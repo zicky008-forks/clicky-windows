@@ -21,9 +21,11 @@ from PyInstaller.utils.hooks import collect_all
 
 # CLICKY_EDITION=bi builds the Clicky BI edition: Excel/finance work with cloud
 # AI. It leaves out offline OCR, figure detection, lesson video recording and
-# whisper.cpp, which make up much of the installer and are not used there.
+# local speech models, which make up much of the installer and are not used
+# there. Without a speech model the talk key starts Windows voice typing.
 EDITION = os.environ.get("CLICKY_EDITION", "full").strip().lower()
-BI_LEAVES_OUT = ["rapidocr_onnxruntime", "cv2", "imageio", "imageio_ffmpeg", "pywhispercpp"]
+BI_LEAVES_OUT = ["rapidocr_onnxruntime", "onnxruntime", "cv2", "imageio", "imageio_ffmpeg",
+                 "pywhispercpp", "faster_whisper", "ctranslate2"]
 
 # ── Modules that are lazy-imported by CompanionManager — PyInstaller's
 #    static analysis misses them, so we list them explicitly.

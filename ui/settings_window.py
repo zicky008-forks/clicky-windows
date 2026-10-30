@@ -57,7 +57,7 @@ class SettingsWindow(QWidget):
         self.provider.setCurrentIndex(max(0,self.provider.findData(setting('tts_provider','auto'))))
         voice.addRow("Speech provider",self.provider)
         self.transcription = QComboBox()
-        for label,value in (("Automatic",''),("Local Whisper",'faster_whisper'),("Local whisper.cpp",'whisper_cpp'),("Deepgram — internet",'deepgram'),("OpenAI Whisper — internet",'openai')):
+        for label,value in (("Automatic",''),("Local Whisper",'faster_whisper'),("Local whisper.cpp",'whisper_cpp'),("Deepgram — internet",'deepgram'),("OpenAI Whisper — internet",'openai'),("Windows voice typing (Win+H) — internet",'windows')):
             self.transcription.addItem(label,value)
         import os
         self.transcription.setCurrentIndex(max(0,self.transcription.findData(os.getenv('CLICKY_STT',''))))

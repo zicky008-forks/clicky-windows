@@ -299,6 +299,7 @@ class CompanionManager(QObject):
     sig_drive_request       = pyqtSignal(dict)
     sig_drive_progress      = pyqtSignal(str)
     sig_dictation_ready     = pyqtSignal(str, dict)
+    sig_voice_typing        = pyqtSignal(bool)            # True → typed chat, False → the focused app
     sig_external_request    = pyqtSignal(dict)
     sig_external_result     = pyqtSignal(str)
     sig_collab_message      = pyqtSignal(dict)
@@ -704,6 +705,10 @@ class CompanionManager(QObject):
     def on_hotkey_press(self):
         if self._state in {AppState.THINKING, AppState.SPEAKING}:
             self.stop()
+        if cfg.stt_provider() == "windows":
+            self.sig_voice_typing.emit(not self._dictating)
+            self._dictating = False
+            return
         if not self._claim_begin():
             return
         self._hotkey_pressed_at = time.monotonic()
@@ -2012,6 +2017,10 @@ class CompanionManager(QObject):
         to catch "Clicky". OFF (the default) leaves the mic closed until you
         press the hotkey, which is both quieter on CPU and less invasive.
         """
+        if enabled and cfg.stt_provider() == "windows":
+            self.sig_notice.emit("Wake word needs a speech model. Add an OpenAI or Deepgram key, "
+                                 "or press the talk shortcut to use Windows voice typing.")
+            return
         try:
             self._listener.set_ambient(enabled)
             cfg.set_mic_mode("ambient" if enabled else "hotkey")
