@@ -53,6 +53,10 @@ def load_all() -> list[dict]:
             continue
         _try_import(f)
 
+    # Built-in skills imported as modules, so they also load from the frozen .exe
+    from office import report_skill
+    _register(dict(report_skill.SKILL))
+
     # User skills
     user_dir = _user_skills_dir()
     user_dir.mkdir(parents=True, exist_ok=True)
@@ -72,17 +76,20 @@ def _try_import(path: Path) -> None:
         mod = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = mod
         spec.loader.exec_module(mod)
-        skill = getattr(mod, "SKILL", None)
-        if not isinstance(skill, dict):
-            return
-        if not all(k in skill for k in ("name", "trigger", "handler")):
-            return
-        skill.setdefault("description", "")
-        skill["_compiled"] = re.compile(skill["trigger"], re.IGNORECASE)
-        _loaded.append(skill)
+        _register(getattr(mod, "SKILL", None))
     except Exception as e:
         # Don't let one bad skill kill startup. Log and skip.
         print(f"[skills] failed to load {path}: {e}")
+
+
+def _register(skill) -> None:
+    if not isinstance(skill, dict):
+        return
+    if not all(k in skill for k in ("name", "trigger", "handler")):
+        return
+    skill.setdefault("description", "")
+    skill["_compiled"] = re.compile(skill["trigger"], re.IGNORECASE)
+    _loaded.append(skill)
 
 
 def match(transcript: str) -> Optional[dict]:
