@@ -55,8 +55,9 @@ Name: "startupicon";  Description: "Launch Clicky when Windows &starts";  GroupD
 ; Only offered when Ollama isn't already on the machine. Previously this task
 ; was checked by default with no detection at all, so every install spent
 ; 12-15 minutes re-downloading and re-running OllamaSetup.exe over a perfectly
-; good existing installation.
-Name: "installollama"; Description: "Also download && install Ollama (free local AI engine, ~700 MB) — needed for the no-API-key mode"; GroupDescription: "Free AI engine:"; Check: not OllamaPresent
+; good existing installation. Unchecked by default: most users bring a cloud key,
+; and office networks often block or throttle this 700 MB download.
+Name: "installollama"; Description: "Also download && install Ollama (free local AI engine, ~700 MB) — needed for the no-API-key mode"; GroupDescription: "Free AI engine:"; Flags: unchecked; Check: not OllamaPresent
 
 [InstallDelete]
 ; Older previews accidentally bundled a foreign ICU that shadows Windows ICU.
@@ -84,7 +85,7 @@ Name: "{userstartup}\{#MyAppName}";              Filename: "{app}\{#MyAppExeName
 ;
 ; Step 1: PowerShell is only an HTTP client here. It must not launch anything.
 Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://ollama.com/download/OllamaSetup.exe' -OutFile '{tmp}\OllamaSetup.exe' -UseBasicParsing"""; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://ollama.com/download/OllamaSetup.exe' -OutFile '{tmp}\OllamaSetup.exe' -UseBasicParsing -TimeoutSec 900"""; \
   StatusMsg: "Downloading Ollama (~700 MB — this can take a few minutes)..."; \
   Tasks: installollama; \
   Flags: runhidden waituntilterminated
