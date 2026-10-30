@@ -62,4 +62,7 @@ uiautomation>=2.0.18
 rapidocr-onnxruntime>=1.3.0
 opencv-python-headless>=4.8.0
 
+# Excel / Power Query bridge over COM (Windows only)
+pywin32>=306; sys_platform == "win32"
+
 # Trusted-LAN sharing uses aiohttp above; no WebRTC dependency.

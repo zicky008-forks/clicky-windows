@@ -1,5 +1,7 @@
 # Clicky for Windows 🔵
 
+> **Clicky BI AI branch (`bi-ai`):** a finance/BI coworker built on this port. When Excel is in front, Clicky reads the workbook over COM (`office/excel_com.py`), answers in Vietnamese finance mode (`office/finance_mode.py`) and points at cells with `[CELL:Sheet!B12|label]` / `[RANGE:Sheet!B2:D20|label]`, whose positions come from Excel's own layout instead of a screenshot guess. Requires Windows, Excel desktop and `pywin32`. Cell pointing still needs live testing on real zoom/DPI/freeze-pane setups.
+
 **1.6 preview:** original Clicky Sketch and Drive, typed chat/history, offline Windows voice, local jobs/routines, Browser Link, reviewed MCP tools, dictation and narrated recordings. Read [what changed and what still needs live testing](RELEASE-NOTES-1.6.md). Configure these from the panel's **Settings**, **Sketch**, and **Work & routines** controls.
 
 > **An AI teaching companion that lives next to your cursor.**

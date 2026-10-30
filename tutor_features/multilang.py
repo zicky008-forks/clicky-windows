@@ -35,6 +35,7 @@ _LANG_VOICE = {
     "bn": ("Bengali",   "bn-IN-TanishaaNeural"),
     "ur": ("Urdu",      "ur-PK-UzmaNeural"),
     "el": ("Greek",     "el-GR-AthinaNeural"),
+    "vi": ("Vietnamese","vi-VN-HoaiMyNeural"),
 }
 
 
@@ -50,6 +51,7 @@ def _script_heuristic(text: str) -> str:
     if re.search(r"[가-힯]", text):    return "ko"   # Hangul
     if re.search("[Ͱ-Ͽἀ-῿]", text): return "el"   # Greek
     if re.search(r"[Ѐ-ӿ]", text):    return "ru"   # Cyrillic
+    if re.search(r"[ăđơưĂĐƠƯ\u1ea0-\u1ef9]", text): return "vi"   # Vietnamese letters/tones
     return "en"
 
 
