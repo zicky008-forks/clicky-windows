@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clicky BI</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <style>
+    :root { --ink:#1f1d2b; --muted:#5d5a6e; --accent:#7c5cff; --line:#e4e1ef; --bg:#ffffff; --soft:#f6f4fd; --warn:#a14400; }
+    @media (prefers-color-scheme: dark) {
+      :root { --ink:#efedf7; --muted:#b4b0c6; --line:#3a3650; --bg:#1c1a26; --soft:#26233a; --warn:#ffb070; }
+    }
+    body { margin:0; padding:16px; font:14px/1.5 "Segoe UI", system-ui, sans-serif; color:var(--ink); background:var(--bg); }
+    h1 { font-size:18px; margin:0 0 4px; }
+    p { margin:0 0 12px; color:var(--muted); }
+    button { width:100%; padding:10px 12px; border:0; border-radius:8px; background:var(--accent); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+    button:disabled { opacity:.55; cursor:default; }
+    #status { margin:12px 0 0; min-height:1.5em; color:var(--muted); }
+    #summary { margin-top:12px; padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--soft); white-space:pre-wrap; display:none; }
+    .error { color:var(--warn) !important; }
+    label { display:flex; gap:8px; align-items:center; margin:12px 0 0; color:var(--muted); }
+    small { display:block; margin-top:16px; color:var(--muted); }
+  </style>
+</head>
+<body>
+  <h1>Clicky BI</h1>
+  <p>Mở file có hai sheet cân đối phát sinh (kỳ này, kỳ trước), đứng ở sheet kỳ này rồi bấm nút.</p>
+  <button id="report" disabled>Lập báo cáo quản trị tháng</button>
+  <label><input type="checkbox" id="speak" checked> Đọc to kết luận</label>
+  <div id="status">Đang mở…</div>
+  <div id="summary"></div>
+  <small>Số liệu do code tính ngay trong máy anh, không gửi file đi đâu. Em chỉ thêm sheet mới, không sửa sheet của anh.</small>
+  <script src="taskpane.js"></script>
+</body>
+</html>

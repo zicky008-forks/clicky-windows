@@ -327,7 +327,7 @@ class Config:
     def stt_provider(self) -> str:
         # Allow explicit override via env (so users can force whisper_cpp etc.)
         forced = os.getenv("CLICKY_STT", "").strip().lower()
-        if forced in ("deepgram", "openai", "whisper_cpp", "faster_whisper"):
+        if forced in ("deepgram", "openai", "whisper_cpp", "faster_whisper", "windows"):
             return forced
         local_model = self.llm_provider() in {"ollama", "lmstudio"}
         if self.deepgram_api_key and not local_model:
@@ -336,11 +336,15 @@ class Config:
             return "openai"
         # Prefer whisper.cpp (GPU-accelerated, same engine as Handy) when the
         # pywhispercpp package is installed; otherwise fall back to faster-whisper.
-        try:
-            import pywhispercpp  # noqa: F401
+        import importlib.util
+        if importlib.util.find_spec("pywhispercpp"):
             return "whisper_cpp"
-        except ImportError:
+        if importlib.util.find_spec("faster_whisper"):
             return "faster_whisper"
+        # The slim Clicky BI build ships no local speech model: the talk key
+        # opens the typed chat and starts Windows voice typing (Win+H), which
+        # understands Vietnamese and costs nothing.
+        return "windows"
 
     def tts_provider(self) -> str:
         forced = setting("tts_provider", "auto")

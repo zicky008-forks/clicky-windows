@@ -395,6 +395,12 @@ class CompanionPanel(QWidget):
         if cfg.llm_provider() == "ollama":
             self._set_models_for("ollama")
 
+    def focus_composer(self):
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self._composer.setFocus()
+
     def showEvent(self, event):
         super().showEvent(event)
         # A model pulled while Clicky was running should appear without a

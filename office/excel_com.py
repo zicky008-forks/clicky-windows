@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 MAX_CONTEXT_ROWS = 30
 MAX_CONTEXT_COLS = 12
 MAX_WRITE_CELLS = 20_000
-EXCEL_TITLE_HINTS = ("- excel", "excel -", "microsoft excel")
+EXCEL_TITLE_HINTS = ("- excel", "excel -", "microsoft excel", "power query editor", "trình soạn thảo power query")
 
 
 def is_excel_window(title: str) -> bool:

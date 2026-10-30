@@ -1,4 +1,10 @@
-"""Explicit GitHub release updates with digest verification; never runs a download silently."""
+"""Explicit GitHub release updates; never runs a download silently.
+
+Builds installed by Velopack update in place from the latest GitHub release,
+downloading only the changed files when a delta package exists. Other builds
+fall back to downloading the full installer with digest verification.
+"""
+import asyncio
 import hashlib
 import re
 from pathlib import Path
@@ -11,6 +17,15 @@ VERSION='1.6.0-preview'
 REPOSITORY='zicky008-forks/clicky-windows'
 
 
+def velopack_manager():
+    """An UpdateManager when this copy was installed by Velopack, else None."""
+    try:
+        import velopack
+        return velopack.UpdateManager(velopack.GithubSource(f'https://github.com/{REPOSITORY}'))
+    except Exception:
+        return None     # source checkout, Inno Setup install, or no velopack package
+
+
 def version_key(value):
     match=re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)(?:-([A-Za-z0-9.-]+))?',value)
     if not match:raise ValueError('Unrecognized release version')
@@ -18,6 +33,13 @@ def version_key(value):
 
 
 async def latest():
+    manager=velopack_manager()
+    if manager is not None:
+        info=await asyncio.to_thread(manager.check_for_updates)
+        if not info:return None
+        target=getattr(info,'TargetFullRelease',None)
+        return {'version':str(getattr(target,'Version','') or 'new version'),
+                'url':f'https://github.com/{REPOSITORY}/releases/latest','asset':None,'velopack':(manager,info)}
     async with httpx.AsyncClient(timeout=20) as client:
         response=await client.get(f'https://api.github.com/repos/{REPOSITORY}/releases/latest',headers={'Accept':'application/vnd.github+json'})
         response.raise_for_status()
@@ -25,6 +47,13 @@ async def latest():
     if version_key(release['tag_name'])<=version_key(VERSION):return None
     assets=[asset for asset in release.get('assets',[]) if asset['name'].lower().endswith('.exe')]
     return {'version':release['tag_name'],'url':release['html_url'],'asset':assets[0] if assets else None}
+
+
+async def apply_in_place(update):
+    """Download a Velopack update (delta when available), then restart into it."""
+    manager,info=update['velopack']
+    await asyncio.to_thread(manager.download_updates,info)
+    manager.apply_updates_and_restart(info)
 
 
 async def download(asset):

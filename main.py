@@ -38,6 +38,15 @@ def _ensure_std_streams() -> None:
 
 _ensure_std_streams()
 
+# Velopack install/update hooks must run first; it may exit or restart the
+# process while installing or applying an update. A no-op in other builds.
+if __name__ == "__main__":
+    try:
+        import velopack
+        velopack.App().run()
+    except ImportError:
+        pass
+
 # Run before normal startup imports, credentials, microphone and global hooks.
 if __name__ == "__main__" and "--smoke-test" in sys.argv:
     from packaging_smoke import run
@@ -269,6 +278,16 @@ def main():
             if box.clickedButton() is copy:
                 app.clipboard().setText(text)
     manager.sig_dictation_ready.connect(_dictation_ready)
+
+    def _voice_typing(into_chat: bool):
+        # Windows voice typing writes into whichever box has focus, so focus
+        # Clicky's composer first unless the user is dictating into their app.
+        from PyQt6.QtCore import QTimer
+        import keyboard
+        if into_chat:
+            panel.focus_composer()
+        QTimer.singleShot(250, lambda: keyboard.send("windows+h"))
+    manager.sig_voice_typing.connect(_voice_typing)
 
     def _review_drive(value):
         from drive import validate_plan, describe

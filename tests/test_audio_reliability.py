@@ -194,3 +194,21 @@ def test_settings_microphone_test_releases_input(qt_app, microphones, monkeypatc
     assert settings._mic_listener is None
     Listener.stop.assert_called_once()
     settings.close()
+
+
+def test_without_a_speech_model_the_talk_key_uses_windows_voice_typing(monkeypatch):
+    import importlib.util
+    from config import cfg
+    monkeypatch.delenv('CLICKY_STT', raising=False)
+    monkeypatch.setattr(cfg, 'deepgram_api_key', None)
+    monkeypatch.setattr(cfg, 'openai_api_key', None)
+    monkeypatch.setattr(importlib.util, 'find_spec', lambda name: None)
+    assert cfg.stt_provider() == 'windows'
+
+    from companion_manager import AppState, CompanionManager
+    for dictating, into_chat in ((False, True), (True, False)):
+        manager = SimpleNamespace(_state=AppState.IDLE, _dictating=dictating, sig_voice_typing=Mock(),
+                                  _claim_begin=Mock(side_effect=AssertionError('Do not open the microphone')))
+        CompanionManager.on_hotkey_press(manager)
+        manager.sig_voice_typing.emit.assert_called_once_with(into_chat)
+        assert not manager._dictating

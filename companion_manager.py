@@ -299,6 +299,7 @@ class CompanionManager(QObject):
     sig_drive_request       = pyqtSignal(dict)
     sig_drive_progress      = pyqtSignal(str)
     sig_dictation_ready     = pyqtSignal(str, dict)
+    sig_voice_typing        = pyqtSignal(bool)            # True → typed chat, False → the focused app
     sig_external_request    = pyqtSignal(dict)
     sig_external_result     = pyqtSignal(str)
     sig_collab_message      = pyqtSignal(dict)
@@ -704,6 +705,10 @@ class CompanionManager(QObject):
     def on_hotkey_press(self):
         if self._state in {AppState.THINKING, AppState.SPEAKING}:
             self.stop()
+        if cfg.stt_provider() == "windows":
+            self.sig_voice_typing.emit(not self._dictating)
+            self._dictating = False
+            return
         if not self._claim_begin():
             return
         self._hotkey_pressed_at = time.monotonic()
@@ -1182,6 +1187,7 @@ class CompanionManager(QObject):
             if is_excel_window(title) and not (self._privacy_guard and is_sensitive_window(title)):
                 ctx = await asyncio.to_thread(self._excel.context)
                 finance_extra = finance_mode.finance_system_prompt_addendum() + excel_context_prompt(ctx)
+                finance_extra += await asyncio.to_thread(self._power_query_context)
             if cfg.response_language:
                 lang_code = cfg.response_language   # user-forced — always wins
             else:
@@ -1513,6 +1519,12 @@ class CompanionManager(QObject):
         nx = (x - shot.logical_left) / max(log_w, 1) * 1000
         ny = (y - shot.logical_top) / max(log_h, 1) * 1000
         return int(round(nx)), int(round(ny))
+
+    def _power_query_context(self) -> str:
+        from office.power_query import PowerQuery, format_for_prompt
+        pq = PowerQuery(self._excel)
+        queries = pq.list()
+        return format_for_prompt(queries, pq.lint_all() if queries else [])
 
     def _physical_to_logical_bbox(self, bbox):
         shot = self._shot(1)
@@ -2005,6 +2017,10 @@ class CompanionManager(QObject):
         to catch "Clicky". OFF (the default) leaves the mic closed until you
         press the hotkey, which is both quieter on CPU and less invasive.
         """
+        if enabled and cfg.stt_provider() == "windows":
+            self.sig_notice.emit("Wake word needs a speech model. Add an OpenAI or Deepgram key, "
+                                 "or press the talk shortcut to use Windows voice typing.")
+            return
         try:
             self._listener.set_ambient(enabled)
             cfg.set_mic_mode("ambient" if enabled else "hotkey")
