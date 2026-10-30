@@ -7,6 +7,7 @@ used from any thread. Needs pywin32 on Windows; elsewhere every call returns Non
 import ctypes
 import logging
 import sys
+from decimal import Decimal
 from typing import Optional
 
 from office.cellref import CellRef, col_letters, parse_ref
@@ -120,7 +121,9 @@ class ExcelBridge:
         height, width = len(rows), max(len(r) for r in rows)
         if height * width > MAX_WRITE_CELLS:
             return False
-        grid = tuple(tuple(r[i] if i < len(r) else "" for i in range(width)) for r in rows)
+        def cell(v):
+            return float(v) if isinstance(v, Decimal) else v
+        grid = tuple(tuple(cell(r[i]) if i < len(r) else "" for i in range(width)) for r in rows)
         try:
             target = self._sheet(app, ref).Range(
                 f"{col_letters(ref.col1)}{ref.row1}:{col_letters(ref.col1 + width - 1)}{ref.row1 + height - 1}")
@@ -130,17 +133,62 @@ class ExcelBridge:
             log.warning("Excel write failed: %s", exc)
             return False
 
-    def add_sheet(self, name: str) -> bool:
+    def add_sheet(self, name: str) -> Optional[str]:
+        """Add a sheet at the end; returns the name used (suffixed when taken), or None."""
         app = self._excel()
         if app is None:
-            return False
+            return None
         try:
             wb = app.ActiveWorkbook
+            taken = {wb.Worksheets(i + 1).Name.lower() for i in range(wb.Worksheets.Count)}
+            base, n, final = name[:28], 2, name[:31]
+            while final.lower() in taken:
+                final, n = f"{base} {n}", n + 1
             ws = wb.Worksheets.Add(After=wb.Worksheets(wb.Worksheets.Count))
-            ws.Name = name[:31]
-            return True
+            ws.Name = final
+            return final
         except Exception:
-            return False
+            return None
+
+    def sheet_rows(self, name: str, max_rows: int = 5000, max_cols: int = 40) -> Optional[list]:
+        """A sheet's values as rows anchored at A1, so row numbers match what the user sees."""
+        app = self._excel()
+        if app is None:
+            return None
+        try:
+            used = app.ActiveWorkbook.Worksheets(name).UsedRange
+            rows = min(used.Rows.Count, max_rows)
+            cols = min(used.Columns.Count, max_cols)
+            grid = _as_grid(used.Resize(rows, cols).Value)
+            pad = [None] * (used.Column - 1)
+            return [[] for _ in range(used.Row - 1)] + [pad + row for row in grid]
+        except Exception:
+            return None
+
+    def sheet_names(self) -> list:
+        app = self._excel()
+        try:
+            wb = app.ActiveWorkbook
+            return [wb.Worksheets(i + 1).Name for i in range(wb.Worksheets.Count)]
+        except Exception:
+            return []
+
+    def activate(self, name: str) -> None:
+        app = self._excel()
+        try:
+            app.ActiveWorkbook.Worksheets(name).Activate()
+        except Exception:
+            pass
+
+    def format_numbers(self, text: str, number_format: str = '#,##0;(#,##0);"-"') -> None:
+        ref = parse_ref(text)
+        app = self._excel()
+        if ref is None or app is None:
+            return
+        try:
+            self._sheet(app, ref).Range(ref.address).NumberFormat = number_format
+        except Exception:
+            pass
 
     # ── Pointing ───────────────────────────────────────────────────────────
 
