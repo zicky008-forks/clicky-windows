@@ -17,6 +17,12 @@ jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        edition: [full, bi]
+    env:
+      CLICKY_EDITION: ${{ matrix.edition }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,9 +32,18 @@ jobs:
       - run: choco install innosetup --no-progress -y
       - run: .\build.bat installer
         shell: cmd
+      - name: Report sizes
+        shell: pwsh
+        run: |
+          $folder = (Get-ChildItem dist\Clicky -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
+          $setup = (Get-Item dist\Setup-Clicky.exe).Length / 1MB
+          "Edition ${{ matrix.edition }}: installer {0:N0} MB, installed folder {1:N0} MB" -f $setup, $folder | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          Get-ChildItem dist\Clicky\_internal -Directory | ForEach-Object {
+            [pscustomobject]@{ MB = [math]::Round((Get-ChildItem $_.FullName -Recurse -File | Measure-Object Length -Sum).Sum / 1MB); Name = $_.Name }
+          } | Sort-Object MB -Descending | Select-Object -First 15 | Format-Table -AutoSize | Out-String
       - uses: actions/upload-artifact@v4
         with:
-          name: Setup-Clicky
+          name: Setup-Clicky-${{ matrix.edition }}
           path: dist/Setup-Clicky.exe
           if-no-files-found: error
           retention-days: 14
