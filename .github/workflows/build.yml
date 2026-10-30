@@ -70,7 +70,7 @@ jobs:
           $repo = "https://github.com/${{ github.repository }}"
           # The previous release lets vpk build a delta; the first release has none.
           vpk download github --repoUrl $repo --token $env:GH_TOKEN --outputDir releases
-          vpk pack --packId ClickyBI --packTitle "Clicky BI" --packVersion $version --packDir dist\Clicky --mainExe Clicky.exe --outputDir releases
+          vpk pack --packId ClickyBI --packTitle "Clicky BI" --packVersion $version --packDir dist\Clicky --mainExe Clicky.exe --runtime win-x64 --outputDir releases
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem releases | ForEach-Object { "{0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB) } | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           if ('${{ github.ref_type }}' -eq 'tag') {
@@ -80,7 +80,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: matrix.edition == 'bi'
         with:
-          name: Clicky-BI-Velopack
-          path: releases/*
+          name: Clicky-BI-Setup
+          path: releases/*-Setup.exe
           if-no-files-found: error
           retention-days: 14
