@@ -54,8 +54,10 @@ def load_all() -> list[dict]:
         _try_import(f)
 
     # Built-in skills imported as modules, so they also load from the frozen .exe
-    from office import report_skill
+    from office import pq_skill, report_skill
     _register(dict(report_skill.SKILL))
+    for skill in pq_skill.SKILLS:
+        _register(dict(skill))
 
     # User skills
     user_dir = _user_skills_dir()
