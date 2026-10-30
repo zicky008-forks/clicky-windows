@@ -84,7 +84,8 @@ def test_report_sheets_use_traceable_formulas():
     assert header[:3] == ["Chỉ tiêu", "Tài khoản", "Kỳ này"]
     selling = next(r for r in grid if r and r[0] == "Chi phí bán hàng")
     assert selling[2] == "=SUMIFS('TB ky nay'!$E:$E,'TB ky nay'!$A:$A,\"641*\")"
-    assert selling[7].startswith("=IF(ABS(C") and "1380000000" in selling[7]
+    assert selling[6] == '=IF(E12=0,"",IF(E12>0,"Bất lợi","Thuận lợi"))'
+    assert selling[8].startswith("=IF(ABS(C") and "1380000000" in selling[8]
     net = next(r for r in grid if r and r[0] == "Doanh thu thuần")
     assert net[2] == "=C5-C6"
     tb_sheet = report.sheets["TB ky nay"]
@@ -157,5 +158,23 @@ def test_cli_writes_one_self_contained_workbook(tmp_path):
     out = tmp_path / "BaoCao.xlsx"
     assert main([str(tmp_path / "TB_T10.xlsx"), str(tmp_path / "TB_T09.xlsx"), "-o", str(out)]) == 0
     wb = load_workbook(out)
-    assert wb.sheetnames == ["BC thang", "Kiem tra", "TB ky nay", "TB ky truoc", "TB_T10", "TB_T09"]
+    assert wb.sheetnames == ["BC thang", "Cau hoi xac minh", "Kiem tra", "TB ky nay", "TB ky truoc", "TB_T10", "TB_T09"]
     assert wb["BC thang"]["C5"].value.startswith("=SUMIFS('TB ky nay'!$F:$F")
+
+
+def test_questions_cover_material_moves_without_claiming_causes():
+    from engine.questions import build_questions
+    cur = compute(read_trial_balance(t10_rows()))
+    prev = compute(read_trial_balance(t9_rows()))
+    qs = build_questions(compare(cur, prev))
+    keys = [q.key for q in qs]
+    assert keys[:2] == ["cogs", "selling"]                  # biggest movements first
+    assert "tax" not in keys                                 # tax rate stayed at 20 %
+    assert "rev" not in keys                                 # +4,1 % is under the 5 % threshold
+    cogs = qs[0]
+    assert not cogs.favourable and "63,9% lên 67,1%" in cogs.question
+    assert "TK 6417" in qs[1].question and qs[1].owner == "Trưởng bộ phận bán hàng"
+    report = build(t10_rows(), t9_rows())
+    sheet = report.sheets["Cau hoi xac minh"]
+    assert sheet[1][3] == "TÍNH TOÁN" and sheet[1][7] == ""  # explanation left for a person
+    assert "câu hỏi cần xác minh" in report.summary

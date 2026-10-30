@@ -40,10 +40,11 @@ def _sumifs(tb_sheet: str, prefixes) -> str:
 
 
 def report_grid(current: list, variances: list, cur_sheet: str, prev_sheet: str, title: str) -> list:
-    """Chỉ tiêu | TK | Kỳ này | Kỳ trước | Chênh lệch | % | Biến động chính | Khớp với code"""
+    """Chỉ tiêu | TK | Kỳ này | Kỳ trước | Chênh lệch | % | Thuận lợi/Bất lợi | Biến động chính | Khớp với code"""
+    from engine.questions import FAVOURABLE_UP
     rows = [[title], ["Số liệu lấy bằng công thức từ sheet " + cur_sheet + " và " + prev_sheet +
-                      "; cột H so từng công thức với kết quả tính bằng code."], [],
-            ["Chỉ tiêu", "Tài khoản", "Kỳ này", "Kỳ trước", "Chênh lệch", "%", "Biến động chính", "Khớp với code"]]
+                      "; cột I so từng công thức với kết quả tính bằng code. Số liệu là TÍNH TOÁN; nguyên nhân xem sheet câu hỏi."], [],
+            ["Chỉ tiêu", "Tài khoản", "Kỳ này", "Kỳ trước", "Chênh lệch", "%", "Thuận lợi / Bất lợi", "Biến động chính", "Khớp với code"]]
     row_of = {}
     by_key = {v.key: v for v in variances}
     for i, ((key, label, spec), fig) in enumerate(zip(PNL, current)):
@@ -59,7 +60,9 @@ def report_grid(current: list, variances: list, cur_sheet: str, prev_sheet: str,
         v = by_key[key]
         drivers = "; ".join(f"TK {a} {fmt(c, sign=True)}" for a, _n, c in v.drivers)
         check = f'=IF(ABS(C{r}-({fig.value}))<=1,"✓","≠ code {fmt(fig.value)}")'
-        rows.append([label, accounts, this, prev, f"=C{r}-D{r}", f'=IF(D{r}=0,"",E{r}/ABS(D{r}))', drivers, check])
+        good, bad = ("Thuận lợi", "Bất lợi") if key in FAVOURABLE_UP else ("Bất lợi", "Thuận lợi")
+        verdict = f'=IF(E{r}=0,"",IF(E{r}>0,"{good}","{bad}"))'
+        rows.append([label, accounts, this, prev, f"=C{r}-D{r}", f'=IF(D{r}=0,"",E{r}/ABS(D{r}))', verdict, drivers, check])
     return rows
 
 

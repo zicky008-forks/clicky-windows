@@ -1,14 +1,14 @@
 """Voice skill: "lập báo cáo tháng" builds the monthly management report inside the open workbook.
 
 It finds the two trial-balance sheets (this period and the one before it), adds
-the report, check and cleaned trial-balance sheets with live formulas, and speaks
+the report, questions-to-verify, check and cleaned trial-balance sheets with live formulas, and speaks
 the conclusion. It only adds new sheets; the user's own sheets are never changed.
 """
 import asyncio
 
 TRIGGER = (r"(l[ậa]p|l[àa]m|t[ạa]o|d[ựu]ng|xu[ấa]t)\b.{0,20}b[áa]o\s+c[áa]o.{0,30}\bth[áa]ng\b"
            r"|\b(build|make|create)\b.{0,20}\bmonthly\s+report\b")
-OUTPUT_PREFIXES = ("TB ky nay", "TB ky truoc", "BC thang", "Kiem tra")
+OUTPUT_PREFIXES = ("TB ky nay", "TB ky truoc", "BC thang", "Cau hoi xac minh", "Kiem tra")
 NEED_TWO = ("Anh mở file Excel có hai sheet cân đối phát sinh, kỳ này và kỳ trước, "
             "rồi gọi lại em. Em tìm thấy {n} sheet đọc được.")
 
@@ -49,7 +49,7 @@ def run(bridge) -> str:
     ctx = bridge.context() or {}
     (cur_name, cur_rows), (prev_name, prev_rows) = pick_periods(found, ctx.get("sheet", ""))
     names = {}
-    for key in ("report", "checks", "tb_cur", "tb_prev"):
+    for key in ("report", "questions", "checks", "tb_cur", "tb_prev"):
         actual = bridge.add_sheet(SHEET_NAMES[key])
         if not actual:
             return "Em không thêm được sheet mới vào file này. Anh kiểm tra file có đang bị khoá hoặc chỉ đọc không."
@@ -61,6 +61,7 @@ def run(bridge) -> str:
     last = 4 + len(report.figures)
     bridge.format_numbers(f"{quote(names['report'])}!C5:E{last}")
     bridge.format_numbers(f"{quote(names['report'])}!F5:F{last}", "0.0%")
+    bridge.format_numbers(f"{quote(names['questions'])}!B2:B{len(report.sheets[names['questions']])}")
     for key in ("tb_cur", "tb_prev"):
         bridge.format_numbers(f"{quote(names[key])}!C2:H{len(report.sheets[names[key]])}")
     bridge.activate(names["report"])

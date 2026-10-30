@@ -108,8 +108,9 @@ def compare(current: list, previous: list) -> list:
 INCOME_KEYS = {"rev", "fin_inc", "oth_inc"}
 
 
-def summary_vi(variances: list, issues: list) -> str:
-    """One spoken paragraph: conclusion first, then what moved profit most, then traps."""
+def summary_vi(variances: list, issues: list, n_questions: int = 0) -> str:
+    """One spoken paragraph: conclusion first, then what moved profit most, then traps.
+    It states calculations only; causes are left to the questions sheet."""
     v = {x.key: x for x in variances}
     pat = v["pat"]
     direction = "tăng" if pat.change > 0 else "giảm" if pat.change < 0 else "không đổi"
@@ -124,11 +125,13 @@ def summary_vi(variances: list, issues: list) -> str:
             acct, name, change = x.drivers[0]
             word = "tăng" if x.change > 0 else "giảm"
             parts.append(f"{x.label.lower()} {word} {spoken(abs(x.change))}, nhiều nhất ở TK {acct} {name}")
-        text += " Nguyên nhân chính: " + "; ".join(parts) + "."
+        text += f" Khoản kéo lợi nhuận {direction} nhiều nhất: " + "; ".join(parts) + "."
         offset = max((e for e in effects if e[1] * pat.change < 0), key=lambda e: abs(e[1]), default=None)
         if offset:
             x = offset[0]
             text += f" Bù lại một phần: {x.label.lower()} {'tăng' if x.change > 0 else 'giảm'} {spoken(abs(x.change))}."
+    if n_questions:
+        text += f" Em đã ghi {n_questions} câu hỏi cần xác minh nguyên nhân trước khi giải thích với sếp."
     errors = [i for i in issues if i.severity == "error"]
     if errors:
         text += f" Cảnh báo: có {len(errors)} lỗi cần xem trước khi gửi, ví dụ: {errors[0].message}."

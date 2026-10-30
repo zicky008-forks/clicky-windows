@@ -43,7 +43,7 @@ def write_workbook(path: Path, sheets: dict) -> None:
     report["A1"].font = Font(bold=True, size=14)
     for cell in report[4]:
         cell.font = Font(bold=True)
-    for col, width in zip("ABCDEFGH", (44, 12, 18, 18, 18, 9, 48, 16)):
+    for col, width in zip("ABCDEFGHI", (44, 12, 18, 18, 18, 9, 14, 48, 16)):
         report.column_dimensions[col].width = width
     for row in report.iter_rows(min_row=5, min_col=6, max_col=6):
         row[0].number_format = "0.0%"
