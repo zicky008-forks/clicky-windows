@@ -1,0 +1,48 @@
+name: Excel add-in site
+# Publishes the Clicky BI Excel add-in (task pane, manifest and the shared Python
+# report engine it runs in the browser) to GitHub Pages. Pull requests only build
+# and check the site; merges to main deploy it.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [addin/**, engine/**, office/report_skill.py, .github/workflows/addin.yml]
+  pull_request:
+    paths: [addin/**, engine/**, office/report_skill.py, .github/workflows/addin.yml]
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble site
+        run: |
+          mkdir -p site/py/engine site/py/office
+          cp addin/taskpane.html addin/taskpane.js addin/manifest.xml site/
+          cp -r addin/assets site/
+          cp engine/__init__.py engine/trial_balance.py engine/monthly_report.py engine/checks.py \
+             engine/questions.py engine/report_sheet.py engine/build.py site/py/engine/
+          cp office/__init__.py office/report_skill.py site/py/office/
+          cp addin/workbook_plan.py site/py/
+          # Every file the task pane loads must be in the site.
+          for f in $(grep -o '"[a-z_/]*\.py"' addin/taskpane.js | tr -d '"'); do test -f "site/py/$f" || { echo "missing $f"; exit 1; }; done
+          python3 -c "import xml.dom.minidom as m; m.parse('site/manifest.xml')"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: site
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
