@@ -34,6 +34,9 @@ from tutor_features import (
     multilang, workflow_capture, collab,
 )
 import skills as skills_pkg
+from office import finance_mode
+from office.cellref import parse_ref
+from office.excel_com import ExcelBridge, format_for_prompt as excel_context_prompt, is_excel_window
 from storage import setting, set_setting
 
 _log = logging.getLogger("clicky.manager")
@@ -245,9 +248,12 @@ CLEAR_RE     = re.compile(r'\[CLEAR\]')
 # the model never guesses coordinates for real UI: [CIRCLE:@Save button]
 CIRCLE_AT_RE    = re.compile(r'\[CIRCLE:@([^:\]]+?)' + _C + r'\]')
 UNDERLINE_AT_RE = re.compile(r'\[UNDERLINE:@([^:\]]+?)' + _C + r'\]')
+# Excel forms — position computed from Excel over COM: [CELL:Sheet1!B12|label]
+CELL_RE  = re.compile(r'\[CELL:([^|\]]+)\|([^\]]*)\]')
+RANGE_RE = re.compile(r'\[RANGE:([^|\]]+)\|([^\]]*)\]')
 
 ANY_TAG_RE   = re.compile(
-    r'\[(?:POINT|ARROW|CIRCLE|UNDERLINE|LABEL|LINE|RECT|POLY|TEXT|ANGLE|CLEAR)'
+    r'\[(?:POINT|CELL|RANGE|ARROW|CIRCLE|UNDERLINE|LABEL|LINE|RECT|POLY|TEXT|ANGLE|CLEAR)'
     r'(?::[^\]]*)?\]'
 )
 ANY_PARTIAL_RE = re.compile(r'\[[A-Z]{0,9}(?::[^\]]*)?$')
@@ -359,6 +365,7 @@ class CompanionManager(QObject):
         self._quiz_mode = setting("quiz_mode", False)
         self._privacy_guard = setting("privacy_guard", True)
         self._code_mode_auto = setting("code_mode", True)
+        self._excel = ExcelBridge()
         self._multilang = setting("multilang", True)
         self._journal_enabled = setting("journal", True)
         self._ocr_enabled = setting("ocr", True)
@@ -1171,6 +1178,10 @@ class CompanionManager(QObject):
 
             # ── Per-turn enrichment: code mode, language, OCR, attached docs ──
             code_active = self._code_mode_auto and code_mode.is_code_window(title)
+            finance_extra = ""
+            if is_excel_window(title) and not (self._privacy_guard and is_sensitive_window(title)):
+                ctx = await asyncio.to_thread(self._excel.context)
+                finance_extra = finance_mode.finance_system_prompt_addendum() + excel_context_prompt(ctx)
             if cfg.response_language:
                 lang_code = cfg.response_language   # user-forced — always wins
             else:
@@ -1206,7 +1217,7 @@ class CompanionManager(QObject):
                 detected_coord=detected_coord,
                 code_active=code_active,
                 language_code=lang_code,
-                extra=ocr_extra + doc_extra + fig_extra,
+                extra=finance_extra + ocr_extra + doc_extra + fig_extra,
             )
             if sensitive:
                 system += (
@@ -1503,22 +1514,34 @@ class CompanionManager(QObject):
         ny = (y - shot.logical_top) / max(log_h, 1) * 1000
         return int(round(nx)), int(round(ny))
 
+    def _physical_to_logical_bbox(self, bbox):
+        shot = self._shot(1)
+        if not shot:
+            return None
+        scale = shot.dpi_scale or 1.0
+        l, tp, r, b = bbox
+        return (shot.logical_left + (l - shot.physical_left) / scale,
+                shot.logical_top + (tp - shot.physical_top) / scale,
+                shot.logical_left + (r - shot.physical_left) / scale,
+                shot.logical_top + (b - shot.physical_top) / scale)
+
+    def _excel_bbox(self, ref: str):
+        """Cell or range → logical bbox, computed by Excel itself."""
+        rect = self._excel.screen_rect(ref)
+        return self._physical_to_logical_bbox(rect) if rect else None
+
     def _resolve_anchor(self, name: str):
-        """Resolve '@element name' → logical bbox via UIA (fast tier only)."""
+        """Resolve '@element name' → logical bbox via Excel for cell refs, else UIA (fast tier only)."""
         try:
+            if parse_ref(name):
+                bbox = self._excel_bbox(name)
+                if bbox:
+                    return bbox
             from ai.hybrid_pointer import find_target
             t = find_target(name, skip_ocr=True, skip_vision=True, window_handle=getattr(self, '_drive_context', {}).get('hwnd'))
             if t is None:
                 return None
-            shot = self._shot(1)
-            scale = (shot.dpi_scale if shot else 1.0) or 1.0
-            l, tp, r, b = t.bbox
-            if not shot:
-                return None
-            return (shot.logical_left + (l - shot.physical_left) / scale,
-                    shot.logical_top + (tp - shot.physical_top) / scale,
-                    shot.logical_left + (r - shot.physical_left) / scale,
-                    shot.logical_top + (b - shot.physical_top) / scale)
+            return self._physical_to_logical_bbox(t.bbox)
         except Exception:
             return None
 
@@ -1533,6 +1556,12 @@ class CompanionManager(QObject):
                 self._guided_target = (shot.physical_left + (lx - shot.logical_left) * shot.dpi_scale,
                                        shot.physical_top + (ly - shot.logical_top) * shot.dpi_scale)
             self.sig_point_at.emit(lx, ly, label.strip())
+        for match in CELL_RE.finditer(text):
+            ref, label = match.groups()
+            bbox = self._excel_bbox(ref.strip())
+            if bbox:
+                l, t, r, b = bbox
+                self.sig_point_at.emit((l + r) / 2, (t + b) / 2, label.strip() or ref.strip())
         if CLEAR_RE.search(text):
             self.sig_clear_drawings.emit()
 
@@ -1645,6 +1674,13 @@ class CompanionManager(QObject):
             return {"kind": "circle", "x": cx, "y": cy,
                     "r": max(12.0, self._denorm_len(float(r))),
                     "label": (label or "").strip(), "color": color or "blue"}
+        m = RANGE_RE.fullmatch(tag)
+        if m:
+            bbox = self._excel_bbox(m.group(1).strip())
+            if not bbox:
+                return None
+            l, t, r, b = bbox
+            return {"kind": "rect", "x1": l - 2, "y1": t - 2, "x2": r + 2, "y2": b + 2, "color": "orange"}
         m = RECT_RE.fullmatch(tag)
         if m:
             x1, y1, x2, y2, color = m.groups()

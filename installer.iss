@@ -17,7 +17,7 @@
   #define BuildRoot "dist\Clicky"
 #endif
 #define MyAppPublisher   "Shashank Singh"
-#define MyAppURL         "https://github.com/Bitshank-2338/clicky-windows"
+#define MyAppURL         "https://github.com/zicky008-forks/clicky-windows"
 #define MyAppExeName     "Clicky.exe"
 
 [Setup]

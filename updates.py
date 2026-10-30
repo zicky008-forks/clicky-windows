@@ -8,7 +8,7 @@ import httpx
 from storage import data_dir
 
 VERSION='1.6.0-preview'
-REPOSITORY='Bitshank-2338/clicky-windows'
+REPOSITORY='zicky008-forks/clicky-windows'
 
 
 def version_key(value):
