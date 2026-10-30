@@ -11,8 +11,12 @@ on:
       - .github/workflows/build.yml
       - build.bat
       - clicky.spec
+      - main.py
+      - updates.py
       - installer.iss
       - requirements.txt
+permissions:
+  contents: write        # a v* tag publishes the Velopack release for in-app updates
 jobs:
   build:
     runs-on: windows-latest
@@ -45,5 +49,38 @@ jobs:
         with:
           name: Setup-Clicky-${{ matrix.edition }}
           path: dist/Setup-Clicky.exe
+          if-no-files-found: error
+          retention-days: 14
+      # The BI edition installs and updates with Velopack: per-user, no admin,
+      # and later versions download only the changed files.
+      - name: Velopack package
+        if: matrix.edition == 'bi'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $vpk = python -c "import importlib.metadata as m; print(m.version('velopack'))"
+          dotnet tool install -g vpk --version $vpk
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $version = '${{ github.ref_name }}'.TrimStart('v')
+          } else {
+            $base = (Select-String -Path updates.py -Pattern "^VERSION='([^']+)'").Matches[0].Groups[1].Value
+            $version = "$base.ci${{ github.run_number }}"
+          }
+          $repo = "https://github.com/${{ github.repository }}"
+          # The previous release lets vpk build a delta; the first release has none.
+          vpk download github --repoUrl $repo --token $env:GH_TOKEN --outputDir releases
+          vpk pack --packId ClickyBI --packTitle "Clicky BI" --packVersion $version --packDir dist\Clicky --mainExe Clicky.exe --outputDir releases
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem releases | ForEach-Object { "{0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB) } | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            vpk upload github --repoUrl $repo --token $env:GH_TOKEN --outputDir releases --tag '${{ github.ref_name }}' --releaseName "Clicky BI $version" --publish --merge
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - uses: actions/upload-artifact@v4
+        if: matrix.edition == 'bi'
+        with:
+          name: Clicky-BI-Velopack
+          path: releases/*
           if-no-files-found: error
           retention-days: 14

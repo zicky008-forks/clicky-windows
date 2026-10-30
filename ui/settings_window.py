@@ -239,11 +239,24 @@ class SettingsWindow(QWidget):
 
     def show_update(self,value):
         self._update=value
-        self.install.setEnabled(bool(value and value.get('asset')))
+        self.install.setEnabled(bool(value and (value.get('asset') or value.get('velopack'))))
+        self.install.setText('Update and restart' if value and value.get('velopack') else 'Download verified installer')
         self.update_status.setText(value.get('error') if value and value.get('error') else ('Available: '+value['version']+'\n'+value['url'] if value else 'No newer release is available.'))
 
     def download_update(self):
         self.install.setEnabled(False)
+        if self._update and self._update.get('velopack'):
+            if QMessageBox.question(self,'Update Clicky','Download the update, then restart Clicky into it?',QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)!=QMessageBox.StandardButton.Yes:
+                self.install.setEnabled(True)
+                return
+            self.update_status.setText('Downloading the update…')
+            async def apply():
+                try:
+                    from updates import apply_in_place
+                    await apply_in_place(self._update)
+                except Exception as exc:self.update_ready.emit({'error':str(exc)})
+            self.manager._submit(apply())
+            return
         async def fetch():
             try:
                 from updates import download

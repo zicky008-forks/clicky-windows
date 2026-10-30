@@ -69,3 +69,4 @@ openpyxl>=3.1.0
 pywin32>=306; sys_platform == "win32"
 
 # Trusted-LAN sharing uses aiohttp above; no WebRTC dependency.
+velopack>=1.2,<2              # in-place delta updates for Velopack installs (MIT)

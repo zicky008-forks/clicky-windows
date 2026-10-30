@@ -38,6 +38,15 @@ def _ensure_std_streams() -> None:
 
 _ensure_std_streams()
 
+# Velopack install/update hooks must run first; it may exit or restart the
+# process while installing or applying an update. A no-op in other builds.
+if __name__ == "__main__":
+    try:
+        import velopack
+        velopack.App().run()
+    except ImportError:
+        pass
+
 # Run before normal startup imports, credentials, microphone and global hooks.
 if __name__ == "__main__" and "--smoke-test" in sys.argv:
     from packaging_smoke import run
