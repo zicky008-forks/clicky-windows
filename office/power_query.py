@@ -60,6 +60,68 @@ class PowerQuery:
                      "query": name, "formula": formula})
         atomic_write(path, json.dumps(rows[-200:], ensure_ascii=False, indent=1).encode("utf-8"))
 
+    def add(self, name: str, formula: str) -> bool:
+        """Add a query, or replace its M (with a backup) when one with that name exists."""
+        qs = self._queries()
+        if qs is None:                                  # not "if not qs": an empty COM collection is falsy
+            return False
+        if any(qs.Item(i + 1).Name == name for i in range(qs.Count)):
+            return self.replace(name, formula)
+        try:
+            qs.Add(name, formula)
+            return True
+        except Exception as exc:
+            log.warning("Power Query add failed for %s: %s", name, exc)
+            return False
+
+    def table_for(self, name: str):
+        """The sheet table (ListObject) that loads this query, or None."""
+        app = self.bridge._excel()
+        try:
+            wb = app.ActiveWorkbook
+            for i in range(wb.Worksheets.Count):
+                ws = wb.Worksheets(i + 1)
+                for j in range(ws.ListObjects.Count):
+                    lo = ws.ListObjects(j + 1)
+                    try:
+                        text = str(lo.QueryTable.CommandText)
+                    except Exception:
+                        continue
+                    if f"[{name}]" in text or f'Location={name};' in text or f'Location="{name}"' in text:
+                        return lo
+        except Exception as exc:
+            log.debug("table_for %s failed: %s", name, exc)
+        return None
+
+    def load(self, name: str) -> tuple:
+        """Load (or refresh) a query into a sheet table and return (sheet name, header, rows) or an error string.
+
+        Uses the Mashup OLE DB provider the same way Close & Load does, and waits for
+        the refresh to finish so the rows read back are the query's real output.
+        """
+        app = self.bridge._excel()
+        try:
+            lo = self.table_for(name)
+            if lo is None:
+                sheet = self.bridge.add_sheet(name[:28])
+                ws = app.ActiveWorkbook.Worksheets(sheet)
+                source = (f'OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;'
+                          f'Location="{name}";Extended Properties=""')
+                lo = ws.ListObjects.Add(0, source, True, 1, ws.Range("$A$1"))
+                qt = lo.QueryTable
+                qt.CommandType = 2                      # xlCmdSql
+                qt.CommandText = f"SELECT * FROM [{name}]"
+                qt.RowNumbers = False
+                qt.RefreshStyle = 1                     # xlInsertDeleteCells
+                qt.AdjustColumnWidth = True
+            lo.QueryTable.Refresh(False)
+            grid = lo.Range.Value
+            rows = [list(r) for r in grid] if isinstance(grid, tuple) else [[grid]]
+            return lo.Parent.Name, rows[0], rows[1:]
+        except Exception as exc:
+            log.warning("Power Query load failed for %s: %s", name, exc)
+            return str(exc)
+
     def refresh_all(self) -> None:
         try:
             self.bridge._excel().ActiveWorkbook.RefreshAll()

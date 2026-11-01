@@ -165,6 +165,15 @@ class ExcelBridge:
         except Exception:
             return None
 
+    def workbook_folder(self) -> Optional[str]:
+        """Folder of the saved active workbook, or None for a new, unsaved one."""
+        app = self._excel()
+        try:
+            path = str(app.ActiveWorkbook.Path or "")
+            return path or None
+        except Exception:
+            return None
+
     def sheet_names(self) -> list:
         app = self._excel()
         try:

@@ -39,25 +39,30 @@ def pick_periods(found: list, active_sheet: str):
 
 
 def run(bridge) -> str:
+    return run_report(bridge)[0]
+
+
+def run_report(bridge) -> tuple:
+    """(spoken summary, MonthlyReport or None, sheet names used or None)."""
     from engine.build import SHEET_NAMES, build
     from engine.report_sheet import quote
     if not bridge.available():
-        return NEED_TWO.format(n=0)
+        return NEED_TWO.format(n=0), None, None
     found = find_trial_balances(bridge)
     if len(found) < 2:
-        return NEED_TWO.format(n=len(found))
+        return NEED_TWO.format(n=len(found)), None, None
     ctx = bridge.context() or {}
     (cur_name, cur_rows), (prev_name, prev_rows) = pick_periods(found, ctx.get("sheet", ""))
     names = {}
     for key in ("report", "questions", "checks", "tb_cur", "tb_prev"):
         actual = bridge.add_sheet(SHEET_NAMES[key])
         if not actual:
-            return "Em không thêm được sheet mới vào file này. Anh kiểm tra file có đang bị khoá hoặc chỉ đọc không."
+            return "Em không thêm được sheet mới vào file này. Anh kiểm tra file có đang bị khoá hoặc chỉ đọc không.", None, None
         names[key] = actual
     report = build(cur_rows, prev_rows, cur_name, prev_name, text_prefix="'", names=names)
     for name, grid in report.sheets.items():
         if not bridge.write(f"{quote(name)}!A1", grid):
-            return f"Em tính xong nhưng ghi vào sheet {name} bị lỗi. Kết quả: {report.summary}"
+            return f"Em tính xong nhưng ghi vào sheet {name} bị lỗi. Kết quả: {report.summary}", report, names
     last = 4 + len(report.figures)
     bridge.format_numbers(f"{quote(names['report'])}!C5:E{last}")
     bridge.format_numbers(f"{quote(names['report'])}!F5:F{last}", "0.0%")
@@ -65,7 +70,7 @@ def run(bridge) -> str:
     for key in ("tb_cur", "tb_prev"):
         bridge.format_numbers(f"{quote(names[key])}!C2:H{len(report.sheets[names[key]])}")
     bridge.activate(names["report"])
-    return report.summary
+    return report.summary, report, names
 
 
 async def handle(manager, transcript: str) -> str:
