@@ -49,6 +49,7 @@ class Beat:
     text: str
     ref: Optional[str] = None       # cell or range to point at while speaking, e.g. 'Doi chieu'!C7
     label: str = ""
+    mark: str = ""                  # "ok" draws the box green, "bad" red, "" blue
 
 
 def pending() -> bool:
@@ -57,6 +58,10 @@ def pending() -> bool:
 
 def _q(sheet: str) -> str:
     return "'" + sheet.replace("'", "''") + "'"
+
+
+def _check_ref(cells: str) -> str:
+    return f"{_q(CHECK_SHEET)}!{cells}"
 
 
 def _col(i: int) -> str:
@@ -292,13 +297,15 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     beats.append(Beat(
         f"Em đọc {len(files)} file đơn hàng: {truth.rows} dòng, {detail}. "
         f"Theo file gốc có {truth.unique_rows} chứng từ, doanh thu {spoken(truth.amount)}"
-        + (f", trong đó {len(truth.duplicates)} chứng từ bị xuất hai lần." if truth.duplicates else ".")))
+        + (f", trong đó {len(truth.duplicates)} chứng từ bị xuất hai lần." if truth.duplicates else "."),
+        _check_ref("B5:C5"), f"File gốc: {truth.unique_rows} chứng từ · {spoken(truth.amount)}"))
     if ledger:
         same = abs(truth.amount - ledger["revenue"]) <= TOLERANCE
         beats.append(Beat(
             f"Sổ cái {ledger['name']} có phát sinh Có TK {ledger['rev_acct']} {spoken(ledger['revenue'])}: "
             + ("khớp file gốc đến từng đồng." if same else
-               f"file gốc {_gap_vi(truth.amount - ledger['revenue'])} so với sổ cái, anh cần xem lại file xuất.")))
+               f"file gốc {_gap_vi(truth.amount - ledger['revenue'])} so với sổ cái, anh cần xem lại file xuất."),
+            _check_ref("C5:C6"), "File gốc = sổ cái ✓" if same else "File gốc ≠ sổ cái", "ok" if same else "bad"))
 
     name, formula, origin = _query_to_check(pq, folder)
     fixed_m = m_code.folder_query(str(folder), {f.name: f.date_order or machine_order or sources.DAY_FIRST for f in files},
@@ -311,8 +318,8 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
         formula, moved = _point_at_this_folder(formula, files)
         pq.add(name, formula)
         beats.append(Beat(f"Em nạp query có sẵn trong file {origin} vào Excel với tên {name} để kiểm tra."
-                          + (f" Đường dẫn trong query là {moved}, máy này không có, nên em đổi sang thư mục đơn hàng ở đây "
-                             "để kiểm tra đúng các bước còn lại." if moved else "")))
+                          + (" Thư mục trong query trỏ tới một máy khác, máy này không có, nên em đổi sang thư mục "
+                            "đơn hàng ở đây để kiểm tra đúng các bước còn lại." if moved else "")))
 
     if formula is not None:
         findings = m_code.lint(name, formula)
@@ -328,10 +335,11 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     result = pq.load(name)
     if isinstance(result, ReadFailed):
         _write_check_sheet(bridge, None, truth, ledger)
-        return beats + [Beat(_READ_FAILED_VI.format(name=name))]
+        return beats + [Beat(_READ_FAILED_VI.format(name=name), _check_ref("A7:E7"), "Chưa đối chiếu được", "bad")]
     if isinstance(result, str):
         _write_check_sheet(bridge, None, truth, ledger)
-        beats.append(Beat(f"Excel báo lỗi khi tải query {name}: {result[:200]}"))
+        beats.append(Beat(f"Excel báo lỗi khi tải query {name}: {result[:200]}", _check_ref("A4:E4"),
+                          "Query chưa tải được", "bad"))
         if formula is None:
             return beats
         _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder)}
@@ -345,11 +353,11 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     ref = f"{_q(check_sheet)}!C7" if check_sheet and ledger else None
     if abs(gap) <= TOLERANCE and len(rows) == truth.unique_rows:
         beats.append(Beat(f"Query giữ {len(rows)} dòng, doanh thu {spoken(loaded.amount)}, khớp sổ cái. Em đã kiểm tra lại, số đúng.",
-                          ref, "Khớp ✓"))
+                          ref, "Khớp ✓", "ok"))
         return beats + build_report(bridge, folder, tbs)
 
     beats.append(Beat(f"Query trong Excel chỉ giữ {len(rows)} dòng, doanh thu {spoken(loaded.amount)}, "
-                      f"{_gap_vi(gap)} so với sổ cái. Chưa được dùng số này.", ref, _gap_vi(gap).capitalize()))
+                      f"{_gap_vi(gap)} so với sổ cái. Chưa được dùng số này.", ref, _gap_vi(gap).capitalize(), "bad"))
     why = diagnose(truth, loaded, machine_order)
     reasons = []
     if why["date"]:
@@ -398,11 +406,11 @@ def approve(bridge, pq) -> list:
     ref = f"{_q(check_sheet)}!C7" if check_sheet and ledger else None
     if abs(gap) > TOLERANCE:
         return [Beat(f"Em đã sửa và tải lại: query còn {len(rows)} dòng, {spoken(loaded.amount)}, vẫn {_gap_vi(gap)} so với sổ cái. "
-                     "Em dừng ở đây để anh xem, chưa lập báo cáo.", ref, _gap_vi(gap).capitalize())]
+                     "Em dừng ở đây để anh xem, chưa lập báo cáo.", ref, _gap_vi(gap).capitalize(), "bad")]
     cost_ok = not ledger or "cost" not in loaded.columns or abs(loaded.cost - ledger["cost"]) <= TOLERANCE
     beats = [Beat(f"Đã sửa và đọc lại: query giữ {len(rows)} chứng từ, doanh thu {spoken(loaded.amount)}"
                   + (", giá vốn khớp Nợ TK 632" if cost_ok and ledger and "cost" in loaded.columns else "")
-                  + ". Khớp sổ cái đến từng đồng.", ref, "Khớp ✓")]
+                  + ". Khớp sổ cái đến từng đồng.", ref, "Khớp ✓", "ok")]
     return beats + build_report(bridge, folder, tbs)
 
 
@@ -454,11 +462,31 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
 
 # ── Voice skill glue ──────────────────────────────────────────────────────────
 
+_MARK_COLORS = {"ok": "green", "bad": "red"}
+
+
+def marks_for(box: tuple, beat: Beat) -> list:
+    """Overlay shapes for one beat: a hand-drawn box around the range and a label card beside it."""
+    l, t, r, b = box
+    color = _MARK_COLORS.get(beat.mark, "blue")
+    shapes = [{"kind": "rect", "x1": l - 4, "y1": t - 4, "x2": r + 4, "y2": b + 4, "color": color}]
+    if beat.label:
+        shapes.append({"kind": "text", "x": r + 14, "y": (t + b) / 2, "text": beat.label, "size": "m", "color": color})
+    return shapes
+
+
 async def play(manager, beats: list) -> None:
-    """Speak each beat, flying the pointer to its cell first; the sheet is activated so the cell is on screen."""
+    """Speak each beat, flying the pointer to its cell first; the sheet is activated so the cell is on screen.
+
+    Each referenced range gets a box and a label card drawn on screen, which stay up until
+    the next question so the user can read the whole reconciliation at a glance.
+    """
     from office.cellref import parse_ref
-    for beat in beats:
+    manager.sig_clear_drawings.emit()
+    for i, beat in enumerate(beats):
         held = False
+        if i:
+            manager.sig_response_chunk.emit("\n\n")
         if beat.ref:
             ref = parse_ref(beat.ref)
             try:
@@ -468,6 +496,8 @@ async def play(manager, beats: list) -> None:
                 box = manager._physical_to_logical_bbox(rect) if rect else None
                 if box:
                     l, t, r, b = box
+                    for shape in marks_for(box, beat):
+                        manager.sig_draw.emit(shape)
                     manager.sig_point_hold.emit(True)
                     manager.sig_point_at.emit((l + r) / 2, (t + b) / 2, beat.label or beat.ref)
                     held = True

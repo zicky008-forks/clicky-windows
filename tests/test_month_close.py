@@ -204,13 +204,14 @@ def test_start_finds_the_gap_and_names_both_causes(folder):
     assert "khớp file gốc đến từng đồng" in said
     lint = next(b.text for b in beats if b.text.startswith("Query DonHang có"))
     assert lint.index("Bước Changed Type") < lint.index("Bước Removed Duplicates") < lint.index("Bước Removed Errors")
-    assert "M_do_AI_viet.txt" in said and "máy này không có" in said
+    assert "M_do_AI_viet.txt" in said and "máy này không có" in said and ":\\" not in said   # no raw path read aloud
     assert f'Folder.Files("{folder / "DonHang"}")' in pq.queries["DonHang"]
     assert "chỉ giữ 3 dòng, doanh thu 4,2 tỷ, thiếu 4,2 tỷ so với sổ cái" in said
     assert "2 chứng từ, 2,8 tỷ, mất vì máy này đọc ngày kiểu ngày/tháng" in said
     assert "1 chứng từ, 1,4 tỷ, bị xoá nhầm ở bước xoá trùng" in said
     gap = next(b for b in beats if b.text.startswith("Query trong Excel"))
-    assert gap.ref == "'Doi chieu'!C7"
+    assert gap.ref == "'Doi chieu'!C7" and gap.mark == "bad"
+    assert beats[0].ref == "'Doi chieu'!B5:C5" and beats[1].ref == "'Doi chieu'!C5:C6" and beats[1].mark == "ok"
     check = bridge.sheets["Doi chieu"]
     assert check[3][1:3] == ["=COUNT('DonHang'!G:G)", "=SUM('DonHang'!G:G)"]
     assert check[4][1:4] == [6, Decimal(84 * BN // 10), Decimal(58 * BN // 10)]
@@ -281,6 +282,14 @@ def test_table_clicky_cannot_read_back_shows_no_gap_and_offers_no_fix(folder):
     assert gap_row[2] == "" and gap_row[3] == "" and gap_row[4].startswith("Chưa đối chiếu được")
 
 
+def test_marks_draw_a_coloured_box_and_label_beside_the_range():
+    shapes = month_close.marks_for((100, 50, 200, 70), month_close.Beat("x", "'Doi chieu'!C7", "Thiếu 4,2 tỷ", "bad"))
+    box, card = shapes
+    assert box["kind"] == "rect" and box["color"] == "red" and (box["x1"], box["y2"]) == (96, 74)
+    assert card["kind"] == "text" and card["text"] == "Thiếu 4,2 tỷ" and card["x"] > 200
+    assert month_close.marks_for((0, 0, 1, 1), month_close.Beat("x", "A1"))[0]["color"] == "blue"
+
+
 def test_unsaved_workbook_and_empty_folder(tmp_path):
     bridge = FakeBridge(None)
     assert "chưa được lưu" in _text(month_close.start(bridge, FakePQ(bridge, tmp_path), None))
@@ -318,3 +327,43 @@ def test_machine_order_follows_the_region_culture_not_a_custom_short_date():
     assert month_close.order_from_culture("en-US") == sources.MONTH_FIRST
     assert month_close.order_from_culture("vi-VN") == sources.DAY_FIRST
     assert month_close.machine_date_order() in (None, sources.DAY_FIRST, sources.MONTH_FIRST)
+
+
+def test_play_separates_beats_and_draws_before_speaking():
+    import asyncio
+
+    class Sig:
+        def __init__(self, log, name):
+            self.log, self.name = log, name
+
+        def emit(self, *a):
+            self.log.append((self.name, a))
+
+    class Excel:
+        def activate(self, sheet):
+            pass
+
+        def screen_rect(self, ref, reveal):
+            return (100.0, 50.0, 200.0, 70.0)
+
+    class Manager:
+        def __init__(self):
+            self.log = []
+            self._excel = Excel()
+            for n in ("sig_clear_drawings", "sig_response_chunk", "sig_draw", "sig_point_hold",
+                      "sig_point_at", "sig_point_release"):
+                setattr(self, n, Sig(self.log, n))
+
+        def _physical_to_logical_bbox(self, rect):
+            return rect
+
+        async def _reply_local(self, text):
+            self.log.append(("say", (text,)))
+
+    m = Manager()
+    asyncio.run(month_close.play(m, [month_close.Beat("một"), month_close.Beat("hai", "'Doi chieu'!C7", "Lệch", "bad")]))
+    names = [n for n, _ in m.log]
+    assert names[0] == "sig_clear_drawings"
+    assert ("sig_response_chunk", ("\n\n",)) in m.log
+    assert names.index("sig_draw") < names.index("sig_point_at") < len(names) - 1 - names[::-1].index("say")
+    assert names[-1] == "sig_point_release"
