@@ -236,6 +236,7 @@ def _typed_columns(files: list) -> list:
     return typed
 
 
+ZERO_SHOWN = '#,##0;(#,##0);0'   # the gap must read 0 when it is closed, not an accounting dash
 DETAIL_TOP = 9          # "Chi tiết kiểm tra" heading; detail rows start on the next row
 _CHECK_COLUMNS = {"A": 30, "B": 11, "C": 18, "D": 18, "E": 64}
 _INK, _MUTED, _LINE = "#0F172A", "#64748B", "#E2E8F0"
@@ -296,7 +297,7 @@ def _write_check_sheet(bridge, loaded: Optional[Loaded], truth, ledger: dict,
         grid += [list(r) + [""] * (5 - len(r)) for r in details]
     _try(bridge, "clear", f"{_q(sheet)}!A1:F60")
     bridge.write(f"{_q(sheet)}!A1", grid)
-    bridge.format_numbers(f"{_q(sheet)}!B4:D7")
+    bridge.format_numbers(f"{_q(sheet)}!B4:D7", ZERO_SHOWN)
     _style_check_sheet(bridge, sheet, len(details or []), gap_state if loaded else None)
     return sheet
 
@@ -482,7 +483,7 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     if clean:
         beats.append(Beat(f"Excel khớp sổ cái đến từng đồng: doanh thu {spoken(loaded.amount)}.",
                           ref, "Excel khớp sổ cái", "ok", "0 đ", f"{len(rows)} chứng từ · {spoken(loaded.amount)}"))
-        return beats + build_report(bridge, folder, tbs)
+        return beats + build_report(bridge, folder, tbs) + [SAVE_REMINDER]
 
     beats.append(Beat(f"Báo cáo trong Excel đang {_gap_vi(gap)} so với sổ cái.", ref, "Excel lệch sổ cái", "bad",
                       _signed(gap), f"Query chỉ giữ {len(rows)}/{truth.unique_rows} chứng từ. Chưa được dùng số này."))
@@ -530,7 +531,12 @@ def approve(bridge, pq) -> list:
     note = f"{len(rows)} chứng từ · doanh thu {spoken(loaded.amount)}" + (
         " · giá vốn khớp TK 632" if cost_ok and ledger and "cost" in loaded.columns else "")
     beats = [Beat("Đã sửa xong. Excel khớp sổ cái đến từng đồng.", ref, "Đã khớp sổ cái", "ok", "0 đ", note)]
-    return beats + build_report(bridge, folder, tbs)
+    return beats + build_report(bridge, folder, tbs) + [SAVE_REMINDER]
+
+
+# Clicky changes the open workbook but never saves it for the user; closing without saving
+# loses the fix and the report, so the last thing it says is how to keep them.
+SAVE_REMINDER = Beat("Em chưa lưu file. Anh bấm Ctrl + S để giữ kết quả nhé.")
 
 
 def reject() -> list:
@@ -555,7 +561,10 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
             if sheet:
                 bridge.write(f"{quote(sheet)}!A1", [list(r) for r in rows])
     bridge.activate(tbs[-1][0])
-    summary, report, names = report_skill.run_report(bridge)
+    # The rows already read from the files are what the report is built from; reading them back
+    # out of Excel would only add a way to fail (cell types change on the way in and out).
+    (cur, cur_rows, _), (prev, prev_rows, _) = tbs[-1], tbs[-2]
+    summary, report, names = report_skill.run_report(bridge, ((cur, cur_rows), (prev, prev_rows)))
     if report is None:
         return [Beat(summary)]
     pat = report.figures[-1].value
@@ -621,6 +630,9 @@ async def play(manager, beats: list) -> None:
     from ui.card_layout import NO_BUBBLE, reading_seconds
     run = object()
     manager._month_close_run = run
+    guided = getattr(manager, "sig_guided", None)     # the chat panel steps aside while Clicky guides
+    if guided is not None:
+        guided.emit(True)
     manager.sig_clear_drawings.emit()
     for i, beat in enumerate(beats):
         if i:
@@ -646,6 +658,8 @@ async def play(manager, beats: list) -> None:
         def fade():
             if getattr(manager, "_month_close_run", None) is run:
                 manager.sig_clear_drawings.emit()
+                if guided is not None:
+                    guided.emit(False)
         try:
             asyncio.get_running_loop().call_later(CLEAR_AFTER_S, fade)
         except RuntimeError:

@@ -259,7 +259,37 @@ def test_approve_fixes_verifies_then_builds_the_report(folder):
     assert profit.value == "436 triệu" and "TK 521" in profit.note and profit.mark == "warn"
     assert profit.ref.startswith("'BC thang'!C")
     assert "Lợi nhuận thực" in said
+    assert beats[-1] is month_close.SAVE_REMINDER             # the file is never saved behind the user's back
     assert month_close.approve(bridge, pq) == []              # nothing left to approve
+
+
+def test_report_is_built_from_the_files_even_when_excel_cannot_read_the_sheets_back(folder):
+    """Run 4 on the real PC: the TB sheets were written, reading them back gave nothing, and the
+    report step said "0 sheet đọc được". The rows already read from the files must be enough."""
+    class BlindBridge(FakeBridge):
+        def sheet_rows(self, name):
+            return None
+
+    bridge = BlindBridge(folder)
+    pq = FakePQ(bridge, folder)
+    month_close.start(bridge, pq, sources.DAY_FIRST)
+    beats = month_close.approve(bridge, pq)
+    said = _text(beats)
+    assert "sheet đọc được" not in said
+    assert "BC thang" in bridge.sheets
+    assert any("Lợi nhuận thực là 436 triệu" in b.text for b in beats)
+
+
+def test_closed_gap_reads_zero_not_a_dash(folder):
+    class Recording(FakeBridge):
+        def format_numbers(self, ref, number_format=None):
+            self.formats.append((ref, number_format))
+
+    bridge = Recording(folder)
+    pq = FakePQ(bridge, folder)
+    month_close.start(bridge, pq, sources.DAY_FIRST)
+    fmt = dict(f for f in bridge.formats if isinstance(f, tuple))
+    assert fmt["'Doi chieu'!B4:D7"].endswith(";0")
 
 
 def test_reject_keeps_the_query_and_warns(folder):
@@ -384,7 +414,7 @@ def test_play_shows_one_idea_at_a_time_then_offers_the_buttons(monkeypatch):
             self.log = []
             self._excel = Excel()
             for n in ("sig_clear_drawings", "sig_response_chunk", "sig_draw", "sig_point_hold",
-                      "sig_point_at", "sig_point_release", "sig_choices"):
+                      "sig_point_at", "sig_point_release", "sig_choices", "sig_guided"):
                 setattr(self, n, Sig(self.log, n))
 
         def _physical_to_logical_bbox(self, rect):
@@ -410,3 +440,6 @@ def test_play_shows_one_idea_at_a_time_then_offers_the_buttons(monkeypatch):
     # The question beat keeps the last card up and ends with the buttons.
     assert names[-1] == "sig_choices" and m.log[-1][1] == ("Em sửa giúp anh nhé?", ["Sửa giúp tôi", "Để tôi xem"])
     assert "sig_clear_drawings" not in names[names.index("say", second_say + 1) - 1:]
+    # The chat panel steps aside for the whole walk-through and stays away while the buttons are up.
+    assert names[0] == "sig_guided" and m.log[0][1] == (True,)
+    assert ("sig_guided", (False,)) not in m.log

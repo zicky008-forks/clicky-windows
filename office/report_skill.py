@@ -5,6 +5,9 @@ the report, questions-to-verify, check and cleaned trial-balance sheets with liv
 the conclusion. It only adds new sheets; the user's own sheets are never changed.
 """
 import asyncio
+import logging
+
+log = logging.getLogger(__name__)
 
 TRIGGER = (r"(l[ậa]p|l[àa]m|t[ạa]o|d[ựu]ng|xu[ấa]t)\b.{0,20}b[áa]o\s+c[áa]o.{0,30}\bth[áa]ng\b"
            r"|\b(build|make|create)\b.{0,20}\bmonthly\s+report\b")
@@ -22,12 +25,16 @@ def find_trial_balances(bridge) -> list:
             continue
         rows = bridge.sheet_rows(name)
         if not rows:
+            log.info("Sheet %s: no rows read", name)
             continue
         try:
             if read_trial_balance(rows, name).lines:
                 found.append((name, rows))
         except ValueError:
             continue
+        except Exception as exc:
+            log.warning("Sheet %s could not be read as a trial balance: %s", name, exc)
+    log.info("Trial balances found in the workbook: %s", [n for n, _ in found])
     return found
 
 
@@ -42,17 +49,24 @@ def run(bridge) -> str:
     return run_report(bridge)[0]
 
 
-def run_report(bridge) -> tuple:
-    """(spoken summary, MonthlyReport or None, sheet names used or None)."""
+def run_report(bridge, periods=None) -> tuple:
+    """(spoken summary, MonthlyReport or None, sheet names used or None).
+
+    periods is ((this period's name, rows), (previous name, rows)) when the caller already
+    read both trial balances (the month-close flow reads them from the files); otherwise
+    they are found among the workbook's sheets.
+    """
     from engine.build import SHEET_NAMES, build
     from engine.report_sheet import quote
     if not bridge.available():
         return NEED_TWO.format(n=0), None, None
-    found = find_trial_balances(bridge)
-    if len(found) < 2:
-        return NEED_TWO.format(n=len(found)), None, None
-    ctx = bridge.context() or {}
-    (cur_name, cur_rows), (prev_name, prev_rows) = pick_periods(found, ctx.get("sheet", ""))
+    if periods is None:
+        found = find_trial_balances(bridge)
+        if len(found) < 2:
+            return NEED_TWO.format(n=len(found)), None, None
+        ctx = bridge.context() or {}
+        periods = pick_periods(found, ctx.get("sheet", ""))
+    (cur_name, cur_rows), (prev_name, prev_rows) = periods
     names = {}
     for key in ("report", "questions", "checks", "tb_cur", "tb_prev"):
         actual = bridge.add_sheet(SHEET_NAMES[key])

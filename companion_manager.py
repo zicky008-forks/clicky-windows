@@ -310,6 +310,7 @@ class CompanionManager(QObject):
     sig_draw                = pyqtSignal(dict)            # generic teaching shape → overlay
     sig_clear_drawings      = pyqtSignal()                # wipe all teaching shapes
     sig_choices             = pyqtSignal(str, list)       # (question, button labels) → clickable choice card
+    sig_guided              = pyqtSignal(bool)            # True while Clicky walks through the screen step by step
     sig_recording_state     = pyqtSignal(bool, str)       # (is_recording, output_dir)
     sig_turn_started        = pyqtSignal(str)
     sig_caption             = pyqtSignal(str)

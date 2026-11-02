@@ -349,6 +349,22 @@ def main():
     choice_card.dismissed.connect(overlay.clear_annotations)
     manager.sig_turn_started.connect(lambda _q: choice_card.hide())
 
+    # While Clicky walks through the sheet step by step the cards carry everything, so the chat
+    # panel steps aside instead of covering a third of the screen, and comes back afterwards.
+    guided_state = {"panel_was_open": False}
+
+    def _on_guided(active: bool):
+        if active:
+            if panel.isVisible():
+                guided_state["panel_was_open"] = True
+                panel.hide()
+        elif guided_state["panel_was_open"]:
+            guided_state["panel_was_open"] = False
+            panel.show()
+
+    manager.sig_guided.connect(_on_guided)
+    choice_card.dismissed.connect(lambda: _on_guided(False))
+
     # Errors. The toast names the log file because it only has room for the
     # message itself — issue #15 was reported with no traceback simply because
     # nobody knew a log existed.
@@ -357,7 +373,7 @@ def main():
     ) / "Clicky" / "clicky.log"
     manager.sig_error.connect(
         lambda e: tray.show_notification(
-            "Clicky error", f"{e}\n\nFull details: {_log_hint}"
+            "Clicky gặp lỗi", f"{e}\n\nChi tiết trong: {_log_hint}"
         )
     )
     manager.sig_notice.connect(lambda message: tray.show_notification('Clicky', message))

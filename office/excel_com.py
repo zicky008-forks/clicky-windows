@@ -32,6 +32,16 @@ def _as_grid(value):
     return [[value]]
 
 
+def _block_address(row: int, col: int, rows: int, cols: int) -> str:
+    """'C5:H40' for a block of rows x cols whose top-left cell is (row, col).
+
+    Built as text so no parameterised COM property (Range.Resize) is involved: early-bound
+    wrappers turn those into GetResize or the default member, which fails or returns one cell.
+    """
+    rows, cols = max(rows, 1), max(cols, 1)
+    return f"{col_letters(col)}{row}:{col_letters(col + cols - 1)}{row + rows - 1}"
+
+
 def _bgr(hex_colour: str) -> int:
     """'#RRGGBB' → the BGR integer Excel's Color properties take."""
     h = hex_colour.lstrip("#")
@@ -98,7 +108,7 @@ class ExcelBridge:
                 ctx["selection"] = sel.Address.replace("$", "")
                 rows = min(sel.Rows.Count, MAX_CONTEXT_ROWS)
                 cols = min(sel.Columns.Count, MAX_CONTEXT_COLS)
-                block = sel.Resize(rows, cols)
+                block = ws.Range(_block_address(sel.Row, sel.Column, rows, cols))
                 ctx["values"] = _as_grid(block.Formula)
             except Exception:
                 pass   # a chart or shape is selected, not cells
@@ -163,13 +173,16 @@ class ExcelBridge:
         if app is None:
             return None
         try:
-            used = app.ActiveWorkbook.Worksheets(name).UsedRange
-            rows = min(used.Rows.Count, max_rows)
-            cols = min(used.Columns.Count, max_cols)
-            grid = _as_grid(used.Resize(rows, cols).Value)
+            ws = app.ActiveWorkbook.Worksheets(name)
+            used = ws.UsedRange
+            block = ws.Range(_block_address(used.Row, used.Column, min(used.Rows.Count, max_rows),
+                                            min(used.Columns.Count, max_cols)))
+            # Value2: plain numbers and text, no date or currency conversion that can fail.
+            grid = _as_grid(block.Value2)
             pad = [None] * (used.Column - 1)
             return [[] for _ in range(used.Row - 1)] + [pad + row for row in grid]
-        except Exception:
+        except Exception as exc:
+            log.warning("Reading sheet %s failed: %s", name, exc)
             return None
 
     def workbook_folder(self) -> Optional[str]:
