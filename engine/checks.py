@@ -75,8 +75,12 @@ def check(tb: TrialBalance) -> list:
     # 6. Income-statement accounts outside the mapping would silently drop out of profit.
     for l in leaves:
         if l.account[0] in "5678" and not l.account.startswith(MAPPED_PREFIXES) and l.dr != l.cr:
+            income = l.account[0] in "57"
+            net = (l.cr - l.dr) if income else (l.dr - l.cr)
+            effect = "chưa cộng khoản này" if (net > 0) == income else "chưa trừ khoản này"
             issues.append(Issue("warning", "unmapped",
-                                f"TK {l.account} {l.name} còn chênh lệch Nợ/Có nhưng chưa nằm trong chỉ tiêu nào", l.row))
+                                f"TK {l.account} {l.name} còn {fmt(abs(net))} chưa nằm trong chỉ tiêu nào, "
+                                f"lợi nhuận sau thuế {effect}", l.row))
 
     # 7. Income closed to 911 should match income computed from 511/521/515/711. A gap usually
     #    means returns or discounts booked straight to Nợ 511, which inflate gross revenue.

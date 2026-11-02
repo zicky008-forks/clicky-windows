@@ -169,10 +169,25 @@ def diagnose(truth: sources.SourceTruth, loaded: Loaded, machine_order: Optional
     present = Counter(loaded.docs())
     orders = {f.name: f.date_order for f in truth.files}
     kept = {(info.date, info.customer) for doc, info in truth.doc_numbers.items() if doc in present}
-    out = {"date": [], "distinct": [], "other": [], "amount": [],
+    out = {"date": [], "distinct": [], "other": [], "amount": [], "shared": [], "outside": [],
            "excel_dups": [d for d, n in present.items() if n > truth.collisions.get(d, 1)]}
     if "doc" not in loaded.columns:
         return out
+    loaded_by_doc = {}
+    ai = loaded.columns.get("amount")
+    for r in loaded.rows:
+        di = loaded.columns["doc"]
+        if di < len(r) and r[di] not in (None, ""):
+            loaded_by_doc[str(r[di]).strip()] = loaded_by_doc.get(str(r[di]).strip(), ZERO) + (
+                _dec(r[ai]) if ai is not None and ai < len(r) else ZERO)
+    # Real orders that share a number with another branch's order, removed by a de-duplication on the number alone.
+    for doc, n in truth.collisions.items():
+        if 0 < present.get(doc, 0) < n:
+            out["shared"].append((doc, n - present[doc], truth.doc_amounts[doc] - loaded_by_doc.get(doc, ZERO)))
+    # Rows the query kept although they are dated outside the ledger's month.
+    for doc, file, d, amount in truth.outside:
+        if doc and doc in present and doc not in truth.doc_numbers:
+            out["outside"].append((doc, d, loaded_by_doc.get(doc, amount)))
     # Rows that arrived but with a different amount: a number read in the wrong format, then the error
     # replaced by 0 or the digits taken as a decimal. Row counts match; the money does not.
     di, ai = loaded.columns["doc"], loaded.columns.get("amount")
@@ -393,7 +408,16 @@ def _date_example(items, machine_order: Optional[str]) -> tuple:
     return "", ""
 
 
-def _cause_beats(why: dict, machine_order: Optional[str], first_row: int, reader: str = "Máy này đọc") -> tuple:
+def explained(why: dict) -> Decimal:
+    """How much the named causes move the query's total away from the source files (missing is negative)."""
+    missing = sum((_amount(why.get(k, [])) for k in ("date", "distinct", "other")), ZERO)
+    missing += sum((a for *_, a in why.get("shared", [])), ZERO)
+    missing += sum((info.amount - got for _, info, got in why.get("amount", [])), ZERO)
+    return sum((a for *_, a in why.get("outside", [])), ZERO) - missing
+
+
+def _cause_beats(why: dict, machine_order: Optional[str], first_row: int, reader: str = "Máy này đọc",
+                 gap: Optional[Decimal] = None) -> tuple:
     """(beats, detail rows): one beat per cause, each lighting up its own row in the detail table."""
     beats, rows = [], []
 
@@ -426,11 +450,34 @@ def _cause_beats(why: dict, machine_order: Optional[str], first_row: int, reader
                  note=f"Ví dụ {doc}: file ghi {spoken(info.amount)}, Excel đọc thành {spoken(got)}."),
             ["Đọc sai số tiền", n, -lost, "", f"Số tiền ghi kiểu khác cài đặt của query (ví dụ 1.250.000 so với 1,250,000), "
              f"bị đọc sai hoặc lỗi rồi thay bằng 0. Ví dụ {doc}: file {info.amount:,.0f}, Excel {got:,.0f}."])
+    if why.get("shared"):
+        n, amt = sum(k for _, k, _ in why["shared"]), sum((a for *_, a in why["shared"]), ZERO)
+        example = why["shared"][0][0]
+        add(Beat(f"{n} đơn thật bị xoá vì trùng số chứng từ với nơi khác, làm mất {spoken(amt)}.",
+                 label=f"Trùng số giữa các nơi · {n} đơn", mark="bad", value=spoken(amt),
+                 note=f"Ví dụ số {example}: hai nơi cùng đánh số này cho hai đơn khác nhau."),
+            ["Xoá nhầm đơn trùng số giữa các nơi", n, amt, "", "Bước xoá trùng chỉ theo số chứng từ, nhưng mỗi chi nhánh "
+             f"tự đánh số nên hai đơn khác nhau có cùng số. Ví dụ {example}. Cần xoá trùng theo Chi nhánh + Số CT."])
+    if why.get("outside"):
+        n, amt = len(why["outside"]), sum((a for *_, a in why["outside"]), ZERO)
+        months = sorted({f"{d.month:02d}/{d.year}" for _, d, _ in why["outside"]})
+        add(Beat(f"Query còn giữ {n} dòng của tháng khác, cộng thừa {spoken(amt)}.",
+                 label=f"Dòng ngoài kỳ · {n} dòng", mark="bad", value=f"+{spoken(amt)}",
+                 note=f"Các dòng tháng {', '.join(months)} chưa được lọc ra."),
+            ["Dòng ngoài kỳ còn trong query", n, amt, "", f"File xuất có dòng tháng {', '.join(months)}; query không lọc theo "
+             "kỳ của sổ cái nên cộng cả vào."])
     if why["other"]:
         n, amt = len(why["other"]), _amount(why["other"])
         add(Beat(f"Còn {n} chứng từ bị mất mà em chưa rõ lý do.", label="Chưa rõ nguyên nhân", mark="warn",
                  value=spoken(amt), note="Anh xem danh sách trong bảng chi tiết."),
             ["Chưa rõ nguyên nhân", n, amt, "", "Có trong file gốc nhưng không có trong bảng query."])
+    # The causes must add up to the gap; whatever they do not cover is said, never left silent.
+    if gap is not None:
+        rest = gap - explained(why)
+        if abs(rest) > TOLERANCE:
+            add(Beat(f"Còn {spoken(abs(rest))} em chưa tìm ra nguyên nhân.", label="Chưa rõ nguyên nhân", mark="warn",
+                     value=_signed(rest), note="Phần này chưa được giải thích. Anh xem bảng query trước khi dùng số."),
+                ["Phần lệch chưa rõ nguyên nhân", "", rest, "", "Tổng các nguyên nhân ở trên chưa bằng chỗ lệch giữa query và file gốc."])
     if why["excel_dups"]:
         n = len(why["excel_dups"])
         add(Beat(f"{n} chứng từ bị đếm hai lần trong Excel.", label="Đếm trùng", mark="bad", value=f"{n} chứng từ",
@@ -500,7 +547,8 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     keys = _dedup_key(files, truth)
     if keys is not None:
         shared = ", ".join(sorted(truth.collisions)[:5])
-        notes.append(["Số chứng từ trùng giữa các nơi", sum(truth.collisions.values()), "", "",
+        notes.append(["Số chứng từ trùng giữa các nơi", sum(truth.collisions.values()),
+                      sum((truth.doc_amounts[d] for d in truth.collisions), ZERO), "",
                       f"{len(truth.collisions)} số chứng từ được dùng cho các đơn khác nhau ({shared}). Đây là đơn thật, "
                       + ("Clicky xoá trùng theo Chi nhánh + Số CT." if keys else "Clicky chỉ xoá dòng giống hệt nhau.")])
     fixed_m = m_code.folder_query(str(folder), {f.name: f.culture(machine_order) for f in files},
@@ -547,7 +595,8 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     culture = m_code.fixed_culture(formula) if formula else None
     read_order = (sources.MONTH_FIRST if culture.endswith("-US") else sources.DAY_FIRST) if culture else machine_order
     why = diagnose(truth, loaded, read_order) if not clean else {"date": [], "distinct": [], "other": [], "excel_dups": []}
-    cause_beats, cause_rows = _cause_beats(why, read_order, 0, f"Query ghi cứng {culture}, nên đọc" if culture else "Máy này đọc")
+    cause_beats, cause_rows = _cause_beats(why, read_order, 0, f"Query ghi cứng {culture}, nên đọc" if culture else "Máy này đọc",
+                                           None if clean else loaded.amount - truth.amount)
     check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, cause_rows + notes, "ok" if clean else "bad")
     ref = f"{_q(check_sheet)}!C7" if check_sheet and ledger else None
     if clean:

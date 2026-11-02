@@ -155,6 +155,7 @@ class SourceTruth:
     unreadable_dates: int = 0
     doc_numbers: dict = field(default_factory=dict)      # doc number → DocInfo
     collisions: dict = field(default_factory=dict)       # doc number → how many different orders share it
+    doc_amounts: dict = field(default_factory=dict)      # doc number → total of every distinct order using it
     period: Optional[tuple] = None                       # (year, month) the files were measured for
     outside: list = field(default_factory=list)          # (doc, file, date, amount) dated outside that period
 
@@ -241,8 +242,10 @@ def truth(files: list, period: Optional[tuple] = None) -> SourceTruth:
                     continue
                 seen[doc].append(content)
                 t.collisions[doc] = len(seen[doc])
+                t.doc_amounts[doc] += amount
             elif doc:
                 seen[doc] = [content]
+                t.doc_amounts[doc] = amount
                 t.doc_numbers[doc] = DocInfo(f.name, d, str(cell("customer") or "").strip(), amount, str(cell("date") or ""))
             t.unique_rows += 1
             t.amount += amount

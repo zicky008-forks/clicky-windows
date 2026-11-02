@@ -143,3 +143,47 @@ def test_amount_format_decides_the_culture_when_dates_are_iso_and_misread_amount
     beats, rows = month_close._cause_beats(why, sources.MONTH_FIRST, 0)
     assert beats[0].text == "1 chứng từ vẫn có trong Excel nhưng số tiền bị đọc sai, làm lệch 1,2 triệu."
     assert rows[0][0] == "Đọc sai số tiền"
+
+
+def test_shared_numbers_and_out_of_period_rows_explain_the_whole_gap(tmp_path):
+    """An AI query de-duplicates on the number alone and does not filter the month: both causes are named,
+    with money, and together they add up to the gap."""
+    from office import month_close
+    for name, branch, rows in (("DonHang_HN.csv", "HN", [["0001", "05/10/2026", "K1", "100"], ["0002", "28/09/2026", "K2", "40"]]),
+                               ("DonHang_DN.csv", "DN", [["0001", "06/10/2026", "K7", "300"], ["0003", "20/10/2026", "K8", "50"]])):
+        with open(tmp_path / name, "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.writer(f)
+            w.writerow(["SoCT", "Ngay", "MaKH", "ThanhTien", "ChiNhanh"])
+            w.writerows([r + [branch] for r in rows])
+    t = sources.truth(sources.find_order_files(tmp_path), (2026, 10))
+    assert t.amount == Decimal(450)
+    header = ["SoCT", "Ngay", "MaKH", "ThanhTien", "ChiNhanh"]
+    # What the AI query loads: DN first, so DN's 0001 is kept and HN's 0001 (100) is removed; 0002 from September stays.
+    loaded = month_close.Loaded("DonHang", header, [["0001", 0, "K7", 300, "DN"], ["0003", 0, "K8", 50, "DN"],
+                                                    ["0002", 0, "K2", 40, "HN"]], sources.find_columns(header))
+    gap = loaded.amount - t.amount
+    assert gap == Decimal(-60)
+    why = month_close.diagnose(t, loaded, sources.DAY_FIRST)
+    assert why["shared"] == [("0001", 1, Decimal(100))] and [d for d, *_ in why["outside"]] == ["0002"]
+    assert month_close.explained(why) == gap
+    beats, rows = month_close._cause_beats(why, sources.DAY_FIRST, 0, gap=gap)
+    assert [r[0] for r in rows] == ["Xoá nhầm đơn trùng số giữa các nơi", "Dòng ngoài kỳ còn trong query"]
+    assert beats[0].text == "1 đơn thật bị xoá vì trùng số chứng từ với nơi khác, làm mất 100 đồng."
+
+
+def test_a_gap_the_causes_do_not_cover_is_said_out_loud():
+    from office import month_close
+    why = {"date": [], "distinct": [], "other": [], "excel_dups": []}
+    beats, rows = month_close._cause_beats(why, None, 0, gap=Decimal(-5_000_000))
+    assert beats[-1].text == "Còn 5 triệu em chưa tìm ra nguyên nhân." and rows[-1][2] == Decimal(-5_000_000)
+
+
+def test_money_outside_the_report_lines_is_said_in_the_summary():
+    """6281 (a cost account the report has no line for) still carries 12 triệu: say it and its effect on profit."""
+    from engine import checks, monthly_report
+    tb = read_trial_balance(HEAD + [["111", "Tiền mặt", 100_000_000, 0, 0, 12_000_000, 88_000_000, 0],
+                                    ["6281", "Chi phí sản xuất chung", 0, 0, 12_000_000, 0, 12_000_000, 0]])
+    found = [i for i in checks.check(tb) if i.code == "unmapped"]
+    assert len(found) == 1 and "12.000.000" in found[0].message and "lợi nhuận sau thuế chưa trừ khoản này" in found[0].message
+    text = monthly_report.summary_vi([monthly_report.Variance("pat", "Lợi nhuận sau thuế", Decimal(100), Decimal(90), [])], found)
+    assert "Lưu ý: TK 6281 Chi phí sản xuất chung còn 12.000.000" in text and "điểm cần lưu ý" not in text

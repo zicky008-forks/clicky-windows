@@ -136,7 +136,13 @@ def summary_vi(variances: list, issues: list, n_questions: int = 0) -> str:
     if errors:
         text += f" Cảnh báo: có {len(errors)} lỗi cần xem trước khi gửi, ví dụ: {errors[0].message}."
     elif issues:
-        text += f" Có {len(issues)} điểm cần lưu ý trong sheet Kiem tra."
+        # Money outside the report changes profit, so it is said outright, not left in the sheet.
+        unmapped = [i for i in issues if i.code == "unmapped"]
+        for i in unmapped[:2]:
+            text += f" Lưu ý: {i.message}."
+        rest = len(issues) - min(len(unmapped), 2)
+        if rest:
+            text += f" Còn {rest} điểm cần lưu ý trong sheet Kiem tra."
     return text
 
 
