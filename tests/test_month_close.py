@@ -266,6 +266,21 @@ def test_query_that_excel_cannot_load_still_gets_the_fix_offered(folder):
     assert "Khớp sổ cái đến từng đồng" in _text(month_close.approve(bridge, pq))
 
 
+def test_table_clicky_cannot_read_back_shows_no_gap_and_offers_no_fix(folder):
+    from office.power_query import ReadFailed
+
+    class UnreadablePQ(FakePQ):
+        def load(self, name):
+            return ReadFailed("No module named 'win32timezone'")
+    bridge = FakeBridge(folder)
+    pq = UnreadablePQ(bridge, folder)
+    said = _text(month_close.start(bridge, pq, sources.DAY_FIRST))
+    assert "lỗi của Clicky" in said and "Excel báo lỗi" not in said
+    assert not month_close.pending()
+    gap_row = bridge.sheets["Doi chieu"][6]
+    assert gap_row[2] == "" and gap_row[3] == "" and gap_row[4].startswith("Chưa đối chiếu được")
+
+
 def test_unsaved_workbook_and_empty_folder(tmp_path):
     bridge = FakeBridge(None)
     assert "chưa được lưu" in _text(month_close.start(bridge, FakePQ(bridge, tmp_path), None))

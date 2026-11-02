@@ -115,18 +115,28 @@ class PowerQuery:
                 qt.RefreshStyle = 1                     # xlInsertDeleteCells
                 qt.AdjustColumnWidth = True
             lo.QueryTable.Refresh(False)
-            grid = lo.Range.Value
-            rows = [list(r) for r in grid] if isinstance(grid, tuple) else [[grid]]
-            return lo.Parent.Name, rows[0], rows[1:]
         except Exception as exc:
             log.warning("Power Query load failed for %s: %s", name, exc)
             return str(exc)
+        try:
+            # Value2 gives dates as serial numbers, so reading never depends on
+            # pywin32's date conversion; the checks only use amounts and voucher numbers.
+            grid = lo.Range.Value2
+            rows = [list(r) for r in grid] if isinstance(grid, tuple) else [[grid]]
+            return lo.Parent.Name, rows[0], rows[1:]
+        except Exception as exc:
+            log.warning("Reading the loaded table for %s failed: %s", name, exc)
+            return ReadFailed(str(exc))
 
     def refresh_all(self) -> None:
         try:
             self.bridge._excel().ActiveWorkbook.RefreshAll()
         except Exception:
             pass
+
+
+class ReadFailed(str):
+    """Excel loaded the query but Clicky could not read the table back: Clicky's fault, not the query's."""
 
 
 def format_for_prompt(queries: list, findings: list) -> str:

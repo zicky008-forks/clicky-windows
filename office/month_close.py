@@ -23,6 +23,7 @@ from typing import Optional
 from engine import m_code, sources
 from engine.monthly_report import spoken
 from engine.trial_balance import ZERO
+from office.power_query import ReadFailed
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +62,11 @@ def _q(sheet: str) -> str:
 def _col(i: int) -> str:
     from office.cellref import col_letters
     return col_letters(i + 1)
+
+
+_READ_FAILED_VI = ("Excel đã tải xong query {name}, nhưng em chưa đọc lại được bảng kết quả. Đây là lỗi của Clicky, "
+                   "không phải lỗi file của anh. Em chưa đối chiếu được nên chưa có số chênh lệch nào, anh đừng dùng "
+                   "số trong sheet Doi chieu. Anh cập nhật Clicky rồi gọi lại em.")
 
 
 def _dec(v) -> Decimal:
@@ -244,8 +250,9 @@ def _write_check_sheet(bridge, loaded: Optional[Loaded], truth, ledger: dict) ->
          f"Đã bỏ {len(truth.duplicates)} chứng từ lặp: {dups}" if truth.duplicates else "Không có chứng từ lặp"],
         [f"Sổ cái {ledger.get('name', '')}", "", ledger.get("revenue", ""), ledger.get("cost", ""),
          f"Phát sinh Có TK {ledger.get('rev_acct', '511')} / Nợ TK 632" if ledger else "Chưa thấy file cân đối tài khoản"],
-        ["Chênh lệch Excel − sổ cái", "", "=C4-C6" if ledger else "", "=D4-D6" if ledger and "cost" in (loaded.columns if loaded else {}) else "",
-         "Phải bằng 0"],
+        ["Chênh lệch Excel − sổ cái", "", "=C4-C6" if ledger and loaded else "",
+         "=D4-D6" if ledger and loaded and "cost" in loaded.columns else "",
+         "Phải bằng 0" if loaded else "Chưa đối chiếu được: chưa đọc được bảng query"],
     ]
     bridge.write(f"{_q(sheet)}!A1", grid)
     bridge.format_numbers(f"{_q(sheet)}!B4:D7")
@@ -319,6 +326,9 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
         pq.add(name, fixed_m)
 
     result = pq.load(name)
+    if isinstance(result, ReadFailed):
+        _write_check_sheet(bridge, None, truth, ledger)
+        return beats + [Beat(_READ_FAILED_VI.format(name=name))]
     if isinstance(result, str):
         _write_check_sheet(bridge, None, truth, ledger)
         beats.append(Beat(f"Excel báo lỗi khi tải query {name}: {result[:200]}"))
@@ -373,6 +383,8 @@ def approve(bridge, pq) -> list:
     if not pq.add(job["name"], job["formula"]):
         return [Beat(f"Em không sửa được query {job['name']}. Anh kiểm tra file có đang bị khoá không.")]
     result = pq.load(job["name"])
+    if isinstance(result, ReadFailed):
+        return [Beat(_READ_FAILED_VI.format(name=job["name"]) + " Bản query cũ vẫn còn trong power_query_backups.json.")]
     if isinstance(result, str):
         return [Beat(f"Em đã sửa query nhưng Excel báo lỗi khi tải lại: {result[:200]}. Bản cũ vẫn còn trong power_query_backups.json.")]
     sheet, header, rows = result

@@ -68,6 +68,11 @@ hidden = [
     "audio.tts.openai_tts_provider",
     "audio.tts.elevenlabs_provider",
 
+    # pywin32 converts Excel dates to Python through win32timezone, imported
+    # lazily inside pywintypes, so the build never sees it. Without it any
+    # Excel range that holds a date fails to read.
+    "win32timezone",
+
     # Indirect deps
     "tiktoken_ext",
     "tiktoken_ext.openai_public",

@@ -32,8 +32,14 @@ def run():
     assert not image.isNull()
     window.close()
     app.processEvents()
+    checks = ["QtWidgets import", "native window", "Sketch rendering", "audio capture import", "Edge voice import"]
+    if sys.platform == "win32":
+        # Excel dates come back through pywintypes, which imports win32timezone at run time.
+        import pywintypes  # noqa: F401
+        import win32timezone  # noqa: F401
+        checks.append("Excel date conversion import")
     report = {"ok": True, "qt_binding": QT_VERSION_STR, "qt_runtime": qVersion(),
-              "checks": ["QtWidgets import", "native window", "Sketch rendering", "audio capture import", "Edge voice import"],
+              "checks": checks,
               "edge_tts": edge_version,
               "services_started": False}
     if "--smoke-report" in sys.argv:
