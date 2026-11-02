@@ -209,6 +209,26 @@ class ExcelBridge:
         except Exception:
             pass
 
+    def screen_updating(self, on: bool) -> None:
+        """Freeze or release Excel's screen, so sheets added and filled in a batch do not flash past the user."""
+        app = self._excel()
+        try:
+            app.ScreenUpdating = bool(on)
+        except Exception:
+            pass
+
+    def ignore_text_numbers(self, text: str) -> None:
+        """Hide Excel's green 'number stored as text' triangle on cells that are text on purpose (account codes)."""
+        ref = parse_ref(text)
+        app = self._excel()
+        if ref is None or app is None:
+            return
+        try:
+            for cell in self._sheet(app, ref).Range(ref.address).Cells:
+                cell.Errors(3).Ignore = True          # xlNumberAsText
+        except Exception:
+            pass
+
     def format_numbers(self, text: str, number_format: str = '#,##0;(#,##0);"-"') -> None:
         ref = parse_ref(text)
         app = self._excel()

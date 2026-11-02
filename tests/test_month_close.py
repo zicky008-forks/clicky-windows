@@ -444,3 +444,22 @@ def test_play_shows_one_idea_at_a_time_then_offers_the_buttons(monkeypatch):
     # The chat panel steps aside for the whole walk-through and stays away while the buttons are up.
     assert names[0] == "sig_guided" and m.log[0][1] == (True,)
     assert ("sig_guided", (False,)) not in m.log
+
+
+def test_fix_runs_behind_a_still_screen_and_ends_on_the_profit_card(folder):
+    class Recording(FakeBridge):
+        def __init__(self, f):
+            super().__init__(f)
+            self.screen = []
+
+        def screen_updating(self, on):
+            self.screen.append(on)
+
+    bridge = Recording(folder)
+    pq = FakePQ(bridge, folder)
+    month_close.start(bridge, pq, sources.DAY_FIRST)
+    beats = month_close.approve(bridge, pq)
+    assert bridge.screen == [False, True]                    # frozen while sheets are added, released after
+    assert beats[-2].text.startswith("Lợi nhuận thực là")    # the warning is the last scene before the save line
+    assert any(name == "BC thang" and widths["A"] >= 30 for name, widths, _ in bridge.layouts)
+    assert ("'BC thang'!A4:I4", ) == tuple(r for r, o in bridge.styles if r == "'BC thang'!A4:I4")[:1]

@@ -346,6 +346,8 @@ def main():
     # Questions Clicky asks get real buttons; a click answers as if the words were typed.
     manager.sig_choices.connect(choice_card.ask)
     choice_card.chosen.connect(manager.submit_text)
+    # The last card belongs to the question just answered; it must not linger while Clicky works.
+    choice_card.chosen.connect(lambda _label: overlay.clear_annotations())
     choice_card.dismissed.connect(overlay.clear_annotations)
     manager.sig_turn_started.connect(lambda _q: choice_card.hide())
 

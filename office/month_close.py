@@ -621,6 +621,16 @@ def approve(bridge, pq) -> list:
     job, _PENDING = _PENDING, None
     if not job:
         return []
+    # Reloading the query and adding the report sheets would flash a dozen sheets past the user;
+    # the screen stays still and the result is shown when it is ready.
+    _try(bridge, "screen_updating", False)
+    try:
+        return _approve(bridge, pq, job)
+    finally:
+        _try(bridge, "screen_updating", True)
+
+
+def _approve(bridge, pq, job) -> list:
     folder = Path(job["folder"])
     pq.add(PARAM_NAME, m_code.parameter_query(str(folder)))
     if not pq.add(job["name"], job["formula"]):
@@ -691,7 +701,11 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
     prev_pat = next((v.previous for v in report.variances if v.key == "pat"), None)
     row = 4 + len(report.figures)
     pat_ref = f"{quote(names['report'])}!C{row}"
+    _style_report_sheet(bridge, names["report"], row)
+    bridge.activate(names["report"])
     beats = [Beat(f"Em đã lập báo cáo ở sheet {names['report']}, mọi số là công thức trỏ về sổ cái.")]
+    if report.questions:
+        beats.append(Beat(f"Em ghi sẵn {len(report.questions)} câu hỏi cho các bộ phận ở sheet {names['questions']}."))
     overstated = sources.returns_in_revenue(report.current)
     if overstated > 0:
         real = pat - overstated
@@ -702,15 +716,32 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
                           f"Cần chuyển sang TK 521 trước khi gửi sếp.{change}"))
     else:
         beats.append(Beat(summary, pat_ref, "Lợi nhuận sau thuế", "", spoken(pat)))
-    if report.questions:
-        beats.append(Beat(f"Em ghi sẵn {len(report.questions)} câu hỏi cho các bộ phận ở sheet {names['questions']}."))
-    return beats
+    return beats            # the profit card is the last scene: it is what goes to the boss
+
+
+_REPORT_COLUMNS = {"A": 40, "B": 12, "C": 17, "D": 17, "E": 17, "F": 9, "G": 15, "H": 34, "I": 14}
+
+
+def _style_report_sheet(bridge, sheet: str, last: int) -> None:
+    """The report reads like one: title, a header band, readable columns, the profit line stands out."""
+    s = _q(sheet)
+    _try(bridge, "layout_sheet", sheet, _REPORT_COLUMNS, gridlines=False)
+    _try(bridge, "style", f"{s}!A1", bold=True, size=15, color=_INK)
+    _try(bridge, "style", f"{s}!A2", italic=True, size=9, color=_MUTED)
+    _try(bridge, "style", f"{s}!A4:I4", bold=True, color="#FFFFFF", fill="#1E3A5F", height=24, wrap=True)
+    _try(bridge, "style", f"{s}!C4:F4", halign="right")
+    _try(bridge, "style", f"{s}!A5:I{last}", border_bottom=_LINE, height=20)
+    _try(bridge, "style", f"{s}!B5:B{last}", halign="center", color=_MUTED)
+    _try(bridge, "style", f"{s}!H5:I{last}", color="#475569")
+    _try(bridge, "style", f"{s}!A{last}:I{last}", bold=True, fill="#FEF3E2", height=26)
+    _try(bridge, "ignore_text_numbers", f"{s}!B5:B{last}")
 
 
 # ── Voice skill glue ──────────────────────────────────────────────────────────
 
 BEAT_GAP_S = 0.5          # breath between two ideas
 CLEAR_AFTER_S = 8.0       # the last card fades this long after Clicky stops talking (not when it asks a question)
+FINAL_HOLD_S = 25.0       # ...unless it is a warning: that one stays up long enough to read, screenshot, act on
 
 
 def shapes_for(box: tuple, beat: Beat) -> list:
@@ -754,6 +785,7 @@ async def play(manager, beats: list) -> None:
     if guided is not None:
         guided.emit(True)
     manager.sig_clear_drawings.emit()
+    last_card = None
     for i, beat in enumerate(beats):
         if i:
             manager.sig_response_chunk.emit("\n\n")
@@ -772,6 +804,7 @@ async def play(manager, beats: list) -> None:
             await asyncio.sleep(reading_seconds(beat.text))
         if box:
             manager.sig_point_release.emit()
+            last_card = beat
         if beat.choices:
             manager.sig_choices.emit(beat.text, list(beat.choices))
     if beats and not beats[-1].choices:
@@ -781,7 +814,8 @@ async def play(manager, beats: list) -> None:
                 if guided is not None:
                     guided.emit(False)
         try:
-            asyncio.get_running_loop().call_later(CLEAR_AFTER_S, fade)
+            hold = FINAL_HOLD_S if last_card is not None and last_card.mark in ("warn", "bad") else CLEAR_AFTER_S
+            asyncio.get_running_loop().call_later(hold, fade)
         except RuntimeError:
             pass
 

@@ -265,7 +265,7 @@ class CompanionPanel(QWidget):
         root.addWidget(self._waveform)
 
         # Response area
-        scroll = QScrollArea()
+        scroll = self._scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._response_label = QLabel()
@@ -420,6 +420,10 @@ class CompanionPanel(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        # Text that arrived while the panel was hidden (Clicky guiding on screen) never resized the
+        # word-wrapped label, so the end of the chat was cut off with no scrollbar. Re-lay it out now
+        # and land on the newest message.
+        QTimer.singleShot(0, self._refit_transcript)
         # A model pulled while Clicky was running should appear without a
         # restart; a throttled re-poll on open keeps the list current.
         if cfg.llm_provider() == "ollama":
@@ -427,6 +431,14 @@ class CompanionPanel(QWidget):
             if now - self._ollama_polled_at > 5:
                 self._ollama_polled_at = now
                 self.on_ollama_refresh_requested.emit()
+
+    def _refit_transcript(self):
+        label = self._response_label
+        width = self._scroll.viewport().width()
+        if width > 0:
+            label.setMinimumHeight(max(0, label.heightForWidth(width)))
+        bar = self._scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
     def refresh_for_provider(self, provider: str):
         """Called from outside when the active provider is switched at runtime."""
@@ -491,6 +503,7 @@ class CompanionPanel(QWidget):
         self._transcript = ""
         self._response_text = ""
         self._response_label.setText("")
+        self._response_label.setMinimumHeight(0)
 
     def show_copilot_code(self, user_code: str, verification_uri: str):
         """Thread-safe: can be called from any thread. Emits a queued signal
