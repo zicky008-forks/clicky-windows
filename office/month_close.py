@@ -494,6 +494,8 @@ async def play(manager, beats: list) -> None:
                     await asyncio.to_thread(manager._excel.activate, ref.sheet)
                 rect = await asyncio.to_thread(manager._excel.screen_rect, beat.ref, True)
                 box = manager._physical_to_logical_bbox(rect) if rect else None
+                if not box:
+                    log.warning("cannot place %s on screen (Excel rect %s)", beat.ref, rect)
                 if box:
                     l, t, r, b = box
                     for shape in marks_for(box, beat):
@@ -502,7 +504,7 @@ async def play(manager, beats: list) -> None:
                     manager.sig_point_at.emit((l + r) / 2, (t + b) / 2, beat.label or beat.ref)
                     held = True
             except Exception as exc:
-                log.debug("pointing at %s failed: %s", beat.ref, exc)
+                log.warning("pointing at %s failed: %s", beat.ref, exc)
         await manager._reply_local(beat.text)
         if held:
             manager.sig_point_release.emit()

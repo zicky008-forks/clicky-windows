@@ -1549,15 +1549,20 @@ class CompanionManager(QObject):
         return format_for_prompt(queries, pq.lint_all() if queries else [])
 
     def _physical_to_logical_bbox(self, bbox):
-        shot = self._shot(1)
-        if not shot:
-            return None
-        scale = shot.dpi_scale or 1.0
-        l, tp, r, b = bbox
-        return (shot.logical_left + (l - shot.physical_left) / scale,
-                shot.logical_top + (tp - shot.physical_top) / scale,
-                shot.logical_left + (r - shot.physical_left) / scale,
-                shot.logical_top + (b - shot.physical_top) / scale)
+        """Physical screen box → logical overlay coordinates.
+
+        Code-only skills (the month close) never take a screenshot, so fall back to
+        reading monitor geometry directly instead of returning nothing.
+        """
+        from screen.capture import monitor_geometry, physical_to_logical
+        shots = self._screens_ctx
+        if not shots:
+            try:
+                shots = monitor_geometry()
+            except Exception as exc:
+                _log.warning("reading monitor geometry failed: %s", exc)
+                return None
+        return physical_to_logical(bbox, shots)
 
     def _excel_bbox(self, ref: str):
         """Cell or range → logical bbox, computed by Excel itself."""
