@@ -195,7 +195,8 @@ def test_folder_query_reads_each_file_in_its_own_format_and_lints_clean():
     m = m_code.folder_query("C:\\T10", {"a.csv": "en-US", "b.csv": "vi-VN", "c.csv": "vi-VN"},
                             [("Ngay", "type date"), ("ThanhTien", "type number")], "SoCT", folder_parameter="ThuMuc")
     assert 'if [Name] = "a.csv" then "en-US"' in m and 'else "vi-VN"' in m
-    assert 'Table.Distinct(GopFile, {"SoCT"})' in m and "Folder.Files(ThuMuc)" in m
+    assert 'Table.SelectRows(GopFile, each [Ngay] <> null)' in m          # a "Tổng cộng" footer has no date
+    assert 'Table.Distinct(BoDongKhongNgay, {"SoCT"})' in m and "Folder.Files(ThuMuc)" in m
     assert m_code.lint("DonHang", m) == []
     assert "IsParameterQuery = true" in m_code.parameter_query("C:\\T10")
 

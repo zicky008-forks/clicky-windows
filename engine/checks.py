@@ -67,6 +67,11 @@ def check(tb: TrialBalance) -> list:
     for row, column in tb.text_amounts[:20]:
         issues.append(Issue("warning", "text_amount", f"Dòng {row}: số tiền đang ở dạng chữ, hàm SUM của Excel sẽ bỏ qua", row))
 
+    # 5b. Rows with money but an account code the reader cannot use never reach the report.
+    for row, account, moved in tb.skipped[:20]:
+        issues.append(Issue("error", "unreadable_account",
+                            f"Dòng {row}: mã TK \"{account}\" không đọc được, {fmt(moved)} chưa được đưa vào báo cáo", row))
+
     # 6. Income-statement accounts outside the mapping would silently drop out of profit.
     for l in leaves:
         if l.account[0] in "5678" and not l.account.startswith(MAPPED_PREFIXES) and l.dr != l.cr:

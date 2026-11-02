@@ -73,6 +73,24 @@ def date_order(values: list) -> Optional[str]:
     return None
 
 
+_VI_NUMBER = re.compile(r"^-?\d{1,3}(\.\d{3})+(,\d+)?$|^-?\d+,\d{1,2}$")     # 1.250.000 / 1.250,5 / 12,5
+_US_NUMBER = re.compile(r"^-?\d{1,3}(,\d{3})+(\.\d+)?$|^-?\d+\.\d{1,2}$")    # 1,250,000 / 1,250.5 / 12.5
+
+
+def number_style(values: list) -> Optional[str]:
+    """'vi-VN' when amounts are written 1.250.000, 'en-US' when 1,250,000, None when the values cannot tell."""
+    vi = us = 0
+    for v in values:
+        text = str(v or "").strip().replace(" ", "")
+        vi += bool(_VI_NUMBER.match(text))
+        us += bool(_US_NUMBER.match(text))
+    if vi and not us:
+        return DAY_FIRST
+    if us and not vi:
+        return MONTH_FIRST
+    return None
+
+
 def parse_date(value, order: Optional[str]) -> Optional[date]:
     if isinstance(value, date):
         return value
@@ -98,6 +116,16 @@ class OrderFile:
     rows: list                     # raw rows after the header
     columns: dict
     date_order: Optional[str]
+    footers: list = field(default_factory=list)   # rows with no date, e.g. a "Tổng cộng" line: not orders
+
+    @property
+    def number_style(self) -> Optional[str]:
+        i = self.columns.get("amount")
+        return number_style([r[i] for r in self.rows if i is not None and i < len(r)])
+
+    def culture(self, fallback: Optional[str]) -> str:
+        """The one culture the query should read this file with: its date order, else how its amounts are written."""
+        return self.date_order or self.number_style or fallback or DAY_FIRST
 
     @property
     def name(self) -> str:
@@ -118,12 +146,17 @@ class SourceTruth:
     files: list
     rows: int = 0                  # rows across all files
     unique_rows: int = 0           # after removing repeated document numbers
-    amount: Decimal = ZERO
+    amount: Decimal = ZERO         # net: sales minus return slips
     cost: Decimal = ZERO
+    gross: Decimal = ZERO          # positive rows: should equal Có 511
+    returns: Decimal = ZERO        # negative rows as a positive amount: should equal Nợ 521
     duplicates: list = field(default_factory=list)       # (doc number, file, amount)
     by_file: dict = field(default_factory=dict)          # file name → (rows, amount)
     unreadable_dates: int = 0
     doc_numbers: dict = field(default_factory=dict)      # doc number → DocInfo
+    collisions: dict = field(default_factory=dict)       # doc number → how many different orders share it
+    period: Optional[tuple] = None                       # (year, month) the files were measured for
+    outside: list = field(default_factory=list)          # (doc, file, date, amount) dated outside that period
 
 
 def read_csv(path: Path) -> list:
@@ -152,9 +185,14 @@ def load_order_file(path: Path) -> Optional[OrderFile]:
     cols = find_columns(rows[0])
     if "amount" not in cols or "date" not in cols:
         return None
-    data = rows[1:]
+    data, footers = [], []
+    for r in rows[1:]:
+        # A row without a date is not an order (exports often end with a "Tổng cộng" line whose
+        # amount is the whole file); counting it would double the file in the yardstick.
+        blank = cols["date"] >= len(r) or not str(r[cols["date"]] or "").strip()
+        (footers if blank else data).append(r)
     order = date_order([r[cols["date"]] for r in data if cols["date"] < len(r)])
-    return OrderFile(path, rows[0], data, cols, order)
+    return OrderFile(path, rows[0], data, cols, order, footers)
 
 
 def find_order_files(folder: Path) -> list:
@@ -163,9 +201,21 @@ def find_order_files(folder: Path) -> list:
     return [f for f in (load_order_file(p) for p in paths) if f]
 
 
-def truth(files: list) -> SourceTruth:
-    t = SourceTruth(files=files)
+def truth(files: list, period: Optional[tuple] = None) -> SourceTruth:
+    """The yardstick. With period (year, month), the ledger's month, rows dated in another month
+    are set aside in t.outside instead of being counted: exports often run wider than the period."""
+    t = SourceTruth(files=files, period=period)
+    seen = {}
     for f in files:
+        if period and f.date_order is None and "date" in f.columns:
+            # Every date in this file has day and month ≤ 12, so the values cannot tell the order;
+            # the ledger's month can. Set here so the query reads the file the same way.
+            def inside(order):
+                return sum(1 for r in f.rows if f.columns["date"] < len(r)
+                           and (d := parse_date(r[f.columns["date"]], order)) and (d.year, d.month) == tuple(period))
+            day, month = inside(DAY_FIRST), inside(MONTH_FIRST)
+            if day != month:
+                f.date_order = DAY_FIRST if day > month else MONTH_FIRST
         c = f.columns
         n, amt = 0, ZERO
         for row in f.rows:
@@ -178,14 +228,28 @@ def truth(files: list) -> SourceTruth:
             if d is None:
                 t.unreadable_dates += 1
             t.rows += 1
-            doc = str(cell("doc") or "").strip() if "doc" in c else ""
-            if doc and doc in t.doc_numbers:
-                t.duplicates.append((doc, f.name, amount))
+            if period and d is not None and (d.year, d.month) != tuple(period):
+                t.outside.append((str(cell("doc") or "").strip(), f.name, d, amount))
                 continue
-            if doc:
+            doc = str(cell("doc") or "").strip() if "doc" in c else ""
+            # Same number and same content is the same order exported twice. Same number with
+            # different content is two real orders: branches and stores often number on their own.
+            content = (d, str(cell("customer") or "").strip(), amount, cost, str(cell("branch") or "").strip())
+            if doc and doc in seen:
+                if content in seen[doc]:
+                    t.duplicates.append((doc, f.name, amount))
+                    continue
+                seen[doc].append(content)
+                t.collisions[doc] = len(seen[doc])
+            elif doc:
+                seen[doc] = [content]
                 t.doc_numbers[doc] = DocInfo(f.name, d, str(cell("customer") or "").strip(), amount, str(cell("date") or ""))
             t.unique_rows += 1
             t.amount += amount
+            if amount < 0:
+                t.returns -= amount
+            else:
+                t.gross += amount
             t.cost += cost
             n += 1
             amt += amount
@@ -212,6 +276,11 @@ def find_trial_balances(folder: Path, read_rows) -> list:
             found.append((p.stem[:31], rows, tb, _period(rows) or (0, 0)))
     found.sort(key=lambda x: (x[3], x[0]))
     return [(name, rows, tb) for name, rows, tb, _ in found]
+
+
+def period_of(rows) -> Optional[tuple]:
+    """(year, month) a trial balance covers, from its title rows."""
+    return _period(rows)
 
 
 def _period(rows) -> Optional[tuple]:

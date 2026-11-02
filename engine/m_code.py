@@ -134,6 +134,12 @@ def lint(query: str, formula: str) -> list:
                 "Đổi kiểu ngày/số mà không ghi định dạng nguồn, nên Power Query đọc theo cài đặt của máy đang mở file. "
                 "File chi nhánh dùng ngày kiểu Mỹ (tháng/ngày) sẽ bị đảo ngày tháng hoặc báo lỗi, số có dấu phẩy thập phân có thể bị nhân lên.",
                 fix="culture")
+        elif args is not None and len(args) >= 3 and _TYPED.search(args[1]):
+            culture = re.fullmatch(r'\s*"([a-z]{2,3}-[A-Z]{2})"\s*', args[2])
+            if culture:
+                add("warning", "locale_fixed",
+                    f"Đọc mọi file theo một kiểu cố định {culture.group(1)}. File nào ghi ngày hoặc số theo kiểu khác "
+                    "(chi nhánh xuất từ máy cài đặt khác) sẽ bị đảo ngày tháng, báo lỗi, hoặc số bị đọc sai.")
         args = _call_args(e, "Number.FromText")
         if args is not None and len(args) == 1:
             add("warning", "locale_number", "Number.FromText không ghi định dạng nguồn; '1.234' có thể thành 1,234 hoặc 1234 tuỳ máy.")
@@ -165,6 +171,17 @@ def lint(query: str, formula: str) -> list:
     return found
 
 
+def fixed_culture(formula: str) -> Optional[str]:
+    """The culture a query hardcodes for its type conversion ("en-US"), or None when it has none or reads it per file."""
+    for s in steps(formula):
+        args = _call_args(s.expr, "Table.TransformColumnTypes")
+        if args is not None and len(args) >= 3 and _TYPED.search(args[1]):
+            m = re.fullmatch(r'\s*"([a-z]{2,3}-[A-Z]{2})"\s*', args[2])
+            if m:
+                return m.group(1)
+    return None
+
+
 _DOC_WORDS = ("soct", "sochungtu", "sohd", "sohoadon", "sophieu", "invoice", "docno", "documentno", "machungtu", "id")
 
 
@@ -180,13 +197,16 @@ def _m_text(value: str) -> str:
 
 
 def folder_query(folder: str, file_cultures: dict, typed: list, doc_column: Optional[str] = None,
-                 folder_parameter: Optional[str] = None, delimiter: str = ",") -> str:
+                 folder_parameter: Optional[str] = None, delimiter: str = ",",
+                 key_columns: Optional[list] = None, period: Optional[tuple] = None) -> str:
     """M that combines CSV exports in a folder, reading each file's dates in that file's own format.
 
     file_cultures maps file name → culture ('vi-VN' / 'en-US'); files not listed use the
     first culture given. typed is [(column, M type)], e.g. [("Ngay", "type date")].
     Rows are de-duplicated on the document number only, and no row is dropped for
-    an error: a type error stays visible so it can be counted.
+    an error: a type error stays visible so it can be counted. key_columns replaces the
+    document number as the de-duplication key: [branch, doc] when branches reuse numbers,
+    or [] for whole identical rows only.
     """
     from collections import Counter
     default = Counter(file_cultures.values()).most_common(1)[0][0] if file_cultures else "vi-VN"
@@ -202,11 +222,30 @@ def folder_query(folder: str, file_cultures: dict, typed: list, doc_column: Opti
         "    DocFile = Table.AddColumn(DinhDang, \"Bang\", each Table.TransformColumnTypes(",
         f"        Table.PromoteHeaders(Csv.Document([Content], [Delimiter = {_m_text(delimiter)}, Encoding = 65001]), [PromoteAllScalars = true]),",
         f"        {{{types}}}, [DinhDang])),",
-        "    GopFile = Table.Combine(DocFile[Bang])" + ("," if doc_column else ""),
+        "    GopFile = Table.Combine(DocFile[Bang]),",
     ]
-    if doc_column:
-        lines.append(f"    XoaTrungTheoSoCT = Table.Distinct(GopFile, {{{_m_text(doc_column)}}})")
-    lines += ["in", "    XoaTrungTheoSoCT" if doc_column else "    GopFile"]
+    last = "GopFile"
+    date_column = next((col for col, t in typed if t.strip() == "type date"), None)
+    if date_column:
+        # Rows with no date (a "Tổng cộng" footer) are not orders. A date that fails to convert
+        # is an error, not null, so it is still kept and counted.
+        lines.append(f"    BoDongKhongNgay = Table.SelectRows({last}, each [{date_column}] <> null),")
+        last = "BoDongKhongNgay"
+        if period:
+            # Keep only the ledger's month; a date that failed to convert stays in, visible as an error.
+            y, mth = period
+            lines.append(f"    TrongKy = Table.SelectRows({last}, each try Date.Year([{date_column}]) = {int(y)} "
+                         f"and Date.Month([{date_column}]) = {int(mth)} otherwise true),")
+            last = "TrongKy"
+    if key_columns is not None:
+        keys = ", ".join(_m_text(k) for k in key_columns)
+        lines.append(f"    XoaTrungTheoSoCT = Table.Distinct({last}" + (f", {{{keys}}})," if keys else "),"))
+        last = "XoaTrungTheoSoCT"
+    elif doc_column:
+        lines.append(f"    XoaTrungTheoSoCT = Table.Distinct({last}, {{{_m_text(doc_column)}}}),")
+        last = "XoaTrungTheoSoCT"
+    lines[-1] = lines[-1].rstrip(",")
+    lines += ["in", f"    {last}"]
     return "\n".join(lines)
 
 

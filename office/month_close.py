@@ -32,7 +32,7 @@ PARAM_NAME = "ThuMucDonHang"
 CHECK_SHEET = "Doi chieu"
 TOLERANCE = Decimal(1)
 # Findings that lose revenue rows come first: these are the ones that explain a gap with the ledger.
-_LINT_ORDER = ["locale_types", "distinct_keys", "remove_errors", "distinct_all", "inner_join", "fixed_path"]
+_LINT_ORDER = ["locale_types", "locale_fixed", "distinct_keys", "remove_errors", "distinct_all", "inner_join", "fixed_path"]
 
 START_TRIGGER = (r"(l[àa]m|l[ậa]p|ch[ạa]y)\b.{0,25}b[áa]o\s*c[áa]o\s*th[áa]ng.{0,30}"
                  r"(th[ưu]\s*m[ụu]c|t[ừu]\s*[đd][ầa]u|e2e|tr[ọo]n\s*g[óo]i|to[àa]n\s*b[ộo])"
@@ -169,9 +169,21 @@ def diagnose(truth: sources.SourceTruth, loaded: Loaded, machine_order: Optional
     present = Counter(loaded.docs())
     orders = {f.name: f.date_order for f in truth.files}
     kept = {(info.date, info.customer) for doc, info in truth.doc_numbers.items() if doc in present}
-    out = {"date": [], "distinct": [], "other": [], "excel_dups": [d for d, n in present.items() if n > 1]}
+    out = {"date": [], "distinct": [], "other": [], "amount": [],
+           "excel_dups": [d for d, n in present.items() if n > truth.collisions.get(d, 1)]}
     if "doc" not in loaded.columns:
         return out
+    # Rows that arrived but with a different amount: a number read in the wrong format, then the error
+    # replaced by 0 or the digits taken as a decimal. Row counts match; the money does not.
+    di, ai = loaded.columns["doc"], loaded.columns.get("amount")
+    if ai is not None:
+        got = {}
+        for r in loaded.rows:
+            if di < len(r) and ai < len(r) and r[di] not in (None, ""):
+                got.setdefault(str(r[di]).strip(), _dec(r[ai]))
+        for doc, info in truth.doc_numbers.items():
+            if doc in got and doc not in truth.collisions and abs(got[doc] - info.amount) > TOLERANCE:
+                out["amount"].append((doc, info, got[doc]))
     for doc, info in truth.doc_numbers.items():
         if doc in present:
             continue
@@ -185,6 +197,20 @@ def diagnose(truth: sources.SourceTruth, loaded: Loaded, machine_order: Optional
         else:
             out["other"].append((doc, info))
     return out
+
+
+def _dedup_key(files: list, truth: sources.SourceTruth) -> Optional[list]:
+    """None: de-duplicate on the document number. When different orders share a number (each branch
+    numbers its own), [branch column, doc column] if every file has both, else [] (identical rows only)."""
+    if not truth.collisions:
+        return None
+    names = []
+    for role in ("branch", "doc"):
+        cols = {f.header[f.columns[role]] if role in f.columns else None for f in files}
+        if len(cols) != 1 or None in cols:
+            return []
+        names.append(cols.pop())
+    return names
 
 
 def _amount(items) -> Decimal:
@@ -287,7 +313,8 @@ def _write_check_sheet(bridge, loaded: Optional[Loaded], truth, ledger: dict,
         ["File gốc (đọc bằng code)", truth.unique_rows, truth.amount, truth.cost,
          f"Đã bỏ {len(truth.duplicates)} chứng từ lặp: {dups}" if truth.duplicates else "Không có chứng từ lặp"],
         [f"Sổ cái {ledger.get('name', '')}", "", ledger.get("revenue", ""), ledger.get("cost", ""),
-         f"Phát sinh Có TK {ledger.get('rev_acct', '511')} / Nợ TK 632" if ledger else "Chưa thấy file cân đối tài khoản"],
+         (f"Có TK {ledger.get('rev_acct', '511')} − Nợ TK 521 (file gốc có phiếu trả hàng) / Nợ TK 632" if ledger.get("net")
+          else f"Phát sinh Có TK {ledger.get('rev_acct', '511')} / Nợ TK 632") if ledger else "Chưa thấy file cân đối tài khoản"],
         ["Chênh lệch Excel − sổ cái", "", "=C4-C6" if ledger and loaded else "",
          "=D4-D6" if ledger and loaded and "cost" in loaded.columns else "",
          "Phải bằng 0" if loaded else "Chưa đối chiếu được: chưa đọc được bảng query"],
@@ -331,8 +358,18 @@ def _ledger(folder: Path) -> tuple:
         return tbs, {}
     name, _, tb = tbs[-1]
     acct = sources.revenue_account(tb)
-    return tbs, {"name": name, "rev_acct": acct, "revenue": sources.ledger_movement(tb, acct, "cr"),
+    revenue = sources.ledger_movement(tb, acct, "cr")
+    return tbs, {"name": name, "rev_acct": acct, "revenue": revenue, "gross": revenue,
+                 "returns": sources.ledger_movement(tb, "521", "dr"),
                  "cost": sources.ledger_movement(tb, "632", "dr")}
+
+
+def _net_of_returns(ledger: dict, truth) -> dict:
+    """When the order files carry return slips (negative rows) the files and the query hold net sales,
+    so the ledger side becomes Có 511 − Nợ 521; sales and returns are still compared one by one."""
+    if not ledger or not truth.returns:
+        return ledger
+    return {**ledger, "revenue": ledger["gross"] - ledger["returns"], "net": True}
 
 
 def _signed(amount: Decimal) -> str:
@@ -356,7 +393,7 @@ def _date_example(items, machine_order: Optional[str]) -> tuple:
     return "", ""
 
 
-def _cause_beats(why: dict, machine_order: Optional[str], first_row: int) -> tuple:
+def _cause_beats(why: dict, machine_order: Optional[str], first_row: int, reader: str = "Máy này đọc") -> tuple:
     """(beats, detail rows): one beat per cause, each lighting up its own row in the detail table."""
     beats, rows = [], []
 
@@ -370,8 +407,8 @@ def _cause_beats(why: dict, machine_order: Optional[str], first_row: int) -> tup
         value, example = _date_example(why["date"], machine_order)
         add(Beat(f"Nguyên nhân chính: máy đọc nhầm ngày tháng, làm mất {spoken(amt)}.",
                  label=f"Đọc nhầm ngày · {n} chứng từ · {spoken(amt)}", mark="bad", value=value or spoken(amt),
-                 note=example or f"Máy này đọc ngày kiểu {_order_vi(machine_order)}, khác kiểu ghi trong file."),
-            ["Đọc nhầm ngày tháng", n, amt, "", f"Máy này đọc ngày kiểu {_order_vi(machine_order)}; file ghi kiểu khác "
+                 note=example or f"{reader} ngày kiểu {_order_vi(machine_order)}, khác kiểu ghi trong file."),
+            ["Đọc nhầm ngày tháng", n, amt, "", f"{reader} ngày kiểu {_order_vi(machine_order)}; file ghi kiểu khác "
              f"bị đảo ngày hoặc báo lỗi rồi bị xoá. {example}".strip()])
     if why["distinct"]:
         n, amt = len(why["distinct"]), _amount(why["distinct"])
@@ -380,6 +417,15 @@ def _cause_beats(why: dict, machine_order: Optional[str], first_row: int) -> tup
                  note=f"{n} chứng từ: cùng khách mua hai lần trong một ngày bị coi là trùng."),
             ["Xoá trùng nhầm", n, amt, "", "Bước xoá trùng dùng Ngày + Mã KH; hai chứng từ khác nhau cùng khách, cùng ngày "
              "bị xoá mất một. Chỉ nên xoá trùng theo số chứng từ."])
+    if why.get("amount"):
+        n = len(why["amount"])
+        lost = sum((info.amount - got for _, info, got in why["amount"]), ZERO)
+        doc, info, got = why["amount"][0]
+        add(Beat(f"{n} chứng từ vẫn có trong Excel nhưng số tiền bị đọc sai, làm lệch {spoken(abs(lost))}.",
+                 label=f"Đọc sai số tiền · {n} chứng từ", mark="bad", value=_signed(-lost),
+                 note=f"Ví dụ {doc}: file ghi {spoken(info.amount)}, Excel đọc thành {spoken(got)}."),
+            ["Đọc sai số tiền", n, -lost, "", f"Số tiền ghi kiểu khác cài đặt của query (ví dụ 1.250.000 so với 1,250,000), "
+             f"bị đọc sai hoặc lỗi rồi thay bằng 0. Ví dụ {doc}: file {info.amount:,.0f}, Excel {got:,.0f}."])
     if why["other"]:
         n, amt = len(why["other"]), _amount(why["other"])
         add(Beat(f"Còn {n} chứng từ bị mất mà em chưa rõ lý do.", label="Chưa rõ nguyên nhân", mark="warn",
@@ -413,12 +459,27 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     files = sources.find_order_files(folder)
     if not files:
         return [Beat(f"Em không thấy file đơn hàng CSV nào trong thư mục {folder.name}.")]
-    truth = sources.truth(files)
     tbs, ledger = _ledger(folder)
+    period = sources.period_of(tbs[-1][1]) if tbs else None
+    truth = sources.truth(files, period)
+    ledger = _net_of_returns(ledger, truth)
     beats, notes = [], []
+    if truth.outside:
+        out_amt = sum((a for *_, a in truth.outside), ZERO)
+        months = sorted({f"{d.month:02d}/{d.year}" for _, _, d, _ in truth.outside})
+        notes.append(["Dòng ngoài kỳ sổ cái", len(truth.outside), out_amt, "",
+                      f"File xuất có {len(truth.outside)} dòng của tháng {', '.join(months)}, tổng {spoken(out_amt)}, "
+                      f"nằm ngoài kỳ {period[1]:02d}/{period[0]} của sổ cái nên không được tính khi đối chiếu."])
 
     source_note = f"{truth.unique_rows} chứng từ trong {len(files)} file" + (
-        f" · đã bỏ {len(truth.duplicates)} chứng từ lặp" if truth.duplicates else "")
+        f" · đã bỏ {len(truth.duplicates)} chứng từ lặp" if truth.duplicates else "") + (
+        f" · trả lại {spoken(truth.returns)}" if truth.returns else "")
+    if ledger.get("net"):
+        for label, mine, theirs, acct in (("Doanh thu bán", truth.gross, ledger["gross"], f"Có TK {ledger['rev_acct']}"),
+                                          ("Hàng bán trả lại", truth.returns, ledger["returns"], "Nợ TK 521")):
+            if abs(mine - theirs) > TOLERANCE:
+                notes.append([f"{label} lệch sổ cái", "", mine - theirs, "",
+                              f"File gốc {spoken(mine)}, sổ cái {acct} {spoken(theirs)}."])
     if ledger:
         diff = truth.amount - ledger["revenue"]
         same = abs(diff) <= TOLERANCE
@@ -436,9 +497,15 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
                       "; ".join(f"{f.name}: {_order_vi(f.date_order)}" for f in files)])
 
     name, formula, origin = _query_to_check(pq, folder)
-    fixed_m = m_code.folder_query(str(folder), {f.name: f.date_order or machine_order or sources.DAY_FIRST for f in files},
+    keys = _dedup_key(files, truth)
+    if keys is not None:
+        shared = ", ".join(sorted(truth.collisions)[:5])
+        notes.append(["Số chứng từ trùng giữa các nơi", sum(truth.collisions.values()), "", "",
+                      f"{len(truth.collisions)} số chứng từ được dùng cho các đơn khác nhau ({shared}). Đây là đơn thật, "
+                      + ("Clicky xoá trùng theo Chi nhánh + Số CT." if keys else "Clicky chỉ xoá dòng giống hệt nhau.")])
+    fixed_m = m_code.folder_query(str(folder), {f.name: f.culture(machine_order) for f in files},
                                   _typed_columns(files), files[0].header[files[0].columns["doc"]] if "doc" in files[0].columns else None,
-                                  folder_parameter=PARAM_NAME)
+                                  folder_parameter=PARAM_NAME, key_columns=keys, period=period if truth.outside else None)
     if name is None:
         name, formula, origin = QUERY_NAME, None, "clicky"
         notes.append(["Query đơn hàng", "", "", "", "Trong file chưa có query đơn hàng; Clicky tạo query mới đọc đúng kiểu ngày của từng file."])
@@ -476,8 +543,11 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     loaded = Loaded(sheet, header, rows, sources.find_columns(header))
     gap = loaded.amount - (ledger["revenue"] if ledger else truth.amount)
     clean = abs(gap) <= TOLERANCE and len(rows) == truth.unique_rows
-    why = diagnose(truth, loaded, machine_order) if not clean else {"date": [], "distinct": [], "other": [], "excel_dups": []}
-    cause_beats, cause_rows = _cause_beats(why, machine_order, 0)
+    # A query that names its own culture reads dates that way on every machine, not the machine's way.
+    culture = m_code.fixed_culture(formula) if formula else None
+    read_order = (sources.MONTH_FIRST if culture.endswith("-US") else sources.DAY_FIRST) if culture else machine_order
+    why = diagnose(truth, loaded, read_order) if not clean else {"date": [], "distinct": [], "other": [], "excel_dups": []}
+    cause_beats, cause_rows = _cause_beats(why, read_order, 0, f"Query ghi cứng {culture}, nên đọc" if culture else "Máy này đọc")
     check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, cause_rows + notes, "ok" if clean else "bad")
     ref = f"{_q(check_sheet)}!C7" if check_sheet and ledger else None
     if clean:
@@ -515,8 +585,9 @@ def approve(bridge, pq) -> list:
     sheet, header, rows = result
     loaded = Loaded(sheet, header, rows, sources.find_columns(header))
     files = sources.find_order_files(folder)
-    truth = sources.truth(files)
     tbs, ledger = _ledger(folder)
+    truth = sources.truth(files, sources.period_of(tbs[-1][1]) if tbs else None)
+    ledger = _net_of_returns(ledger, truth)
     target = ledger["revenue"] if ledger else truth.amount
     gap = loaded.amount - target
     ok = abs(gap) <= TOLERANCE
