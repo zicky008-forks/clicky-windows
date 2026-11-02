@@ -212,3 +212,21 @@ def test_without_a_speech_model_the_talk_key_uses_windows_voice_typing(monkeypat
         CompanionManager.on_hotkey_press(manager)
         manager.sig_voice_typing.emit.assert_called_once_with(into_chat)
         assert not manager._dictating
+
+
+def test_vietnamese_text_asks_windows_for_a_vietnamese_voice():
+    from audio.tts.sapi_tts_provider import text_language
+    assert text_language("Sổ cái khớp đến từng đồng.") == "vi-VN"
+    assert text_language("Ledger matches.") == ""
+
+
+def test_local_reply_says_once_why_it_was_not_read_aloud():
+    from unittest.mock import AsyncMock
+    from companion_manager import CompanionManager
+    tts = Mock(speak=AsyncMock(side_effect=RuntimeError("Windows speech failed: blocked")))
+    manager = Mock(_get_tts=Mock(return_value=tts), _voice_failure_noticed=False)
+    asyncio.run(CompanionManager._reply_local(manager, "Em đọc 3 file."))
+    asyncio.run(CompanionManager._reply_local(manager, "Sổ cái khớp."))
+    assert manager.sig_response_done.emit.call_count == 2
+    assert manager.sig_notice.emit.call_count == 1
+    assert "giọng đọc" in manager.sig_notice.emit.call_args.args[0]

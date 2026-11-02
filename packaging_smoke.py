@@ -38,6 +38,13 @@ def run():
         import pywintypes  # noqa: F401
         import win32timezone  # noqa: F401
         checks.append("Excel date conversion import")
+        # The default voice end to end, short of the speakers: Windows speech, then the decoder.
+        import asyncio
+        from audio.playback import decode_mp3_to_pcm
+        from audio.tts.sapi_tts_provider import SapiTTSProvider
+        pcm, _ = decode_mp3_to_pcm(asyncio.run(SapiTTSProvider().synthesize("Clicky đối chiếu sổ cái.")))
+        assert pcm.size > 1000, "Windows speech produced no audio"
+        checks.append("Windows voice synthesis and decoding")
     report = {"ok": True, "qt_binding": QT_VERSION_STR, "qt_runtime": qVersion(),
               "checks": checks,
               "edge_tts": edge_version,

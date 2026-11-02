@@ -1452,8 +1452,13 @@ class CompanionManager(QObject):
         self._emit_state(AppState.SPEAKING)
         try:
             await self._get_tts().speak(msg)
-        except Exception:
-            pass
+        except Exception as exc:
+            # The answer is on screen either way; say once why it was not read aloud.
+            _log.warning("speaking a local reply failed: %s", exc)
+            if not getattr(self, "_voice_failure_noticed", False):
+                self._voice_failure_noticed = True
+                self.sig_notice.emit("Clicky chưa phát được giọng đọc trên máy này, câu trả lời vẫn hiện trong khung chat. "
+                                     f"Chi tiết: {str(exc)[:160]}")
         self._emit_state(AppState.IDLE)
 
     async def _spaced_review(self):
