@@ -273,3 +273,14 @@ def test_profit_not_matching_what_was_closed_to_4212_is_an_error():
     report = build(rows, S.t9_rows(), "T10", "T09")
     tie = [i for i in report.issues if i.code == "profit_tie"]
     assert len(tie) == 1 and "30.000.000" in tie[0].message
+
+
+def test_several_missing_recurring_entries_are_named_and_added_up():
+    from engine.monthly_report import summary_vi
+    report = build(S.t10_rows(), S.t9_rows(), "T10", "T09")
+    missing = [checks.Issue("error", "recurring_missing", "…", 0, "khấu hao tài sản cố định", Decimal(120_000_000)),
+               checks.Issue("error", "recurring_missing", "…", 0, "trích lương", Decimal(1_280_000_000)),
+               checks.Issue("error", "recurring_missing", "…", 0, "phân bổ chi phí trả trước", Decimal(40_000_000))]
+    text = summary_vi(report.variances, missing)
+    assert "khấu hao tài sản cố định, trích lương, phân bổ chi phí trả trước" in text
+    assert "1,44 tỷ" in text

@@ -58,6 +58,8 @@ class Beat:
     value: str = ""                 # the one figure that matters, big on the card
     note: str = ""                  # one line of context under the figure
     choices: tuple = ()             # buttons offered after the sentence, e.g. ("Sửa giúp tôi", "Để tôi xem")
+    was: str = ""                   # the figure it replaces, shown struck through above the new one
+    roll: tuple = ()                # (from, to) in đồng: the big figure counts from one to the other
 
 
 def pending() -> bool:
@@ -624,7 +626,7 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     beats.append(Beat(f"Báo cáo trong Excel đang {_gap_vi(gap)} so với sổ cái.", ref, "Excel lệch sổ cái", "bad",
                       _signed(gap), f"Query chỉ giữ {len(rows)}/{truth.unique_rows} chứng từ. Chưa được dùng số này."))
     beats += cause_beats
-    _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder)}
+    _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder), "gap": int(gap)}
     return beats + [_fix_offer()]
 
 
@@ -677,7 +679,9 @@ def _approve(bridge, pq, job) -> list:
     cost_ok = not ledger or "cost" not in loaded.columns or abs(loaded.cost - ledger["cost"]) <= TOLERANCE
     note = f"{len(rows)} chứng từ · doanh thu {spoken(loaded.amount)}" + (
         " · giá vốn khớp TK 632" if cost_ok and ledger and "cost" in loaded.columns else "")
-    beats = [Beat("Đã sửa xong. Excel khớp sổ cái đến từng đồng.", ref, "Đã khớp sổ cái", "ok", "0 đ", note)]
+    # The gap counts down to zero on the card, so the fix is seen happening rather than swapped in.
+    roll = (job["gap"], 0) if job.get("gap") else ()
+    beats = [Beat("Đã sửa xong. Excel khớp sổ cái đến từng đồng.", ref, "Đã khớp sổ cái", "ok", "0 đ", note, roll=roll)]
     return beats + build_report(bridge, folder, tbs) + [SAVE_REMINDER]
 
 
@@ -717,12 +721,15 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
     pat = report.figures[-1].value
     prev_pat = next((v.previous for v in report.variances if v.key == "pat"), None)
     row = 4 + len(report.figures)
-    pat_ref = f"{quote(names['report'])}!C{row}"
+    sheet = quote(names["report"])
+    pat_ref = f"{sheet}!A{row}:G{row}"      # the whole line, label included: the figure never appears without its name
     _style_report_sheet(bridge, names["report"], row)
     bridge.activate(names["report"])
-    beats = [Beat(f"Em đã lập báo cáo ở sheet {names['report']}, mọi số là công thức trỏ về sổ cái.")]
-    if report.questions:
-        beats.append(Beat(f"Em ghi sẵn {len(report.questions)} câu hỏi cho các bộ phận ở sheet {names['questions']}."))
+    _try(bridge, "scroll_home", names["report"])  # the report is seen from its title down, and stays that way
+    asks = (f", kèm {len(report.questions)} câu hỏi cho các bộ phận" if report.questions else "")
+    note = "Mọi số là công thức trỏ về sổ cái." + (
+        f" {len(report.questions)} câu hỏi xác minh ở sheet {names['questions']}." if report.questions else "")
+    beats = [Beat(f"Em đã lập báo cáo tháng{asks}.", f"{sheet}!A4:G{row}", "Báo cáo tháng đã lập", "", "", note)]
     overstated = sources.returns_in_revenue(report.current)
     if overstated > 0:
         real = pat - overstated
@@ -730,7 +737,8 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
         beats.append(Beat(f"Lợi nhuận thực là {spoken(real)}, không phải {spoken(pat)} như trên báo cáo.",
                           pat_ref, "Lợi nhuận sau thuế thực", "warn", spoken(real),
                           f"{spoken(overstated)} hàng bán bị trả lại đang ghi thẳng vào Nợ TK 511. "
-                          f"Cần chuyển sang TK 521 trước khi gửi sếp.{change}"))
+                          f"Cần chuyển sang TK 521 trước khi gửi sếp.{change}",
+                          was=spoken(pat), roll=(int(pat), int(real))))
     else:
         beats.append(Beat(summary, pat_ref, "Lợi nhuận sau thuế", "", spoken(pat)))
     return beats            # the profit card is the last scene: it is what goes to the boss
@@ -768,8 +776,8 @@ def shapes_for(box: tuple, beat: Beat) -> list:
     tone = tone_of(beat.mark)
     shapes = [{"kind": "spotlight", "x1": l, "y1": t, "x2": r, "y2": b, "tone": tone}]
     if beat.label or beat.value or beat.note:
-        shapes.append({"kind": "card", "anchor": [l, t, r, b], "title": beat.label, "value": beat.value,
-                       "note": beat.note, "tone": tone})
+        shapes.append({"kind": "card", "anchor": [l, t, r, b], "title": beat.label, "was": beat.was,
+                       "value": beat.value, "note": beat.note, "tone": tone, "roll": list(beat.roll)})
     return shapes
 
 
@@ -795,7 +803,7 @@ async def play(manager, beats: list) -> None:
     A beat without a range keeps the previous card up, so the screen never goes blank mid-story.
     When the sentence cannot be read aloud (no Vietnamese voice), it stays up long enough to read.
     """
-    from ui.card_layout import NO_BUBBLE, reading_seconds
+    from ui.card_layout import NO_BUBBLE, pointer_spot, reading_seconds
     run = object()
     manager._month_close_run = run
     guided = getattr(manager, "sig_guided", None)     # the chat panel steps aside while Clicky guides
@@ -815,7 +823,8 @@ async def play(manager, beats: list) -> None:
                 manager.sig_draw.emit(shape)
             l, t, r, b = box
             manager.sig_point_hold.emit(True)
-            manager.sig_point_at.emit((l + r) / 2, (t + b) / 2, NO_BUBBLE)
+            # The pointer stops beside the range, never on it: it must not hide the figure being explained.
+            manager.sig_point_at.emit(*pointer_spot(box), NO_BUBBLE)
         spoke = await manager._reply_local(beat.text)
         if spoke is False and BEAT_GAP_S:
             await asyncio.sleep(reading_seconds(beat.text))

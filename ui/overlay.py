@@ -23,7 +23,7 @@ from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPainterPath, QCursor, QFont, QFontMetrics,
 )
 
-from ui.card_layout import CARD_WIDTH, NO_BUBBLE, TONES, place_card
+from ui.card_layout import CARD_WIDTH, NO_BUBBLE, ROLL_S, TONES, place_card, roll_amount, stem
 
 
 MODE_IDLE      = "idle"
@@ -717,13 +717,15 @@ class CursorOverlay(QWidget):
         pad, bar = 18, 5
         inner = CARD_WIDTH - 2 * pad - bar
         title_f = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
+        was_f = QFont("Segoe UI", 12)
+        was_f.setStrikeOut(True)
         value_f = QFont("Segoe UI", 24, QFont.Weight.Bold)
         note_f = QFont("Segoe UI", 11)
         flags = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop) | int(Qt.TextFlag.TextWordWrap)
         layout = ann.get("_layout")
         if layout is None:
             parts, h = [], pad
-            for key, font in (("title", title_f), ("value", value_f), ("note", note_f)):
+            for key, font in (("title", title_f), ("was", was_f), ("value", value_f), ("note", note_f)):
                 text = ann.get(key) or ""
                 if not text:
                     continue
@@ -737,8 +739,19 @@ class CursorOverlay(QWidget):
             x, y = place_card(anchor, (CARD_WIDTH, h), self._card_screen(anchor))
             layout = ann["_layout"] = (x, y, h, parts)
         x, y, h, parts = layout
+        line = stem(ann["anchor"], (x, y, x + CARD_WIDTH, y + h))
         x, y = x - self.x(), y - self.y() + (1.0 - u) * 8
         card = QRectF(x, y, CARD_WIDTH, h)
+        if line:
+            # Tie the card to the cells it explains, so it reads as part of the sheet, not pasted on.
+            tie = QColor(accent_hex)
+            tie.setAlpha(int(200 * u))
+            p.setPen(QPen(tie, 2))
+            x1, y1, x2, y2 = (line[0] - self.x(), line[1] - self.y(), line[2] - self.x(), line[3] - self.y())
+            p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(tie)
+            p.drawEllipse(QPointF(x2, y2), 3.5, 3.5)
         p.setPen(Qt.PenStyle.NoPen)
         for spread, a in ((12, 16), (7, 24), (3, 34)):
             p.setBrush(QColor(15, 23, 42, int(a * u)))
@@ -752,8 +765,25 @@ class CursorOverlay(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(accent)
         p.drawRoundedRect(QRectF(x + 8, y + 14, bar, h - 28), 2.5, 2.5)
-        colours = {"title": QColor(91, 101, 117), "value": QColor(accent_hex), "note": QColor(31, 41, 55)}
+        colours = {"title": QColor(91, 101, 117), "was": QColor(148, 163, 184), "value": QColor(accent_hex),
+                   "note": QColor(31, 41, 55)}
+        roll = ann.get("roll")
         for key, font, text, top, height in parts:
+            if key == "value" and roll:
+                # The figure counts from where it was to where it is: the change is seen, not swapped in.
+                elapsed = time.monotonic() - ann["start"]
+                if elapsed < ROLL_S:
+                    from decimal import Decimal
+                    from engine.monthly_report import spoken
+                    n = roll_amount(int(roll[0]), int(roll[1]), elapsed)
+                    text = ("−" if n < 0 else "") + spoken(Decimal(abs(n)))
+                    # Neutral while moving: the tone colour belongs to the result, not to the figures on the way.
+                    c = QColor(100, 116, 139)
+                    c.setAlpha(int(255 * u))
+                    p.setFont(font)
+                    p.setPen(QPen(c, 1))
+                    p.drawText(QRectF(x + pad + bar, y + top, inner, height + 2), flags, text)
+                    continue
             c = colours[key]
             c.setAlpha(int(255 * u))
             p.setFont(font)

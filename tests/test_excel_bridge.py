@@ -152,3 +152,10 @@ def test_sheet_rows_reads_the_used_block_without_resize():
     # Row and column numbers match what the user sees: two empty rows, then a blank first column.
     assert rows[:2] == [[], []]
     assert rows[2:] == [[None, "v00", "v01"], [None, "v10", "v11"]]
+
+
+def test_reveal_keeps_the_report_title_and_labels_in_view():
+    from office.excel_com import reveal_scroll
+    assert reveal_scroll(20, 1, 1, 24, 12) == (1, 1)       # fits under the title: start from the top
+    assert reveal_scroll(20, 1, 3, 18, 12) == (14, 1)      # does not fit: a third of the way down, column A kept
+    assert reveal_scroll(200, 1, 30, 30, 12) == (190, 30)

@@ -258,7 +258,10 @@ def test_approve_fixes_verifies_then_builds_the_report(folder):
     profit = next(b for b in beats if "Lợi nhuận thực" in b.text)
     assert profit.text == "Lợi nhuận thực là 436 triệu, không phải 556 triệu như trên báo cáo."
     assert profit.value == "436 triệu" and "TK 521" in profit.note and profit.mark == "warn"
-    assert profit.ref.startswith("'BC thang'!C")
+    assert profit.ref.startswith("'BC thang'!A") and profit.ref.endswith(":G" + profit.ref.split("!A")[1].split(":")[0])
+    assert profit.was == "556 triệu" and profit.roll == (556_000_000, 436_000_000)
+    report_beat = next(b for b in beats if b.text.startswith("Em đã lập báo cáo tháng"))
+    assert report_beat.ref.startswith("'BC thang'!A4:G") and "công thức trỏ về sổ cái" in report_beat.note
     assert "Lợi nhuận thực" in said
     assert beats[-1] is month_close.SAVE_REMINDER             # the file is never saved behind the user's back
     assert month_close.approve(bridge, pq) == []              # nothing left to approve
@@ -463,3 +466,11 @@ def test_fix_runs_behind_a_still_screen_and_ends_on_the_profit_card(folder):
     assert beats[-2].text.startswith("Lợi nhuận thực là")    # the warning is the last scene before the save line
     assert any(name == "BC thang" and widths["A"] >= 30 for name, widths, _ in bridge.layouts)
     assert ("'BC thang'!A4:I4", ) == tuple(r for r, o in bridge.styles if r == "'BC thang'!A4:I4")[:1]
+
+
+def test_changing_figures_roll_and_the_old_profit_is_shown_struck():
+    from office.month_close import Beat, shapes_for
+    beat = Beat("Lợi nhuận thực là 436 triệu.", "'BC thang'!C12", "Lợi nhuận sau thuế thực", "warn", "436 triệu",
+                "note", was="556 triệu", roll=(556_000_000, 436_000_000))
+    card = shapes_for((10, 10, 100, 30), beat)[1]
+    assert card["was"] == "556 triệu" and card["roll"] == [556_000_000, 436_000_000]

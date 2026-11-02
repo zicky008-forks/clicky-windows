@@ -20,6 +20,8 @@ class Issue:
     code: str
     message: str
     row: int = 0               # source row to point at, 0 when not about one row
+    what: str = ""             # short name of the thing found, for summaries that list several
+    amount: Decimal = Decimal(0)   # money involved, for summaries that add several up
 
 
 def check(tb: TrialBalance) -> list:
@@ -132,7 +134,7 @@ def check_against_previous(cur: TrialBalance, prev: TrialBalance) -> list:
                                 f"Kỳ này {'chưa thấy' if now <= TOLERANCE else 'mới có'} {label} (phát sinh "
                                 f"{'Có' if side == 'cr' else 'Nợ'} TK {prefix} {fmt(now)}, kỳ trước {fmt(before)}); "
                                 f"nếu chưa ghi thì chi phí đang thiếu khoảng {fmt(before - now)} và lợi nhuận đang cao hơn thực tế",
-                                row))
+                                row, label, before - now))
     return issues
 
 

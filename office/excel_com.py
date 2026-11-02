@@ -56,6 +56,18 @@ def _window_dpi(hwnd) -> int:
         return 96
 
 
+
+def reveal_scroll(row: int, rows: int, col: int, seen_rows: int, seen_cols: int) -> tuple:
+    """(ScrollRow, ScrollColumn) that bring a range into view with its context.
+
+    Keeps the sheet's top-left (title, row labels in column A) on screen when the range fits
+    under it; otherwise puts the range about a third of the way down, never at the very top.
+    """
+    seen_rows, seen_cols = max(seen_rows, 1), max(seen_cols, 1)
+    top = 1 if row + rows - 1 <= seen_rows - 1 else max(1, row - seen_rows // 3)
+    left = 1 if col < seen_cols - 1 else col
+    return top, left
+
 class ExcelBridge:
     def __init__(self, app=None, dpi: Optional[int] = None):
         self._app = app        # injected in tests; otherwise attach to the running Excel
@@ -209,6 +221,15 @@ class ExcelBridge:
         except Exception:
             pass
 
+    def scroll_home(self, name: str) -> None:
+        """Show a sheet from its top-left corner, so a report is seen from its title down."""
+        app = self._excel()
+        try:
+            app.ActiveWorkbook.Worksheets(name).Activate()
+            app.ActiveWindow.ScrollRow, app.ActiveWindow.ScrollColumn = 1, 1
+        except Exception as exc:
+            log.debug("scroll_home %s failed: %s", name, exc)
+
     def screen_updating(self, on: bool) -> None:
         """Freeze or release Excel's screen, so sheets added and filled in a batch do not flash past the user."""
         app = self._excel()
@@ -312,7 +333,9 @@ class ExcelBridge:
             win = app.ActiveWindow
             pane = self._pane_showing(app, win, rng)
             if pane is None and reveal and win.Panes.Count == 1:
-                win.ScrollRow, win.ScrollColumn = rng.Row, rng.Column
+                seen = win.Panes(1).VisibleRange
+                win.ScrollRow, win.ScrollColumn = reveal_scroll(rng.Row, rng.Rows.Count, rng.Column,
+                                                                seen.Rows.Count, seen.Columns.Count)
                 pane = self._pane_showing(app, win, rng)
             if pane is None:
                 return None

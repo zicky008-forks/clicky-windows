@@ -122,7 +122,10 @@ def summary_vi(variances: list, issues: list, n_questions: int = 0) -> str:
     missing = [i for i in own if i.code == "recurring_missing"]
     if missing:
         # A cost that was simply not booked yet must never be told as "profit up thanks to lower costs".
-        text += f" Chưa nên giải thích lợi nhuận bằng chi phí giảm: {missing[0].message}."
+        names = ", ".join(i.what for i in missing)
+        short = sum((i.amount for i in missing), Decimal(0))
+        text += (f" Chưa nên giải thích lợi nhuận bằng chi phí giảm: kỳ này còn thiếu {names}, "
+                 f"chi phí có thể đang thiếu khoảng {spoken(short)} so với kỳ trước, lợi nhuận đang cao hơn thực tế.")
         variances = [x for x in variances if x.key in INCOME_KEYS]
     # Effect of each mapped line on profit: income up helps, cost up hurts.
     effects = [(x, x.change if x.key in INCOME_KEYS else -x.change) for x in variances if x.drivers]
