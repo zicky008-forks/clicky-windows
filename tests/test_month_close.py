@@ -376,6 +376,8 @@ def test_voice_triggers_and_pending_gate(folder):
     assert start.search("làm báo cáo tháng từ thư mục này")
     assert start.search("chạy case")
     assert not start.search("làm báo cáo tháng")
+    assert skills.match("làm báo cáo từ thư mục này")["name"] == "Báo cáo tháng trọn gói"   # "tháng" left out
+    assert start.search("đối chiếu báo cáo trong thư mục này")
     approve = re.compile(month_close.APPROVE_TRIGGER, re.I)
     assert approve.search("đồng ý") and approve.search("ok sửa đi") and approve.search("Sửa giúp tôi")
     assert not approve.search("được không em, sao doanh thu tháng này lại giảm mạnh vậy")

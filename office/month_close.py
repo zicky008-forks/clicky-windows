@@ -34,7 +34,8 @@ TOLERANCE = Decimal(1)
 # Findings that lose revenue rows come first: these are the ones that explain a gap with the ledger.
 _LINT_ORDER = ["locale_types", "locale_fixed", "distinct_keys", "remove_errors", "distinct_all", "inner_join", "fixed_path"]
 
-START_TRIGGER = (r"(l[àa]m|l[ậa]p|ch[ạa]y)\b.{0,25}b[áa]o\s*c[áa]o\s*th[áa]ng.{0,30}"
+# "tháng" is optional: people say "làm báo cáo từ thư mục này" just as often.
+START_TRIGGER = (r"(l[àa]m|l[ậa]p|ch[ạa]y|[đd][ốo]i\s*chi[ếe]u)\b.{0,25}b[áa]o\s*c[áa]o(\s*(th[áa]ng|qu[ảa]n\s*tr[ịi]))?.{0,30}"
                  r"(th[ưu]\s*m[ụu]c|t[ừu]\s*[đd][ầa]u|e2e|tr[ọo]n\s*g[óo]i|to[àa]n\s*b[ộo])"
                  r"|\bch[ạa]y\s*case\b|\bmonth[\s-]*close\b")
 # Only short replies count, so a new question that starts with "không" is not taken as an answer.
@@ -729,7 +730,9 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
         pat_ref = f"{sheet}!A{row}:G{row + 2}"
     _style_report_sheet(bridge, names["report"], row, extra=2 if overstated > 0 else 0)
     bridge.activate(names["report"])
-    _try(bridge, "scroll_home", names["report"])  # the report is seen from its title down, and stays that way
+    # The whole report, title to real profit, fits on screen; it is seen from the top and stays that way.
+    _try(bridge, "fit_rows", names["report"], f"A1:I{row + 2 if overstated > 0 else row}")
+    _try(bridge, "scroll_home", names["report"])
     asks = (f", kèm {len(report.questions)} câu hỏi cho các bộ phận" if report.questions else "")
     note = "Mọi số là công thức trỏ về sổ cái." + (
         f" {len(report.questions)} câu hỏi xác minh ở sheet {names['questions']}." if report.questions else "")

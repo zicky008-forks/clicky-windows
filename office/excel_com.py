@@ -230,6 +230,22 @@ class ExcelBridge:
         except Exception as exc:
             log.debug("scroll_home %s failed: %s", name, exc)
 
+    def fit_rows(self, name: str, address: str, low: int = 70, high: int = 100) -> None:
+        """Zoom so a whole block (a report from its title to its last line) fits the window, within low–high %,
+        then show it from the top-left. Only used on sheets Clicky made."""
+        app = self._excel()
+        try:
+            ws = app.ActiveWorkbook.Worksheets(name)
+            ws.Activate()
+            win = app.ActiveWindow
+            ws.Range(address).Select()
+            win.Zoom = True                         # Excel's "zoom to selection"
+            win.Zoom = max(low, min(high, int(win.Zoom)))
+            ws.Range("A1").Select()
+            win.ScrollRow, win.ScrollColumn = 1, 1
+        except Exception as exc:
+            log.debug("fit_rows %s %s failed: %s", name, address, exc)
+
     def screen_updating(self, on: bool) -> None:
         """Freeze or release Excel's screen, so sheets added and filled in a batch do not flash past the user."""
         app = self._excel()

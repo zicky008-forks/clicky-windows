@@ -139,7 +139,8 @@ def test_missing_local_model_explains_what_to_do():
     class ConnectError(Exception):
         pass
     msg = friendly_request_error(ConnectError("All connection attempts failed"), "ollama")
-    assert "API key" in msg and "làm báo cáo tháng" in msg and "Ollama" in msg
+    assert "chưa bật AI" in msg and "làm báo cáo tháng" in msg and "Ollama" in msg
+    assert len(msg) < 200      # the chat keeps only the first 200 characters of an error
     assert friendly_request_error(ValueError("bad reply"), "ollama") == "bad reply"
     assert friendly_request_error(ConnectError("All connection attempts failed"), "claude") == "All connection attempts failed"
 
