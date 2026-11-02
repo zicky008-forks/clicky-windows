@@ -14,14 +14,15 @@ class FakeRange:
         self.Address = "$" + address.replace(":", ":$")
         self.Rows = type("N", (), {"Count": ref.row2 - ref.row1 + 1})()
         self.Columns = type("N", (), {"Count": ref.col2 - ref.col1 + 1})()
-        self.Formula = sheet.cells.get(address, "")
-        self.Value = self.Formula
+        rows, cols = ref.row2 - ref.row1 + 1, ref.col2 - ref.col1 + 1
+        # A block nobody wrote reads as v<row><col> from its own top-left, like a filled sheet.
+        default = tuple(tuple(f"v{i}{j}" for j in range(cols)) for i in range(rows)) if rows * cols > 1 else ""
+        self.Formula = sheet.cells.get(address, default)
+        self.Value = self.Value2 = self.Formula
 
     def Resize(self, rows, cols):
-        ref = parse_ref(self.address)
-        r = FakeRange(self.sheet, f"{col_letters(ref.col1)}{ref.row1}:{col_letters(ref.col1 + cols - 1)}{ref.row1 + rows - 1}")
-        r.Formula = tuple(tuple(f"v{i}{j}" for j in range(cols)) for i in range(rows))
-        return r
+        # Early-bound pywin32 wrappers do not expose Range.Resize as a call; the bridge must not use it.
+        raise AttributeError("Resize")
 
     def __setattr__(self, name, value):
         if name == "Formula" and hasattr(self, "Formula"):
@@ -130,3 +131,24 @@ def test_cell_tags_are_hidden_from_speech():
     assert CELL_RE.search(text).groups() == ("'Báo cáo T10'!C12", "Doanh thu")
     assert RANGE_RE.search(text).group(1) == "B2:D20"
     assert ANY_TAG_RE.sub("", text) == "Doanh thu giảm ở đây  và vùng này ."
+
+
+def test_missing_local_model_explains_what_to_do():
+    from companion_manager import friendly_request_error
+
+    class ConnectError(Exception):
+        pass
+    msg = friendly_request_error(ConnectError("All connection attempts failed"), "ollama")
+    assert "API key" in msg and "làm báo cáo tháng" in msg and "Ollama" in msg
+    assert friendly_request_error(ValueError("bad reply"), "ollama") == "bad reply"
+    assert friendly_request_error(ConnectError("All connection attempts failed"), "claude") == "All connection attempts failed"
+
+
+def test_sheet_rows_reads_the_used_block_without_resize():
+    app = FakeApp()
+    data = app.ActiveWorkbook.Worksheets("Data")
+    data.UsedRange = data.Range("B3:C4")
+    rows = ExcelBridge(app=app).sheet_rows("Data")
+    # Row and column numbers match what the user sees: two empty rows, then a blank first column.
+    assert rows[:2] == [[], []]
+    assert rows[2:] == [[None, "v00", "v01"], [None, "v10", "v11"]]

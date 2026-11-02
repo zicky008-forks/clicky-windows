@@ -54,7 +54,9 @@ def load_all() -> list[dict]:
         _try_import(f)
 
     # Built-in skills imported as modules, so they also load from the frozen .exe
-    from office import pq_skill, report_skill
+    from office import month_close, pq_skill, report_skill
+    for skill in month_close.SKILLS:          # before report_skill: "làm báo cáo tháng từ thư mục" is the longer match
+        _register(dict(skill))
     _register(dict(report_skill.SKILL))
     for skill in pq_skill.SKILLS:
         _register(dict(skill))
@@ -97,6 +99,9 @@ def _register(skill) -> None:
 def match(transcript: str) -> Optional[dict]:
     """Return the first skill whose trigger matches the user's utterance."""
     for s in _loaded:
+        when = s.get("when")
+        if when is not None and not when():
+            continue                  # e.g. "đồng ý" only means something while a fix is waiting
         if s["_compiled"].search(transcript):
             return s
     return None

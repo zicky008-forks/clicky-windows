@@ -6,7 +6,7 @@ from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QBrush
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QObject
 
 from config import cfg
-from storage import setting
+from storage import set_setting, setting
 
 
 def _make_tray_icon(color: QColor) -> QIcon:
@@ -34,6 +34,7 @@ class TrayManager(QObject):
     on_toggle_slow_mode   = pyqtSignal(bool)
     on_toggle_quiz_mode   = pyqtSignal(bool)
     on_toggle_privacy     = pyqtSignal(bool)
+    on_toggle_recording   = pyqtSignal(bool)
     on_switch_provider    = pyqtSignal(str)     # "claude" | "openai" | "copilot" | ...
     on_copilot_login      = pyqtSignal()
     on_copilot_refresh    = pyqtSignal()
@@ -127,6 +128,12 @@ class TrayManager(QObject):
 
         stop_action = menu.addAction("Stop (Esc)")
         stop_action.triggered.connect(self.on_stop)
+
+        # Off by default: Clicky's windows stay out of screenshots and screen recordings.
+        recording_action = menu.addAction("Cho phép quay màn hình Clicky (để quay demo)")
+        recording_action.setCheckable(True)
+        recording_action.setChecked(bool(setting("allow_screen_recording", False)))
+        recording_action.triggered.connect(self._toggle_recording)
 
         menu.addSeparator()
 
@@ -547,6 +554,10 @@ class TrayManager(QObject):
             "Quiz Mode: ON" if checked else "Quiz Mode: OFF"
         )
         self.on_toggle_quiz_mode.emit(checked)
+
+    def _toggle_recording(self, checked: bool):
+        set_setting("allow_screen_recording", checked)
+        self.on_toggle_recording.emit(checked)
 
     def _toggle_privacy(self, checked: bool):
         self._privacy_enabled = checked

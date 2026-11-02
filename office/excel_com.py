@@ -32,6 +32,23 @@ def _as_grid(value):
     return [[value]]
 
 
+def _block_address(row: int, col: int, rows: int, cols: int) -> str:
+    """'C5:H40' for a block of rows x cols whose top-left cell is (row, col).
+
+    Built as text so no parameterised COM property (Range.Resize) is involved: early-bound
+    wrappers turn those into GetResize or the default member, which fails or returns one cell.
+    """
+    rows, cols = max(rows, 1), max(cols, 1)
+    return f"{col_letters(col)}{row}:{col_letters(col + cols - 1)}{row + rows - 1}"
+
+
+def _bgr(hex_colour: str) -> int:
+    """'#RRGGBB' → the BGR integer Excel's Color properties take."""
+    h = hex_colour.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return r + (g << 8) + (b << 16)
+
+
 def _window_dpi(hwnd) -> int:
     try:
         return ctypes.windll.user32.GetDpiForWindow(int(hwnd)) or 96
@@ -91,7 +108,7 @@ class ExcelBridge:
                 ctx["selection"] = sel.Address.replace("$", "")
                 rows = min(sel.Rows.Count, MAX_CONTEXT_ROWS)
                 cols = min(sel.Columns.Count, MAX_CONTEXT_COLS)
-                block = sel.Resize(rows, cols)
+                block = ws.Range(_block_address(sel.Row, sel.Column, rows, cols))
                 ctx["values"] = _as_grid(block.Formula)
             except Exception:
                 pass   # a chart or shape is selected, not cells
@@ -156,12 +173,24 @@ class ExcelBridge:
         if app is None:
             return None
         try:
-            used = app.ActiveWorkbook.Worksheets(name).UsedRange
-            rows = min(used.Rows.Count, max_rows)
-            cols = min(used.Columns.Count, max_cols)
-            grid = _as_grid(used.Resize(rows, cols).Value)
+            ws = app.ActiveWorkbook.Worksheets(name)
+            used = ws.UsedRange
+            block = ws.Range(_block_address(used.Row, used.Column, min(used.Rows.Count, max_rows),
+                                            min(used.Columns.Count, max_cols)))
+            # Value2: plain numbers and text, no date or currency conversion that can fail.
+            grid = _as_grid(block.Value2)
             pad = [None] * (used.Column - 1)
             return [[] for _ in range(used.Row - 1)] + [pad + row for row in grid]
+        except Exception as exc:
+            log.warning("Reading sheet %s failed: %s", name, exc)
+            return None
+
+    def workbook_folder(self) -> Optional[str]:
+        """Folder of the saved active workbook, or None for a new, unsaved one."""
+        app = self._excel()
+        try:
+            path = str(app.ActiveWorkbook.Path or "")
+            return path or None
         except Exception:
             return None
 
@@ -189,6 +218,63 @@ class ExcelBridge:
             self._sheet(app, ref).Range(ref.address).NumberFormat = number_format
         except Exception:
             pass
+
+    def clear(self, text: str) -> None:
+        """Clear values and formatting of a range, so a sheet Clicky rewrites keeps no stale rows or colours."""
+        ref = parse_ref(text)
+        app = self._excel()
+        if ref is None or app is None:
+            return
+        self._sheet(app, ref).Range(ref.address).Clear()
+
+    def style(self, text: str, bold=None, italic=None, size=None, color=None, fill=None, wrap=None,
+              halign=None, border_bottom=None, height=None) -> None:
+        """Format a range; colours are '#RRGGBB'. Raises on COM errors (callers decide whether to care)."""
+        ref = parse_ref(text)
+        app = self._excel()
+        if ref is None or app is None:
+            return
+        rng = self._sheet(app, ref).Range(ref.address)
+        font = rng.Font
+        if bold is not None:
+            font.Bold = bold
+        if italic is not None:
+            font.Italic = italic
+        if size is not None:
+            font.Size = size
+        if color is not None:
+            font.Color = _bgr(color)
+        if fill is not None:
+            rng.Interior.Color = _bgr(fill)
+        if wrap is not None:
+            rng.WrapText = wrap
+        if halign is not None:
+            rng.HorizontalAlignment = {"left": -4131, "center": -4108, "right": -4152}[halign]
+        if border_bottom is not None:
+            edge = rng.Borders(9)            # xlEdgeBottom
+            edge.LineStyle = 1               # xlContinuous
+            edge.Weight = 2                  # xlThin
+            edge.Color = _bgr(border_bottom)
+            if rng.Rows.Count > 1:
+                inside = rng.Borders(12)     # xlInsideHorizontal
+                inside.LineStyle = 1
+                inside.Weight = 2
+                inside.Color = _bgr(border_bottom)
+        if height is not None:
+            rng.RowHeight = height
+        rng.VerticalAlignment = -4108        # xlCenter: text sits in the middle of taller rows
+
+    def layout_sheet(self, name: str, widths: dict, gridlines: bool = True) -> None:
+        """Column widths (in Excel characters) and gridlines for one sheet; gridlines are a window setting."""
+        app = self._excel()
+        if app is None:
+            return
+        ws = app.ActiveWorkbook.Worksheets(name)
+        for col, width in widths.items():
+            ws.Columns(col).ColumnWidth = width
+        if not gridlines:
+            ws.Activate()
+            app.ActiveWindow.DisplayGridlines = False
 
     # ── Pointing ───────────────────────────────────────────────────────────
 

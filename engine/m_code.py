@@ -149,6 +149,12 @@ def lint(query: str, formula: str) -> list:
         if args is not None and len(args) == 1:
             add("warning", "distinct_all",
                 "Xoá trùng trên toàn bộ cột: hai đơn khác nhau nhưng giống hệt số liệu sẽ bị gộp làm một. Nên ghi rõ cột khoá như số chứng từ.")
+        elif args is not None and len(args) >= 2:
+            keys = re.findall(r'"((?:[^"]|"")*)"', args[1])
+            if keys and not any(_is_doc_column(k) for k in keys):
+                add("error", "distinct_keys",
+                    f"Xoá trùng theo {', '.join(keys)}: hai chứng từ khác nhau có cùng các giá trị này (ví dụ cùng khách mua hai lần "
+                    "trong một ngày) sẽ bị xoá mất một. Chỉ nên xoá trùng theo số chứng từ.")
         if re.search(r"\bTable\.(Skip|RemoveFirstN)\s*\([^,]+,\s*\d+\s*\)", e):
             add("warning", "fixed_skip",
                 "Bỏ một số dòng đầu cố định. Nếu file xuất thêm hoặc bớt dòng tiêu đề, dữ liệu sẽ bị cắt lệch.")
@@ -157,6 +163,56 @@ def lint(query: str, formula: str) -> list:
             add("warning", "fixed_path",
                 f"Đường dẫn cố định {m.group(2)}: máy khác hoặc khi đổi thư mục sẽ lỗi. Nên đưa đường dẫn vào một tham số.")
     return found
+
+
+_DOC_WORDS = ("soct", "sochungtu", "sohd", "sohoadon", "sophieu", "invoice", "docno", "documentno", "machungtu", "id")
+
+
+def _is_doc_column(name: str) -> bool:
+    import unicodedata
+    s = unicodedata.normalize("NFD", name.replace("đ", "d").replace("Đ", "D"))
+    s = re.sub(r"[\s_\-./]", "", "".join(c for c in s if unicodedata.category(c) != "Mn")).lower()
+    return any(w == s or (len(w) > 3 and w in s) for w in _DOC_WORDS)
+
+
+def _m_text(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def folder_query(folder: str, file_cultures: dict, typed: list, doc_column: Optional[str] = None,
+                 folder_parameter: Optional[str] = None, delimiter: str = ",") -> str:
+    """M that combines CSV exports in a folder, reading each file's dates in that file's own format.
+
+    file_cultures maps file name → culture ('vi-VN' / 'en-US'); files not listed use the
+    first culture given. typed is [(column, M type)], e.g. [("Ngay", "type date")].
+    Rows are de-duplicated on the document number only, and no row is dropped for
+    an error: a type error stays visible so it can be counted.
+    """
+    from collections import Counter
+    default = Counter(file_cultures.values()).most_common(1)[0][0] if file_cultures else "vi-VN"
+    source = folder_parameter or _m_text(folder)
+    rules = " else ".join(f"if [Name] = {_m_text(n)} then {_m_text(c)}" for n, c in file_cultures.items())
+    culture_expr = f"{rules} else {_m_text(default)}" if rules else _m_text(default)
+    types = ", ".join("{" + _m_text(col) + ", " + t + "}" for col, t in typed)
+    lines = [
+        "let",
+        f"    Nguon = Folder.Files({source}),",
+        '    LocCsv = Table.SelectRows(Nguon, each Text.Lower([Extension]) = ".csv"),',
+        f"    DinhDang = Table.AddColumn(LocCsv, \"DinhDang\", each {culture_expr}),",
+        "    DocFile = Table.AddColumn(DinhDang, \"Bang\", each Table.TransformColumnTypes(",
+        f"        Table.PromoteHeaders(Csv.Document([Content], [Delimiter = {_m_text(delimiter)}, Encoding = 65001]), [PromoteAllScalars = true]),",
+        f"        {{{types}}}, [DinhDang])),",
+        "    GopFile = Table.Combine(DocFile[Bang])" + ("," if doc_column else ""),
+    ]
+    if doc_column:
+        lines.append(f"    XoaTrungTheoSoCT = Table.Distinct(GopFile, {{{_m_text(doc_column)}}})")
+    lines += ["in", "    XoaTrungTheoSoCT" if doc_column else "    GopFile"]
+    return "\n".join(lines)
+
+
+def parameter_query(value: str) -> str:
+    """M for a text parameter (Manage Parameters), so a folder path lives in one place."""
+    return f'{_m_text(value)} meta [IsParameterQuery = true, Type = "Text", IsParameterQueryRequired = true]'
 
 
 def add_culture(formula: str, culture: str) -> tuple:

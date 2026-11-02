@@ -73,6 +73,11 @@ STATE_TO_CURSOR_MODE = {
 }
 
 
+def _allow_recording() -> bool:
+    from storage import setting
+    return bool(setting("allow_screen_recording", False))
+
+
 def _copilot_login_flow(tray, panel, manager):
     """Run the GitHub device-flow login in a worker thread so the UI stays live."""
     import asyncio, threading
@@ -168,6 +173,8 @@ def main():
     panel   = CompanionPanel()
     overlay = CursorOverlay()
     tray    = TrayManager()
+    from ui.choice_card import ChoiceCard
+    choice_card = ChoiceCard()
     from PyQt6.QtCore import QTimer
     from desktop import foreground, restore
     _last_foreground = [{}]
@@ -247,7 +254,7 @@ def main():
         caption.show()
         try:
             from screen.privacy import exclude_window
-            exclude_window(caption)
+            exclude_window(caption, not _allow_recording())
         except OSError:
             caption.hide()
     manager.sig_caption.connect(_caption)
@@ -336,6 +343,27 @@ def main():
     # Teaching drawings — generic shape channel with progressive animation
     manager.sig_draw.connect(overlay.add_shape)
     manager.sig_clear_drawings.connect(overlay.clear_annotations)
+    # Questions Clicky asks get real buttons; a click answers as if the words were typed.
+    manager.sig_choices.connect(choice_card.ask)
+    choice_card.chosen.connect(manager.submit_text)
+    choice_card.dismissed.connect(overlay.clear_annotations)
+    manager.sig_turn_started.connect(lambda _q: choice_card.hide())
+
+    # While Clicky walks through the sheet step by step the cards carry everything, so the chat
+    # panel steps aside instead of covering a third of the screen, and comes back afterwards.
+    guided_state = {"panel_was_open": False}
+
+    def _on_guided(active: bool):
+        if active:
+            if panel.isVisible():
+                guided_state["panel_was_open"] = True
+                panel.hide()
+        elif guided_state["panel_was_open"]:
+            guided_state["panel_was_open"] = False
+            panel.show()
+
+    manager.sig_guided.connect(_on_guided)
+    choice_card.dismissed.connect(lambda: _on_guided(False))
 
     # Errors. The toast names the log file because it only has room for the
     # message itself — issue #15 was reported with no traceback simply because
@@ -345,7 +373,7 @@ def main():
     ) / "Clicky" / "clicky.log"
     manager.sig_error.connect(
         lambda e: tray.show_notification(
-            "Clicky error", f"{e}\n\nFull details: {_log_hint}"
+            "Clicky gặp lỗi", f"{e}\n\nChi tiết trong: {_log_hint}"
         )
     )
     manager.sig_notice.connect(lambda message: tray.show_notification('Clicky', message))
@@ -355,6 +383,7 @@ def main():
     panel.on_text_submitted.connect(manager.submit_text)
     panel.on_stop_requested.connect(manager.stop)
     manager.sig_turn_started.connect(panel.begin_turn)
+    manager.sig_error.connect(panel.show_error)
     panel.on_new_chat.connect(manager.clear_history)
     panel.on_new_chat.connect(panel.clear_response)
 
@@ -652,11 +681,17 @@ def main():
     # ── Show UI + start listener ──────────────────────────────────────────────
     overlay.show()        # persistent overlay (cursor follow)
     from screen.privacy import exclude_window
-    for window in (overlay, panel):
-        try:
-            exclude_window(window)
-        except OSError as exc:
-            manager.sig_error.emit(f"Could not exclude Clicky's window from screen capture: {exc}")
+
+    def _apply_capture_policy(allowed=None):
+        """Clicky hides its own windows from screen capture, unless the user turned on recording for a demo."""
+        hidden = not (_allow_recording() if allowed is None else allowed)
+        for window in (overlay, panel, choice_card, caption):
+            try:
+                exclude_window(window, hidden)
+            except OSError as exc:
+                manager.sig_error.emit(f"Could not change screen-capture visibility of Clicky's window: {exc}")
+    _apply_capture_policy()
+    tray.on_toggle_recording.connect(_apply_capture_policy)
     # Panel is hidden by default — user can open it from the tray menu if needed
     manager.start()        # begin ambient mic + wake-word scanning
     app.aboutToQuit.connect(manager.shutdown)

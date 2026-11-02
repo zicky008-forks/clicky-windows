@@ -267,6 +267,23 @@ POINT_TRIGGER_RE = re.compile(
 )
 
 
+NO_AI_MESSAGE = (
+    "Clicky chưa có AI để trả lời câu hỏi tự do: chưa nhập API key và máy không chạy {name}. "
+    "Vào Settings nhập API key Claude, OpenAI hoặc Gemini. Các lệnh như \"làm báo cáo tháng từ thư mục này\" "
+    "và \"kiểm tra power query\" vẫn chạy được mà không cần AI."
+)
+
+
+def friendly_request_error(exc: Exception, provider: str) -> str:
+    """Turn 'All connection attempts failed' from a local model nobody installed into what to do next."""
+    text = str(exc)
+    if provider in ("ollama", "lmstudio") and (
+            "connection attempts failed" in text.lower() or "connecterror" in type(exc).__name__.lower()
+            or "connection refused" in text.lower()):
+        return NO_AI_MESSAGE.format(name="Ollama" if provider == "ollama" else "LM Studio")
+    return text
+
+
 class CompanionManager(QObject):
     """Thread-safe signals for Qt UI updates from async/audio threads."""
 
@@ -292,6 +309,8 @@ class CompanionManager(QObject):
     sig_label               = pyqtSignal(float, float, str)
     sig_draw                = pyqtSignal(dict)            # generic teaching shape → overlay
     sig_clear_drawings      = pyqtSignal()                # wipe all teaching shapes
+    sig_choices             = pyqtSignal(str, list)       # (question, button labels) → clickable choice card
+    sig_guided              = pyqtSignal(bool)            # True while Clicky walks through the screen step by step
     sig_recording_state     = pyqtSignal(bool, str)       # (is_recording, output_dir)
     sig_turn_started        = pyqtSignal(str)
     sig_caption             = pyqtSignal(str)
@@ -1412,7 +1431,7 @@ class CompanionManager(QObject):
             # "'NoneType' object has no attribute 'write'" with no way to
             # tell which call produced it.
             _log.exception("request failed: %s", e)
-            self.sig_error.emit(str(e))
+            self.sig_error.emit(friendly_request_error(e, cfg.llm_provider()))
 
         finally:
             for task in (search_task, locate_task, narration_task):
@@ -1427,17 +1446,32 @@ class CompanionManager(QObject):
                 self._current_task = None
                 self._emit_state(AppState.IDLE)
 
-    async def _reply_local(self, msg: str):
-        """Show + speak a message that doesn't need an LLM round-trip."""
+    async def _reply_local(self, msg: str) -> bool:
+        """Show + speak a message that doesn't need an LLM round-trip; False when it was not read aloud."""
+        from audio.tts.sapi_tts_provider import NoVoiceForLanguage
         self.sig_response_chunk.emit(msg)
         self.sig_response_done.emit(msg)
         self._last_response = msg
         self._emit_state(AppState.SPEAKING)
+        spoke = True
         try:
             await self._get_tts().speak(msg)
-        except Exception:
-            pass
+        except NoVoiceForLanguage:
+            # Never read Vietnamese with an English voice: show the words and say once how to get a voice.
+            spoke = False
+            if not getattr(self, "_no_voice_noticed", False):
+                self._no_voice_noticed = True
+                self.sig_notice.emit(NoVoiceForLanguage.ADVICE)
+        except Exception as exc:
+            # The answer is on screen either way; say once why it was not read aloud.
+            spoke = False
+            _log.warning("speaking a local reply failed: %s", exc)
+            if not getattr(self, "_voice_failure_noticed", False):
+                self._voice_failure_noticed = True
+                self.sig_notice.emit("Clicky chưa phát được giọng đọc trên máy này, câu trả lời vẫn hiện trong khung chat. "
+                                     f"Chi tiết: {str(exc)[:160]}")
         self._emit_state(AppState.IDLE)
+        return spoke
 
     async def _spaced_review(self):
         """SR-style review: pick due entries from the journal, ask one back."""
@@ -1527,15 +1561,20 @@ class CompanionManager(QObject):
         return format_for_prompt(queries, pq.lint_all() if queries else [])
 
     def _physical_to_logical_bbox(self, bbox):
-        shot = self._shot(1)
-        if not shot:
-            return None
-        scale = shot.dpi_scale or 1.0
-        l, tp, r, b = bbox
-        return (shot.logical_left + (l - shot.physical_left) / scale,
-                shot.logical_top + (tp - shot.physical_top) / scale,
-                shot.logical_left + (r - shot.physical_left) / scale,
-                shot.logical_top + (b - shot.physical_top) / scale)
+        """Physical screen box → logical overlay coordinates.
+
+        Code-only skills (the month close) never take a screenshot, so fall back to
+        reading monitor geometry directly instead of returning nothing.
+        """
+        from screen.capture import monitor_geometry, physical_to_logical
+        shots = self._screens_ctx
+        if not shots:
+            try:
+                shots = monitor_geometry()
+            except Exception as exc:
+                _log.warning("reading monitor geometry failed: %s", exc)
+                return None
+        return physical_to_logical(bbox, shots)
 
     def _excel_bbox(self, ref: str):
         """Cell or range → logical bbox, computed by Excel itself."""

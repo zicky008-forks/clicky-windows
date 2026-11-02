@@ -5,6 +5,9 @@ the report, questions-to-verify, check and cleaned trial-balance sheets with liv
 the conclusion. It only adds new sheets; the user's own sheets are never changed.
 """
 import asyncio
+import logging
+
+log = logging.getLogger(__name__)
 
 TRIGGER = (r"(l[ậa]p|l[àa]m|t[ạa]o|d[ựu]ng|xu[ấa]t)\b.{0,20}b[áa]o\s+c[áa]o.{0,30}\bth[áa]ng\b"
            r"|\b(build|make|create)\b.{0,20}\bmonthly\s+report\b")
@@ -22,12 +25,16 @@ def find_trial_balances(bridge) -> list:
             continue
         rows = bridge.sheet_rows(name)
         if not rows:
+            log.info("Sheet %s: no rows read", name)
             continue
         try:
             if read_trial_balance(rows, name).lines:
                 found.append((name, rows))
         except ValueError:
             continue
+        except Exception as exc:
+            log.warning("Sheet %s could not be read as a trial balance: %s", name, exc)
+    log.info("Trial balances found in the workbook: %s", [n for n, _ in found])
     return found
 
 
@@ -39,25 +46,37 @@ def pick_periods(found: list, active_sheet: str):
 
 
 def run(bridge) -> str:
+    return run_report(bridge)[0]
+
+
+def run_report(bridge, periods=None) -> tuple:
+    """(spoken summary, MonthlyReport or None, sheet names used or None).
+
+    periods is ((this period's name, rows), (previous name, rows)) when the caller already
+    read both trial balances (the month-close flow reads them from the files); otherwise
+    they are found among the workbook's sheets.
+    """
     from engine.build import SHEET_NAMES, build
     from engine.report_sheet import quote
     if not bridge.available():
-        return NEED_TWO.format(n=0)
-    found = find_trial_balances(bridge)
-    if len(found) < 2:
-        return NEED_TWO.format(n=len(found))
-    ctx = bridge.context() or {}
-    (cur_name, cur_rows), (prev_name, prev_rows) = pick_periods(found, ctx.get("sheet", ""))
+        return NEED_TWO.format(n=0), None, None
+    if periods is None:
+        found = find_trial_balances(bridge)
+        if len(found) < 2:
+            return NEED_TWO.format(n=len(found)), None, None
+        ctx = bridge.context() or {}
+        periods = pick_periods(found, ctx.get("sheet", ""))
+    (cur_name, cur_rows), (prev_name, prev_rows) = periods
     names = {}
     for key in ("report", "questions", "checks", "tb_cur", "tb_prev"):
         actual = bridge.add_sheet(SHEET_NAMES[key])
         if not actual:
-            return "Em không thêm được sheet mới vào file này. Anh kiểm tra file có đang bị khoá hoặc chỉ đọc không."
+            return "Em không thêm được sheet mới vào file này. Anh kiểm tra file có đang bị khoá hoặc chỉ đọc không.", None, None
         names[key] = actual
     report = build(cur_rows, prev_rows, cur_name, prev_name, text_prefix="'", names=names)
     for name, grid in report.sheets.items():
         if not bridge.write(f"{quote(name)}!A1", grid):
-            return f"Em tính xong nhưng ghi vào sheet {name} bị lỗi. Kết quả: {report.summary}"
+            return f"Em tính xong nhưng ghi vào sheet {name} bị lỗi. Kết quả: {report.summary}", report, names
     last = 4 + len(report.figures)
     bridge.format_numbers(f"{quote(names['report'])}!C5:E{last}")
     bridge.format_numbers(f"{quote(names['report'])}!F5:F{last}", "0.0%")
@@ -65,7 +84,7 @@ def run(bridge) -> str:
     for key in ("tb_cur", "tb_prev"):
         bridge.format_numbers(f"{quote(names[key])}!C2:H{len(report.sheets[names[key]])}")
     bridge.activate(names["report"])
-    return report.summary
+    return report.summary, report, names
 
 
 async def handle(manager, transcript: str) -> str:

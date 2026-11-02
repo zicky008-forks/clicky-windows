@@ -107,3 +107,20 @@ def test_prompt_context_lists_steps_and_findings():
     text = format_for_prompt([("Ban hang HN", BRANCH_QUERY)], lint("Ban hang HN", BRANCH_QUERY))
     assert "4.Changed Type" in text and "step 'Removed Errors'" in text
     assert pq_skill.culture_from("theo kiểu Việt Nam") == "vi-VN" and pq_skill.culture_from("en-gb") == "en-GB"
+
+
+def test_add_creates_new_or_replaces_with_backup(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLICKY_DATA_DIR", str(tmp_path))
+    bridge = FakeBridge([("KhachHang", CLEAN_QUERY)])
+    added = []
+    bridge.queries.Add = lambda name, formula: added.append(FakeQuery(name, formula))
+    pq = PowerQuery(bridge)
+    monkeypatch.setattr(FakeQueries, "__len__", lambda self: self.Count, raising=False)   # COM collections are falsy when empty
+    empty = FakeBridge([])
+    empty.queries.Add = lambda name, formula: added.append(FakeQuery(name, formula))
+    assert PowerQuery(empty).add("DonHang", BRANCH_QUERY) and added[0].Name == "DonHang"
+    assert pq.add("DonHang", BRANCH_QUERY)
+    assert pq.add("KhachHang", BRANCH_QUERY)
+    assert bridge.queries.Item("KhachHang").Formula == BRANCH_QUERY
+    backup = json.loads((tmp_path / "power_query_backups.json").read_text(encoding="utf-8"))
+    assert backup[-1]["formula"] == CLEAN_QUERY

@@ -149,6 +149,41 @@ def capture_all_screens(max_width: int = 1280, privacy_guard: bool = True, prefe
     return results
 
 
+def monitor_geometry() -> List[ScreenShot]:
+    """Each monitor's physical and logical geometry, without capturing any pixels.
+
+    Lets code-only features (Excel pointing from a voice skill) draw on screen
+    without taking a screenshot.
+    """
+    results = []
+    with mss.mss() as sct:
+        for i, monitor in enumerate(sct.monitors[1:], start=1):
+            logical_left, logical_top, dpi = _display_geometry(monitor)
+            results.append(ScreenShot(
+                index=i, width=0, height=0, base64_jpeg="",
+                physical_width=int(monitor["width"]), physical_height=int(monitor["height"]),
+                physical_left=int(monitor["left"]), physical_top=int(monitor["top"]),
+                dpi_scale=dpi, logical_left=logical_left, logical_top=logical_top,
+            ))
+    return results
+
+
+def physical_to_logical(bbox, shots):
+    """Physical (left, top, right, bottom) → logical, using the monitor that holds the box's centre."""
+    if not shots:
+        return None
+    l, t, r, b = bbox
+    cx, cy = (l + r) / 2, (t + b) / 2
+    shot = next((s for s in shots
+                 if s.physical_left <= cx < s.physical_left + s.physical_width
+                 and s.physical_top <= cy < s.physical_top + s.physical_height), shots[0])
+    scale = shot.dpi_scale or 1.0
+    return (shot.logical_left + (l - shot.physical_left) / scale,
+            shot.logical_top + (t - shot.physical_top) / scale,
+            shot.logical_left + (r - shot.physical_left) / scale,
+            shot.logical_top + (b - shot.physical_top) / scale)
+
+
 def capture_primary() -> ScreenShot:
     """Capture only the primary monitor."""
     screens = capture_all_screens()
