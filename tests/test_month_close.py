@@ -293,3 +293,13 @@ def test_voice_triggers_and_pending_gate(folder):
     month_close._PENDING = {"stage": "fix_query"}
     assert all(s["when"]() for s in gated)
     assert skills.match("đồng ý")["handler"] is month_close.handle_approve
+
+
+def test_machine_order_follows_the_region_culture_not_a_custom_short_date():
+    # Tester PC: region en-US, short date customised to dd/MM/yyyy; Power Query still read dates month-first.
+    assert month_close.order_from_pattern("M/d/yyyy") == sources.MONTH_FIRST
+    assert month_close.order_from_pattern("dd/MM/yyyy") == sources.DAY_FIRST
+    assert month_close.order_from_pattern("yyyy-MM-dd") is None
+    assert month_close.order_from_culture("en-US") == sources.MONTH_FIRST
+    assert month_close.order_from_culture("vi-VN") == sources.DAY_FIRST
+    assert month_close.machine_date_order() in (None, sources.DAY_FIRST, sources.MONTH_FIRST)

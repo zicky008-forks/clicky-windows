@@ -75,18 +75,46 @@ def _dec(v) -> Decimal:
 
 
 def machine_date_order() -> Optional[str]:
-    """'vi-VN' or 'en-US' from the Windows short-date pattern, which Power Query uses when no culture is given."""
+    """'vi-VN' or 'en-US': how Power Query on this PC reads dates when a query gives no culture.
+
+    Power Query follows the culture of the Windows region (en-US, vi-VN...), not a
+    short-date pattern the user customised: a PC set to en-US with dd/MM/yyyy still
+    reads 04/10/2026 as April 10 (seen on a tester's PC). So the order comes from
+    the culture's own default pattern, ignoring user overrides.
+    """
     try:
         import ctypes
+        k32 = ctypes.windll.kernel32
+        name = ctypes.create_unicode_buffer(85)
+        if not k32.GetUserDefaultLocaleName(name, 85):
+            return None
         buf = ctypes.create_unicode_buffer(80)
-        if ctypes.windll.kernel32.GetLocaleInfoEx(None, 0x1F, buf, 80):    # LOCALE_SSHORTDATE
-            pattern = buf.value.strip().lower()
-            if pattern.startswith("d"):
-                return sources.DAY_FIRST
-            if pattern.startswith("m"):
-                return sources.MONTH_FIRST
+        # LOCALE_SSHORTDATE | LOCALE_NOUSEROVERRIDE
+        if k32.GetLocaleInfoEx(name.value, 0x1F | 0x80000000, buf, 80):
+            return order_from_pattern(buf.value) or order_from_culture(name.value)
+        return order_from_culture(name.value)
     except Exception:
-        pass
+        return None
+
+
+def order_from_pattern(pattern: str) -> Optional[str]:
+    p = (pattern or "").strip().lower()
+    for ch in p:
+        if ch == "d":
+            return sources.DAY_FIRST
+        if ch == "m":
+            return sources.MONTH_FIRST
+        if ch == "y":
+            return None               # year first (ISO, ja-JP): ambiguous for dd/mm files
+    return None
+
+
+def order_from_culture(name: str) -> Optional[str]:
+    n = (name or "").lower()
+    if n in {"en-us", "en-ph", "en-ca", "es-us", "en-029"} or n.startswith("en-us"):
+        return sources.MONTH_FIRST
+    if n.startswith(("vi", "fr", "de", "en-gb", "en-au", "es", "it", "pt", "nl", "ru", "id", "th", "en-sg", "en-in")):
+        return sources.DAY_FIRST
     return None
 
 
