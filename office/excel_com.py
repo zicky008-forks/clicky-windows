@@ -32,6 +32,13 @@ def _as_grid(value):
     return [[value]]
 
 
+def _bgr(hex_colour: str) -> int:
+    """'#RRGGBB' → the BGR integer Excel's Color properties take."""
+    h = hex_colour.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return r + (g << 8) + (b << 16)
+
+
 def _window_dpi(hwnd) -> int:
     try:
         return ctypes.windll.user32.GetDpiForWindow(int(hwnd)) or 96
@@ -198,6 +205,63 @@ class ExcelBridge:
             self._sheet(app, ref).Range(ref.address).NumberFormat = number_format
         except Exception:
             pass
+
+    def clear(self, text: str) -> None:
+        """Clear values and formatting of a range, so a sheet Clicky rewrites keeps no stale rows or colours."""
+        ref = parse_ref(text)
+        app = self._excel()
+        if ref is None or app is None:
+            return
+        self._sheet(app, ref).Range(ref.address).Clear()
+
+    def style(self, text: str, bold=None, italic=None, size=None, color=None, fill=None, wrap=None,
+              halign=None, border_bottom=None, height=None) -> None:
+        """Format a range; colours are '#RRGGBB'. Raises on COM errors (callers decide whether to care)."""
+        ref = parse_ref(text)
+        app = self._excel()
+        if ref is None or app is None:
+            return
+        rng = self._sheet(app, ref).Range(ref.address)
+        font = rng.Font
+        if bold is not None:
+            font.Bold = bold
+        if italic is not None:
+            font.Italic = italic
+        if size is not None:
+            font.Size = size
+        if color is not None:
+            font.Color = _bgr(color)
+        if fill is not None:
+            rng.Interior.Color = _bgr(fill)
+        if wrap is not None:
+            rng.WrapText = wrap
+        if halign is not None:
+            rng.HorizontalAlignment = {"left": -4131, "center": -4108, "right": -4152}[halign]
+        if border_bottom is not None:
+            edge = rng.Borders(9)            # xlEdgeBottom
+            edge.LineStyle = 1               # xlContinuous
+            edge.Weight = 2                  # xlThin
+            edge.Color = _bgr(border_bottom)
+            if rng.Rows.Count > 1:
+                inside = rng.Borders(12)     # xlInsideHorizontal
+                inside.LineStyle = 1
+                inside.Weight = 2
+                inside.Color = _bgr(border_bottom)
+        if height is not None:
+            rng.RowHeight = height
+        rng.VerticalAlignment = -4108        # xlCenter: text sits in the middle of taller rows
+
+    def layout_sheet(self, name: str, widths: dict, gridlines: bool = True) -> None:
+        """Column widths (in Excel characters) and gridlines for one sheet; gridlines are a window setting."""
+        app = self._excel()
+        if app is None:
+            return
+        ws = app.ActiveWorkbook.Worksheets(name)
+        for col, width in widths.items():
+            ws.Columns(col).ColumnWidth = width
+        if not gridlines:
+            ws.Activate()
+            app.ActiveWindow.DisplayGridlines = False
 
     # ── Pointing ───────────────────────────────────────────────────────────
 

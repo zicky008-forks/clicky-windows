@@ -74,6 +74,7 @@ def folder(tmp_path):
 class FakeBridge:
     def __init__(self, folder):
         self.folder, self.sheets, self.active, self.formats = folder, {"Sheet1": []}, "Sheet1", []
+        self.styles, self.layouts = [], []
 
     def available(self):
         return True
@@ -102,6 +103,12 @@ class FakeBridge:
 
     def format_numbers(self, ref, number_format=None):
         self.formats.append(ref)
+
+    def style(self, ref, **opts):
+        self.styles.append((ref, opts))
+
+    def layout_sheet(self, name, widths, gridlines=True):
+        self.layouts.append((name, widths, gridlines))
 
     def activate(self, name):
         self.active = name
@@ -200,22 +207,36 @@ def test_start_finds_the_gap_and_names_both_causes(folder):
     pq = FakePQ(bridge, folder)
     beats = month_close.start(bridge, pq, sources.DAY_FIRST)
     said = _text(beats)
-    assert "2 file đơn hàng: 7 dòng" in said and "6 chứng từ, doanh thu 8,4 tỷ" in said
-    assert "khớp file gốc đến từng đồng" in said
-    lint = next(b.text for b in beats if b.text.startswith("Query DonHang có"))
-    assert lint.index("Bước Changed Type") < lint.index("Bước Removed Duplicates") < lint.index("Bước Removed Errors")
-    assert "M_do_AI_viet.txt" in said and "máy này không có" in said and ":\\" not in said   # no raw path read aloud
+    # One short idea per sentence, no step or file names spoken.
+    assert all(len(b.text.split()) <= 16 for b in beats), [b.text for b in beats]
+    assert "Bước" not in said and "M_do_AI_viet" not in said and ":\\" not in said
+    assert beats[0].text == "File gốc và sổ cái khớp nhau: doanh thu 8,4 tỷ."
+    assert beats[0].ref == "'Doi chieu'!C5:C6" and beats[0].mark == "ok" and beats[0].value == "8,4 tỷ"
+    assert "6 chứng từ trong 2 file · đã bỏ 1 chứng từ lặp" in beats[0].note
+    gap = beats[1]
+    assert gap.text == "Báo cáo trong Excel đang thiếu 4,2 tỷ so với sổ cái."
+    assert gap.ref == "'Doi chieu'!C7" and gap.mark == "bad" and gap.value == "−4,2 tỷ" and "3/6 chứng từ" in gap.note
+    date, dedupe = beats[2], beats[3]
+    assert date.text == "Nguyên nhân chính: máy đọc nhầm ngày tháng, làm mất 2,8 tỷ."
+    assert date.value == "05/10 → 10/05" and "ngày 5/10 bị đọc thành ngày 10/5" in date.note
+    assert date.ref == "'Doi chieu'!A10:E10" and dedupe.ref == "'Doi chieu'!A11:E11"
+    assert dedupe.text == "Thêm 1 chứng từ bị xoá nhầm ở bước xoá trùng." and dedupe.value == "1,4 tỷ"
+    offer = beats[-1]
+    assert offer.choices == ("Sửa giúp tôi", "Để tôi xem") and "Bản cũ vẫn được giữ" in offer.text
     assert f'Folder.Files("{folder / "DonHang"}")' in pq.queries["DonHang"]
-    assert "chỉ giữ 3 dòng, doanh thu 4,2 tỷ, thiếu 4,2 tỷ so với sổ cái" in said
-    assert "2 chứng từ, 2,8 tỷ, mất vì máy này đọc ngày kiểu ngày/tháng" in said
-    assert "1 chứng từ, 1,4 tỷ, bị xoá nhầm ở bước xoá trùng" in said
-    gap = next(b for b in beats if b.text.startswith("Query trong Excel"))
-    assert gap.ref == "'Doi chieu'!C7" and gap.mark == "bad"
-    assert beats[0].ref == "'Doi chieu'!B5:C5" and beats[1].ref == "'Doi chieu'!C5:C6" and beats[1].mark == "ok"
     check = bridge.sheets["Doi chieu"]
     assert check[3][1:3] == ["=COUNT('DonHang'!G:G)", "=SUM('DonHang'!G:G)"]
     assert check[4][1:4] == [6, Decimal(84 * BN // 10), Decimal(58 * BN // 10)]
     assert check[5][2] == Decimal(8400 * tb.M) and check[6][2] == "=C4-C6"
+    # The full story lives in the sheet: causes on the rows the cards point at, then the query's risky steps.
+    assert check[8][0] == "Chi tiết kiểm tra"
+    assert check[9][:3] == ["Đọc nhầm ngày tháng", 2, Decimal(28 * BN // 10)]
+    assert check[10][:3] == ["Xoá trùng nhầm", 1, Decimal(14 * BN // 10)]
+    steps = [r[0] for r in check[11:]]
+    assert steps.index("Bước query: Changed Type") < steps.index("Bước query: Removed Duplicates") < steps.index("Bước query: Removed Errors")
+    assert any("máy này không có" in r[4] for r in check[11:])
+    assert ("'Doi chieu'!A7:D7", {"color": "#B42318"}) in bridge.styles      # the gap row reads red
+    assert bridge.layouts and bridge.layouts[0][2] is False                    # widths set, gridlines off
     assert month_close.pending()
 
 
@@ -226,12 +247,18 @@ def test_approve_fixes_verifies_then_builds_the_report(folder):
     beats = month_close.approve(bridge, pq)
     said = _text(beats)
     assert not month_close.pending()
-    assert "query giữ 6 chứng từ, doanh thu 8,4 tỷ, giá vốn khớp Nợ TK 632. Khớp sổ cái" in said
+    done = beats[0]
+    assert done.text == "Đã sửa xong. Excel khớp sổ cái đến từng đồng." and done.mark == "ok" and done.value == "0 đ"
+    assert done.note == "6 chứng từ · doanh thu 8,4 tỷ · giá vốn khớp TK 632"
+    assert ("'Doi chieu'!A7:D7", {"color": "#157347"}) in bridge.styles
+    assert bridge.sheets["Doi chieu"][9][0] == "Đã sửa query"
     assert pq.queries["ThuMucDonHang"].startswith(f'"{folder}"') or str(folder).replace("\\", "\\\\") in pq.queries["ThuMucDonHang"]
     assert "BC thang" in bridge.sheets and "TB_T10" in bridge.sheets
     profit = next(b for b in beats if "Lợi nhuận thực" in b.text)
-    assert "Lợi nhuận thực là 436 triệu" in profit.text and "556 triệu" in profit.text
+    assert profit.text == "Lợi nhuận thực là 436 triệu, không phải 556 triệu như trên báo cáo."
+    assert profit.value == "436 triệu" and "TK 521" in profit.note and profit.mark == "warn"
     assert profit.ref.startswith("'BC thang'!C")
+    assert "Lợi nhuận thực" in said
     assert month_close.approve(bridge, pq) == []              # nothing left to approve
 
 
@@ -249,7 +276,8 @@ def test_clean_query_goes_straight_to_the_report(folder):
     bridge = FakeBridge(folder)
     pq = FakePQ(bridge, folder)
     said = _text(month_close.start(bridge, pq, sources.DAY_FIRST))
-    assert "em tạo query mới" in said and "Query giữ 6 dòng, doanh thu 8,4 tỷ, khớp sổ cái" in said
+    assert "Excel khớp sổ cái đến từng đồng: doanh thu 8,4 tỷ." in said
+    assert any("Clicky tạo query mới" in r[4] for r in bridge.sheets["Doi chieu"][9:])
     assert "Lợi nhuận thực là 436 triệu" in said and not month_close.pending()
 
 
@@ -264,7 +292,7 @@ def test_query_that_excel_cannot_load_still_gets_the_fix_offered(folder):
     said = _text(month_close.start(bridge, pq, sources.DAY_FIRST))
     assert "Excel báo lỗi khi tải query DonHang" in said and month_close.pending()
     assert bridge.sheets["Doi chieu"][3][4] == "Chưa đọc được bảng query"
-    assert "Khớp sổ cái đến từng đồng" in _text(month_close.approve(bridge, pq))
+    assert "khớp sổ cái đến từng đồng" in _text(month_close.approve(bridge, pq))
 
 
 def test_table_clicky_cannot_read_back_shows_no_gap_and_offers_no_fix(folder):
@@ -282,12 +310,14 @@ def test_table_clicky_cannot_read_back_shows_no_gap_and_offers_no_fix(folder):
     assert gap_row[2] == "" and gap_row[3] == "" and gap_row[4].startswith("Chưa đối chiếu được")
 
 
-def test_marks_draw_a_coloured_box_and_label_beside_the_range():
-    shapes = month_close.marks_for((100, 50, 200, 70), month_close.Beat("x", "'Doi chieu'!C7", "Thiếu 4,2 tỷ", "bad"))
-    box, card = shapes
-    assert box["kind"] == "rect" and box["color"] == "red" and (box["x1"], box["y2"]) == (96, 74)
-    assert card["kind"] == "text" and card["text"] == "Thiếu 4,2 tỷ" and card["x"] > 200
-    assert month_close.marks_for((0, 0, 1, 1), month_close.Beat("x", "A1"))[0]["color"] == "blue"
+def test_each_beat_lights_its_range_and_puts_one_card_beside_it():
+    beat = month_close.Beat("x", "'Doi chieu'!C7", "Excel lệch sổ cái", "bad", "−4,2 tỷ", "Query chỉ giữ 3/6 chứng từ.")
+    spot, card = month_close.shapes_for((100, 50, 200, 70), beat)
+    assert spot == {"kind": "spotlight", "x1": 100, "y1": 50, "x2": 200, "y2": 70, "tone": "bad"}
+    assert card["kind"] == "card" and card["anchor"] == [100, 50, 200, 70] and card["tone"] == "bad"
+    assert (card["title"], card["value"], card["note"]) == ("Excel lệch sổ cái", "−4,2 tỷ", "Query chỉ giữ 3/6 chứng từ.")
+    plain = month_close.shapes_for((0, 0, 1, 1), month_close.Beat("x", "A1"))
+    assert [s["kind"] for s in plain] == ["spotlight"] and plain[0]["tone"] == "info"
 
 
 def test_unsaved_workbook_and_empty_folder(tmp_path):
@@ -307,10 +337,11 @@ def test_voice_triggers_and_pending_gate(folder):
     assert start.search("chạy case")
     assert not start.search("làm báo cáo tháng")
     approve = re.compile(month_close.APPROVE_TRIGGER, re.I)
-    assert approve.search("đồng ý") and approve.search("ok sửa đi")
+    assert approve.search("đồng ý") and approve.search("ok sửa đi") and approve.search("Sửa giúp tôi")
     assert not approve.search("được không em, sao doanh thu tháng này lại giảm mạnh vậy")
     reject = re.compile(month_close.REJECT_TRIGGER, re.I)
-    assert reject.search("thôi") and not reject.search("không hiểu sao lợi nhuận lại giảm nhiều thế")
+    assert reject.search("thôi") and reject.search("Để tôi xem")
+    assert not reject.search("không hiểu sao lợi nhuận lại giảm nhiều thế")
 
     gated = [s for s in month_close.SKILLS if s.get("when")]
     assert gated and all(not s["when"]() for s in gated)
@@ -329,8 +360,10 @@ def test_machine_order_follows_the_region_culture_not_a_custom_short_date():
     assert month_close.machine_date_order() in (None, sources.DAY_FIRST, sources.MONTH_FIRST)
 
 
-def test_play_separates_beats_and_draws_before_speaking():
+def test_play_shows_one_idea_at_a_time_then_offers_the_buttons(monkeypatch):
     import asyncio
+    from ui.card_layout import NO_BUBBLE
+    monkeypatch.setattr(month_close, "BEAT_GAP_S", 0)
 
     class Sig:
         def __init__(self, log, name):
@@ -351,7 +384,7 @@ def test_play_separates_beats_and_draws_before_speaking():
             self.log = []
             self._excel = Excel()
             for n in ("sig_clear_drawings", "sig_response_chunk", "sig_draw", "sig_point_hold",
-                      "sig_point_at", "sig_point_release"):
+                      "sig_point_at", "sig_point_release", "sig_choices"):
                 setattr(self, n, Sig(self.log, n))
 
         def _physical_to_logical_bbox(self, rect):
@@ -359,11 +392,21 @@ def test_play_separates_beats_and_draws_before_speaking():
 
         async def _reply_local(self, text):
             self.log.append(("say", (text,)))
+            return True
 
     m = Manager()
-    asyncio.run(month_close.play(m, [month_close.Beat("một"), month_close.Beat("hai", "'Doi chieu'!C7", "Lệch", "bad")]))
+    beats = [month_close.Beat("một", "'Doi chieu'!C7", "Lệch", "bad", "−1 tỷ"),
+             month_close.Beat("hai", "'Doi chieu'!A10:E10", "Nguyên nhân", "bad", "05/10 → 10/05"),
+             month_close.Beat("Em sửa giúp anh nhé?", choices=("Sửa giúp tôi", "Để tôi xem"))]
+    asyncio.run(month_close.play(m, beats))
     names = [n for n, _ in m.log]
-    assert names[0] == "sig_clear_drawings"
     assert ("sig_response_chunk", ("\n\n",)) in m.log
-    assert names.index("sig_draw") < names.index("sig_point_at") < len(names) - 1 - names[::-1].index("say")
-    assert names[-1] == "sig_point_release"
+    # Each beat with a range starts from a clean screen, then lights it, then points, then speaks.
+    first_say, second_say = [i for i, n in enumerate(names) if n == "say"][:2]
+    between = names[first_say:second_say]
+    assert between.count("sig_clear_drawings") == 1 and between.count("sig_draw") == 2
+    assert all(a[2] == NO_BUBBLE for n, a in m.log if n == "sig_point_at")
+    assert names.index("sig_draw") < names.index("sig_point_at") < names.index("say")
+    # The question beat keeps the last card up and ends with the buttons.
+    assert names[-1] == "sig_choices" and m.log[-1][1] == ("Em sửa giúp anh nhé?", ["Sửa giúp tôi", "Để tôi xem"])
+    assert "sig_clear_drawings" not in names[names.index("say", second_say + 1) - 1:]

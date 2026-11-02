@@ -20,8 +20,10 @@ from typing import Optional
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF
 from PyQt6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPainterPath, QCursor, QFont,
+    QPainter, QColor, QPen, QBrush, QPainterPath, QCursor, QFont, QFontMetrics,
 )
+
+from ui.card_layout import CARD_WIDTH, NO_BUBBLE, TONES, place_card
 
 
 MODE_IDLE      = "idle"
@@ -265,7 +267,7 @@ class CursorOverlay(QWidget):
         # Buddy's tip should sit on the target pixel. The triangle is drawn
         # centred on _display_pos, so we just plant _display_pos there.
         self._locked_pos = QPointF(x, y)
-        self._bubble_text = label or random.choice(POINTER_PHRASES)
+        self._bubble_text = "" if label == NO_BUBBLE else (label or random.choice(POINTER_PHRASES))
         self._bubble_scale = 0.5
         self._bubble_alpha = 0.0
         # Halo ring around the actual target pixel
@@ -314,8 +316,11 @@ class CursorOverlay(QWidget):
         start = max(now, self._draw_queue_end)
         shape = dict(shape)
         # Draw at hand speed — long strokes take visibly longer
-        dur = _shape_length(shape) / STROKE_SPEED_PX_S
-        dur = max(SHAPE_DRAW_MIN_S, min(SHAPE_DRAW_MAX_S, dur))
+        if shape.get("kind") in ("spotlight", "card"):
+            dur = 0.35            # these fade in rather than being drawn stroke by stroke
+        else:
+            dur = _shape_length(shape) / STROKE_SPEED_PX_S
+            dur = max(SHAPE_DRAW_MIN_S, min(SHAPE_DRAW_MAX_S, dur))
         shape["start"] = start
         shape["dur"] = dur
         shape.setdefault("color", "blue")
@@ -587,6 +592,10 @@ class CursorOverlay(QWidget):
                     self._paint_angle(p, ann, u, col)
                 elif kind == "text":
                     self._paint_text(p, ann, u, col, alpha)
+                elif kind == "spotlight":
+                    self._paint_spotlight(p, ann, u * alpha)
+                elif kind == "card":
+                    self._paint_card(p, ann, u * alpha)
             except Exception:
                 continue   # a malformed shape must never break the paint loop
         self._annotations = keep
@@ -673,6 +682,83 @@ class CursorOverlay(QWidget):
         fade = u * alpha
         y += (1.0 - u) * 6
         self._outlined_text(p, x, y, ann["text"], col, fade)
+
+    def _paint_spotlight(self, p, ann, u):
+        """Dim everything except one range, and frame that range in the tone colour."""
+        accent = QColor(TONES.get(ann.get("tone"), TONES["info"])[0])
+        pad = 5
+        hole = QRectF(ann["x1"] - pad - self.x(), ann["y1"] - pad - self.y(),
+                      ann["x2"] - ann["x1"] + 2 * pad, ann["y2"] - ann["y1"] + 2 * pad)
+        shade = QPainterPath()
+        shade.addRect(QRectF(self.rect()))
+        cut = QPainterPath()
+        cut.addRoundedRect(hole, 6, 6)
+        p.fillPath(shade.subtracted(cut), QColor(15, 23, 42, int(105 * u)))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        glow = QColor(accent)
+        glow.setAlpha(int(70 * u))
+        p.setPen(QPen(glow, 9))
+        p.drawRoundedRect(hole, 6, 6)
+        accent.setAlpha(int(255 * u))
+        p.setPen(QPen(accent, 3))
+        p.drawRoundedRect(hole, 6, 6)
+
+    def _card_screen(self, anchor):
+        """Available area of the monitor holding the anchor, in logical screen coords."""
+        from PyQt6.QtCore import QPoint
+        cx, cy = int((anchor[0] + anchor[2]) / 2), int((anchor[1] + anchor[3]) / 2)
+        screen = QApplication.screenAt(QPoint(cx, cy)) or QApplication.primaryScreen()
+        g = screen.availableGeometry() if screen else self.geometry()
+        return g.left(), g.top(), g.right(), g.bottom()
+
+    def _paint_card(self, p, ann, u):
+        """A clean explanation card beside the lit range: title, one big figure, one line of context."""
+        accent_hex, soft_hex = TONES.get(ann.get("tone"), TONES["info"])
+        pad, bar = 18, 5
+        inner = CARD_WIDTH - 2 * pad - bar
+        title_f = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
+        value_f = QFont("Segoe UI", 24, QFont.Weight.Bold)
+        note_f = QFont("Segoe UI", 11)
+        flags = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop) | int(Qt.TextFlag.TextWordWrap)
+        layout = ann.get("_layout")
+        if layout is None:
+            parts, h = [], pad
+            for key, font in (("title", title_f), ("value", value_f), ("note", note_f)):
+                text = ann.get(key) or ""
+                if not text:
+                    continue
+                if parts:
+                    h += 6
+                rect = QFontMetrics(font).boundingRect(0, 0, inner, 2000, flags, text)
+                parts.append((key, font, text, h, rect.height()))
+                h += rect.height()
+            h += pad
+            anchor = ann["anchor"]
+            x, y = place_card(anchor, (CARD_WIDTH, h), self._card_screen(anchor))
+            layout = ann["_layout"] = (x, y, h, parts)
+        x, y, h, parts = layout
+        x, y = x - self.x(), y - self.y() + (1.0 - u) * 8
+        card = QRectF(x, y, CARD_WIDTH, h)
+        p.setPen(Qt.PenStyle.NoPen)
+        for spread, a in ((12, 16), (7, 24), (3, 34)):
+            p.setBrush(QColor(15, 23, 42, int(a * u)))
+            p.drawRoundedRect(card.adjusted(-spread / 2, -spread / 4, spread / 2, spread), 14 + spread / 2, 14 + spread / 2)
+        p.setBrush(QColor(255, 255, 255, int(252 * u)))
+        border = QColor(226, 232, 240, int(255 * u))
+        p.setPen(QPen(border, 1))
+        p.drawRoundedRect(card, 14, 14)
+        accent = QColor(accent_hex)
+        accent.setAlpha(int(255 * u))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(accent)
+        p.drawRoundedRect(QRectF(x + 8, y + 14, bar, h - 28), 2.5, 2.5)
+        colours = {"title": QColor(91, 101, 117), "value": QColor(accent_hex), "note": QColor(31, 41, 55)}
+        for key, font, text, top, height in parts:
+            c = colours[key]
+            c.setAlpha(int(255 * u))
+            p.setFont(font)
+            p.setPen(QPen(c, 1))
+            p.drawText(QRectF(x + pad + bar, y + top, inner, height + 2), flags, text)
 
     def _outlined_text(self, p, x, y, text, col, alpha):
         """Text with a dark outline so it reads on any background."""

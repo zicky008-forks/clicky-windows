@@ -454,12 +454,18 @@ class CompanionPanel(QWidget):
             self.on_text_submitted.emit(text)
 
     def begin_turn(self, question):
-        if self._response_text:
-            self._transcript += self._response_text + "\n\n"
+        # A turn that ended with no answer (an error shown as a notification) still gets closed off,
+        # so the next "You:" never runs on from a dangling "Clicky: ".
+        self._transcript += (self._response_text or "(chưa trả lời được)") + "\n\n" if self._transcript else ""
         self._transcript += "You: " + question + "\n\nClicky: "
         self._transcript = self._transcript[-40000:]
         self._response_text = ""
         self._response_label.setText(self._transcript)
+
+    def show_error(self, message: str):
+        """Put a failed turn's reason in the chat itself, not only in a notification that may go unseen."""
+        first = (message or "").strip().splitlines()[0][:200] if (message or "").strip() else "lỗi không rõ"
+        self.append_response_chunk(("\n" if self._response_text else "") + "⚠ Clicky chưa trả lời được: " + first)
 
     def set_audio_level(self, rms: float):
         self._waveform.set_level(rms)

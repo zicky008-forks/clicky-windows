@@ -309,6 +309,7 @@ class CompanionManager(QObject):
     sig_label               = pyqtSignal(float, float, str)
     sig_draw                = pyqtSignal(dict)            # generic teaching shape → overlay
     sig_clear_drawings      = pyqtSignal()                # wipe all teaching shapes
+    sig_choices             = pyqtSignal(str, list)       # (question, button labels) → clickable choice card
     sig_recording_state     = pyqtSignal(bool, str)       # (is_recording, output_dir)
     sig_turn_started        = pyqtSignal(str)
     sig_caption             = pyqtSignal(str)
@@ -1444,22 +1445,32 @@ class CompanionManager(QObject):
                 self._current_task = None
                 self._emit_state(AppState.IDLE)
 
-    async def _reply_local(self, msg: str):
-        """Show + speak a message that doesn't need an LLM round-trip."""
+    async def _reply_local(self, msg: str) -> bool:
+        """Show + speak a message that doesn't need an LLM round-trip; False when it was not read aloud."""
+        from audio.tts.sapi_tts_provider import NoVoiceForLanguage
         self.sig_response_chunk.emit(msg)
         self.sig_response_done.emit(msg)
         self._last_response = msg
         self._emit_state(AppState.SPEAKING)
+        spoke = True
         try:
             await self._get_tts().speak(msg)
+        except NoVoiceForLanguage:
+            # Never read Vietnamese with an English voice: show the words and say once how to get a voice.
+            spoke = False
+            if not getattr(self, "_no_voice_noticed", False):
+                self._no_voice_noticed = True
+                self.sig_notice.emit(NoVoiceForLanguage.ADVICE)
         except Exception as exc:
             # The answer is on screen either way; say once why it was not read aloud.
+            spoke = False
             _log.warning("speaking a local reply failed: %s", exc)
             if not getattr(self, "_voice_failure_noticed", False):
                 self._voice_failure_noticed = True
                 self.sig_notice.emit("Clicky chưa phát được giọng đọc trên máy này, câu trả lời vẫn hiện trong khung chat. "
                                      f"Chi tiết: {str(exc)[:160]}")
         self._emit_state(AppState.IDLE)
+        return spoke
 
     async def _spaced_review(self):
         """SR-style review: pick due entries from the journal, ask one back."""

@@ -237,3 +237,39 @@ def test_online_voice_reads_vietnamese_with_a_vietnamese_voice():
     assert voice_for("Sổ cái khớp đến từng đồng.", "en-US-AvaNeural") == VI_VOICE
     assert voice_for("Sổ cái khớp.", "vi-VN-NamMinhNeural") == "vi-VN-NamMinhNeural"
     assert voice_for("Ledger matches.", "en-US-AvaNeural") == "en-US-AvaNeural"
+
+
+def test_vietnamese_is_never_read_with_an_english_voice():
+    from unittest.mock import AsyncMock
+    from audio.tts.sapi_tts_provider import NoVoiceForLanguage
+    from companion_manager import CompanionManager
+    tts = Mock(speak=AsyncMock(side_effect=NoVoiceForLanguage("NO_VOICE_FOR_LANG")))
+    manager = Mock(_get_tts=Mock(return_value=tts), _voice_failure_noticed=False, _no_voice_noticed=False)
+    assert asyncio.run(CompanionManager._reply_local(manager, "Em đọc 3 file.")) is False
+    assert asyncio.run(CompanionManager._reply_local(manager, "Sổ cái khớp.")) is False
+    assert manager.sig_notice.emit.call_count == 1
+    advice = manager.sig_notice.emit.call_args.args[0]
+    assert "không đọc bằng giọng tiếng Anh" in advice and "gửi lên Microsoft" in advice
+    ok = Mock(speak=AsyncMock(return_value=None))
+    assert asyncio.run(CompanionManager._reply_local(Mock(_get_tts=Mock(return_value=ok)), "Khớp.")) is True
+
+
+def test_windows_speech_without_a_voice_for_the_language_raises_instead_of_speaking(monkeypatch):
+    import subprocess
+    import audio.tts.sapi_tts_provider as sapi
+
+    class Process:
+        returncode = 3
+
+        def communicate(self, data, timeout=None):
+            assert b'"lang": "vi-VN"' in data
+            return b"", b"NO_VOICE_FOR_LANG"
+
+        def poll(self):
+            return 3
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: Process())
+    monkeypatch.setattr(sapi, "setting", lambda name, default=None: default)
+    with pytest.raises(sapi.NoVoiceForLanguage):
+        asyncio.run(sapi.SapiTTSProvider().synthesize("Sổ cái khớp đến từng đồng."))
+    assert "NO_VOICE_FOR_LANG" in sapi._SCRIPT and "Windows.Media.SpeechSynthesis" in sapi._SCRIPT

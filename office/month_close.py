@@ -38,18 +38,26 @@ START_TRIGGER = (r"(l[àa]m|l[ậa]p|ch[ạa]y)\b.{0,25}b[áa]o\s*c[áa]o\s*th[�
                  r"(th[ưu]\s*m[ụu]c|t[ừu]\s*[đd][ầa]u|e2e|tr[ọo]n\s*g[óo]i|to[àa]n\s*b[ộo])"
                  r"|\bch[ạa]y\s*case\b|\bmonth[\s-]*close\b")
 # Only short replies count, so a new question that starts with "không" is not taken as an answer.
-APPROVE_TRIGGER = r"^\s*(đồng ý|dong y|ok|oke|okay|được|duoc|sửa đi|sua di|làm đi|lam di|yes)\b(\s+\S+){0,3}\s*[.!]?\s*$"
-REJECT_TRIGGER = r"^\s*(thôi|thoi|không|khong|giữ nguyên|giu nguyen|no)\b(\s+\S+){0,2}\s*[.!]?\s*$"
+APPROVE_TRIGGER = (r"^\s*(đồng ý|dong y|ok|oke|okay|được|duoc|sửa đi|sua di|sửa giúp|sua giup|làm đi|lam di|yes)\b"
+                   r"(\s+\S+){0,3}\s*[.!]?\s*$")
+REJECT_TRIGGER = (r"^\s*(thôi|thoi|không|khong|giữ nguyên|giu nguyen|để tôi xem|de toi xem|để anh xem|để chị xem|no)\b"
+                  r"(\s+\S+){0,2}\s*[.!]?\s*$")
+FIX_CHOICES = ("Sửa giúp tôi", "Để tôi xem")
 
 _PENDING: Optional[dict] = None
 
 
 @dataclass
 class Beat:
-    text: str
-    ref: Optional[str] = None       # cell or range to point at while speaking, e.g. 'Doi chieu'!C7
-    label: str = ""
-    mark: str = ""                  # "ok" draws the box green, "bad" red, "" blue
+    """One idea on screen: a short sentence (shown in the chat and spoken) and, when it has a range,
+    that range lit up with one card beside it. Details go in the sheet, not in the sentence."""
+    text: str                       # one short sentence, no file or step names
+    ref: Optional[str] = None       # cell or range to light up while speaking, e.g. 'Doi chieu'!C7
+    label: str = ""                 # card title
+    mark: str = ""                  # "ok" green, "bad" red, "warn" amber, "" blue
+    value: str = ""                 # the one figure that matters, big on the card
+    note: str = ""                  # one line of context under the figure
+    choices: tuple = ()             # buttons offered after the sentence, e.g. ("Sửa giúp tôi", "Để tôi xem")
 
 
 def pending() -> bool:
@@ -67,11 +75,6 @@ def _check_ref(cells: str) -> str:
 def _col(i: int) -> str:
     from office.cellref import col_letters
     return col_letters(i + 1)
-
-
-_READ_FAILED_VI = ("Excel đã tải xong query {name}, nhưng em chưa đọc lại được bảng kết quả. Đây là lỗi của Clicky, "
-                   "không phải lỗi file của anh. Em chưa đối chiếu được nên chưa có số chênh lệch nào, anh đừng dùng "
-                   "số trong sheet Doi chieu. Anh cập nhật Clicky rồi gọi lại em.")
 
 
 def _dec(v) -> Decimal:
@@ -233,7 +236,36 @@ def _typed_columns(files: list) -> list:
     return typed
 
 
-def _write_check_sheet(bridge, loaded: Optional[Loaded], truth, ledger: dict) -> Optional[str]:
+DETAIL_TOP = 9          # "Chi tiết kiểm tra" heading; detail rows start on the next row
+_CHECK_COLUMNS = {"A": 30, "B": 11, "C": 18, "D": 18, "E": 64}
+_INK, _MUTED, _LINE = "#0F172A", "#64748B", "#E2E8F0"
+_GAP_STYLE = {"bad": ("#FDECEE", "#B42318"), "ok": ("#E7F6EE", "#157347"), None: ("#F1F5F9", "#64748B")}
+
+
+def _detail_ref(i: int) -> str:
+    row = DETAIL_TOP + 1 + i
+    return _check_ref(f"A{row}:E{row}")
+
+
+def _try(bridge, method: str, *args, **kwargs):
+    """Styling helps reading but must never stop the reconciliation: a missing or failing call is skipped."""
+    fn = getattr(bridge, method, None)
+    if fn is None:
+        return None
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:
+        log.debug("Excel %s failed: %s", method, exc)
+        return None
+
+
+def _write_check_sheet(bridge, loaded: Optional[Loaded], truth, ledger: dict,
+                       details: Optional[list] = None, gap_state: Optional[str] = None) -> Optional[str]:
+    """The reconciliation as a small, formatted table (rows 3-7) and the reasons below it (row 9 on).
+
+    details: rows of [what, documents, revenue, '', explanation]; the chat only carries one sentence per
+    idea, so this is where the full story lives, next to the numbers it explains.
+    """
     names = bridge.sheet_names()
     sheet = CHECK_SHEET if CHECK_SHEET in names else bridge.add_sheet(CHECK_SHEET)
     if not sheet:
@@ -259,9 +291,36 @@ def _write_check_sheet(bridge, loaded: Optional[Loaded], truth, ledger: dict) ->
          "=D4-D6" if ledger and loaded and "cost" in loaded.columns else "",
          "Phải bằng 0" if loaded else "Chưa đối chiếu được: chưa đọc được bảng query"],
     ]
+    if details:
+        grid += [["", "", "", "", ""], ["Chi tiết kiểm tra", "Chứng từ", "Doanh thu (đ)", "", "Giải thích"]]
+        grid += [list(r) + [""] * (5 - len(r)) for r in details]
+    _try(bridge, "clear", f"{_q(sheet)}!A1:F60")
     bridge.write(f"{_q(sheet)}!A1", grid)
     bridge.format_numbers(f"{_q(sheet)}!B4:D7")
+    _style_check_sheet(bridge, sheet, len(details or []), gap_state if loaded else None)
     return sheet
+
+
+def _style_check_sheet(bridge, sheet: str, n_details: int, gap_state: Optional[str]) -> None:
+    s = _q(sheet)
+    _try(bridge, "layout_sheet", sheet, _CHECK_COLUMNS, gridlines=False)
+    _try(bridge, "style", f"{s}!A1", bold=True, size=15, color=_INK)
+    _try(bridge, "style", f"{s}!A2", italic=True, size=9, color=_MUTED)
+    _try(bridge, "style", f"{s}!A3:E3", bold=True, color="#FFFFFF", fill="#1E3A5F", height=24)
+    _try(bridge, "style", f"{s}!B3:D3", halign="right")
+    _try(bridge, "style", f"{s}!A4:E6", border_bottom=_LINE, height=21)
+    _try(bridge, "style", f"{s}!E4:E7", color="#475569")
+    fill, ink = _GAP_STYLE.get(gap_state, _GAP_STYLE[None])
+    _try(bridge, "style", f"{s}!A7:E7", bold=True, fill=fill, height=26)
+    _try(bridge, "style", f"{s}!A7:D7", color=ink)
+    if n_details:
+        top, last = DETAIL_TOP, DETAIL_TOP + n_details
+        _try(bridge, "style", f"{s}!A{top}:E{top}", bold=True, color=_INK, border_bottom="#94A3B8", height=24)
+        _try(bridge, "style", f"{s}!B{top}:D{top}", halign="right")
+        _try(bridge, "style", f"{s}!A{top + 1}:E{last}", border_bottom=_LINE, wrap=True)
+        _try(bridge, "style", f"{s}!A{top + 1}:A{last}", bold=True, color=_INK)
+        _try(bridge, "style", f"{s}!E{top + 1}:E{last}", color="#334155")
+        bridge.format_numbers(f"{s}!B{top + 1}:C{last}")
 
 
 def _ledger(folder: Path) -> tuple:
@@ -273,6 +332,72 @@ def _ledger(folder: Path) -> tuple:
     acct = sources.revenue_account(tb)
     return tbs, {"name": name, "rev_acct": acct, "revenue": sources.ledger_movement(tb, acct, "cr"),
                  "cost": sources.ledger_movement(tb, "632", "dr")}
+
+
+def _signed(amount: Decimal) -> str:
+    """Card figure with a real minus sign: −5,42 tỷ."""
+    return ("−" if amount < 0 else "") + spoken(abs(amount))
+
+
+def _date_example(items, machine_order: Optional[str]) -> tuple:
+    """('04/10 → 10/04', 'Ví dụ HN-HD1: ngày 4/10 bị đọc thành ngày 10/4.') from the first flipped document."""
+    unreadable = None
+    for doc, info in items:
+        wrong = sources.parse_date(info.raw_date, machine_order) if machine_order else None
+        if wrong and info.date and wrong != info.date:
+            return (f"{info.date:%d/%m} → {wrong:%d/%m}",
+                    f"Ví dụ {doc}: ngày {info.date.day}/{info.date.month} bị đọc thành ngày {wrong.day}/{wrong.month}.")
+        if unreadable is None and info.date:
+            unreadable = (doc, info)
+    if unreadable:
+        doc, info = unreadable
+        return f"{info.date:%d/%m} → lỗi", f"Ví dụ {doc}: ngày {info.date.day}/{info.date.month} không đọc được nên bị xoá."
+    return "", ""
+
+
+def _cause_beats(why: dict, machine_order: Optional[str], first_row: int) -> tuple:
+    """(beats, detail rows): one beat per cause, each lighting up its own row in the detail table."""
+    beats, rows = [], []
+
+    def add(beat, row):
+        beat.ref = _detail_ref(first_row + len(rows))
+        beats.append(beat)
+        rows.append(row)
+
+    if why["date"]:
+        n, amt = len(why["date"]), _amount(why["date"])
+        value, example = _date_example(why["date"], machine_order)
+        add(Beat(f"Nguyên nhân chính: máy đọc nhầm ngày tháng, làm mất {spoken(amt)}.",
+                 label=f"Đọc nhầm ngày · {n} chứng từ · {spoken(amt)}", mark="bad", value=value or spoken(amt),
+                 note=example or f"Máy này đọc ngày kiểu {_order_vi(machine_order)}, khác kiểu ghi trong file."),
+            ["Đọc nhầm ngày tháng", n, amt, "", f"Máy này đọc ngày kiểu {_order_vi(machine_order)}; file ghi kiểu khác "
+             f"bị đảo ngày hoặc báo lỗi rồi bị xoá. {example}".strip()])
+    if why["distinct"]:
+        n, amt = len(why["distinct"]), _amount(why["distinct"])
+        add(Beat(f"Thêm {n} chứng từ bị xoá nhầm ở bước xoá trùng.",
+                 label="Xoá trùng nhầm", mark="bad", value=spoken(amt),
+                 note=f"{n} chứng từ: cùng khách mua hai lần trong một ngày bị coi là trùng."),
+            ["Xoá trùng nhầm", n, amt, "", "Bước xoá trùng dùng Ngày + Mã KH; hai chứng từ khác nhau cùng khách, cùng ngày "
+             "bị xoá mất một. Chỉ nên xoá trùng theo số chứng từ."])
+    if why["other"]:
+        n, amt = len(why["other"]), _amount(why["other"])
+        add(Beat(f"Còn {n} chứng từ bị mất mà em chưa rõ lý do.", label="Chưa rõ nguyên nhân", mark="warn",
+                 value=spoken(amt), note="Anh xem danh sách trong bảng chi tiết."),
+            ["Chưa rõ nguyên nhân", n, amt, "", "Có trong file gốc nhưng không có trong bảng query."])
+    if why["excel_dups"]:
+        n = len(why["excel_dups"])
+        add(Beat(f"{n} chứng từ bị đếm hai lần trong Excel.", label="Đếm trùng", mark="bad", value=f"{n} chứng từ",
+                 note="Một số chứng từ xuất hiện hai lần trong bảng query."),
+            ["Đếm trùng trong Excel", n, "", "", ", ".join(why["excel_dups"][:5])])
+    return beats, rows
+
+
+def _lint_rows(findings) -> list:
+    return [[f"Bước query: {f.step}", "", "", "", f.message] for f in findings]
+
+
+def _fix_offer() -> Beat:
+    return Beat("Em sửa query giúp anh nhé? Bản cũ vẫn được giữ lại.", choices=FIX_CHOICES)
 
 
 def start(bridge, pq, machine_order: Optional[str]) -> list:
@@ -289,23 +414,25 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
         return [Beat(f"Em không thấy file đơn hàng CSV nào trong thư mục {folder.name}.")]
     truth = sources.truth(files)
     tbs, ledger = _ledger(folder)
-    beats = []
+    beats, notes = [], []
 
-    kinds = Counter(f.date_order for f in files)
-    detail = "; ".join(f"{f.name} ghi ngày kiểu {_order_vi(f.date_order)}" for f in files) if len(kinds) > 1 else \
-        f"cả {len(files)} file đều ghi ngày kiểu {_order_vi(files[0].date_order)}"
-    beats.append(Beat(
-        f"Em đọc {len(files)} file đơn hàng: {truth.rows} dòng, {detail}. "
-        f"Theo file gốc có {truth.unique_rows} chứng từ, doanh thu {spoken(truth.amount)}"
-        + (f", trong đó {len(truth.duplicates)} chứng từ bị xuất hai lần." if truth.duplicates else "."),
-        _check_ref("B5:C5"), f"File gốc: {truth.unique_rows} chứng từ · {spoken(truth.amount)}"))
+    source_note = f"{truth.unique_rows} chứng từ trong {len(files)} file" + (
+        f" · đã bỏ {len(truth.duplicates)} chứng từ lặp" if truth.duplicates else "")
     if ledger:
-        same = abs(truth.amount - ledger["revenue"]) <= TOLERANCE
+        diff = truth.amount - ledger["revenue"]
+        same = abs(diff) <= TOLERANCE
         beats.append(Beat(
-            f"Sổ cái {ledger['name']} có phát sinh Có TK {ledger['rev_acct']} {spoken(ledger['revenue'])}: "
-            + ("khớp file gốc đến từng đồng." if same else
-               f"file gốc {_gap_vi(truth.amount - ledger['revenue'])} so với sổ cái, anh cần xem lại file xuất."),
-            _check_ref("C5:C6"), "File gốc = sổ cái ✓" if same else "File gốc ≠ sổ cái", "ok" if same else "bad"))
+            f"File gốc và sổ cái khớp nhau: doanh thu {spoken(truth.amount)}." if same else
+            f"File gốc {_gap_vi(diff)} so với sổ cái, anh cần xem lại file xuất.",
+            _check_ref("C5:C6"), "File gốc khớp sổ cái" if same else "File gốc lệch sổ cái", "ok" if same else "bad",
+            spoken(truth.amount) if same else _signed(diff), source_note + f" · TK {ledger['rev_acct']}"))
+    else:
+        beats.append(Beat(f"Em đọc {len(files)} file đơn hàng: {truth.unique_rows} chứng từ, doanh thu {spoken(truth.amount)}.",
+                          _check_ref("B5:C5"), "File gốc", "", spoken(truth.amount), source_note))
+    kinds = Counter(f.date_order for f in files)
+    if len(kinds) > 1:
+        notes.append(["Kiểu ngày trong file gốc", "", "", "",
+                      "; ".join(f"{f.name}: {_order_vi(f.date_order)}" for f in files)])
 
     name, formula, origin = _query_to_check(pq, folder)
     fixed_m = m_code.folder_query(str(folder), {f.name: f.date_order or machine_order or sources.DAY_FIRST for f in files},
@@ -313,73 +440,61 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
                                   folder_parameter=PARAM_NAME)
     if name is None:
         name, formula, origin = QUERY_NAME, None, "clicky"
-        beats.append(Beat("Trong file chưa có query đơn hàng, em tạo query mới đọc đúng định dạng từng file."))
+        notes.append(["Query đơn hàng", "", "", "", "Trong file chưa có query đơn hàng; Clicky tạo query mới đọc đúng kiểu ngày của từng file."])
     elif origin != "workbook":
         formula, moved = _point_at_this_folder(formula, files)
         pq.add(name, formula)
-        beats.append(Beat(f"Em nạp query có sẵn trong file {origin} vào Excel với tên {name} để kiểm tra."
-                          + (" Thư mục trong query trỏ tới một máy khác, máy này không có, nên em đổi sang thư mục "
-                            "đơn hàng ở đây để kiểm tra đúng các bước còn lại." if moved else "")))
+        notes.append(["Query đơn hàng", "", "", "", f"Lấy từ file {origin}, nạp vào Excel với tên {name} để kiểm tra."
+                      + (" Thư mục trong query trỏ tới một máy khác, máy này không có, nên Clicky đổi sang thư mục "
+                         "đơn hàng ở đây." if moved else "")])
 
     if formula is not None:
         findings = m_code.lint(name, formula)
-        if findings:
-            worst = sorted(findings, key=lambda f: (_LINT_ORDER.index(f.code) if f.code in _LINT_ORDER else 99,
-                                                    f.severity != "error"))[:3]
-            beats.append(Beat(f"Query {name} có {len(findings)} bước đáng lo: "
-                              + " ".join(f"Bước {f.step}: {f.message}" for f in worst)))
+        worst = sorted(findings, key=lambda f: (_LINT_ORDER.index(f.code) if f.code in _LINT_ORDER else 99,
+                                                f.severity != "error"))
+        notes += _lint_rows(worst)
     else:
         pq.add(PARAM_NAME, m_code.parameter_query(str(folder)))
         pq.add(name, fixed_m)
 
     result = pq.load(name)
     if isinstance(result, ReadFailed):
-        _write_check_sheet(bridge, None, truth, ledger)
-        return beats + [Beat(_READ_FAILED_VI.format(name=name), _check_ref("A7:E7"), "Chưa đối chiếu được", "bad")]
+        _write_check_sheet(bridge, None, truth, ledger, notes)
+        return beats + [Beat("Em chưa đọc lại được bảng query, nên chưa có số chênh lệch. Đây là lỗi của Clicky.",
+                             _check_ref("A7:E7"), "Chưa đối chiếu được", "warn", "Chưa có số",
+                             "Không phải lỗi file của anh. Anh cập nhật Clicky rồi gọi lại em.")]
     if isinstance(result, str):
-        _write_check_sheet(bridge, None, truth, ledger)
-        beats.append(Beat(f"Excel báo lỗi khi tải query {name}: {result[:200]}", _check_ref("A4:E4"),
-                          "Query chưa tải được", "bad"))
+        _write_check_sheet(bridge, None, truth, ledger, [["Lỗi khi tải query", "", "", "", result[:300]]] + notes)
+        beats.append(Beat(f"Excel báo lỗi khi tải query {name}.", _check_ref("A4:E4"), "Query chưa tải được", "bad",
+                          "Lỗi tải", result[:140]))
         if formula is None:
             return beats
         _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder)}
-        beats.append(Beat("Em có bản query mới đọc đúng định dạng từng file và xoá trùng theo số chứng từ. "
-                          "Anh nói đồng ý để em thay vào và tải lại, hoặc thôi để giữ nguyên."))
-        return beats
+        return beats + [_fix_offer()]
     sheet, header, rows = result
     loaded = Loaded(sheet, header, rows, sources.find_columns(header))
-    check_sheet = _write_check_sheet(bridge, loaded, truth, ledger)
     gap = loaded.amount - (ledger["revenue"] if ledger else truth.amount)
+    clean = abs(gap) <= TOLERANCE and len(rows) == truth.unique_rows
+    why = diagnose(truth, loaded, machine_order) if not clean else {"date": [], "distinct": [], "other": [], "excel_dups": []}
+    cause_beats, cause_rows = _cause_beats(why, machine_order, 0)
+    check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, cause_rows + notes, "ok" if clean else "bad")
     ref = f"{_q(check_sheet)}!C7" if check_sheet and ledger else None
-    if abs(gap) <= TOLERANCE and len(rows) == truth.unique_rows:
-        beats.append(Beat(f"Query giữ {len(rows)} dòng, doanh thu {spoken(loaded.amount)}, khớp sổ cái. Em đã kiểm tra lại, số đúng.",
-                          ref, "Khớp ✓", "ok"))
+    if clean:
+        beats.append(Beat(f"Excel khớp sổ cái đến từng đồng: doanh thu {spoken(loaded.amount)}.",
+                          ref, "Excel khớp sổ cái", "ok", "0 đ", f"{len(rows)} chứng từ · {spoken(loaded.amount)}"))
         return beats + build_report(bridge, folder, tbs)
 
-    beats.append(Beat(f"Query trong Excel chỉ giữ {len(rows)} dòng, doanh thu {spoken(loaded.amount)}, "
-                      f"{_gap_vi(gap)} so với sổ cái. Chưa được dùng số này.", ref, _gap_vi(gap).capitalize(), "bad"))
-    why = diagnose(truth, loaded, machine_order)
-    reasons = []
-    if why["date"]:
-        reasons.append(f"{len(why['date'])} chứng từ, {spoken(_amount(why['date']))}, mất vì máy này đọc ngày kiểu "
-                       f"{_order_vi(machine_order)} nên file ghi kiểu khác bị đảo ngày hoặc báo lỗi rồi bị xoá")
-    if why["distinct"]:
-        reasons.append(f"{len(why['distinct'])} chứng từ, {spoken(_amount(why['distinct']))}, bị xoá nhầm ở bước xoá trùng "
-                       "vì cùng khách mua hai lần trong một ngày")
-    if why["other"]:
-        reasons.append(f"{len(why['other'])} chứng từ, {spoken(_amount(why['other']))}, mất vì lý do khác em chưa xác định")
-    if why["excel_dups"]:
-        reasons.append(f"{len(why['excel_dups'])} chứng từ bị đếm hai lần")
-    if reasons:
-        beats.append(Beat("Nguyên nhân: " + "; ".join(reasons) + "."))
+    beats.append(Beat(f"Báo cáo trong Excel đang {_gap_vi(gap)} so với sổ cái.", ref, "Excel lệch sổ cái", "bad",
+                      _signed(gap), f"Query chỉ giữ {len(rows)}/{truth.unique_rows} chứng từ. Chưa được dùng số này."))
+    beats += cause_beats
     _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder)}
-    beats.append(Beat("Em đề xuất sửa query: đọc ngày theo đúng kiểu của từng file, xoá trùng chỉ theo số chứng từ, "
-                      "không xoá dòng lỗi, và đưa đường dẫn thư mục vào một tham số. Bản cũ được lưu lại. "
-                      "Anh nói đồng ý để em sửa, hoặc thôi để giữ nguyên."))
-    return beats
+    return beats + [_fix_offer()]
 
 
 # ── Stage 2 ───────────────────────────────────────────────────────────────────
+
+_BACKUP_NOTE = "Bản query cũ vẫn còn trong power_query_backups.json."
+
 
 def approve(bridge, pq) -> list:
     global _PENDING
@@ -392,25 +507,29 @@ def approve(bridge, pq) -> list:
         return [Beat(f"Em không sửa được query {job['name']}. Anh kiểm tra file có đang bị khoá không.")]
     result = pq.load(job["name"])
     if isinstance(result, ReadFailed):
-        return [Beat(_READ_FAILED_VI.format(name=job["name"]) + " Bản query cũ vẫn còn trong power_query_backups.json.")]
+        return [Beat("Em đã sửa query nhưng chưa đọc lại được bảng kết quả. Đây là lỗi của Clicky.",
+                     label="Chưa kiểm tra được", mark="warn", note=_BACKUP_NOTE)]
     if isinstance(result, str):
-        return [Beat(f"Em đã sửa query nhưng Excel báo lỗi khi tải lại: {result[:200]}. Bản cũ vẫn còn trong power_query_backups.json.")]
+        return [Beat(f"Em đã sửa query nhưng Excel báo lỗi khi tải lại: {result[:200]}. {_BACKUP_NOTE}")]
     sheet, header, rows = result
     loaded = Loaded(sheet, header, rows, sources.find_columns(header))
     files = sources.find_order_files(folder)
     truth = sources.truth(files)
     tbs, ledger = _ledger(folder)
-    check_sheet = _write_check_sheet(bridge, loaded, truth, ledger)
     target = ledger["revenue"] if ledger else truth.amount
     gap = loaded.amount - target
+    ok = abs(gap) <= TOLERANCE
+    fixed_note = [["Đã sửa query", "", "", "", "Đọc ngày theo đúng kiểu của từng file, xoá trùng chỉ theo số chứng từ, "
+                   "không xoá âm thầm dòng lỗi, đường dẫn thư mục nằm trong tham số " + PARAM_NAME + ". " + _BACKUP_NOTE]]
+    check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, fixed_note, "ok" if ok else "bad")
     ref = f"{_q(check_sheet)}!C7" if check_sheet and ledger else None
-    if abs(gap) > TOLERANCE:
-        return [Beat(f"Em đã sửa và tải lại: query còn {len(rows)} dòng, {spoken(loaded.amount)}, vẫn {_gap_vi(gap)} so với sổ cái. "
-                     "Em dừng ở đây để anh xem, chưa lập báo cáo.", ref, _gap_vi(gap).capitalize(), "bad")]
+    if not ok:
+        return [Beat(f"Em đã sửa nhưng Excel vẫn {_gap_vi(gap)} so với sổ cái. Em dừng ở đây để anh xem.",
+                     ref, "Vẫn lệch sổ cái", "bad", _signed(gap), f"Query còn {len(rows)} chứng từ. Chưa lập báo cáo.")]
     cost_ok = not ledger or "cost" not in loaded.columns or abs(loaded.cost - ledger["cost"]) <= TOLERANCE
-    beats = [Beat(f"Đã sửa và đọc lại: query giữ {len(rows)} chứng từ, doanh thu {spoken(loaded.amount)}"
-                  + (", giá vốn khớp Nợ TK 632" if cost_ok and ledger and "cost" in loaded.columns else "")
-                  + ". Khớp sổ cái đến từng đồng.", ref, "Khớp ✓", "ok")]
+    note = f"{len(rows)} chứng từ · doanh thu {spoken(loaded.amount)}" + (
+        " · giá vốn khớp TK 632" if cost_ok and ledger and "cost" in loaded.columns else "")
+    beats = [Beat("Đã sửa xong. Excel khớp sổ cái đến từng đồng.", ref, "Đã khớp sổ cái", "ok", "0 đ", note)]
     return beats + build_report(bridge, folder, tbs)
 
 
@@ -419,7 +538,7 @@ def reject() -> list:
     if not _PENDING:
         return []
     _PENDING = None
-    return [Beat("Em giữ nguyên query. Số trong Excel vẫn đang lệch sổ cái, anh đừng dùng cho báo cáo nhé.")]
+    return [Beat("Em giữ nguyên query. Số trong Excel vẫn lệch sổ cái, anh đừng dùng cho báo cáo nhé.")]
 
 
 # ── Stage 3: the report ───────────────────────────────────────────────────────
@@ -428,7 +547,7 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
     from engine.report_sheet import quote
     from office import report_skill
     if len(tbs) < 2:
-        return [Beat("Em chưa thấy đủ hai file cân đối tài khoản, kỳ này và kỳ trước, trong thư mục nên chưa lập báo cáo.")]
+        return [Beat("Em chưa thấy đủ hai file cân đối tài khoản, kỳ này và kỳ trước, nên chưa lập báo cáo.")]
     existing = set(bridge.sheet_names())
     for name, rows, _ in tbs[-2:]:
         if name not in existing:
@@ -447,67 +566,90 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
     overstated = sources.returns_in_revenue(report.current)
     if overstated > 0:
         real = pat - overstated
-        change = f", giảm {spoken(prev_pat - real)} so với kỳ trước" if prev_pat is not None and prev_pat > real else ""
-        beats.append(Beat(f"Lợi nhuận sau thuế trên báo cáo là {spoken(pat)}, nhưng có {spoken(overstated)} hàng bán bị trả lại "
-                          f"ghi thẳng vào Nợ TK 511 nên doanh thu và lợi nhuận đang bị thổi lên. Lợi nhuận thực là {spoken(real)}{change}. "
-                          "Anh cần kế toán chuyển khoản này sang TK 521 trước khi gửi sếp.",
-                          pat_ref, f"Thực: {spoken(real)}"))
+        change = f" Giảm {spoken(prev_pat - real)} so với kỳ trước." if prev_pat is not None and prev_pat > real else ""
+        beats.append(Beat(f"Lợi nhuận thực là {spoken(real)}, không phải {spoken(pat)} như trên báo cáo.",
+                          pat_ref, "Lợi nhuận sau thuế thực", "warn", spoken(real),
+                          f"{spoken(overstated)} hàng bán bị trả lại đang ghi thẳng vào Nợ TK 511. "
+                          f"Cần chuyển sang TK 521 trước khi gửi sếp.{change}"))
     else:
-        beats.append(Beat(summary, pat_ref, "LNST"))
+        beats.append(Beat(summary, pat_ref, "Lợi nhuận sau thuế", "", spoken(pat)))
     if report.questions:
-        beats.append(Beat(f"Em đã ghi {len(report.questions)} câu hỏi cần các bộ phận trả lời ở sheet {names['questions']}, "
-                          "trước khi giải thích nguyên nhân với sếp."))
+        beats.append(Beat(f"Em ghi sẵn {len(report.questions)} câu hỏi cho các bộ phận ở sheet {names['questions']}."))
     return beats
 
 
 # ── Voice skill glue ──────────────────────────────────────────────────────────
 
-_MARK_COLORS = {"ok": "green", "bad": "red"}
+BEAT_GAP_S = 0.5          # breath between two ideas
+CLEAR_AFTER_S = 8.0       # the last card fades this long after Clicky stops talking (not when it asks a question)
 
 
-def marks_for(box: tuple, beat: Beat) -> list:
-    """Overlay shapes for one beat: a hand-drawn box around the range and a label card beside it."""
+def shapes_for(box: tuple, beat: Beat) -> list:
+    """Overlay shapes for one beat: the range lit with the rest of the screen dimmed, and one card beside it."""
+    from ui.card_layout import tone_of
     l, t, r, b = box
-    color = _MARK_COLORS.get(beat.mark, "blue")
-    shapes = [{"kind": "rect", "x1": l - 4, "y1": t - 4, "x2": r + 4, "y2": b + 4, "color": color}]
-    if beat.label:
-        shapes.append({"kind": "text", "x": r + 14, "y": (t + b) / 2, "text": beat.label, "size": "m", "color": color})
+    tone = tone_of(beat.mark)
+    shapes = [{"kind": "spotlight", "x1": l, "y1": t, "x2": r, "y2": b, "tone": tone}]
+    if beat.label or beat.value or beat.note:
+        shapes.append({"kind": "card", "anchor": [l, t, r, b], "title": beat.label, "value": beat.value,
+                       "note": beat.note, "tone": tone})
     return shapes
 
 
-async def play(manager, beats: list) -> None:
-    """Speak each beat, flying the pointer to its cell first; the sheet is activated so the cell is on screen.
-
-    Each referenced range gets a box and a label card drawn on screen, which stay up until
-    the next question so the user can read the whole reconciliation at a glance.
-    """
+async def _locate(manager, ref_text: str):
     from office.cellref import parse_ref
+    ref = parse_ref(ref_text)
+    try:
+        if ref and ref.sheet:
+            await asyncio.to_thread(manager._excel.activate, ref.sheet)
+        rect = await asyncio.to_thread(manager._excel.screen_rect, ref_text, True)
+        box = manager._physical_to_logical_bbox(rect) if rect else None
+        if not box:
+            log.warning("cannot place %s on screen (Excel rect %s)", ref_text, rect)
+        return box
+    except Exception as exc:
+        log.warning("pointing at %s failed: %s", ref_text, exc)
+        return None
+
+
+async def play(manager, beats: list) -> None:
+    """One idea at a time: light up the beat's range, show its card, say its one sentence, pause, next.
+
+    A beat without a range keeps the previous card up, so the screen never goes blank mid-story.
+    When the sentence cannot be read aloud (no Vietnamese voice), it stays up long enough to read.
+    """
+    from ui.card_layout import NO_BUBBLE, reading_seconds
+    run = object()
+    manager._month_close_run = run
     manager.sig_clear_drawings.emit()
     for i, beat in enumerate(beats):
-        held = False
         if i:
             manager.sig_response_chunk.emit("\n\n")
-        if beat.ref:
-            ref = parse_ref(beat.ref)
-            try:
-                if ref and ref.sheet:
-                    await asyncio.to_thread(manager._excel.activate, ref.sheet)
-                rect = await asyncio.to_thread(manager._excel.screen_rect, beat.ref, True)
-                box = manager._physical_to_logical_bbox(rect) if rect else None
-                if not box:
-                    log.warning("cannot place %s on screen (Excel rect %s)", beat.ref, rect)
-                if box:
-                    l, t, r, b = box
-                    for shape in marks_for(box, beat):
-                        manager.sig_draw.emit(shape)
-                    manager.sig_point_hold.emit(True)
-                    manager.sig_point_at.emit((l + r) / 2, (t + b) / 2, beat.label or beat.ref)
-                    held = True
-            except Exception as exc:
-                log.warning("pointing at %s failed: %s", beat.ref, exc)
-        await manager._reply_local(beat.text)
-        if held:
+            if BEAT_GAP_S:
+                await asyncio.sleep(BEAT_GAP_S)
+        box = await _locate(manager, beat.ref) if beat.ref else None
+        if box:
+            manager.sig_clear_drawings.emit()
+            for shape in shapes_for(box, beat):
+                manager.sig_draw.emit(shape)
+            l, t, r, b = box
+            manager.sig_point_hold.emit(True)
+            manager.sig_point_at.emit((l + r) / 2, (t + b) / 2, NO_BUBBLE)
+        spoke = await manager._reply_local(beat.text)
+        if spoke is False and BEAT_GAP_S:
+            await asyncio.sleep(reading_seconds(beat.text))
+        if box:
             manager.sig_point_release.emit()
+        if beat.choices:
+            manager.sig_choices.emit(beat.text, list(beat.choices))
+    if beats and not beats[-1].choices:
+        def fade():
+            if getattr(manager, "_month_close_run", None) is run:
+                manager.sig_clear_drawings.emit()
+        try:
+            asyncio.get_running_loop().call_later(CLEAR_AFTER_S, fade)
+        except RuntimeError:
+            pass
 
 
 def _pq(manager):

@@ -43,13 +43,20 @@ def run():
         import os
         import tempfile
         from audio.playback import decode_mp3_to_pcm
-        from audio.tts.sapi_tts_provider import SapiTTSProvider
+        from audio.tts.sapi_tts_provider import NoVoiceForLanguage, SapiTTSProvider
         # Voice settings are read from the data folder; keep the check from creating the user's one.
         saved = os.environ.get("CLICKY_DATA_DIR")
         with tempfile.TemporaryDirectory() as scratch:
             os.environ["CLICKY_DATA_DIR"] = scratch
             try:
-                pcm, _ = decode_mp3_to_pcm(asyncio.run(SapiTTSProvider().synthesize("Clicky đối chiếu sổ cái.")))
+                pcm, _ = decode_mp3_to_pcm(asyncio.run(SapiTTSProvider().synthesize("Clicky checks the ledger.")))
+                # Vietnamese must come out in a Vietnamese voice or not at all, never in the English default.
+                try:
+                    vi = decode_mp3_to_pcm(asyncio.run(SapiTTSProvider().synthesize("Clicky đối chiếu sổ cái.")))[0]
+                    assert vi.size > 1000, "Vietnamese voice produced no audio"
+                    checks.append("Vietnamese voice synthesis")
+                except NoVoiceForLanguage:
+                    checks.append("No Vietnamese voice: text only")
             finally:
                 if saved is None:
                     os.environ.pop("CLICKY_DATA_DIR", None)
