@@ -130,3 +130,14 @@ def test_cell_tags_are_hidden_from_speech():
     assert CELL_RE.search(text).groups() == ("'Báo cáo T10'!C12", "Doanh thu")
     assert RANGE_RE.search(text).group(1) == "B2:D20"
     assert ANY_TAG_RE.sub("", text) == "Doanh thu giảm ở đây  và vùng này ."
+
+
+def test_missing_local_model_explains_what_to_do():
+    from companion_manager import friendly_request_error
+
+    class ConnectError(Exception):
+        pass
+    msg = friendly_request_error(ConnectError("All connection attempts failed"), "ollama")
+    assert "API key" in msg and "làm báo cáo tháng" in msg and "Ollama" in msg
+    assert friendly_request_error(ValueError("bad reply"), "ollama") == "bad reply"
+    assert friendly_request_error(ConnectError("All connection attempts failed"), "claude") == "All connection attempts failed"

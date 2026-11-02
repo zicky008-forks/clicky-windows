@@ -267,6 +267,23 @@ POINT_TRIGGER_RE = re.compile(
 )
 
 
+NO_AI_MESSAGE = (
+    "Clicky chưa có AI để trả lời câu hỏi tự do: chưa nhập API key và máy không chạy {name}. "
+    "Vào Settings nhập API key Claude, OpenAI hoặc Gemini. Các lệnh như \"làm báo cáo tháng từ thư mục này\" "
+    "và \"kiểm tra power query\" vẫn chạy được mà không cần AI."
+)
+
+
+def friendly_request_error(exc: Exception, provider: str) -> str:
+    """Turn 'All connection attempts failed' from a local model nobody installed into what to do next."""
+    text = str(exc)
+    if provider in ("ollama", "lmstudio") and (
+            "connection attempts failed" in text.lower() or "connecterror" in type(exc).__name__.lower()
+            or "connection refused" in text.lower()):
+        return NO_AI_MESSAGE.format(name="Ollama" if provider == "ollama" else "LM Studio")
+    return text
+
+
 class CompanionManager(QObject):
     """Thread-safe signals for Qt UI updates from async/audio threads."""
 
@@ -1412,7 +1429,7 @@ class CompanionManager(QObject):
             # "'NoneType' object has no attribute 'write'" with no way to
             # tell which call produced it.
             _log.exception("request failed: %s", e)
-            self.sig_error.emit(str(e))
+            self.sig_error.emit(friendly_request_error(e, cfg.llm_provider()))
 
         finally:
             for task in (search_task, locate_task, narration_task):
