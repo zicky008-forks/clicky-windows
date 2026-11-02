@@ -28,6 +28,7 @@ AMOUNT_COLS = {"thanhtien", "doanhthu", "tienhang", "amount", "netamount", "reve
 COST_COLS = {"giavon", "tiengiavon", "cogs", "cost", "costamount"}
 BRANCH_COLS = {"chinhanh", "branch", "cuahang", "store"}
 CUSTOMER_COLS = {"makh", "makhachhang", "customer", "customerid", "khachhang"}
+ITEM_COLS = {"mahang", "mathang", "masp", "masanpham", "sanpham", "tenhang", "tenmathang", "nhomhang", "sku", "item", "product"}
 
 DAY_FIRST, MONTH_FIRST = "vi-VN", "en-US"
 _SLASHED = re.compile(r"^\s*(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})")
@@ -44,7 +45,8 @@ def find_columns(header: list) -> dict:
     for i, h in enumerate(header):
         k = _key(h)
         for role, names in (("doc", DOC_COLS), ("date", DATE_COLS), ("amount", AMOUNT_COLS),
-                            ("cost", COST_COLS), ("branch", BRANCH_COLS), ("customer", CUSTOMER_COLS)):
+                            ("cost", COST_COLS), ("branch", BRANCH_COLS), ("customer", CUSTOMER_COLS),
+                            ("item", ITEM_COLS)):
             if k in names and role not in roles:
                 roles[role] = i
     return roles
@@ -154,7 +156,9 @@ class SourceTruth:
     by_file: dict = field(default_factory=dict)          # file name → (rows, amount)
     unreadable_dates: int = 0
     doc_numbers: dict = field(default_factory=dict)      # doc number → DocInfo
-    collisions: dict = field(default_factory=dict)       # doc number → how many different orders share it
+    multi: dict = field(default_factory=dict)            # doc number → how many different rows carry it
+    collisions: dict = field(default_factory=dict)       # ...of which: different places reusing the number
+    invoice_lines: dict = field(default_factory=dict)    # ...of which: lines of one invoice (same date, customer, place)
     doc_amounts: dict = field(default_factory=dict)      # doc number → total of every distinct order using it
     period: Optional[tuple] = None                       # (year, month) the files were measured for
     outside: list = field(default_factory=list)          # (doc, file, date, amount) dated outside that period
@@ -206,7 +210,7 @@ def truth(files: list, period: Optional[tuple] = None) -> SourceTruth:
     """The yardstick. With period (year, month), the ledger's month, rows dated in another month
     are set aside in t.outside instead of being counted: exports often run wider than the period."""
     t = SourceTruth(files=files, period=period)
-    seen = {}
+    seen, seen_file = {}, {}
     for f in files:
         if period and f.date_order is None and "date" in f.columns:
             # Every date in this file has day and month ≤ 12, so the values cannot tell the order;
@@ -235,16 +239,25 @@ def truth(files: list, period: Optional[tuple] = None) -> SourceTruth:
             doc = str(cell("doc") or "").strip() if "doc" in c else ""
             # Same number and same content is the same order exported twice. Same number with
             # different content is two real orders: branches and stores often number on their own.
-            content = (d, str(cell("customer") or "").strip(), amount, cost, str(cell("branch") or "").strip())
+            # Same number, date, customer and place but other figures: one invoice with several item lines.
+            content = (d, str(cell("customer") or "").strip(), amount, cost, str(cell("branch") or "").strip(),
+                       str(cell("item") or "").strip())
             if doc and doc in seen:
                 if content in seen[doc]:
                     t.duplicates.append((doc, f.name, amount))
                     continue
+                first, first_file = seen[doc][0], seen_file[doc]
                 seen[doc].append(content)
-                t.collisions[doc] = len(seen[doc])
+                t.multi[doc] = len(seen[doc])
+                same_invoice = (first[0], first[1], first[4]) == (content[0], content[1], content[4]) and (
+                    first[4] or first_file == f.name)
+                (t.invoice_lines if same_invoice and doc not in t.collisions else t.collisions)[doc] = len(seen[doc])
+                if doc in t.collisions:
+                    t.invoice_lines.pop(doc, None)
                 t.doc_amounts[doc] += amount
             elif doc:
                 seen[doc] = [content]
+                seen_file[doc] = f.name
                 t.doc_amounts[doc] = amount
                 t.doc_numbers[doc] = DocInfo(f.name, d, str(cell("customer") or "").strip(), amount, str(cell("date") or ""))
             t.unique_rows += 1

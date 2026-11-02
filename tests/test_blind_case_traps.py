@@ -187,3 +187,89 @@ def test_money_outside_the_report_lines_is_said_in_the_summary():
     assert len(found) == 1 and "12.000.000" in found[0].message and "lợi nhuận sau thuế chưa trừ khoản này" in found[0].message
     text = monthly_report.summary_vi([monthly_report.Variance("pat", "Lợi nhuận sau thuế", Decimal(100), Decimal(90), [])], found)
     assert "Lưu ý: TK 6281 Chi phí sản xuất chung còn 12.000.000" in text and "điểm cần lưu ý" not in text
+
+
+def test_lines_of_one_invoice_are_not_called_numbers_shared_between_branches(tmp_path):
+    from engine import m_code
+    from office import month_close
+    with open(tmp_path / "DonHang.csv", "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["SoCT", "Ngay", "MaKH", "MaHang", "ThanhTien", "ChiNhanh"])
+        w.writerows([["HD1", "05/10/2026", "K1", "SP1", "100", "HN"], ["HD1", "05/10/2026", "K1", "SP2", "100", "HN"],
+                     ["HD1", "05/10/2026", "K1", "SP3", "50", "HN"], ["HD2", "06/10/2026", "K2", "SP1", "70", "HN"]])
+    files = sources.find_order_files(tmp_path)
+    t = sources.truth(files)
+    assert t.amount == Decimal(320) and not t.duplicates                 # two lines at the same price are not a duplicate
+    assert t.invoice_lines == {"HD1": 3} and not t.collisions
+    assert month_close._dedup_key(files, t) == []                       # identical rows only, never branch + number
+    header = ["SoCT", "Ngay", "MaKH", "MaHang", "ThanhTien", "ChiNhanh"]
+    loaded = month_close.Loaded("DonHang", header, [["HD1", 0, "K1", "SP1", 100, "HN"], ["HD2", 0, "K2", "SP1", 70, "HN"]],
+                                sources.find_columns(header))
+    why = month_close.diagnose(t, loaded, sources.DAY_FIRST)
+    assert why["lines"] == [("HD1", 2, Decimal(150))] and not why["shared"]
+    assert month_close.explained(why) == loaded.amount - t.amount
+    beats, rows = month_close._cause_beats(why, sources.DAY_FIRST, 0, gap=loaded.amount - t.amount)
+    assert rows[0][0] == "Xoá nhầm dòng của cùng hoá đơn" and "Chi nhánh" not in rows[0][4]
+    m = m_code.folder_query("C:\\T10", {"DonHang.csv": "vi-VN"}, [("Ngay", "type date")], "SoCT", key_columns=[])
+    assert "Table.Distinct(BoDongKhongNgay)" in m
+
+
+# --- Second round: checks a reviewer would make before trusting the profit figure (self-made data). ---
+
+from engine.build import build  # noqa: E402
+from tests import tb_samples as S  # noqa: E402
+
+
+def _t10(opening=None, **kw):
+    _, _, closing_t9 = S.balances(S.OPENING_T9, S.T9)
+    args = dict(sales=8400, service=450, deduction=210, cogs=5800, purchases=6000, collected=9000, paid=5500,
+                fin_inc=15, interest=70, selling=(760, 420, 200), admin=(520, 170), other_inc=5, other_exp=25, tax=139)
+    args.update(kw)
+    return S.misa_rows(opening or closing_t9, S.month(**args))
+
+
+def _codes(issues):
+    return [i.code for i in issues if not i.message.startswith("[")]
+
+
+def test_cash_with_a_credit_balance_is_an_error():
+    rows = _t10(opening={**S.balances(S.OPENING_T9, S.T9)[2], "111": 100})
+    issues = checks.check(read_trial_balance(rows))
+    wrong = [i for i in issues if i.code == "wrong_side"]
+    assert len(wrong) == 1 and wrong[0].severity == "error" and "TK 111" in wrong[0].message
+
+
+def test_income_and_expense_accounts_left_open_mark_the_report_preliminary():
+    rows = _t10()
+    for r in rows:                        # 6428 was never closed to 911: it keeps its 170 triệu balance
+        if r and r[0] == "6428":
+            r[6], r[7] = 170 * S.M, 0
+    report = build(rows, S.t9_rows(), "T10", "T09")
+    assert "not_closed" in _codes(report.issues)
+    assert report.summary.startswith("Số sơ bộ, chưa khoá sổ.")
+    title = next(iter(report.sheets.values()))[0][0]
+    assert title.startswith("SỐ SƠ BỘ, CHƯA KHOÁ SỔ.")
+
+
+def test_missing_payroll_accrual_is_not_told_as_lower_costs():
+    rows = _t10(selling=(0, 420, 200), admin=(0, 170))        # no 334 accrual this month
+    report = build(rows, S.t9_rows(), "T10", "T09")
+    assert _codes(report.issues)[0] == "recurring_missing"
+    assert "trích lương" in report.summary and "Chưa nên giải thích lợi nhuận bằng chi phí giảm" in report.summary
+    assert "chi phí bán hàng giảm" not in report.summary.lower()
+
+
+def test_clean_month_has_no_recurring_or_tie_issue():
+    report = build(S.t10_rows(), S.t9_rows(), "T10", "T09")
+    assert not {"recurring_missing", "profit_tie", "not_closed", "wrong_side"} & set(_codes(report.issues))
+
+
+def test_profit_not_matching_what_was_closed_to_4212_is_an_error():
+    rows = _t10()
+    for r in rows:                        # 30 triệu of profit never reached 4212
+        if r and r[0] == "4212":
+            r[5] -= 30 * S.M
+            r[7] -= 30 * S.M
+    report = build(rows, S.t9_rows(), "T10", "T09")
+    tie = [i for i in report.issues if i.code == "profit_tie"]
+    assert len(tie) == 1 and "30.000.000" in tie[0].message

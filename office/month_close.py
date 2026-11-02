@@ -170,7 +170,7 @@ def diagnose(truth: sources.SourceTruth, loaded: Loaded, machine_order: Optional
     orders = {f.name: f.date_order for f in truth.files}
     kept = {(info.date, info.customer) for doc, info in truth.doc_numbers.items() if doc in present}
     out = {"date": [], "distinct": [], "other": [], "amount": [], "shared": [], "outside": [],
-           "excel_dups": [d for d, n in present.items() if n > truth.collisions.get(d, 1)]}
+           "lines": [], "excel_dups": [d for d, n in present.items() if n > truth.multi.get(d, 1)]}
     if "doc" not in loaded.columns:
         return out
     loaded_by_doc = {}
@@ -181,9 +181,10 @@ def diagnose(truth: sources.SourceTruth, loaded: Loaded, machine_order: Optional
             loaded_by_doc[str(r[di]).strip()] = loaded_by_doc.get(str(r[di]).strip(), ZERO) + (
                 _dec(r[ai]) if ai is not None and ai < len(r) else ZERO)
     # Real orders that share a number with another branch's order, removed by a de-duplication on the number alone.
-    for doc, n in truth.collisions.items():
-        if 0 < present.get(doc, 0) < n:
-            out["shared"].append((doc, n - present[doc], truth.doc_amounts[doc] - loaded_by_doc.get(doc, ZERO)))
+    for bucket, docs in (("shared", truth.collisions), ("lines", truth.invoice_lines)):
+        for doc, n in docs.items():
+            if 0 < present.get(doc, 0) < n:
+                out[bucket].append((doc, n - present[doc], truth.doc_amounts[doc] - loaded_by_doc.get(doc, ZERO)))
     # Rows the query kept although they are dated outside the ledger's month.
     for doc, file, d, amount in truth.outside:
         if doc and doc in present and doc not in truth.doc_numbers:
@@ -197,7 +198,7 @@ def diagnose(truth: sources.SourceTruth, loaded: Loaded, machine_order: Optional
             if di < len(r) and ai < len(r) and r[di] not in (None, ""):
                 got.setdefault(str(r[di]).strip(), _dec(r[ai]))
         for doc, info in truth.doc_numbers.items():
-            if doc in got and doc not in truth.collisions and abs(got[doc] - info.amount) > TOLERANCE:
+            if doc in got and doc not in truth.multi and abs(got[doc] - info.amount) > TOLERANCE:
                 out["amount"].append((doc, info, got[doc]))
     for doc, info in truth.doc_numbers.items():
         if doc in present:
@@ -217,8 +218,10 @@ def diagnose(truth: sources.SourceTruth, loaded: Loaded, machine_order: Optional
 def _dedup_key(files: list, truth: sources.SourceTruth) -> Optional[list]:
     """None: de-duplicate on the document number. When different orders share a number (each branch
     numbers its own), [branch column, doc column] if every file has both, else [] (identical rows only)."""
-    if not truth.collisions:
+    if not truth.multi:
         return None
+    if truth.invoice_lines:
+        return []          # an invoice's lines share everything but the item: only identical rows are duplicates
     names = []
     for role in ("branch", "doc"):
         cols = {f.header[f.columns[role]] if role in f.columns else None for f in files}
@@ -411,7 +414,7 @@ def _date_example(items, machine_order: Optional[str]) -> tuple:
 def explained(why: dict) -> Decimal:
     """How much the named causes move the query's total away from the source files (missing is negative)."""
     missing = sum((_amount(why.get(k, [])) for k in ("date", "distinct", "other")), ZERO)
-    missing += sum((a for *_, a in why.get("shared", [])), ZERO)
+    missing += sum((a for k in ("shared", "lines") for *_, a in why.get(k, [])), ZERO)
     missing += sum((info.amount - got for _, info, got in why.get("amount", [])), ZERO)
     return sum((a for *_, a in why.get("outside", [])), ZERO) - missing
 
@@ -458,6 +461,14 @@ def _cause_beats(why: dict, machine_order: Optional[str], first_row: int, reader
                  note=f"Ví dụ số {example}: hai nơi cùng đánh số này cho hai đơn khác nhau."),
             ["Xoá nhầm đơn trùng số giữa các nơi", n, amt, "", "Bước xoá trùng chỉ theo số chứng từ, nhưng mỗi chi nhánh "
              f"tự đánh số nên hai đơn khác nhau có cùng số. Ví dụ {example}. Cần xoá trùng theo Chi nhánh + Số CT."])
+    if why.get("lines"):
+        n, amt = sum(k for _, k, _ in why["lines"]), sum((a for *_, a in why["lines"]), ZERO)
+        example = why["lines"][0][0]
+        add(Beat(f"{n} dòng mặt hàng của cùng một hoá đơn bị xoá ở bước xoá trùng, làm mất {spoken(amt)}.",
+                 label=f"Mất dòng hoá đơn · {n} dòng", mark="bad", value=spoken(amt),
+                 note=f"Ví dụ hoá đơn {example}: nhiều mặt hàng nên có nhiều dòng cùng số, query chỉ giữ một dòng."),
+            ["Xoá nhầm dòng của cùng hoá đơn", n, amt, "", "Bước xoá trùng theo số chứng từ giữ lại một dòng mỗi hoá đơn, "
+             f"nên hoá đơn nhiều mặt hàng mất các dòng còn lại. Ví dụ {example}. Chỉ nên xoá dòng giống hệt nhau."])
     if why.get("outside"):
         n, amt = len(why["outside"]), sum((a for *_, a in why["outside"]), ZERO)
         months = sorted({f"{d.month:02d}/{d.year}" for _, d, _ in why["outside"]})
@@ -545,7 +556,13 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
 
     name, formula, origin = _query_to_check(pq, folder)
     keys = _dedup_key(files, truth)
-    if keys is not None:
+    if truth.invoice_lines:
+        lines = ", ".join(sorted(truth.invoice_lines)[:5])
+        notes.append(["Hoá đơn nhiều dòng", sum(truth.invoice_lines.values()),
+                      sum((truth.doc_amounts[d] for d in truth.invoice_lines), ZERO), "",
+                      f"{len(truth.invoice_lines)} hoá đơn có nhiều dòng mặt hàng cùng số chứng từ ({lines}). "
+                      "Đó là các dòng của một hoá đơn, không phải trùng; Clicky chỉ xoá dòng giống hệt nhau."])
+    if truth.collisions:
         shared = ", ".join(sorted(truth.collisions)[:5])
         notes.append(["Số chứng từ trùng giữa các nơi", sum(truth.collisions.values()),
                       sum((truth.doc_amounts[d] for d in truth.collisions), ZERO), "",
