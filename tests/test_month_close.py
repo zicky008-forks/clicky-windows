@@ -97,8 +97,11 @@ class FakeBridge:
         return final
 
     def write(self, ref, grid):
-        m = re.match(r"^'?(.*?)'?!A1$", ref)
-        self.sheets[m.group(1).replace("''", "'")] = [list(r) for r in grid]
+        m = re.match(r"^'?(.*?)'?!A(\d+)$", ref)
+        name, start = m.group(1).replace("''", "'"), int(m.group(2))
+        rows = self.sheets.get(name, []) if start > 1 else []
+        rows = rows + [[] for _ in range(start - 1 - len(rows))]
+        self.sheets[name] = rows[:start - 1] + [list(r) for r in grid]
         return True
 
     def format_numbers(self, ref, number_format=None):
@@ -258,8 +261,11 @@ def test_approve_fixes_verifies_then_builds_the_report(folder):
     profit = next(b for b in beats if "Lợi nhuận thực" in b.text)
     assert profit.text == "Lợi nhuận thực là 436 triệu, không phải 556 triệu như trên báo cáo."
     assert profit.value == "436 triệu" and "TK 521" in profit.note and profit.mark == "warn"
-    assert profit.ref.startswith("'BC thang'!A") and profit.ref.endswith(":G" + profit.ref.split("!A")[1].split(":")[0])
     assert profit.was == "556 triệu" and profit.roll == (556_000_000, 436_000_000)
+    real = bridge.sheets["BC thang"][-1]
+    assert real[0] == "Lợi nhuận sau thuế thực" and real[2].startswith("=C20+C21")
+    assert bridge.sheets["BC thang"][-2][2].startswith("=-MAX(0,SUMIFS(")
+    assert profit.ref == "'BC thang'!A20:G22"
     report_beat = next(b for b in beats if b.text.startswith("Em đã lập báo cáo tháng"))
     assert report_beat.ref.startswith("'BC thang'!A4:G") and "công thức trỏ về sổ cái" in report_beat.note
     assert "Lợi nhuận thực" in said

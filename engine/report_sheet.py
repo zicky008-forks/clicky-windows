@@ -74,3 +74,27 @@ def checks_grid(issues: list, source_sheet: str) -> list:
     if len(rows) == 1:
         rows.append(["OK", "", "Không phát hiện bẫy nào trong các phép kiểm", ""])
     return rows
+
+
+def real_profit_rows(pat_row: int, cur_sheet: str, overstated) -> list:
+    """Two lines under the report when returns were booked straight to Nợ 511: the amount, then the real profit.
+
+    Both are live formulas on the trial balance (income from 511/521/515/711 against what 911 received),
+    so the corrected figure is in the file itself, not only in what Clicky said.
+    """
+    q = quote(cur_sheet)
+
+    def side(prefix, col):
+        return f'SUMIFS({q}!${col}:${col},{q}!$A:$A,"{prefix}*")'
+
+    income = f'{side("511", "F")}-{side("521", "E")}+{side("515", "F")}+{side("711", "F")}'
+    adj = pat_row + 1
+    amount = int(overstated)
+    return [
+        ["Trừ: hàng bán bị trả lại đang ghi thẳng Nợ TK 511", "511, 521, 515, 711, 911",
+         f'=-MAX(0,{income}-{side("911", "F")})', "", "", "", "",
+         "Chuyển sang Nợ TK 521 trước khi gửi sếp",
+         f'=IF(ABS(C{adj}-(-{amount}))<=1,"✓","≠ code -{fmt(overstated)}")'],
+        ["Lợi nhuận sau thuế thực", "", f"=C{pat_row}+C{adj}", "", "", "", "",
+         "Số nên dùng khi báo cáo", ""],
+    ]

@@ -723,14 +723,17 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
     row = 4 + len(report.figures)
     sheet = quote(names["report"])
     pat_ref = f"{sheet}!A{row}:G{row}"      # the whole line, label included: the figure never appears without its name
-    _style_report_sheet(bridge, names["report"], row)
+    overstated = sources.returns_in_revenue(report.current)
+    if overstated > 0:
+        # The report already carries the returns line and the real profit under the reported one.
+        pat_ref = f"{sheet}!A{row}:G{row + 2}"
+    _style_report_sheet(bridge, names["report"], row, extra=2 if overstated > 0 else 0)
     bridge.activate(names["report"])
     _try(bridge, "scroll_home", names["report"])  # the report is seen from its title down, and stays that way
     asks = (f", kèm {len(report.questions)} câu hỏi cho các bộ phận" if report.questions else "")
     note = "Mọi số là công thức trỏ về sổ cái." + (
         f" {len(report.questions)} câu hỏi xác minh ở sheet {names['questions']}." if report.questions else "")
     beats = [Beat(f"Em đã lập báo cáo tháng{asks}.", f"{sheet}!A4:G{row}", "Báo cáo tháng đã lập", "", "", note)]
-    overstated = sources.returns_in_revenue(report.current)
     if overstated > 0:
         real = pat - overstated
         change = f" Giảm {spoken(prev_pat - real)} so với kỳ trước." if prev_pat is not None and prev_pat > real else ""
@@ -747,8 +750,10 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
 _REPORT_COLUMNS = {"A": 40, "B": 12, "C": 17, "D": 17, "E": 17, "F": 9, "G": 15, "H": 34, "I": 14}
 
 
-def _style_report_sheet(bridge, sheet: str, last: int) -> None:
-    """The report reads like one: title, a header band, readable columns, the profit line stands out."""
+def _style_report_sheet(bridge, sheet: str, last: int, extra: int = 0) -> None:
+    """The report reads like one: title, a header band, readable columns, the profit line stands out.
+
+    extra: lines added under the profit line (the returns adjustment and the real profit)."""
     s = _q(sheet)
     _try(bridge, "layout_sheet", sheet, _REPORT_COLUMNS, gridlines=False)
     _try(bridge, "style", f"{s}!A1", bold=True, size=15, color=_INK)
@@ -760,6 +765,14 @@ def _style_report_sheet(bridge, sheet: str, last: int) -> None:
     _try(bridge, "style", f"{s}!H5:I{last}", color="#475569")
     _try(bridge, "style", f"{s}!A{last}:I{last}", bold=True, fill="#FEF3E2", height=26)
     _try(bridge, "ignore_text_numbers", f"{s}!B5:B{last}")
+    if extra:
+        end = last + extra
+        _try(bridge, "format_numbers", f"{s}!C{last + 1}:C{end}")
+        _try(bridge, "style", f"{s}!A{last + 1}:I{end}", border_bottom=_LINE, height=20)
+        _try(bridge, "style", f"{s}!A{last}:I{last}", bold=False, fill="#FFFFFF", height=20)
+        _try(bridge, "style", f"{s}!A{last + 1}:I{last + 1}", italic=True, color="#B45309")
+        _try(bridge, "style", f"{s}!H{last + 1}:I{end}", color="#475569")
+        _try(bridge, "style", f"{s}!A{end}:I{end}", bold=True, fill="#FEF3E2", height=26)
 
 
 # ── Voice skill glue ──────────────────────────────────────────────────────────

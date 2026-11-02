@@ -1,7 +1,7 @@
 """One call from two trial balances to the finished report: figures, checks, sheet grids and a spoken summary."""
 from dataclasses import dataclass
 
-from engine import checks, monthly_report, questions, report_sheet
+from engine import checks, sources, monthly_report, questions, report_sheet
 from engine.trial_balance import TrialBalance, read_trial_balance
 
 SHEET_NAMES = {"tb_cur": "TB ky nay", "tb_prev": "TB ky truoc", "report": "BC thang",
@@ -33,10 +33,15 @@ def build(cur_rows, prev_rows, cur_name="Kỳ này", prev_name="Kỳ trước", 
     preliminary = any(i.code == "not_closed" and not i.message.startswith("[") for i in issues)
     agenda = questions.build_questions(variances)
     n = {**SHEET_NAMES, **(names or {})}
+    report = report_sheet.report_grid(figures, variances, n["tb_cur"], n["tb_prev"],
+                                      ("SỐ SƠ BỘ, CHƯA KHOÁ SỔ. " if preliminary else "")
+                                      + f"Báo cáo kết quả kinh doanh quản trị: {cur_name} so với {prev_name}")
+    overstated = sources.returns_in_revenue(cur)
+    if overstated > 0:
+        # The corrected profit lives in the file, under the reported one, for anyone who opens it later.
+        report += report_sheet.real_profit_rows(len(report), n["tb_cur"], overstated)
     sheets = {
-        n["report"]: report_sheet.report_grid(figures, variances, n["tb_cur"], n["tb_prev"],
-                                              ("SỐ SƠ BỘ, CHƯA KHOÁ SỔ. " if preliminary else "")
-                                              + f"Báo cáo kết quả kinh doanh quản trị: {cur_name} so với {prev_name}"),
+        n["report"]: report,
         n["questions"]: questions.questions_grid(agenda),
         n["checks"]: report_sheet.checks_grid(issues, cur_name),
         n["tb_cur"]: report_sheet.tb_grid(cur, text_prefix),

@@ -77,7 +77,7 @@ def run_report(bridge, periods=None) -> tuple:
     for name, grid in report.sheets.items():
         if not bridge.write(f"{quote(name)}!A1", grid):
             return f"Em tính xong nhưng ghi vào sheet {name} bị lỗi. Kết quả: {report.summary}", report, names
-    last = 4 + len(report.figures)
+    last = len(report.sheets[names["report"]])          # includes the real-profit lines when there are any
     bridge.format_numbers(f"{quote(names['report'])}!C5:E{last}")
     bridge.format_numbers(f"{quote(names['report'])}!F5:F{last}", "0.0%")
     bridge.format_numbers(f"{quote(names['questions'])}!B2:B{len(report.sheets[names['questions']])}")
