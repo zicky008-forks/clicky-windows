@@ -52,7 +52,7 @@ class SettingsWindow(QWidget):
         voice_page = QWidget()
         voice = QFormLayout(voice_page)
         self.provider = QComboBox()
-        for label,value in (("Automatic",'auto'),("Windows voice — offline",'sapi'),("Edge — internet",'edge_tts'),("OpenAI — API key",'openai'),("ElevenLabs — API key",'elevenlabs')):
+        for label,value in (("Automatic",'auto'),("Windows voice — offline",'sapi'),("Microsoft online — sends each spoken sentence to Microsoft",'edge_tts'),("OpenAI — API key",'openai'),("ElevenLabs — API key",'elevenlabs')):
             self.provider.addItem(label,value)
         self.provider.setCurrentIndex(max(0,self.provider.findData(setting('tts_provider','auto'))))
         voice.addRow("Speech provider",self.provider)

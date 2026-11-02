@@ -230,3 +230,10 @@ def test_local_reply_says_once_why_it_was_not_read_aloud():
     assert manager.sig_response_done.emit.call_count == 2
     assert manager.sig_notice.emit.call_count == 1
     assert "giọng đọc" in manager.sig_notice.emit.call_args.args[0]
+
+
+def test_online_voice_reads_vietnamese_with_a_vietnamese_voice():
+    from audio.tts.edge_tts_provider import VI_VOICE, voice_for
+    assert voice_for("Sổ cái khớp đến từng đồng.", "en-US-AvaNeural") == VI_VOICE
+    assert voice_for("Sổ cái khớp.", "vi-VN-NamMinhNeural") == "vi-VN-NamMinhNeural"
+    assert voice_for("Ledger matches.", "en-US-AvaNeural") == "en-US-AvaNeural"
