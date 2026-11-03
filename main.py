@@ -772,7 +772,9 @@ def main():
     # know the shortcut or the tray icon still sees where to begin. Setting start_hidden keeps it closed.
     from storage import setting as _setting
     import first_run
-    if first_run.welcome_needed() or os.environ.get("CLICKY_FORCE_SETUP", "").strip() in ("1", "true", "yes"):
+    forced = os.environ.get("CLICKY_FORCE_SETUP", "").strip() in ("1", "true", "yes")
+    rehearsal = bool(os.environ.get("CLICKY_SCENE_LOG", "").strip())   # robot runs start at the chat
+    if forced or (first_run.welcome_needed() and not rehearsal):
         # First start of this install: the 3 promises, then the sample month. Never an AI engine,
         # provider or API key (those stay in Tray → Setup & Diagnostics for power users).
         from ui.welcome import WelcomeCard, start_after_welcome
