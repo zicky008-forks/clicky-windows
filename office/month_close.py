@@ -731,7 +731,8 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
     _style_report_sheet(bridge, names["report"], row, extra=2 if overstated > 0 else 0)
     bridge.activate(names["report"])
     # The whole report, title to real profit, fits on screen; it is seen from the top and stays that way.
-    _try(bridge, "fit_rows", names["report"], f"A1:I{row + 2 if overstated > 0 else row}")
+    # Ten empty rows are kept under it, so the profit card sits below the report instead of covering it.
+    _try(bridge, "fit_rows", names["report"], f"A1:I{(row + 2 if overstated > 0 else row) + 10}")
     _try(bridge, "scroll_home", names["report"])
     asks = (f", kèm {len(report.questions)} câu hỏi cho các bộ phận" if report.questions else "")
     note = "Mọi số là công thức trỏ về sổ cái." + (
@@ -841,9 +842,12 @@ async def play(manager, beats: list) -> None:
             manager.sig_point_hold.emit(True)
             # The pointer stops beside the range, never on it: it must not hide the figure being explained.
             manager.sig_point_at.emit(*pointer_spot(box), NO_BUBBLE)
+        log.info("beat: %s", beat.text)
         spoke = await manager._reply_local(beat.text)
         if spoke is False and BEAT_GAP_S:
-            await asyncio.sleep(reading_seconds(beat.text))
+            # Not read aloud: leave time to read the sentence, and with a card, to look at the figure and its note.
+            await asyncio.sleep(reading_seconds(beat.text)
+                                + ((1.0 + 0.6 * reading_seconds(beat.note) if beat.note else 1.0) if box else 0))
         if box:
             manager.sig_point_release.emit()
             last_card = beat
