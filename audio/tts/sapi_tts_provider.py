@@ -58,7 +58,7 @@ try {
 class NoVoiceForLanguage(RuntimeError):
     """Windows has no voice for the text's language; Clicky shows the words instead of reading them wrongly."""
     # A Windows toast shows about two lines: keep it to what to do.
-    ADVICE = "Máy chưa có giọng tiếng Việt nên Clicky chỉ hiện chữ. Muốn nghe đọc: Cài đặt Clicky > Voice."
+    ADVICE = "Chưa có giọng tiếng Việt nên Clicky chỉ hiện chữ. Giọng online (gửi lên Microsoft): Cài đặt > Voice."
 
 
 _VI_LETTERS = set("ăâđêôơưàảãáạằẳẵắặầẩẫấậèẻẽéẹềểễếệìỉĩíịòỏõóọồổỗốộờởỡớợùủũúụừửữứựỳỷỹýỵ")
