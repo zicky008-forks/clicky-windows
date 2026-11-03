@@ -284,3 +284,17 @@ def test_several_missing_recurring_entries_are_named_and_added_up():
     text = summary_vi(report.variances, missing)
     assert "khấu hao tài sản cố định, trích lương, phân bổ chi phí trả trước" in text
     assert "1,44 tỷ" in text
+
+
+def test_tt99_headers_by_month_or_quarter_are_read():
+    """S06-DN under TT99: 'Số dư đầu tháng / Số phát sinh trong tháng / Số dư cuối tháng' (or quý)."""
+    for unit in ("tháng", "quý"):
+        rows = [["Số hiệu TK", "Tên tài khoản", f"Số dư đầu {unit}", None, f"Số phát sinh trong {unit}", None,
+                 f"Số dư cuối {unit}", None],
+                [None, None, "Nợ", "Có", "Nợ", "Có", "Nợ", "Có"],
+                ["111", "Tiền mặt", 1000, 0, 0, 300, 700, 0],
+                ["6421", "Chi phí nhân viên quản lý", 0, 0, 300, 0, 300, 0]]
+        tb = read_trial_balance(rows)
+        assert [l.account for l in tb.lines] == ["111", "6421"]
+        assert {"open_dr", "dr", "cr", "close_dr", "close_cr"} <= tb.columns.keys()
+        assert sum(l.dr for l in tb.leaves) == Decimal(300)
