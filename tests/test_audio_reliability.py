@@ -249,7 +249,7 @@ def test_vietnamese_is_never_read_with_an_english_voice():
     assert asyncio.run(CompanionManager._reply_local(manager, "Sổ cái khớp.")) is False
     assert manager.sig_notice.emit.call_count == 1
     advice = manager.sig_notice.emit.call_args.args[0]
-    assert "không đọc bằng giọng tiếng Anh" in advice and "gửi lên Microsoft" in advice
+    assert "chỉ hiện chữ" in advice and "gửi lên Microsoft" in advice and len(advice) <= 120   # fits a toast
     ok = Mock(speak=AsyncMock(return_value=None))
     assert asyncio.run(CompanionManager._reply_local(Mock(_get_tts=Mock(return_value=ok)), "Khớp.")) is True
 

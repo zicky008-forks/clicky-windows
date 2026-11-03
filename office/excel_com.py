@@ -56,6 +56,18 @@ def _window_dpi(hwnd) -> int:
         return 96
 
 
+
+def reveal_scroll(row: int, rows: int, col: int, seen_rows: int, seen_cols: int) -> tuple:
+    """(ScrollRow, ScrollColumn) that bring a range into view with its context.
+
+    Keeps the sheet's top-left (title, row labels in column A) on screen when the range fits
+    under it; otherwise puts the range about a third of the way down, never at the very top.
+    """
+    seen_rows, seen_cols = max(seen_rows, 1), max(seen_cols, 1)
+    top = 1 if row + rows - 1 <= seen_rows - 1 else max(1, row - seen_rows // 3)
+    left = 1 if col < seen_cols - 1 else col
+    return top, left
+
 class ExcelBridge:
     def __init__(self, app=None, dpi: Optional[int] = None):
         self._app = app        # injected in tests; otherwise attach to the running Excel
@@ -209,6 +221,65 @@ class ExcelBridge:
         except Exception:
             pass
 
+    def content_rect(self):
+        """Physical screen pixels of the filled part of the sheet on screen (UsedRange ∩ visible), or None."""
+        app = self._excel()
+        try:
+            ws, win = app.ActiveSheet, app.ActiveWindow
+            filled = app.Intersect(ws.UsedRange, win.VisibleRange)
+            if filled is None:
+                return None
+            name = ws.Name.replace("'", "''")
+            return self.screen_rect(f"'{name}'!{filled.Address.replace('$', '')}")
+        except Exception as exc:
+            log.debug("content_rect failed: %s", exc)
+            return None
+
+    def scroll_home(self, name: str) -> None:
+        """Show a sheet from its top-left corner, so a report is seen from its title down."""
+        app = self._excel()
+        try:
+            app.ActiveWorkbook.Worksheets(name).Activate()
+            app.ActiveWindow.ScrollRow, app.ActiveWindow.ScrollColumn = 1, 1
+        except Exception as exc:
+            log.debug("scroll_home %s failed: %s", name, exc)
+
+    def fit_rows(self, name: str, address: str, low: int = 70, high: int = 100) -> None:
+        """Zoom so a whole block (a report from its title to its last line) fits the window, within low–high %,
+        then show it from the top-left. Only used on sheets Clicky made."""
+        app = self._excel()
+        try:
+            ws = app.ActiveWorkbook.Worksheets(name)
+            ws.Activate()
+            win = app.ActiveWindow
+            ws.Range(address).Select()
+            win.Zoom = True                         # Excel's "zoom to selection"
+            win.Zoom = max(low, min(high, int(win.Zoom)))
+            ws.Range("A1").Select()
+            win.ScrollRow, win.ScrollColumn = 1, 1
+        except Exception as exc:
+            log.debug("fit_rows %s %s failed: %s", name, address, exc)
+
+    def screen_updating(self, on: bool) -> None:
+        """Freeze or release Excel's screen, so sheets added and filled in a batch do not flash past the user."""
+        app = self._excel()
+        try:
+            app.ScreenUpdating = bool(on)
+        except Exception:
+            pass
+
+    def ignore_text_numbers(self, text: str) -> None:
+        """Hide Excel's green 'number stored as text' triangle on cells that are text on purpose (account codes)."""
+        ref = parse_ref(text)
+        app = self._excel()
+        if ref is None or app is None:
+            return
+        try:
+            for cell in self._sheet(app, ref).Range(ref.address).Cells:
+                cell.Errors(3).Ignore = True          # xlNumberAsText
+        except Exception:
+            pass
+
     def format_numbers(self, text: str, number_format: str = '#,##0;(#,##0);"-"') -> None:
         ref = parse_ref(text)
         app = self._excel()
@@ -292,7 +363,9 @@ class ExcelBridge:
             win = app.ActiveWindow
             pane = self._pane_showing(app, win, rng)
             if pane is None and reveal and win.Panes.Count == 1:
-                win.ScrollRow, win.ScrollColumn = rng.Row, rng.Column
+                seen = win.Panes(1).VisibleRange
+                win.ScrollRow, win.ScrollColumn = reveal_scroll(rng.Row, rng.Rows.Count, rng.Column,
+                                                                seen.Rows.Count, seen.Columns.Count)
                 pane = self._pane_showing(app, win, rng)
             if pane is None:
                 return None

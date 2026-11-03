@@ -32,9 +32,10 @@ PARAM_NAME = "ThuMucDonHang"
 CHECK_SHEET = "Doi chieu"
 TOLERANCE = Decimal(1)
 # Findings that lose revenue rows come first: these are the ones that explain a gap with the ledger.
-_LINT_ORDER = ["locale_types", "distinct_keys", "remove_errors", "distinct_all", "inner_join", "fixed_path"]
+_LINT_ORDER = ["locale_types", "locale_fixed", "distinct_keys", "remove_errors", "distinct_all", "inner_join", "fixed_path"]
 
-START_TRIGGER = (r"(l[àa]m|l[ậa]p|ch[ạa]y)\b.{0,25}b[áa]o\s*c[áa]o\s*th[áa]ng.{0,30}"
+# "tháng" is optional: people say "làm báo cáo từ thư mục này" just as often.
+START_TRIGGER = (r"(l[àa]m|l[ậa]p|ch[ạa]y|[đd][ốo]i\s*chi[ếe]u)\b.{0,25}b[áa]o\s*c[áa]o(\s*(th[áa]ng|qu[ảa]n\s*tr[ịi]))?.{0,30}"
                  r"(th[ưu]\s*m[ụu]c|t[ừu]\s*[đd][ầa]u|e2e|tr[ọo]n\s*g[óo]i|to[àa]n\s*b[ộo])"
                  r"|\bch[ạa]y\s*case\b|\bmonth[\s-]*close\b")
 # Only short replies count, so a new question that starts with "không" is not taken as an answer.
@@ -58,6 +59,8 @@ class Beat:
     value: str = ""                 # the one figure that matters, big on the card
     note: str = ""                  # one line of context under the figure
     choices: tuple = ()             # buttons offered after the sentence, e.g. ("Sửa giúp tôi", "Để tôi xem")
+    was: str = ""                   # the figure it replaces, shown struck through above the new one
+    roll: tuple = ()                # (from, to) in đồng: the big figure counts from one to the other
 
 
 def pending() -> bool:
@@ -169,9 +172,37 @@ def diagnose(truth: sources.SourceTruth, loaded: Loaded, machine_order: Optional
     present = Counter(loaded.docs())
     orders = {f.name: f.date_order for f in truth.files}
     kept = {(info.date, info.customer) for doc, info in truth.doc_numbers.items() if doc in present}
-    out = {"date": [], "distinct": [], "other": [], "excel_dups": [d for d, n in present.items() if n > 1]}
+    out = {"date": [], "distinct": [], "other": [], "amount": [], "shared": [], "outside": [],
+           "lines": [], "excel_dups": [d for d, n in present.items() if n > truth.multi.get(d, 1)]}
     if "doc" not in loaded.columns:
         return out
+    loaded_by_doc = {}
+    ai = loaded.columns.get("amount")
+    for r in loaded.rows:
+        di = loaded.columns["doc"]
+        if di < len(r) and r[di] not in (None, ""):
+            loaded_by_doc[str(r[di]).strip()] = loaded_by_doc.get(str(r[di]).strip(), ZERO) + (
+                _dec(r[ai]) if ai is not None and ai < len(r) else ZERO)
+    # Real orders that share a number with another branch's order, removed by a de-duplication on the number alone.
+    for bucket, docs in (("shared", truth.collisions), ("lines", truth.invoice_lines)):
+        for doc, n in docs.items():
+            if 0 < present.get(doc, 0) < n:
+                out[bucket].append((doc, n - present[doc], truth.doc_amounts[doc] - loaded_by_doc.get(doc, ZERO)))
+    # Rows the query kept although they are dated outside the ledger's month.
+    for doc, file, d, amount in truth.outside:
+        if doc and doc in present and doc not in truth.doc_numbers:
+            out["outside"].append((doc, d, loaded_by_doc.get(doc, amount)))
+    # Rows that arrived but with a different amount: a number read in the wrong format, then the error
+    # replaced by 0 or the digits taken as a decimal. Row counts match; the money does not.
+    di, ai = loaded.columns["doc"], loaded.columns.get("amount")
+    if ai is not None:
+        got = {}
+        for r in loaded.rows:
+            if di < len(r) and ai < len(r) and r[di] not in (None, ""):
+                got.setdefault(str(r[di]).strip(), _dec(r[ai]))
+        for doc, info in truth.doc_numbers.items():
+            if doc in got and doc not in truth.multi and abs(got[doc] - info.amount) > TOLERANCE:
+                out["amount"].append((doc, info, got[doc]))
     for doc, info in truth.doc_numbers.items():
         if doc in present:
             continue
@@ -185,6 +216,22 @@ def diagnose(truth: sources.SourceTruth, loaded: Loaded, machine_order: Optional
         else:
             out["other"].append((doc, info))
     return out
+
+
+def _dedup_key(files: list, truth: sources.SourceTruth) -> Optional[list]:
+    """None: de-duplicate on the document number. When different orders share a number (each branch
+    numbers its own), [branch column, doc column] if every file has both, else [] (identical rows only)."""
+    if not truth.multi:
+        return None
+    if truth.invoice_lines:
+        return []          # an invoice's lines share everything but the item: only identical rows are duplicates
+    names = []
+    for role in ("branch", "doc"):
+        cols = {f.header[f.columns[role]] if role in f.columns else None for f in files}
+        if len(cols) != 1 or None in cols:
+            return []
+        names.append(cols.pop())
+    return names
 
 
 def _amount(items) -> Decimal:
@@ -287,7 +334,8 @@ def _write_check_sheet(bridge, loaded: Optional[Loaded], truth, ledger: dict,
         ["File gốc (đọc bằng code)", truth.unique_rows, truth.amount, truth.cost,
          f"Đã bỏ {len(truth.duplicates)} chứng từ lặp: {dups}" if truth.duplicates else "Không có chứng từ lặp"],
         [f"Sổ cái {ledger.get('name', '')}", "", ledger.get("revenue", ""), ledger.get("cost", ""),
-         f"Phát sinh Có TK {ledger.get('rev_acct', '511')} / Nợ TK 632" if ledger else "Chưa thấy file cân đối tài khoản"],
+         (f"Có TK {ledger.get('rev_acct', '511')} − Nợ TK 521 (file gốc có phiếu trả hàng) / Nợ TK 632" if ledger.get("net")
+          else f"Phát sinh Có TK {ledger.get('rev_acct', '511')} / Nợ TK 632") if ledger else "Chưa thấy file cân đối tài khoản"],
         ["Chênh lệch Excel − sổ cái", "", "=C4-C6" if ledger and loaded else "",
          "=D4-D6" if ledger and loaded and "cost" in loaded.columns else "",
          "Phải bằng 0" if loaded else "Chưa đối chiếu được: chưa đọc được bảng query"],
@@ -331,8 +379,18 @@ def _ledger(folder: Path) -> tuple:
         return tbs, {}
     name, _, tb = tbs[-1]
     acct = sources.revenue_account(tb)
-    return tbs, {"name": name, "rev_acct": acct, "revenue": sources.ledger_movement(tb, acct, "cr"),
+    revenue = sources.ledger_movement(tb, acct, "cr")
+    return tbs, {"name": name, "rev_acct": acct, "revenue": revenue, "gross": revenue,
+                 "returns": sources.ledger_movement(tb, "521", "dr"),
                  "cost": sources.ledger_movement(tb, "632", "dr")}
+
+
+def _net_of_returns(ledger: dict, truth) -> dict:
+    """When the order files carry return slips (negative rows) the files and the query hold net sales,
+    so the ledger side becomes Có 511 − Nợ 521; sales and returns are still compared one by one."""
+    if not ledger or not truth.returns:
+        return ledger
+    return {**ledger, "revenue": ledger["gross"] - ledger["returns"], "net": True}
 
 
 def _signed(amount: Decimal) -> str:
@@ -356,7 +414,16 @@ def _date_example(items, machine_order: Optional[str]) -> tuple:
     return "", ""
 
 
-def _cause_beats(why: dict, machine_order: Optional[str], first_row: int) -> tuple:
+def explained(why: dict) -> Decimal:
+    """How much the named causes move the query's total away from the source files (missing is negative)."""
+    missing = sum((_amount(why.get(k, [])) for k in ("date", "distinct", "other")), ZERO)
+    missing += sum((a for k in ("shared", "lines") for *_, a in why.get(k, [])), ZERO)
+    missing += sum((info.amount - got for _, info, got in why.get("amount", [])), ZERO)
+    return sum((a for *_, a in why.get("outside", [])), ZERO) - missing
+
+
+def _cause_beats(why: dict, machine_order: Optional[str], first_row: int, reader: str = "Máy này đọc",
+                 gap: Optional[Decimal] = None) -> tuple:
     """(beats, detail rows): one beat per cause, each lighting up its own row in the detail table."""
     beats, rows = [], []
 
@@ -370,8 +437,8 @@ def _cause_beats(why: dict, machine_order: Optional[str], first_row: int) -> tup
         value, example = _date_example(why["date"], machine_order)
         add(Beat(f"Nguyên nhân chính: máy đọc nhầm ngày tháng, làm mất {spoken(amt)}.",
                  label=f"Đọc nhầm ngày · {n} chứng từ · {spoken(amt)}", mark="bad", value=value or spoken(amt),
-                 note=example or f"Máy này đọc ngày kiểu {_order_vi(machine_order)}, khác kiểu ghi trong file."),
-            ["Đọc nhầm ngày tháng", n, amt, "", f"Máy này đọc ngày kiểu {_order_vi(machine_order)}; file ghi kiểu khác "
+                 note=example or f"{reader} ngày kiểu {_order_vi(machine_order)}, khác kiểu ghi trong file."),
+            ["Đọc nhầm ngày tháng", n, amt, "", f"{reader} ngày kiểu {_order_vi(machine_order)}; file ghi kiểu khác "
              f"bị đảo ngày hoặc báo lỗi rồi bị xoá. {example}".strip()])
     if why["distinct"]:
         n, amt = len(why["distinct"]), _amount(why["distinct"])
@@ -380,11 +447,51 @@ def _cause_beats(why: dict, machine_order: Optional[str], first_row: int) -> tup
                  note=f"{n} chứng từ: cùng khách mua hai lần trong một ngày bị coi là trùng."),
             ["Xoá trùng nhầm", n, amt, "", "Bước xoá trùng dùng Ngày + Mã KH; hai chứng từ khác nhau cùng khách, cùng ngày "
              "bị xoá mất một. Chỉ nên xoá trùng theo số chứng từ."])
+    if why.get("amount"):
+        n = len(why["amount"])
+        lost = sum((info.amount - got for _, info, got in why["amount"]), ZERO)
+        doc, info, got = why["amount"][0]
+        add(Beat(f"{n} chứng từ vẫn có trong Excel nhưng số tiền bị đọc sai, làm lệch {spoken(abs(lost))}.",
+                 label=f"Đọc sai số tiền · {n} chứng từ", mark="bad", value=_signed(-lost),
+                 note=f"Ví dụ {doc}: file ghi {spoken(info.amount)}, Excel đọc thành {spoken(got)}."),
+            ["Đọc sai số tiền", n, -lost, "", f"Số tiền ghi kiểu khác cài đặt của query (ví dụ 1.250.000 so với 1,250,000), "
+             f"bị đọc sai hoặc lỗi rồi thay bằng 0. Ví dụ {doc}: file {info.amount:,.0f}, Excel {got:,.0f}."])
+    if why.get("shared"):
+        n, amt = sum(k for _, k, _ in why["shared"]), sum((a for *_, a in why["shared"]), ZERO)
+        example = why["shared"][0][0]
+        add(Beat(f"{n} đơn thật bị xoá vì trùng số chứng từ với nơi khác, làm mất {spoken(amt)}.",
+                 label=f"Trùng số giữa các nơi · {n} đơn", mark="bad", value=spoken(amt),
+                 note=f"Ví dụ số {example}: hai nơi cùng đánh số này cho hai đơn khác nhau."),
+            ["Xoá nhầm đơn trùng số giữa các nơi", n, amt, "", "Bước xoá trùng chỉ theo số chứng từ, nhưng mỗi chi nhánh "
+             f"tự đánh số nên hai đơn khác nhau có cùng số. Ví dụ {example}. Cần xoá trùng theo Chi nhánh + Số CT."])
+    if why.get("lines"):
+        n, amt = sum(k for _, k, _ in why["lines"]), sum((a for *_, a in why["lines"]), ZERO)
+        example = why["lines"][0][0]
+        add(Beat(f"{n} dòng mặt hàng của cùng một hoá đơn bị xoá ở bước xoá trùng, làm mất {spoken(amt)}.",
+                 label=f"Mất dòng hoá đơn · {n} dòng", mark="bad", value=spoken(amt),
+                 note=f"Ví dụ hoá đơn {example}: nhiều mặt hàng nên có nhiều dòng cùng số, query chỉ giữ một dòng."),
+            ["Xoá nhầm dòng của cùng hoá đơn", n, amt, "", "Bước xoá trùng theo số chứng từ giữ lại một dòng mỗi hoá đơn, "
+             f"nên hoá đơn nhiều mặt hàng mất các dòng còn lại. Ví dụ {example}. Chỉ nên xoá dòng giống hệt nhau."])
+    if why.get("outside"):
+        n, amt = len(why["outside"]), sum((a for *_, a in why["outside"]), ZERO)
+        months = sorted({f"{d.month:02d}/{d.year}" for _, d, _ in why["outside"]})
+        add(Beat(f"Query còn giữ {n} dòng của tháng khác, cộng thừa {spoken(amt)}.",
+                 label=f"Dòng ngoài kỳ · {n} dòng", mark="bad", value=f"+{spoken(amt)}",
+                 note=f"Các dòng tháng {', '.join(months)} chưa được lọc ra."),
+            ["Dòng ngoài kỳ còn trong query", n, amt, "", f"File xuất có dòng tháng {', '.join(months)}; query không lọc theo "
+             "kỳ của sổ cái nên cộng cả vào."])
     if why["other"]:
         n, amt = len(why["other"]), _amount(why["other"])
         add(Beat(f"Còn {n} chứng từ bị mất mà em chưa rõ lý do.", label="Chưa rõ nguyên nhân", mark="warn",
                  value=spoken(amt), note="Anh xem danh sách trong bảng chi tiết."),
             ["Chưa rõ nguyên nhân", n, amt, "", "Có trong file gốc nhưng không có trong bảng query."])
+    # The causes must add up to the gap; whatever they do not cover is said, never left silent.
+    if gap is not None:
+        rest = gap - explained(why)
+        if abs(rest) > TOLERANCE:
+            add(Beat(f"Còn {spoken(abs(rest))} em chưa tìm ra nguyên nhân.", label="Chưa rõ nguyên nhân", mark="warn",
+                     value=_signed(rest), note="Phần này chưa được giải thích. Anh xem bảng query trước khi dùng số."),
+                ["Phần lệch chưa rõ nguyên nhân", "", rest, "", "Tổng các nguyên nhân ở trên chưa bằng chỗ lệch giữa query và file gốc."])
     if why["excel_dups"]:
         n = len(why["excel_dups"])
         add(Beat(f"{n} chứng từ bị đếm hai lần trong Excel.", label="Đếm trùng", mark="bad", value=f"{n} chứng từ",
@@ -413,12 +520,27 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     files = sources.find_order_files(folder)
     if not files:
         return [Beat(f"Em không thấy file đơn hàng CSV nào trong thư mục {folder.name}.")]
-    truth = sources.truth(files)
     tbs, ledger = _ledger(folder)
+    period = sources.period_of(tbs[-1][1]) if tbs else None
+    truth = sources.truth(files, period)
+    ledger = _net_of_returns(ledger, truth)
     beats, notes = [], []
+    if truth.outside:
+        out_amt = sum((a for *_, a in truth.outside), ZERO)
+        months = sorted({f"{d.month:02d}/{d.year}" for _, _, d, _ in truth.outside})
+        notes.append(["Dòng ngoài kỳ sổ cái", len(truth.outside), out_amt, "",
+                      f"File xuất có {len(truth.outside)} dòng của tháng {', '.join(months)}, tổng {spoken(out_amt)}, "
+                      f"nằm ngoài kỳ {period[1]:02d}/{period[0]} của sổ cái nên không được tính khi đối chiếu."])
 
     source_note = f"{truth.unique_rows} chứng từ trong {len(files)} file" + (
-        f" · đã bỏ {len(truth.duplicates)} chứng từ lặp" if truth.duplicates else "")
+        f" · đã bỏ {len(truth.duplicates)} chứng từ lặp" if truth.duplicates else "") + (
+        f" · trả lại {spoken(truth.returns)}" if truth.returns else "")
+    if ledger.get("net"):
+        for label, mine, theirs, acct in (("Doanh thu bán", truth.gross, ledger["gross"], f"Có TK {ledger['rev_acct']}"),
+                                          ("Hàng bán trả lại", truth.returns, ledger["returns"], "Nợ TK 521")):
+            if abs(mine - theirs) > TOLERANCE:
+                notes.append([f"{label} lệch sổ cái", "", mine - theirs, "",
+                              f"File gốc {spoken(mine)}, sổ cái {acct} {spoken(theirs)}."])
     if ledger:
         diff = truth.amount - ledger["revenue"]
         same = abs(diff) <= TOLERANCE
@@ -436,9 +558,23 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
                       "; ".join(f"{f.name}: {_order_vi(f.date_order)}" for f in files)])
 
     name, formula, origin = _query_to_check(pq, folder)
-    fixed_m = m_code.folder_query(str(folder), {f.name: f.date_order or machine_order or sources.DAY_FIRST for f in files},
+    keys = _dedup_key(files, truth)
+    if truth.invoice_lines:
+        lines = ", ".join(sorted(truth.invoice_lines)[:5])
+        notes.append(["Hoá đơn nhiều dòng", sum(truth.invoice_lines.values()),
+                      sum((truth.doc_amounts[d] for d in truth.invoice_lines), ZERO), "",
+                      f"{len(truth.invoice_lines)} hoá đơn có nhiều dòng mặt hàng cùng số chứng từ ({lines}). "
+                      "Đó là các dòng của một hoá đơn, không phải trùng; Clicky chỉ xoá dòng giống hệt nhau."])
+    if truth.collisions:
+        shared = ", ".join(sorted(truth.collisions)[:5])
+        notes.append(["Số chứng từ trùng giữa các nơi", sum(truth.collisions.values()),
+                      sum((truth.doc_amounts[d] for d in truth.collisions), ZERO), "",
+                      f"{len(truth.collisions)} số chứng từ được dùng cho các đơn khác nhau ({shared}). Đây là đơn thật, "
+                      + ("Clicky xoá trùng theo Chi nhánh + Số CT." if keys else "Clicky chỉ xoá dòng giống hệt nhau.")])
+    fixed_m = m_code.folder_query(str(folder), {f.name: f.culture(machine_order) for f in files},
                                   _typed_columns(files), files[0].header[files[0].columns["doc"]] if "doc" in files[0].columns else None,
-                                  folder_parameter=PARAM_NAME)
+                                  folder_parameter=PARAM_NAME, key_columns=keys, period=period if truth.outside else None,
+                                  delimiter={f.name: f.delimiter for f in files})
     if name is None:
         name, formula, origin = QUERY_NAME, None, "clicky"
         notes.append(["Query đơn hàng", "", "", "", "Trong file chưa có query đơn hàng; Clicky tạo query mới đọc đúng kiểu ngày của từng file."])
@@ -465,9 +601,12 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
                              _check_ref("A7:E7"), "Chưa đối chiếu được", "warn", "Chưa có số",
                              "Không phải lỗi file của anh. Anh cập nhật Clicky rồi gọi lại em.")]
     if isinstance(result, str):
-        _write_check_sheet(bridge, None, truth, ledger, [["Lỗi khi tải query", "", "", "", result[:300]]] + notes)
-        beats.append(Beat(f"Excel báo lỗi khi tải query {name}.", _check_ref("A4:E4"), "Query chưa tải được", "bad",
-                          "Lỗi tải", result[:140]))
+        log.warning("loading query %s failed: %s", name, result)
+        why_vi = load_error_vi(result)
+        _write_check_sheet(bridge, None, truth, ledger,
+                           [["Lỗi khi tải query", "", "", "", why_vi + " Chi tiết kỹ thuật ghi trong clicky.log."]] + notes)
+        beats.append(Beat(f"Excel chưa tải được query {name}.", _check_ref("A4:E4"), "Query chưa tải được", "bad",
+                          "Lỗi tải", why_vi))
         if formula is None:
             return beats
         _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder)}
@@ -476,8 +615,12 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     loaded = Loaded(sheet, header, rows, sources.find_columns(header))
     gap = loaded.amount - (ledger["revenue"] if ledger else truth.amount)
     clean = abs(gap) <= TOLERANCE and len(rows) == truth.unique_rows
-    why = diagnose(truth, loaded, machine_order) if not clean else {"date": [], "distinct": [], "other": [], "excel_dups": []}
-    cause_beats, cause_rows = _cause_beats(why, machine_order, 0)
+    # A query that names its own culture reads dates that way on every machine, not the machine's way.
+    culture = m_code.fixed_culture(formula) if formula else None
+    read_order = (sources.MONTH_FIRST if culture.endswith("-US") else sources.DAY_FIRST) if culture else machine_order
+    why = diagnose(truth, loaded, read_order) if not clean else {"date": [], "distinct": [], "other": [], "excel_dups": []}
+    cause_beats, cause_rows = _cause_beats(why, read_order, 0, f"Query ghi cứng {culture}, nên đọc" if culture else "Máy này đọc",
+                                           None if clean else loaded.amount - truth.amount)
     check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, cause_rows + notes, "ok" if clean else "bad")
     ref = f"{_q(check_sheet)}!C7" if check_sheet and ledger else None
     if clean:
@@ -488,7 +631,7 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     beats.append(Beat(f"Báo cáo trong Excel đang {_gap_vi(gap)} so với sổ cái.", ref, "Excel lệch sổ cái", "bad",
                       _signed(gap), f"Query chỉ giữ {len(rows)}/{truth.unique_rows} chứng từ. Chưa được dùng số này."))
     beats += cause_beats
-    _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder)}
+    _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder), "gap": int(gap)}
     return beats + [_fix_offer()]
 
 
@@ -502,21 +645,61 @@ def approve(bridge, pq) -> list:
     job, _PENDING = _PENDING, None
     if not job:
         return []
+    # Reloading the query and adding the report sheets would flash a dozen sheets past the user;
+    # the screen stays still and the result is shown when it is ready.
+    _try(bridge, "screen_updating", False)
+    try:
+        return _approve(bridge, pq, job)
+    finally:
+        _try(bridge, "screen_updating", True)
+
+
+def load_error_vi(raw: str) -> str:
+    """One plain Vietnamese sentence for a Power Query / COM load error; the raw text goes to the log only."""
+    text = str(raw or "")
+    m = re.search(r"column '([^']+)' of the table wasn't found", text, re.I)
+    if m:
+        return f"Excel không tìm thấy cột {m.group(1)} trong file đơn hàng."
+    if re.search(r"DataFormat\.Error|couldn't convert|could not convert", text, re.I):
+        return "Excel gặp một giá trị không đổi được sang số hoặc ngày."
+    if re.search(r"DataSource\.(Error|NotFound)|could(n't| not) find|access.*denied|being used by another", text, re.I):
+        return "Excel không mở được thư mục hoặc một file đơn hàng (có thể file đang mở ở nơi khác)."
+    if re.search(r"Formula\.Firewall|privacy", text, re.I):
+        return "Excel chặn query vì cài đặt quyền riêng tư của Power Query."
+    return "Excel báo lỗi khi tải query."
+
+
+def _approve(bridge, pq, job) -> list:
     folder = Path(job["folder"])
+    try:
+        before = dict(pq.list()).get(job["name"])
+    except Exception as exc:
+        log.warning("reading query %s before the fix failed: %s", job["name"], exc)
+        before = None
     pq.add(PARAM_NAME, m_code.parameter_query(str(folder)))
     if not pq.add(job["name"], job["formula"]):
         return [Beat(f"Em không sửa được query {job['name']}. Anh kiểm tra file có đang bị khoá không.")]
+    files = sources.find_order_files(folder)
+    tbs, ledger = _ledger(folder)
+    truth = sources.truth(files, sources.period_of(tbs[-1][1]) if tbs else None)
+    ledger = _net_of_returns(ledger, truth)
     result = pq.load(job["name"])
     if isinstance(result, ReadFailed):
         return [Beat("Em đã sửa query nhưng chưa đọc lại được bảng kết quả. Đây là lỗi của Clicky.",
                      label="Chưa kiểm tra được", mark="warn", note=_BACKUP_NOTE)]
     if isinstance(result, str):
-        return [Beat(f"Em đã sửa query nhưng Excel báo lỗi khi tải lại: {result[:200]}. {_BACKUP_NOTE}")]
+        # The raw COM/Power Query text is for the log, never the screen. Put the user's query back as it was,
+        # so a failed fix leaves the workbook as Clicky found it, and end the turn in one clear sentence.
+        log.warning("reloading the fixed query %s failed: %s", job["name"], result)
+        restored = before is not None and pq.add(job["name"], before)
+        kept = "Query cũ vẫn giữ nguyên." if restored else _BACKUP_NOTE
+        why_vi = load_error_vi(result)
+        _write_check_sheet(bridge, None, truth, ledger, [["Chưa sửa được query", "", "", "",
+                                                          f"{why_vi} {kept} Chi tiết kỹ thuật ghi trong clicky.log."]])
+        return [Beat(f"Em chưa sửa được query {job['name']}. {kept} Chưa lập báo cáo.",
+                     _check_ref(f"A{DETAIL_TOP + 1}:E{DETAIL_TOP + 1}"), "Chưa sửa được", "warn", "Chưa sửa", why_vi)]
     sheet, header, rows = result
     loaded = Loaded(sheet, header, rows, sources.find_columns(header))
-    files = sources.find_order_files(folder)
-    truth = sources.truth(files)
-    tbs, ledger = _ledger(folder)
     target = ledger["revenue"] if ledger else truth.amount
     gap = loaded.amount - target
     ok = abs(gap) <= TOLERANCE
@@ -530,6 +713,7 @@ def approve(bridge, pq) -> list:
     cost_ok = not ledger or "cost" not in loaded.columns or abs(loaded.cost - ledger["cost"]) <= TOLERANCE
     note = f"{len(rows)} chứng từ · doanh thu {spoken(loaded.amount)}" + (
         " · giá vốn khớp TK 632" if cost_ok and ledger and "cost" in loaded.columns else "")
+    # Shown straight as 0 đ: a figure rolling through "−2,9 tỷ" under the title "Đã khớp" reads as a contradiction.
     beats = [Beat("Đã sửa xong. Excel khớp sổ cái đến từng đồng.", ref, "Đã khớp sổ cái", "ok", "0 đ", note)]
     return beats + build_report(bridge, folder, tbs) + [SAVE_REMINDER]
 
@@ -570,38 +754,81 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
     pat = report.figures[-1].value
     prev_pat = next((v.previous for v in report.variances if v.key == "pat"), None)
     row = 4 + len(report.figures)
-    pat_ref = f"{quote(names['report'])}!C{row}"
-    beats = [Beat(f"Em đã lập báo cáo ở sheet {names['report']}, mọi số là công thức trỏ về sổ cái.")]
+    sheet = quote(names["report"])
+    pat_ref = f"{sheet}!A{row}:G{row}"      # the whole line, label included: the figure never appears without its name
     overstated = sources.returns_in_revenue(report.current)
+    if overstated > 0:
+        # The report already carries the returns line and the real profit under the reported one.
+        pat_ref = f"{sheet}!A{row}:G{row + 2}"
+    _style_report_sheet(bridge, names["report"], row, extra=2 if overstated > 0 else 0)
+    bridge.activate(names["report"])
+    # The whole report, title to real profit, fits on screen; it is seen from the top and stays that way.
+    # Ten empty rows are kept under it, so the profit card sits below the report instead of covering it.
+    _try(bridge, "fit_rows", names["report"], f"A1:I{(row + 2 if overstated > 0 else row) + 10}")
+    _try(bridge, "scroll_home", names["report"])
+    asks = (f", kèm {len(report.questions)} câu hỏi cho các bộ phận" if report.questions else "")
+    note = "Mọi số là công thức trỏ về sổ cái." + (
+        f" {len(report.questions)} câu hỏi xác minh ở sheet {names['questions']}." if report.questions else "")
+    beats = [Beat(f"Em đã lập báo cáo tháng{asks}.", f"{sheet}!A4:G{row}", "Báo cáo tháng đã lập", "", "", note)]
     if overstated > 0:
         real = pat - overstated
         change = f" Giảm {spoken(prev_pat - real)} so với kỳ trước." if prev_pat is not None and prev_pat > real else ""
         beats.append(Beat(f"Lợi nhuận thực là {spoken(real)}, không phải {spoken(pat)} như trên báo cáo.",
                           pat_ref, "Lợi nhuận sau thuế thực", "warn", spoken(real),
                           f"{spoken(overstated)} hàng bán bị trả lại đang ghi thẳng vào Nợ TK 511. "
-                          f"Cần chuyển sang TK 521 trước khi gửi sếp.{change}"))
+                          f"Cần chuyển sang TK 521 trước khi gửi sếp.{change}",
+                          was=spoken(pat), roll=(int(pat), int(real))))
     else:
         beats.append(Beat(summary, pat_ref, "Lợi nhuận sau thuế", "", spoken(pat)))
-    if report.questions:
-        beats.append(Beat(f"Em ghi sẵn {len(report.questions)} câu hỏi cho các bộ phận ở sheet {names['questions']}."))
-    return beats
+    return beats            # the profit card is the last scene: it is what goes to the boss
+
+
+_REPORT_COLUMNS = {"A": 40, "B": 12, "C": 17, "D": 17, "E": 17, "F": 9, "G": 15, "H": 34, "I": 14}
+
+
+def _style_report_sheet(bridge, sheet: str, last: int, extra: int = 0) -> None:
+    """The report reads like one: title, a header band, readable columns, the profit line stands out.
+
+    extra: lines added under the profit line (the returns adjustment and the real profit)."""
+    s = _q(sheet)
+    _try(bridge, "layout_sheet", sheet, _REPORT_COLUMNS, gridlines=False)
+    _try(bridge, "style", f"{s}!A1", bold=True, size=15, color=_INK)
+    _try(bridge, "style", f"{s}!A2", italic=True, size=9, color=_MUTED)
+    _try(bridge, "style", f"{s}!A4:I4", bold=True, color="#FFFFFF", fill="#1E3A5F", height=24, wrap=True)
+    _try(bridge, "style", f"{s}!C4:F4", halign="right")
+    _try(bridge, "style", f"{s}!A5:I{last}", border_bottom=_LINE, height=20)
+    _try(bridge, "style", f"{s}!B5:B{last}", halign="center", color=_MUTED)
+    _try(bridge, "style", f"{s}!H5:I{last}", color="#475569")
+    _try(bridge, "style", f"{s}!A{last}:I{last}", bold=True, fill="#FEF3E2", height=26)
+    _try(bridge, "ignore_text_numbers", f"{s}!B5:B{last}")
+    if extra:
+        end = last + extra
+        _try(bridge, "format_numbers", f"{s}!C{last + 1}:C{end}")
+        _try(bridge, "style", f"{s}!A{last + 1}:I{end}", border_bottom=_LINE, height=20)
+        _try(bridge, "style", f"{s}!A{last}:I{last}", bold=False, fill="#FFFFFF", height=20)
+        _try(bridge, "style", f"{s}!A{last + 1}:I{last + 1}", italic=True, color="#B45309")
+        _try(bridge, "style", f"{s}!H{last + 1}:I{end}", color="#475569")
+        _try(bridge, "style", f"{s}!A{end}:I{end}", bold=True, fill="#FEF3E2", height=26)
 
 
 # ── Voice skill glue ──────────────────────────────────────────────────────────
 
 BEAT_GAP_S = 0.5          # breath between two ideas
 CLEAR_AFTER_S = 8.0       # the last card fades this long after Clicky stops talking (not when it asks a question)
+FINAL_HOLD_S = 25.0       # ...unless it is a warning: that one stays up long enough to read, screenshot, act on
 
 
-def shapes_for(box: tuple, beat: Beat) -> list:
-    """Overlay shapes for one beat: the range lit with the rest of the screen dimmed, and one card beside it."""
+def shapes_for(box: tuple, beat: Beat, avoid: tuple = None) -> list:
+    """Overlay shapes for one beat: the range lit with the rest of the screen dimmed, and one card beside it.
+    avoid: the filled part of the sheet on screen, which the card keeps off when it can."""
     from ui.card_layout import tone_of
     l, t, r, b = box
     tone = tone_of(beat.mark)
     shapes = [{"kind": "spotlight", "x1": l, "y1": t, "x2": r, "y2": b, "tone": tone}]
     if beat.label or beat.value or beat.note:
-        shapes.append({"kind": "card", "anchor": [l, t, r, b], "title": beat.label, "value": beat.value,
-                       "note": beat.note, "tone": tone})
+        shapes.append({"kind": "card", "anchor": [l, t, r, b], "title": beat.label, "was": beat.was,
+                       "value": beat.value, "note": beat.note, "tone": tone, "roll": list(beat.roll),
+                       "avoid": list(avoid) if avoid else None})
     return shapes
 
 
@@ -621,19 +848,30 @@ async def _locate(manager, ref_text: str):
         return None
 
 
+async def _filled_area(manager):
+    """Logical screen box of the cells holding values on screen, so a card can keep off the figures."""
+    try:
+        rect = await asyncio.to_thread(manager._excel.content_rect)
+        return manager._physical_to_logical_bbox(rect) if rect else None
+    except Exception as exc:
+        log.debug("filled area unknown: %s", exc)
+        return None
+
+
 async def play(manager, beats: list) -> None:
     """One idea at a time: light up the beat's range, show its card, say its one sentence, pause, next.
 
     A beat without a range keeps the previous card up, so the screen never goes blank mid-story.
     When the sentence cannot be read aloud (no Vietnamese voice), it stays up long enough to read.
     """
-    from ui.card_layout import NO_BUBBLE, reading_seconds
+    from ui.card_layout import NO_BUBBLE, pointer_spot, reading_seconds
     run = object()
     manager._month_close_run = run
     guided = getattr(manager, "sig_guided", None)     # the chat panel steps aside while Clicky guides
     if guided is not None:
         guided.emit(True)
     manager.sig_clear_drawings.emit()
+    last_card = None
     for i, beat in enumerate(beats):
         if i:
             manager.sig_response_chunk.emit("\n\n")
@@ -642,18 +880,25 @@ async def play(manager, beats: list) -> None:
         box = await _locate(manager, beat.ref) if beat.ref else None
         if box:
             manager.sig_clear_drawings.emit()
-            for shape in shapes_for(box, beat):
+            avoid = await _filled_area(manager)
+            for shape in shapes_for(box, beat, avoid):
                 manager.sig_draw.emit(shape)
             l, t, r, b = box
             manager.sig_point_hold.emit(True)
-            manager.sig_point_at.emit((l + r) / 2, (t + b) / 2, NO_BUBBLE)
+            # The pointer stops beside the range, never on it: it must not hide the figure being explained.
+            manager.sig_point_at.emit(*pointer_spot(box), NO_BUBBLE)
+        log.info("beat: %s", beat.text)
+        if beat.choices:
+            # The question's buttons appear with the question, not after it has been read out.
+            manager.sig_choices.emit(beat.text, list(beat.choices))
         spoke = await manager._reply_local(beat.text)
         if spoke is False and BEAT_GAP_S:
-            await asyncio.sleep(reading_seconds(beat.text))
+            # Not read aloud: leave time to read the sentence, and with a card, to look at the figure and its note.
+            await asyncio.sleep(reading_seconds(beat.text)
+                                + ((1.0 + 0.6 * reading_seconds(beat.note) if beat.note else 1.0) if box else 0))
         if box:
             manager.sig_point_release.emit()
-        if beat.choices:
-            manager.sig_choices.emit(beat.text, list(beat.choices))
+            last_card = beat
     if beats and not beats[-1].choices:
         def fade():
             if getattr(manager, "_month_close_run", None) is run:
@@ -661,7 +906,8 @@ async def play(manager, beats: list) -> None:
                 if guided is not None:
                     guided.emit(False)
         try:
-            asyncio.get_running_loop().call_later(CLEAR_AFTER_S, fade)
+            hold = FINAL_HOLD_S if last_card is not None and last_card.mark in ("warn", "bad") else CLEAR_AFTER_S
+            asyncio.get_running_loop().call_later(hold, fade)
         except RuntimeError:
             pass
 
@@ -679,6 +925,8 @@ async def handle_start(manager, transcript: str) -> str:
 
 
 async def handle_approve(manager, transcript: str) -> str:
+    # The question's frame must not stay frozen on screen while Excel reloads the query.
+    manager.sig_clear_drawings.emit()
     beats = await asyncio.to_thread(lambda: approve(manager._excel, _pq(manager)))
     await play(manager, beats)
     return ""

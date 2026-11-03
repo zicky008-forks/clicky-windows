@@ -116,6 +116,17 @@ def summary_vi(variances: list, issues: list, n_questions: int = 0) -> str:
     direction = "tăng" if pat.change > 0 else "giảm" if pat.change < 0 else "không đổi"
     pct = f" ({pat.pct:+.1f}%)".replace(".", ",") if pat.pct is not None else ""
     text = f"Lợi nhuận sau thuế kỳ này {spoken(pat.current)}, {direction} {spoken(abs(pat.change))}{pct} so với kỳ trước."
+    own = [i for i in issues if not i.message.startswith("[")]
+    if any(i.code == "not_closed" for i in own):
+        text = "Số sơ bộ, chưa khoá sổ. " + text
+    missing = [i for i in own if i.code == "recurring_missing"]
+    if missing:
+        # A cost that was simply not booked yet must never be told as "profit up thanks to lower costs".
+        names = ", ".join(i.what for i in missing)
+        short = sum((i.amount for i in missing), Decimal(0))
+        text += (f" Chưa nên giải thích lợi nhuận bằng chi phí giảm: kỳ này còn thiếu {names}, "
+                 f"chi phí có thể đang thiếu khoảng {spoken(short)} so với kỳ trước, lợi nhuận đang cao hơn thực tế.")
+        variances = [x for x in variances if x.key in INCOME_KEYS]
     # Effect of each mapped line on profit: income up helps, cost up hurts.
     effects = [(x, x.change if x.key in INCOME_KEYS else -x.change) for x in variances if x.drivers]
     same_way = sorted((e for e in effects if e[1] * pat.change > 0), key=lambda e: -abs(e[1]))[:2]
@@ -132,11 +143,17 @@ def summary_vi(variances: list, issues: list, n_questions: int = 0) -> str:
             text += f" Bù lại một phần: {x.label.lower()} {'tăng' if x.change > 0 else 'giảm'} {spoken(abs(x.change))}."
     if n_questions:
         text += f" Em đã ghi {n_questions} câu hỏi cần xác minh nguyên nhân trước khi giải thích với sếp."
-    errors = [i for i in issues if i.severity == "error"]
+    errors = [i for i in issues if i.severity == "error" and i.code != "recurring_missing"]
     if errors:
         text += f" Cảnh báo: có {len(errors)} lỗi cần xem trước khi gửi, ví dụ: {errors[0].message}."
     elif issues:
-        text += f" Có {len(issues)} điểm cần lưu ý trong sheet Kiem tra."
+        # Money outside the report changes profit, so it is said outright, not left in the sheet.
+        unmapped = [i for i in issues if i.code == "unmapped"]
+        for i in unmapped[:2]:
+            text += f" Lưu ý: {i.message}."
+        rest = len(issues) - min(len(unmapped), 2)
+        if rest:
+            text += f" Còn {rest} điểm cần lưu ý trong sheet Kiem tra."
     return text
 
 

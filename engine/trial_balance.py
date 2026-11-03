@@ -67,6 +67,7 @@ class TrialBalance:
     columns: dict                  # field → 1-based source column
     text_amounts: list = field(default_factory=list)   # (row, column field) stored as text
     period: Optional[str] = None
+    skipped: list = field(default_factory=list)        # (row, raw account cell, movement) rows with money but no readable code
 
     @property
     def leaves(self):
@@ -74,9 +75,10 @@ class TrialBalance:
 
 
 # Section headers that sit above the Nợ/Có row in two-row headers.
-_SECTIONS = (("open", ("dau ky", "dau nam", "opening", "beginning")),
-             ("move", ("phat sinh", "trong ky", "movement", "during", "period")),
-             ("close", ("cuoi ky", "cuoi nam", "closing", "ending")))
+# TT99 (S06-DN) and monthly or quarterly exports say "đầu tháng / cuối tháng", "đầu quý / cuối quý".
+_SECTIONS = (("open", ("dau ky", "dau nam", "dau thang", "dau quy", "opening", "beginning")),
+             ("move", ("phat sinh", "trong ky", "trong thang", "trong quy", "movement", "during", "period")),
+             ("close", ("cuoi ky", "cuoi nam", "cuoi thang", "cuoi quy", "closing", "ending")))
 
 
 def _side(text: str) -> Optional[str]:
@@ -124,18 +126,38 @@ def _find_header(rows):
     raise ValueError("Không tìm thấy dòng tiêu đề có cột Tài khoản và Phát sinh Nợ/Có")
 
 
+# 3–10 digits, optionally with detail segments: 6421, 6421.01, 3331-1, 1121_VCB is not (letters).
+ACCOUNT = re.compile(r"\d{3,10}(?:[.\-]\d{1,6})*")
+
+
+def _is_total(text: str) -> bool:
+    t = fold(text)
+    return any(w in t for w in ("tong", "cong", "total"))
+
+
 def read_trial_balance(rows, sheet: str = "TB") -> TrialBalance:
     rows = [list(r) for r in rows]
     header, start, acct_col, name_col, columns = _find_header(rows)
-    lines, text_amounts = [], []
+    lines, text_amounts, skipped = [], [], []
     for r in range(start, len(rows)):
         row = rows[r]
         raw = row[acct_col] if acct_col < len(row) else None
         account = str(raw).strip() if raw is not None else ""
         if isinstance(raw, float) and raw.is_integer():
             account = str(int(raw))
-        if not re.fullmatch(r"\d{3,10}", account):
-            continue                      # totals, blank and title rows
+        if not ACCOUNT.fullmatch(account):
+            # Totals, blank and title rows carry no account; anything else with money on it
+            # would silently leave the report, so it is kept for the checks to report.
+            if account and re.search(r"\d", account) and not _is_total(account):
+                moved = ZERO
+                for key, c in columns.items():
+                    try:
+                        moved += abs(parse_amount(row[c] if c < len(row) else None)[0])
+                    except ValueError:
+                        pass
+                if moved:
+                    skipped.append((r + 1, account, moved))
+            continue
         line = Line(account=account, name=str(row[name_col] or "").strip() if name_col < len(row) else "", row=r + 1)
         for key, c in columns.items():
             amount, was_text = parse_amount(row[c] if c < len(row) else None)
@@ -147,4 +169,5 @@ def read_trial_balance(rows, sheet: str = "TB") -> TrialBalance:
     for l in lines:
         l.leaf = not any(other != l.account and other.startswith(l.account) for other in codes)
     return TrialBalance(sheet=sheet, lines=lines, header_row=header + 1,
-                        columns={k: v + 1 for k, v in columns.items()}, text_amounts=text_amounts)
+                        columns={k: v + 1 for k, v in columns.items()}, text_amounts=text_amounts,
+                        skipped=skipped)

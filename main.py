@@ -346,14 +346,23 @@ def main():
     # Questions Clicky asks get real buttons; a click answers as if the words were typed.
     manager.sig_choices.connect(choice_card.ask)
     choice_card.chosen.connect(manager.submit_text)
+    # The last card belongs to the question just answered; it must not linger while Clicky works.
+    choice_card.chosen.connect(lambda _label: overlay.clear_annotations())
     choice_card.dismissed.connect(overlay.clear_annotations)
     manager.sig_turn_started.connect(lambda _q: choice_card.hide())
 
     # While Clicky walks through the sheet step by step the cards carry everything, so the chat
     # panel steps aside instead of covering a third of the screen, and comes back afterwards.
-    guided_state = {"panel_was_open": False}
+    guided_state = {"panel_was_open": False, "active": False, "held": []}
 
     def _on_guided(active: bool):
+        guided_state["active"] = active
+        if not active:
+            # Notices that arrived mid-story (e.g. "no Vietnamese voice") wait until the story ends,
+            # so a Windows toast never sits on top of the Excel range being explained.
+            held, guided_state["held"] = guided_state["held"], []
+            for message in dict.fromkeys(held):
+                tray.show_notification("Clicky", message)
         if active:
             if panel.isVisible():
                 guided_state["panel_was_open"] = True
@@ -376,7 +385,13 @@ def main():
             "Clicky gặp lỗi", f"{e}\n\nChi tiết trong: {_log_hint}"
         )
     )
-    manager.sig_notice.connect(lambda message: tray.show_notification('Clicky', message))
+    def _notice(message: str):
+        if guided_state["active"]:
+            guided_state["held"].append(message)
+        else:
+            tray.show_notification("Clicky", message)
+
+    manager.sig_notice.connect(_notice)
 
     # Panel → Manager
     panel.on_model_changed.connect(manager.set_model)
@@ -692,19 +707,19 @@ def main():
                 manager.sig_error.emit(f"Could not change screen-capture visibility of Clicky's window: {exc}")
     _apply_capture_policy()
     tray.on_toggle_recording.connect(_apply_capture_policy)
-    # Panel is hidden by default — user can open it from the tray menu if needed
     manager.start()        # begin ambient mic + wake-word scanning
     app.aboutToQuit.connect(manager.shutdown)
 
-    providers = cfg.describe()
-    _hk = "+".join(p.strip().capitalize() for p in cfg.hotkey.split("+"))
-    tray.show_notification(
-        "Clicky is running",
-        (f"Say 'Clicky' or press {_hk}  |  LLM: {providers['llm']}"
-         if cfg.ambient_mic() else
-         f"Press {_hk}, ask your question, and Clicky answers when you stop "
-         f"talking  |  LLM: {providers['llm']}"),
-    )
+    # The chat opens on start, with an example of what to type: a first-time user who does not
+    # know the shortcut or the tray icon still sees where to begin. Setting start_hidden keeps it closed.
+    from storage import setting as _setting
+    if not _setting("start_hidden", False):
+        QTimer.singleShot(400, panel.show)       # the open chat says what to type; no toast on top of it
+    else:
+        tray.show_notification(
+            "Clicky đã sẵn sàng",
+            "Gõ vào khung Clicky, ví dụ: làm báo cáo tháng từ thư mục này",
+        )
 
     # ── First-run setup wizard ────────────────────────────────────────────────
     # Show the Ollama install / model pull walkthrough on the first launch.

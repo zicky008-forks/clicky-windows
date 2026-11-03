@@ -267,10 +267,10 @@ POINT_TRIGGER_RE = re.compile(
 )
 
 
+# Shown in the chat after "Clicky chưa trả lời được:", which keeps the first 200 characters: say it in fewer.
 NO_AI_MESSAGE = (
-    "Clicky chưa có AI để trả lời câu hỏi tự do: chưa nhập API key và máy không chạy {name}. "
-    "Vào Settings nhập API key Claude, OpenAI hoặc Gemini. Các lệnh như \"làm báo cáo tháng từ thư mục này\" "
-    "và \"kiểm tra power query\" vẫn chạy được mà không cần AI."
+    "câu này cần AI, mà máy chưa bật AI ({name} không chạy). Không cần AI, em vẫn làm được: "
+    "\"làm báo cáo tháng từ thư mục này\" và \"kiểm tra power query\"."
 )
 
 
