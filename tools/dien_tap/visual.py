@@ -22,6 +22,7 @@ MAX_RECT_ERR = 3.0     # px: Clicky's rect vs the robot's own reading of Excel
 MAX_FRAME_ERR = 3.0    # px: frame drawn on screen vs where it should be
 POINTER_R = 12.0       # logical px around the pointer tip that must stay off figures
 RING_R = 37.0          # logical px: outer edge of the pulsing ring (26 + 6 pulse + 3 halo + 2 pen, ui/overlay.py)
+NO_BUBBLE = "\u2063"   # ui/card_layout.NO_BUBBLE: point without bubble or ring
 MAX_POINTER_GAP = 4.0  # logical px: the pointer tip touches the frame, it does not float beside it
 TONE_RGB = {"bad": (0xD9, 0x38, 0x48), "ok": (0x1E, 0x9E, 0x5A), "warn": (0xD9, 0x77, 0x06),
             "info": (0x2F, 0x6F, 0xEB)}
@@ -213,7 +214,8 @@ def grade(events: list, captures: list, open_image=None):
                          f"{ref}: " + ("con trỏ đè lên chính con số" if on_figure else
                                        f"mũi con trỏ cách khung {gap:.0f} px (cần ≤ {MAX_POINTER_GAP:.0f})"),
                          True, cap.beat_no, {"cell": robot, "pointer": disc}))
-            ring_r = RING_R * m[0]
+            # A pointer that only marks a framed range carries no ring (label NO_BUBBLE, ui/overlay.py point_at).
+            ring_r = (POINTER_R if point.get("label") == NO_BUBBLE else RING_R) * m[0]
             ring = [px - ring_r, py - ring_r, px + ring_r, py + ring_r]
             hidden = covered_cells(ring, cap.cells, min_frac=0.15, inside=robot)
             rows.append(("Con trỏ và vòng tròn không che số khác", not hidden,

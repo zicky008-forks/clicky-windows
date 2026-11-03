@@ -130,3 +130,17 @@ def test_no_capture_is_reported_but_does_not_fail_the_run(tmp_path):
     res = checks.Result([checks.Check("x", True)])
     rehearse.add_visual(res, events(), [], tmp_path)
     assert res.passed and res.checks[-1].name == "Chấm bằng ảnh"
+
+
+def test_robot_knows_the_products_no_bubble_marker():
+    from ui.card_layout import NO_BUBBLE
+    assert visual.NO_BUBBLE == NO_BUBBLE
+
+
+def test_new_pointer_spot_under_the_frame_passes():
+    from ui.card_layout import NO_BUBBLE, pointer_spot
+    x, y = pointer_spot(BOX)
+    ev = events(card=[310.0, 200.0, 500.0, 260.0])
+    ev.append({"t": 2.4, "event": "point", "x": x, "y": y, "label": NO_BUBBLE})
+    rows = visual.grade(ev, [capture()])
+    assert all(r[1] for r in rows), [r for r in rows if not r[1]]
