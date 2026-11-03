@@ -53,6 +53,7 @@ FIX_CHOICES = ("Sửa giúp tôi", "Để tôi xem")
 INTAKE_CHOICES = ("Đúng rồi, làm tiếp", "Có chỗ sai")
 CONFIRM_TRIGGER = r"^\s*(đúng rồi|dung roi|đúng|dung|làm tiếp|lam tiep|tiếp tục|tiep tuc)\b(\s+\S+){0,3}\s*[.!]?\s*$"
 WRONG_TRIGGER = r"^\s*(có chỗ sai|co cho sai|sai rồi|sai roi|chưa đúng|chua dung)\b(\s+\S+){0,4}\s*[.!]?\s*$"
+PICK_TRIGGER = r"^\s*(dùng|dung|chọn|chon|lấy|lay)\s+\S+"
 FINAL_TRIGGER = r"\b(chốt|chot|chuyển sang|chuyen sang|đánh dấu|danh dau)\s+(là\s+|la\s+)?(chính thức|chinh thuc)\b"
 
 _PENDING: Optional[dict] = None
@@ -391,9 +392,44 @@ def _style_check_sheet(bridge, sheet: str, n_details: int, gap_state: Optional[s
         bridge.format_numbers(f"{s}!B{top + 1}:C{last}")
 
 
-def _ledger(folder: Path) -> tuple:
+# Which file the user chose when two trial balances cover the same period: (year, month) → file stem.
+_CHOSEN: dict = {}
+
+
+def _tb_groups(folder: Path) -> tuple:
+    """(one trial balance per period, oldest first; the duplicates set aside; the first unresolved conflict).
+
+    A conflict is two files for one of the two periods the report needs, with no choice from the user yet;
+    Clicky asks instead of picking. Older periods are not used, so their copies need no answer.
+    """
     from engine.cli import read_rows
-    tbs = sources.find_trial_balances(folder, read_rows)
+    found = sources.find_trial_balances(folder, read_rows)
+    groups = {}
+    for t in found:
+        groups.setdefault(sources.period_of(t[1]) or (0, 0), []).append(t)
+    periods = sorted(groups)
+    picked, aside, conflict = [], [], None
+    for period in periods:
+        group = groups[period]
+        choice = next((t for t in group if t[0] == _CHOSEN.get(period)), None)
+        if len(group) > 1 and choice is None and period in periods[-2:] and conflict is None:
+            conflict = (period, group)
+        keep = choice or max(group, key=lambda t: _mtime(folder, t[0]))
+        picked.append(keep)
+        aside += [(t[0], period) for t in group if t is not keep]
+    return picked, aside, conflict
+
+
+def _mtime(folder: Path, stem: str) -> float:
+    p = next(iter(sorted(folder.glob(f"{stem}.xls*"))), None)
+    try:
+        return p.stat().st_mtime if p else 0.0
+    except OSError:
+        return 0.0
+
+
+def _ledger(folder: Path) -> tuple:
+    tbs = _tb_groups(folder)[0]
     if not tbs:
         return tbs, {}
     name, _, tb = tbs[-1]
@@ -549,18 +585,73 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     files = sources.find_order_files(folder)
     if not files:
         return [Beat(f"Em không thấy file đơn hàng CSV nào trong thư mục {folder.name}.")]
+    _tbs, aside, conflict = _tb_groups(folder)
+    if conflict:
+        return _ask_which(folder, conflict, machine_order)
     tbs, ledger = _ledger(folder)
     period = sources.period_of(tbs[-1][1]) if tbs else None
     truth = sources.truth(files, period)
     ledger = _net_of_returns(ledger, truth)
-    receipt = intake_mod.build(folder, files, tbs, truth, ledger, _workbook_name(bridge))
+    receipt = intake_mod.build(folder, files, tbs, truth, ledger, _workbook_name(bridge),
+                               set_aside=[(name, f"bản sổ cân đối T{p[1]:02d} khác; anh đã chọn dùng {_CHOSEN[p]}"
+                                           if p in _CHOSEN else "bản cũ hơn của cùng kỳ")
+                                          for name, p in aside])
+    scene_log.record("roles", files=[{"name": n, "role": r} for n, r in receipt.roles.items()])
     n_tb = len(tbs[-2:])
     text = (f"Em đọc được {n_tb} sổ cân đối và {truth.unique_rows} đơn bán hàng. Anh xem giúp em có đúng không, "
             "em chưa sửa gì trong file.")
     _PENDING = {"stage": "intake", "order": machine_order, "intake": receipt, "folder": str(folder),
-                "period": f"{period[1]:02d}/{period[0]}" if period else ""}
+                "period": f"{period[1]:02d}/{period[0]}" if period else "", "picked": list(_PICKS)}
     return [Beat(text, choices=INTAKE_CHOICES,
                  intake={"card": intake_mod.card(receipt), "log": intake_mod.log_fields(receipt, text)})]
+
+
+# The user's answers to "which file?", kept for the Biên bản: (what, chosen, set aside, when).
+_PICKS: list = []
+
+
+def _ask_which(folder: Path, conflict: tuple, machine_order) -> list:
+    """Two files claim the same role for the same month: say when each was last changed and ask. Never pick."""
+    global _PENDING
+    from engine import roles
+    (year, month), group = conflict
+    group = sorted(group, key=lambda t: _mtime(folder, t[0]), reverse=True)[:2]
+    paths = {name: next(iter(sorted(folder.glob(f"{name}.xls*"))), folder / name) for name, _, _ in group}
+    stamps = {name: roles.modified(paths[name]) for name in paths}
+    said = ", ".join(f"{paths[name].name} sửa ngày {stamps[name]}" if stamps[name] else paths[name].name
+                     for name, _, _ in group)
+    _PENDING = {"stage": "pick_source", "period": (year, month), "options": [name for name, _, _ in group],
+                "stamps": stamps, "order": machine_order}
+    return [Beat(f"Có 2 sổ cân đối T{month:02d}: {said}. Em dùng bản nào?",
+                 choices=tuple(f"Dùng {name}" for name, _, _ in group))]
+
+
+def pick(bridge, pq, answer: str) -> list:
+    """The answer to _ask_which: remember the file, write it down for the Biên bản, then read the folder again."""
+    global _PENDING
+    job = _PENDING if stage() == "pick_source" else None
+    if not job:
+        return []
+    text = fold_text(answer)
+    # Longest name first: "Dùng TB_T10_cu" also contains "TB_T10".
+    hit = next((n for n in sorted(job["options"], key=len, reverse=True) if fold_text(n) in text), None)
+    if hit is None:
+        return [Beat("Anh bấm một trong hai nút để chọn sổ cân đối nhé.", choices=tuple(f"Dùng {n}" for n in job["options"]))]
+    _PENDING = None
+    _CHOSEN[job["period"]] = hit
+    others = [n for n in job["options"] if n != hit]
+    _PICKS.append((f"Sổ cân đối T{job['period'][1]:02d}", f"{hit} (sửa {job['stamps'].get(hit, '')})",
+                   ", ".join(others), audit.who()))
+    return start(bridge, pq, job["order"])
+
+
+def fold_text(text: str) -> str:
+    from engine.trial_balance import fold
+    return fold(text).replace(" ", "")
+
+
+def pick_pending() -> bool:
+    return stage() == "pick_source"
 
 
 def _keep_original(bridge) -> str:
@@ -587,6 +678,9 @@ def confirm(bridge, pq) -> list:
     receipt = job["intake"]
     _AUDIT = audit.AuditLog(period=job.get("period", ""), original=_keep_original(bridge),
                             dropped=intake_mod.dropped_rows(receipt), coverage=intake_mod.coverage_rows(receipt))
+    for what, chosen, others, agreed in job.get("picked", []):
+        _AUDIT.add("—", f"Chọn nguồn: {what}", others, chosen,
+                   "Hai file cùng vai trò Số chính thức cho cùng kỳ; người dùng chọn bản dùng", agreed, "Thư mục dữ liệu")
     before = set(bridge.sheet_names())
     beats = _reconcile(bridge, pq, job["order"])
     _note_new_sheets(bridge, before)
@@ -1219,6 +1313,8 @@ def _pq(manager):
 
 
 async def handle_start(manager, transcript: str) -> str:
+    _CHOSEN.clear()                 # a new run asks again: the folder may have changed since
+    _PICKS.clear()
     order = machine_date_order()
     beats = await asyncio.to_thread(lambda: start(manager._excel, _pq(manager), order))
     await play(manager, beats)
@@ -1283,6 +1379,12 @@ def save_pending() -> bool:
     return stage() == "save"
 
 
+async def handle_pick(manager, transcript: str) -> str:
+    beats = await asyncio.to_thread(lambda: pick(manager._excel, _pq(manager), transcript))
+    await play(manager, beats)
+    return ""
+
+
 async def handle_final(manager, transcript: str) -> str:
     beats = await asyncio.to_thread(lambda: make_final(manager._excel))
     await play(manager, beats)
@@ -1293,6 +1395,8 @@ SKILLS = [
     {"name": "Báo cáo tháng trọn gói", "trigger": START_TRIGGER, "handler": handle_start,
      "description": "Từ thư mục dữ liệu tháng: đọc các file và cho xem phiếu nhận file, rồi tải query đơn hàng, đối chiếu "
                     "với file gốc và sổ cái, chỉ ra chỗ lệch, đề xuất sửa, rồi lập báo cáo tháng."},
+    {"name": "Chọn sổ cân đối", "trigger": PICK_TRIGGER, "handler": handle_pick, "when": pick_pending,
+     "description": "Người dùng chọn một trong hai sổ cân đối cùng kỳ."},
     {"name": "Xác nhận phiếu nhận file", "trigger": CONFIRM_TRIGGER, "handler": handle_confirm, "when": intake_pending,
      "description": "Người dùng xác nhận Clicky đọc đúng các file; bắt đầu tính."},
     {"name": "Phiếu nhận file có chỗ sai", "trigger": WRONG_TRIGGER, "handler": handle_wrong, "when": intake_pending,

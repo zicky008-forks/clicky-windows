@@ -110,7 +110,17 @@ class ChoiceCard(QWidget):
         icon.setStyleSheet(f"background: {'#16A34A' if ok else '#D97706'}; color: white; border-radius: 13px;")
         return icon
 
-    def _entry(self, ok: bool, title: str, count: str, detail: str) -> QWidget:
+    _ROLE_STYLE = {"Số chính thức": ("#DBEAFE", "#1D4ED8"), "Chi tiết để giải thích": ("#DCFCE7", "#15803D"),
+                   "Kế hoạch": ("#EDE9FE", "#6D28D9"), "Lý do": ("#FEF3C7", "#B45309"), "Ghi chú": ("#F1F5F9", "#475569")}
+
+    def _pill(self, role: str) -> QLabel:
+        fill, ink = self._ROLE_STYLE.get(role, ("#F1F5F9", "#475569"))
+        pill = QLabel(role)
+        pill.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
+        pill.setStyleSheet(f"background: {fill}; color: {ink}; border-radius: 9px; padding: 2px 8px;")
+        return pill
+
+    def _entry(self, ok: bool, title: str, count: str, detail: str, role: str = "") -> QWidget:
         box = QWidget()
         grid = QHBoxLayout(box)
         grid.setContentsMargins(0, 12, 0, 12)
@@ -129,6 +139,8 @@ class ChoiceCard(QWidget):
             n.setObjectName("rowCount")
             n.setFont(QFont("Segoe UI", 10))
             head.addWidget(n, alignment=Qt.AlignmentFlag.AlignTop)
+        if role:
+            head.addWidget(self._pill(role), alignment=Qt.AlignmentFlag.AlignTop)
         text.addLayout(head)
         if detail:
             d = QLabel(detail)
@@ -152,7 +164,7 @@ class ChoiceCard(QWidget):
         for r in card.get("rows", []):
             self._details.addWidget(self._line())
             self._details.addWidget(self._entry(bool(r.get("ok", True)), r.get("title", ""), r.get("count", ""),
-                                                r.get("detail", "")))
+                                                r.get("detail", ""), r.get("role", "")))
         left = card.get("left_out") or []
         self._details.addWidget(self._line())
         self._details.addWidget(self._entry(not left, card.get("left_out_title", ""), "", " · ".join(left)))

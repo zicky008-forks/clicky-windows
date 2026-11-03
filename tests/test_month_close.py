@@ -748,3 +748,46 @@ def test_tamper_hook_changes_the_saved_cell_only_when_asked(folder, monkeypatch)
     monkeypatch.setenv("CLICKY_TEST_TAMPER", "'Doi chieu'!C7=1000")
     beats = month_close.approve(bridge, pq)
     assert beats[0].mark == "bad" and beats[0].ref == "'Doi chieu'!C7"
+
+
+# ── Beta job 5: each input has a role; two of the same kind → ask, never pick ──
+
+def test_two_trial_balances_of_one_month_are_asked_about_not_picked(folder):
+    import os, shutil, time as _time
+    from engine import roles
+    old = folder / "TB_T10_cu.xlsx"
+    shutil.copy(folder / "TB_T10.xlsx", old)
+    os.utime(old, (_time.time() - 86400 * 6, _time.time() - 86400 * 6))
+    (folder / "anh_so_lieu.png").write_bytes(b"png")
+    (folder / "Email chi nhanh DN.eml").write_text("Doanh thu tháng 11 dự kiến 9.999.999.999", encoding="utf-8")
+    bridge = CopyingBridge(folder)
+    pq = FakePQ(bridge, folder)
+    month_close._CHOSEN.clear(); month_close._PICKS.clear()
+    beats = month_close.start(bridge, pq, sources.DAY_FIRST)
+    assert month_close.stage() == "pick_source" and bridge.writes == []
+    ask = beats[0]
+    assert ask.text.startswith("Có 2 sổ cân đối T10: TB_T10.xlsx sửa ngày") and "TB_T10_cu.xlsx sửa ngày" in ask.text
+    assert ask.choices == ("Dùng TB_T10", "Dùng TB_T10_cu")
+    receipt = month_close.pick(bridge, pq, "Dùng TB_T10_cu")          # the user's choice, even the older one
+    assert month_close.intake_pending()
+    log = receipt[0].intake["log"]
+    assert any(d["file"] == "TB_T10" and "anh đã chọn dùng TB_T10_cu" in d["reason"] for d in log["dropped"])
+    reasons = {d["file"]: d["reason"] for d in log["dropped"]}
+    assert "không bao giờ lấy số từ ảnh" in reasons["anh_so_lieu.png"]
+    assert "Lý do" in reasons["Email chi nhanh DN.eml"]
+    assert roles.of_file("KeHoach_2026_v3.xlsx") == roles.PLAN
+    month_close.confirm(bridge, pq)
+    month_close.approve(bridge, pq)
+    rows = bridge.sheets["Bien ban Clicky"]
+    pickrow = next(r for r in rows if len(r) > 3 and str(r[3]).startswith("Chọn nguồn"))
+    assert pickrow[5].startswith("TB_T10_cu") and pickrow[4] == "TB_T10" and pickrow[7] != "Tự động"
+    every = [c for r in bridge.sheets["BC thang"] for c in r]
+    assert 9_999_999_999 not in every
+
+
+def test_receipt_rows_carry_their_role(folder):
+    bridge = CopyingBridge(folder)
+    month_close._CHOSEN.clear()
+    beats = month_close.start(bridge, FakePQ(bridge, folder), sources.DAY_FIRST)
+    roles_shown = [r.get("role") for r in beats[0].intake["card"]["rows"]]
+    assert roles_shown[:3] == ["Số chính thức", "Số chính thức", "Chi tiết để giải thích"]

@@ -15,7 +15,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
-from engine import sources
+from engine import roles as roles_mod, sources
 from engine.monthly_report import fmt, spoken
 from engine.trial_balance import ZERO, fold, parse_amount
 
@@ -59,6 +59,7 @@ class Intake:
     branches: int = 0
     revenue_ok: Optional[bool] = None
     revenue_note: str = ""
+    roles: dict = field(default_factory=dict)           # file name → role (engine.roles)
 
     @property
     def balanced(self) -> bool:
@@ -159,7 +160,7 @@ def _order_lines(files: list, truth, period: Optional[tuple]) -> tuple:
     return lines, items
 
 
-def _unused_files(folder: Path, used: set, workbook: Optional[str]) -> list:
+def _unused_files(folder: Path, used: set, workbook: Optional[str], roles: dict) -> list:
     """Every data-looking file in the folder (and one level down) that Clicky did not read, with why."""
     out = []
     paths = sorted([p for p in folder.glob("*") if p.is_file()] + [p for p in folder.glob("*/*") if p.is_file()],
@@ -170,7 +171,15 @@ def _unused_files(folder: Path, used: set, workbook: Optional[str]) -> list:
         suffix = p.suffix.lower()
         if suffix not in DATA_SUFFIXES:
             continue
-        if suffix == ".xls":
+        role = roles_mod.of_file(p.name)
+        roles[p.name] = role
+        if role == roles_mod.PLAN:
+            why = "vai trò Kế hoạch; báo cáo tháng này chưa so với kế hoạch, em không lấy số từ file này"
+        elif role == roles_mod.REASON:
+            why = "vai trò Lý do (email, văn bản): chỉ để hiểu nguyên nhân, em không lấy số từ file này"
+        elif suffix in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".heic"):
+            why = "ảnh, vai trò Ghi chú: em không bao giờ lấy số từ ảnh"
+        elif suffix == ".xls":
             why = "định dạng .xls cũ, em chưa đọc được; anh mở và lưu lại thành .xlsx"
         elif suffix == ".csv":
             why = "không có cột ngày và cột số tiền, không phải file đơn hàng"
@@ -195,8 +204,9 @@ def query_files(folder: Path) -> list:
     return out
 
 
-def build(folder: Path, files: list, tbs: list, truth, ledger: dict, workbook: Optional[str] = None) -> Intake:
-    """tbs: [(name, rows, tb)] oldest first, as engine.sources.find_trial_balances returns them."""
+def build(folder: Path, files: list, tbs: list, truth, ledger: dict, workbook: Optional[str] = None,
+          set_aside: Optional[list] = None) -> Intake:
+    """tbs: [(name, rows, tb)] oldest first, one per period; set_aside: [(name, why)] other copies of a period."""
     intake = Intake()
     period = sources.period_of(tbs[-1][1]) if tbs else None
     picked = tbs[-2:]
@@ -208,6 +218,14 @@ def build(folder: Path, files: list, tbs: list, truth, ledger: dict, workbook: O
     for name, _rows, _tb in tbs[:-2]:
         intake.dropped.append(Dropped(f"Sổ cân đối {name}", name, None,
                                       "kỳ cũ hơn, báo cáo chỉ cần kỳ này và kỳ trước", rows=0))
+    for name, why in set_aside or []:
+        intake.dropped.append(Dropped(f"Sổ cân đối {name}", name, None, why, rows=0))
+    for name, _rows, _tb in tbs:
+        intake.roles[name] = roles_mod.OFFICIAL
+    for name, _why in set_aside or []:
+        intake.roles[name] = roles_mod.OFFICIAL
+    for f in files:
+        intake.roles[f.name] = roles_mod.DETAIL
     lines, items = _order_lines(files, truth, period)
     intake.files += lines
     intake.dropped += items
@@ -223,11 +241,13 @@ def build(folder: Path, files: list, tbs: list, truth, ledger: dict, workbook: O
         intake.revenue_ok = abs(diff) <= TOLERANCE
         intake.revenue_note = f"khớp {acct}" if intake.revenue_ok else f"lệch {acct} {spoken(diff)}"
     for name in query_files(folder):
+        intake.roles[name] = roles_mod.NOTE
         intake.files.append(FileLine(name=name, kind="Query Power Query", rows=0, rows_label="",
                                      checks="em dùng để kiểm tra query, không lấy số từ file này"))
-    used_names = set(query_files(folder)) | {f.path.name for f in files} | {p.name for name in [n for n, _, _ in tbs]
-                                                 for p in folder.glob(f"{name}.xlsx")}
-    intake.dropped += _unused_files(folder, used_names, workbook)
+    stems = [n for n, _, _ in tbs] + [n for n, _ in set_aside or []]
+    used_names = set(query_files(folder)) | {f.path.name for f in files} | {p.name for name in stems
+                                                                           for p in folder.glob(f"{name}.xls*")}
+    intake.dropped += _unused_files(folder, used_names, workbook, intake.roles)
     return intake
 
 
@@ -238,16 +258,18 @@ def card(intake: Intake) -> dict:
         if f.kind.startswith("Sổ cân đối"):
             detail = " · ".join(x for x in (f"Kỳ {f.period}" if f.period else "", f"đơn vị {f.unit}" if f.unit else "",
                                             f.checks) if x)
-            rows.append({"ok": f.ok, "title": f"{f.name} · {f.kind}", "count": f.rows_label, "detail": detail})
+            rows.append({"ok": f.ok, "title": f"{f.name} · {f.kind}", "count": f.rows_label, "detail": detail,
+                         "role": roles_mod.OFFICIAL})
     sales = [f for f in intake.files if f.kind == "Bán hàng"]
     if sales:
         where = f"{intake.branches} chi nhánh" if intake.branches > 1 else f"{len(sales)} file"
         detail = f"Tổng {spoken(intake.orders_total)}" + (f", {intake.revenue_note}" if intake.revenue_note else "")
         rows.append({"ok": intake.revenue_ok is not False, "title": f"Bán hàng · {where}",
-                     "count": f"{intake.orders_rows} đơn", "detail": detail})
+                     "count": f"{intake.orders_rows} đơn", "detail": detail, "role": roles_mod.DETAIL})
     for f in intake.files:
         if f.kind == "Query Power Query":
-            rows.append({"ok": True, "title": f"{f.name} · {f.kind}", "count": "", "detail": f.checks})
+            rows.append({"ok": True, "title": f"{f.name} · {f.kind}", "count": "", "detail": f.checks,
+                         "role": roles_mod.NOTE})
     left = summarize_dropped(intake.dropped)
     return {"eyebrow": "TRƯỚC KHI TÍNH", "title": "Em đọc được những gì", "rows": rows,
             "left_out": left, "left_out_title": "Em đã bỏ ra ngoài" if left else "Em không bỏ dòng nào"}
