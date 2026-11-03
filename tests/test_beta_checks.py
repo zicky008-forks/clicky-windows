@@ -9,6 +9,7 @@ import beta_checks   # noqa: E402
 
 HERE = Path(__file__).resolve().parents[1] / "tools" / "dien_tap"
 BETA = json.loads((HERE / "case01_beta_expected.json").read_text(encoding="utf-8"))
+BETA["intake"] = dict(BETA["intake"], must_mention=["Tổng cộng", "HCM-HD10341"], files_min=3)   # the small fixture below
 
 INTAKE = {"t": 3.0, "event": "intake", "text": "Em đọc được những gì",
           "files": [{"name": "CDPS_T10.xlsx", "kind": "Sổ cân đối", "total": 1000, "used": 1000, "dropped": 0},
@@ -149,3 +150,9 @@ def test_choose_check_does_not_accept_the_old_copy():
 def test_choose_check_needs_the_exact_file_name():
     spec = {"roles": {"choose": ["TB_T10.xlsx"]}}
     assert not beta_checks.evaluate(run({"t": 5, "event": "chosen", "label": "Dùng TB_T10 (1)"}), {}, spec)[0].ok
+
+
+def test_case01_beta_asks_for_every_unused_file():
+    real = json.loads((HERE / "case01_beta_expected.json").read_text(encoding="utf-8"))["intake"]
+    for name in ("2_Tra_loi_cac_bo_phan", "BaoCao_T10_Clicky_tao_san", "README", "1_M_do_AI_viet", "0_Kiem_tra_may"):
+        assert name in real["must_mention"]
