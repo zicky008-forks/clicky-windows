@@ -95,6 +95,32 @@ def _same_box(shape: dict, box: list, tol: float = 2.5) -> bool:
     return all(abs(a - b) <= tol for a, b in zip(got, box))
 
 
+_TECH_ERROR = re.compile(
+    r"Exception occurred|\bException\b|Traceback|\[\w+\.Error\]|\bError:|com_error|pywintypes|-21474\d{5}"
+    r"|0x800[0-9A-Fa-f]{5}", re.IGNORECASE)
+_SHOWN_KEYS = ("text", "title", "value", "note", "question", "was")
+
+
+def leaked_errors(events: list) -> list:
+    """Technical error text shown or said to the user (COM, Power Query, Python), from any visible event."""
+    found = []
+    for e in events:
+        if e.get("event") not in ("beat", "said", "notice", "choices", "card"):
+            continue
+        for key in _SHOWN_KEYS:
+            v = e.get(key)
+            if isinstance(v, str) and _TECH_ERROR.search(v) and v not in found:
+                found.append(v)
+    return found
+
+
+def stage_check(stalled: list) -> Check:
+    """A stage that ran out of time is a failure on its own, not something to infer from wrong numbers."""
+    return Check("Không chặng nào bị đứng quá giờ", not stalled,
+                 "; ".join(f"{name}: hết {secs:.0f} giây mà chưa xong" for name, secs in stalled) if stalled
+                 else "mọi chặng xong trong giờ")
+
+
 def evaluate(events: list, sheets: dict, expected: dict) -> Result:
     res = Result()
     add = res.checks.append
@@ -141,7 +167,9 @@ def evaluate(events: list, sheets: dict, expected: dict) -> Result:
                   f"{len(spoken) - len(silent)}/{len(spoken)} câu đọc thành tiếng, {len(notices)} lời báo"))
 
     errors = [e.get("text", "") for e in events if e.get("event") == "error"]
-    add(Check("Không có lỗi hiện ra cho người dùng", not errors, "; ".join(errors[:3])))
+    # A raw technical error can also slip out inside a card, a spoken line or a notice, not only as an error event.
+    errors += leaked_errors(events)
+    add(Check("Không có lỗi hiện ra cho người dùng", not errors, "; ".join(tidy(x)[:120] for x in errors[:3])))
 
     fix = expected.get("fix_label")
     if fix:

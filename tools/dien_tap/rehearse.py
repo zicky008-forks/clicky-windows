@@ -143,6 +143,7 @@ def main(argv=None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     log = out / "scene.jsonl"
     clock = Clock()
+    stalled = []
 
     if drivers.pids_of("Clicky.exe"):
         say("Clicky đang chạy. Thoát Clicky (khay hệ thống → Thoát) rồi chạy lại, để robot mở bản có nhật ký cảnh.")
@@ -189,9 +190,12 @@ def main(argv=None) -> int:
     driver.press(SEND)
     fix = expected.get("fix_label")
     if fix:
+        limit = expected.get("first_stage_seconds", 240)
         events = wait_log(log, lambda ev: any(fix in (e.get("labels") or []) for e in ev if e.get("event") == "choices"),
-                          expected.get("first_stage_seconds", 240))
+                          limit)
         clock.lap("Chặng 1: đối chiếu và chỉ chỗ lệch")
+        if clock.steps[-1][1] >= limit:
+            stalled.append(("Chặng 1", clock.steps[-1][1]))
         if any(fix in (e.get("labels") or []) for e in events if e.get("event") == "choices"):
             say(f"4/6 Bấm \"{fix}\"")
             if driver.wait_for(fix, 20):
@@ -203,14 +207,19 @@ def main(argv=None) -> int:
 
     say("5/6 Chờ Clicky làm xong báo cáo")
     target = expected.get("final_title", "")
-    wait_log(log, lambda ev: any(target and target in (e.get("title") or "") for e in ev if e.get("event") == "beat")
-             or (not target and len(ev) > 0), expected.get("second_stage_seconds", 300), quiet=6.0)
+    finished = lambda ev: any(target and target in (e.get("title") or "") for e in ev if e.get("event") == "beat") \
+        or (not target and len(ev) > 0)  # noqa: E731
+    limit = expected.get("second_stage_seconds", 300)
+    done_events = wait_log(log, finished, limit, quiet=6.0)
     clock.lap("Chặng 2–3: sửa và lập báo cáo")
+    if not finished(done_events):
+        stalled.append(("Chặng 2–3", clock.steps[-1][1]))
 
     say("6/6 Đọc số trong file và chấm")
     sheets = sheet_values(wb)
     events = checks.read_log(log)
     result = checks.evaluate(events, sheets, expected)
+    result.checks.append(checks.stage_check(stalled))
     if watcher is not None:
         watcher.stop()
         watcher.join(timeout=10)

@@ -233,3 +233,19 @@ def test_robot_crash_exits_2_not_1(monkeypatch):
         raise AttributeError("x")
     monkeypatch.setattr(rehearse, "main", boom)
     assert rehearse.run() == 2
+
+
+def test_raw_com_error_inside_a_card_fails_the_error_check():
+    run = good_run()
+    run.append({"t": 61.0, "event": "beat", "i": 2, "ref": None, "box": None,
+                "text": "Không đọc được: (-2147352567, 'Exception occurred.', [Expression.Error] ...)"})
+    res = checks.evaluate(run, SHEETS, EXPECTED)
+    bad = [c for c in res.checks if c.name == "Không có lỗi hiện ra cho người dùng"][0]
+    assert not bad.ok and not res.passed
+    assert checks.leaked_errors(good_run()) == []
+
+
+def test_stalled_stage_is_its_own_failure():
+    assert checks.stage_check([]).ok
+    c = checks.stage_check([("Chặng 2–3", 302.4)])
+    assert not c.ok and c.blocking and "302" in c.detail
