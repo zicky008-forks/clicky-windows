@@ -573,7 +573,8 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
                       + ("Clicky xoá trùng theo Chi nhánh + Số CT." if keys else "Clicky chỉ xoá dòng giống hệt nhau.")])
     fixed_m = m_code.folder_query(str(folder), {f.name: f.culture(machine_order) for f in files},
                                   _typed_columns(files), files[0].header[files[0].columns["doc"]] if "doc" in files[0].columns else None,
-                                  folder_parameter=PARAM_NAME, key_columns=keys, period=period if truth.outside else None)
+                                  folder_parameter=PARAM_NAME, key_columns=keys, period=period if truth.outside else None,
+                                  delimiter={f.name: f.delimiter for f in files})
     if name is None:
         name, formula, origin = QUERY_NAME, None, "clicky"
         notes.append(["Query đơn hàng", "", "", "", "Trong file chưa có query đơn hàng; Clicky tạo query mới đọc đúng kiểu ngày của từng file."])
@@ -600,9 +601,12 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
                              _check_ref("A7:E7"), "Chưa đối chiếu được", "warn", "Chưa có số",
                              "Không phải lỗi file của anh. Anh cập nhật Clicky rồi gọi lại em.")]
     if isinstance(result, str):
-        _write_check_sheet(bridge, None, truth, ledger, [["Lỗi khi tải query", "", "", "", result[:300]]] + notes)
-        beats.append(Beat(f"Excel báo lỗi khi tải query {name}.", _check_ref("A4:E4"), "Query chưa tải được", "bad",
-                          "Lỗi tải", result[:140]))
+        log.warning("loading query %s failed: %s", name, result)
+        why_vi = load_error_vi(result)
+        _write_check_sheet(bridge, None, truth, ledger,
+                           [["Lỗi khi tải query", "", "", "", why_vi + " Chi tiết kỹ thuật ghi trong clicky.log."]] + notes)
+        beats.append(Beat(f"Excel chưa tải được query {name}.", _check_ref("A4:E4"), "Query chưa tải được", "bad",
+                          "Lỗi tải", why_vi))
         if formula is None:
             return beats
         _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder)}
@@ -650,23 +654,52 @@ def approve(bridge, pq) -> list:
         _try(bridge, "screen_updating", True)
 
 
+def load_error_vi(raw: str) -> str:
+    """One plain Vietnamese sentence for a Power Query / COM load error; the raw text goes to the log only."""
+    text = str(raw or "")
+    m = re.search(r"column '([^']+)' of the table wasn't found", text, re.I)
+    if m:
+        return f"Excel không tìm thấy cột {m.group(1)} trong file đơn hàng."
+    if re.search(r"DataFormat\.Error|couldn't convert|could not convert", text, re.I):
+        return "Excel gặp một giá trị không đổi được sang số hoặc ngày."
+    if re.search(r"DataSource\.(Error|NotFound)|could(n't| not) find|access.*denied|being used by another", text, re.I):
+        return "Excel không mở được thư mục hoặc một file đơn hàng (có thể file đang mở ở nơi khác)."
+    if re.search(r"Formula\.Firewall|privacy", text, re.I):
+        return "Excel chặn query vì cài đặt quyền riêng tư của Power Query."
+    return "Excel báo lỗi khi tải query."
+
+
 def _approve(bridge, pq, job) -> list:
     folder = Path(job["folder"])
+    try:
+        before = dict(pq.list()).get(job["name"])
+    except Exception as exc:
+        log.warning("reading query %s before the fix failed: %s", job["name"], exc)
+        before = None
     pq.add(PARAM_NAME, m_code.parameter_query(str(folder)))
     if not pq.add(job["name"], job["formula"]):
         return [Beat(f"Em không sửa được query {job['name']}. Anh kiểm tra file có đang bị khoá không.")]
+    files = sources.find_order_files(folder)
+    tbs, ledger = _ledger(folder)
+    truth = sources.truth(files, sources.period_of(tbs[-1][1]) if tbs else None)
+    ledger = _net_of_returns(ledger, truth)
     result = pq.load(job["name"])
     if isinstance(result, ReadFailed):
         return [Beat("Em đã sửa query nhưng chưa đọc lại được bảng kết quả. Đây là lỗi của Clicky.",
                      label="Chưa kiểm tra được", mark="warn", note=_BACKUP_NOTE)]
     if isinstance(result, str):
-        return [Beat(f"Em đã sửa query nhưng Excel báo lỗi khi tải lại: {result[:200]}. {_BACKUP_NOTE}")]
+        # The raw COM/Power Query text is for the log, never the screen. Put the user's query back as it was,
+        # so a failed fix leaves the workbook as Clicky found it, and end the turn in one clear sentence.
+        log.warning("reloading the fixed query %s failed: %s", job["name"], result)
+        restored = before is not None and pq.add(job["name"], before)
+        kept = "Query cũ vẫn giữ nguyên." if restored else _BACKUP_NOTE
+        why_vi = load_error_vi(result)
+        _write_check_sheet(bridge, None, truth, ledger, [["Chưa sửa được query", "", "", "",
+                                                          f"{why_vi} {kept} Chi tiết kỹ thuật ghi trong clicky.log."]])
+        return [Beat(f"Em chưa sửa được query {job['name']}. {kept} Chưa lập báo cáo.",
+                     _check_ref(f"A{DETAIL_TOP + 1}:E{DETAIL_TOP + 1}"), "Chưa sửa được", "warn", "Chưa sửa", why_vi)]
     sheet, header, rows = result
     loaded = Loaded(sheet, header, rows, sources.find_columns(header))
-    files = sources.find_order_files(folder)
-    tbs, ledger = _ledger(folder)
-    truth = sources.truth(files, sources.period_of(tbs[-1][1]) if tbs else None)
-    ledger = _net_of_returns(ledger, truth)
     target = ledger["revenue"] if ledger else truth.amount
     gap = loaded.amount - target
     ok = abs(gap) <= TOLERANCE
@@ -892,6 +925,8 @@ async def handle_start(manager, transcript: str) -> str:
 
 
 async def handle_approve(manager, transcript: str) -> str:
+    # The question's frame must not stay frozen on screen while Excel reloads the query.
+    manager.sig_clear_drawings.emit()
     beats = await asyncio.to_thread(lambda: approve(manager._excel, _pq(manager)))
     await play(manager, beats)
     return ""
