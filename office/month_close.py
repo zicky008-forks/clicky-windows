@@ -944,6 +944,9 @@ def load_error_vi(raw: str) -> str:
         return "Excel không mở được thư mục hoặc một file đơn hàng (có thể file đang mở ở nơi khác)."
     if re.search(r"Formula\.Firewall|privacy", text, re.I):
         return "Excel chặn query vì cài đặt quyền riêng tư của Power Query."
+    from engine import errors_vi                    # Excel busy / not answering / offline: the shared words
+    if errors_vi.classify(text) != errors_vi.GENERIC:
+        return errors_vi.one_line(text)
     return "Excel báo lỗi khi tải query."
 
 
