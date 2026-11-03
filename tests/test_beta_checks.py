@@ -138,3 +138,9 @@ def test_robot_must_get_to_choose_the_named_book():
 
 def test_checks_only_run_for_jobs_the_case_asks_for():
     assert beta_checks.evaluate(run(), {}, {"fix_label": "Sửa giúp tôi"}) == []
+
+
+def test_choose_check_does_not_accept_the_old_copy():
+    spec = {"roles": {"choose": ["TB_T10.xlsx"]}}
+    assert not beta_checks.evaluate(run({"t": 5, "event": "chosen", "label": "Dùng TB_T10_cu"}), {}, spec)[0].ok
+    assert beta_checks.evaluate(run({"t": 5, "event": "chosen", "label": "Dùng TB_T10"}), {}, spec)[0].ok

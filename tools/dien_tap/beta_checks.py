@@ -161,7 +161,9 @@ def roles_checks(sheets, events, expected) -> list:
         asked = any(ask.casefold() in (e.get("question") or "").casefold() for e in _events(events, "choices"))
         out.append(Check("Hỏi khi có hai nguồn cùng vai trò", asked, "" if asked else f"không hỏi về \"{ask}\""))
     for part in spec.get("choose", []):
-        chosen = any(part.casefold() in (e.get("label") or "").casefold() for e in _events(events, "chosen"))
+        stem = re.sub(r"\.\w+$", "", part)
+        pat = re.compile(r"(?<![\w.])" + re.escape(stem) + r"(\.\w+)?(?![\w])", re.IGNORECASE)
+        chosen = any(pat.search(e.get("label") or "") for e in _events(events, "chosen"))
         out.append(Check(f"Robot chọn được bản \"{part}\"", chosen, "" if chosen else "Clicky không hỏi / không có lựa chọn này"))
     for value in spec.get("numbers_absent", []):
         found = any(isinstance(c, (int, float)) and not isinstance(c, bool) and abs(c - value) < 0.5

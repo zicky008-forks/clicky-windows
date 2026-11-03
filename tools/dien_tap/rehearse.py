@@ -64,12 +64,26 @@ class Clock:
 AUTO_PRESS = []        # (driver, labels): buttons pressed whenever they come up, e.g. the intake receipt's confirm
 
 
+def match_label(part: str, labels) -> str | None:
+    """The button that names `part`: "TB_T10.xlsx" matches "Dùng TB_T10" but not "Dùng TB_T10_cu"."""
+    import re
+    stem = re.sub(r"\.(xlsx|xlsm|xls|csv|pdf|png|jpg|txt)$", "", part.strip(), flags=re.IGNORECASE)
+    pat = re.compile(r"(?<![\w.])" + re.escape(stem) + r"(\.\w+)?(?![\w])", re.IGNORECASE)
+    for lab in labels or []:
+        if lab == part:
+            return lab
+    return next((lab for lab in labels or [] if pat.search(lab)), None)
+
+
 def _auto_press(events) -> None:
     for driver, labels, done in AUTO_PRESS:
         for i, e in enumerate(events):
             if e.get("event") != "choices" or i in done:
                 continue
-            hit = next((lab for lab in e.get("labels") or [] if lab in labels), None)
+            if callable(labels):
+                hit = labels(e)
+            else:
+                hit = next((lab for lab in e.get("labels") or [] if lab in labels), None)
             if hit:
                 done.add(i)
                 say(f"   Bấm \"{hit}\"")
@@ -96,22 +110,6 @@ def wait_log(log: Path, done, timeout: float, quiet: float = 0.0) -> list:
             continue
         time.sleep(1.0)
     return events
-
-
-def answer(driver, log: Path, part: str, timeout: float, question: str = "") -> str | None:
-    """Wait for a choice whose label contains `part` (and question contains `question`), press it; the label or None."""
-    def pick(ev):
-        for e in ev:
-            if e.get("event") == "choices" and question.casefold() in (e.get("question") or "").casefold():
-                for lab in e.get("labels") or []:
-                    if part.casefold() in lab.casefold():
-                        return lab
-        return None
-    label = pick(wait_log(log, lambda ev: pick(ev) is not None, timeout))
-    if label and driver.wait_for(label, 20):
-        driver.press(label)
-        return label
-    return None
 
 
 def file_hash(path: Path) -> str:
@@ -314,6 +312,12 @@ def main(argv=None) -> int:
         auto.append(expected.get("save_label", "Lưu và kiểm tra"))
     if auto:
         AUTO_PRESS.append((driver, set(auto), set()))
+    roles = expected.get("roles") or {}
+    if roles.get("choose"):
+        # Which source to use: asked before the receipt, so it is answered whenever it comes up.
+        def chooser(e, parts=tuple(roles["choose"])):
+            return next(filter(None, (match_label(p, e.get("labels")) for p in parts)), None)
+        AUTO_PRESS.append((driver, chooser, set()))
     if "intake" in expected:
         confirm = expected["intake"].get("confirm_label", "Đúng rồi, làm tiếp")
         asked = lambda ev: any(confirm in (e.get("labels") or []) for e in ev if e.get("event") == "choices")  # noqa: E731
@@ -324,10 +328,6 @@ def main(argv=None) -> int:
                 driver.press(confirm)
         else:
             say("   Không thấy phiếu nhận file.")
-    for part in (expected.get("roles") or {}).get("choose", []):
-        got = answer(driver, log, part, expected.get("first_stage_seconds", 240),
-                     expected["roles"].get("ask_contains", ""))
-        say(f"   Chọn nguồn: {got}" if got else f"   Clicky không hỏi chọn \"{part}\"")
     fix = expected.get("fix_label")
     if fix:
         limit = expected.get("first_stage_seconds", 240)
