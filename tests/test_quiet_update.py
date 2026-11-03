@@ -4,8 +4,12 @@ import sys
 import types
 from unittest import mock
 
-with mock.patch.dict(sys.modules, {"httpx": sys.modules.get("httpx") or types.ModuleType("httpx")}):
-    import updates                      # httpx is not needed by these paths; nothing leaks to other tests
+try:
+    import updates
+except ModuleNotFoundError:             # no httpx on this machine: these paths do not need it
+    with mock.patch.dict(sys.modules, {"httpx": types.ModuleType("httpx")}):
+        import updates
+    sys.modules.pop("updates", None)    # the stubbed copy must not be reused by other tests
 
 
 class _Asset:
