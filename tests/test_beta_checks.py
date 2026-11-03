@@ -132,7 +132,7 @@ def test_tamper_must_be_caught_with_cell_and_amount():
 
 def test_robot_must_get_to_choose_the_named_book():
     spec = {"roles": {"choose": ["TB_T10.xlsx"]}}
-    assert beta_checks.evaluate(run({"t": 5, "event": "chosen", "label": "TB_T10.xlsx (sửa 31/10)"}), {}, spec)[0].ok
+    assert beta_checks.evaluate(run({"t": 5, "event": "chosen", "label": "Dùng TB_T10"}), {}, spec)[0].ok
     assert not beta_checks.evaluate(run(), {}, spec)[0].ok
 
 
