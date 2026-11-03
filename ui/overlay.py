@@ -738,6 +738,10 @@ class CursorOverlay(QWidget):
             anchor = ann["anchor"]
             x, y = place_card(anchor, (CARD_WIDTH, h), self._card_screen(anchor))
             layout = ann["_layout"] = (x, y, h, parts)
+            # Rehearsals: where the card really landed, so the robot can check it covers no figure.
+            import scene_log
+            scene_log.record("card", rect=[x, y, x + CARD_WIDTH, y + h], anchor=list(anchor),
+                             title=ann.get("title") or "")
         x, y, h, parts = layout
         line = stem(ann["anchor"], (x, y, x + CARD_WIDTH, y + h))
         x, y = x - self.x(), y - self.y() + (1.0 - u) * 8

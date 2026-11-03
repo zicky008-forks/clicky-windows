@@ -10,7 +10,9 @@ What it does, like a person would:
  3. types "làm báo cáo tháng từ thư mục này" into Clicky's chat box and presses Gửi;
  4. waits for the fix question and presses "Sửa giúp tôi";
  5. waits for the report, reads the numbers left in the workbook through Excel itself;
- 6. grades the run (tools/dien_tap/checks.py) and writes ket-qua.md + ket-qua.json + scene.jsonl.
+ 6. grades the run (tools/dien_tap/checks.py) and writes ket-qua.md + ket-qua.json + scene.jsonl;
+ 7. at every scene it also screenshots and asks Excel itself where the cell is (visual.py), then
+    checks the frame, the card and the pointer on the picture; failures are saved as marked PNGs.
 
 Privacy: it refuses to run while another workbook is open in Excel, and nothing it writes
 leaves this PC. Exit code 0 = ĐẠT, 1 = KHÔNG ĐẠT, 2 = could not run.
@@ -30,6 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import checks          # noqa: E402
 import drivers         # noqa: E402
+import visual          # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 COMPOSER = "Tin nhắn cho Clicky"
@@ -76,7 +79,7 @@ def wait_log(log: Path, done, timeout: float, quiet: float = 0.0) -> list:
     return events
 
 
-def open_workbook(source: Path, allow_others: bool):
+def open_workbook(source: Path, allow_others: bool, zoom: int | None = None):
     import win32com.client
     excel = win32com.client.Dispatch("Excel.Application")
     others = [wb.Name for wb in excel.Workbooks]
@@ -89,6 +92,11 @@ def open_workbook(source: Path, allow_others: bool):
     excel.Visible = True
     wb = excel.Workbooks.Open(str(copy))
     excel.WindowState = -4137          # xlMaximized
+    if zoom:
+        for ws in wb.Worksheets:       # every sheet: Clicky moves between them during the case
+            ws.Activate()
+            excel.ActiveWindow.Zoom = zoom
+        wb.Worksheets(1).Activate()
     return excel, wb, copy
 
 
@@ -125,6 +133,8 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default=None, help="Thư mục kết quả (mặc định: dien-tap\\<giờ> cạnh file Excel)")
     ap.add_argument("--allow-other-workbooks", action="store_true")
     ap.add_argument("--chat-shortcut", default="ctrl+alt+t", help="Phím tắt mở khung chat Clicky")
+    ap.add_argument("--zoom", type=int, default=None, help="Độ phóng Excel cho lần chạy (ví dụ 85, 100, 130)")
+    ap.add_argument("--no-visual", action="store_true", help="Bỏ phần chụp màn hình và chấm bằng ảnh")
     args = ap.parse_args(argv)
 
     expected = json.loads(Path(args.expected).read_text(encoding="utf-8"))
@@ -143,12 +153,18 @@ def main(argv=None) -> int:
         return 2
 
     say(f"1/6 Mở bản sao {workbook.name} trong Excel")
-    excel, wb, copy = open_workbook(workbook, args.allow_other_workbooks)
+    excel, wb, copy = open_workbook(workbook, args.allow_other_workbooks, args.zoom)
     clock.lap("Mở Excel")
 
     say(f"2/6 Mở Clicky: {exe}")
     env = dict(os.environ, CLICKY_SCENE_LOG=str(log))
     subprocess.Popen([exe], env=env, cwd=str(Path(exe).parent))
+    watcher = None
+    if not args.no_visual:
+        shots = out / "anh"
+        shots.mkdir(exist_ok=True)
+        watcher = visual.Watcher(log, shots)
+        watcher.start()
     driver = None
     if args.driver in ("auto", "agent-desktop"):
         try:
@@ -195,8 +211,13 @@ def main(argv=None) -> int:
     sheets = sheet_values(wb)
     events = checks.read_log(log)
     result = checks.evaluate(events, sheets, expected)
+    if watcher is not None:
+        watcher.stop()
+        watcher.join(timeout=10)
+        add_visual(result, events, watcher.captures, out)
     meta = {"case": expected.get("case", ""), "clicky": exe, "when": time.strftime("%d/%m/%Y %H:%M"),
-            "driver": f"{driver.label} {driver.version}", "steps": clock.steps, "workbook": str(copy)}
+            "driver": f"{driver.label} {driver.version}", "steps": clock.steps, "workbook": str(copy),
+            "zoom": args.zoom or "mặc định"}
     (out / "ket-qua.md").write_text(checks.report_md(result, meta), encoding="utf-8")
     (out / "ket-qua.json").write_text(json.dumps(
         {"passed": result.passed, "meta": meta,
@@ -206,6 +227,37 @@ def main(argv=None) -> int:
     for c in result.checks:
         say(f"  [{'x' if c.ok else ' '}] {c.name}: {c.detail}")
     return 0 if result.passed else 1
+
+
+def add_visual(result, events, captures, out: Path) -> None:
+    """Fold the picture checks into the result: one line per check, worst scene named, a marked PNG per failure."""
+    try:
+        from PIL import Image
+        rows = visual.grade(events, captures, lambda p: Image.open(p).convert("RGB"))
+    except Exception as exc:
+        result.checks.append(checks.Check("Chấm bằng ảnh", False, f"không chấm được: {exc}", blocking=False))
+        return
+    if not captures:
+        result.checks.append(checks.Check("Chấm bằng ảnh", False, "không chụp được cảnh nào", blocking=False))
+        return
+    shots = {c.beat_no: c for c in captures}
+    by_name: dict = {}
+    for name, ok, detail, blocking, beat_no, marks in rows:
+        entry = by_name.setdefault(name, {"ok": True, "blocking": blocking, "fails": [], "n": 0})
+        entry["n"] += 1
+        if not ok:
+            entry["ok"] = False
+            entry["fails"].append(detail)
+            cap = shots.get(beat_no)
+            if cap and cap.shot:
+                try:
+                    visual.annotate(cap.shot, cap.origin, marks, out / f"loi-canh-{beat_no:02d}.png")
+                except Exception:
+                    pass
+    for name, e in by_name.items():
+        detail = "; ".join(e["fails"][:3]) + (f" (+{len(e['fails']) - 3})" if len(e["fails"]) > 3 else "") \
+            if e["fails"] else f"{e['n']} cảnh đều đạt"
+        result.checks.append(checks.Check(name, e["ok"], detail, blocking=e["blocking"]))
 
 
 def run() -> int:

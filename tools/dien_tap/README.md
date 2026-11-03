@@ -36,6 +36,18 @@ Mã thoát: 0 = ĐẠT, 1 = KHÔNG ĐẠT, 2 = không chạy được.
 Clicky chỉ ghi nhật ký khi biến môi trường `CLICKY_SCENE_LOG` trỏ tới một file; robot tự bật khi mở Clicky.
 Người dùng bình thường không bao giờ có file này.
 
+## Chấm bằng ảnh
+
+Ở mỗi cảnh có ô, robot chờ 1 giây rồi tự chụp màn hình và tự hỏi Excel vị trí ô (không dùng số của Clicky). Nó chấm:
+
+- Clicky tính vị trí ô lệch không quá 3 px so với robot tự đọc Excel;
+- khung vẽ thật trên ảnh nằm đúng ô, lệch trung bình không quá 3 px;
+- thẻ không che ô nào có số, và không đè lên chính vùng đang giải thích;
+- mũi con trỏ chạm mép khung (cách tối đa 4 px), không đè lên con số;
+- con trỏ và vòng tròn không che số ở ô khác, vòng tròn nằm trọn trong màn hình.
+
+Ảnh từng cảnh nằm trong `anh\`, cảnh lỗi được lưu thêm `loi-canh-NN.png` có đánh dấu: xanh lá là ô đúng, đỏ là thẻ, xanh dương là con trỏ, cam là các ô bị che. Nên chạy ở 3 mức phóng: `--zoom 85`, `--zoom 100`, `--zoom 130`. `--no-visual` tắt phần này. Ảnh chụp có thể lộ cửa sổ khác trên màn hình, nên chỉ chạy khi đã đóng file công ty.
+
 ## File đáp án
 
 `numbers`: `{"name", "label", "value", "tolerance", "sheet"}`. Robot tìm ô có nhãn rồi lấy số đầu tiên bên phải; một tiêu đề chỉ nhắc nhãn mà không có số thì bỏ qua và tìm tiếp.
