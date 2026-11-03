@@ -72,7 +72,7 @@ def checks_grid(issues: list, source_sheet: str) -> list:
         link = source_link(source_sheet, i.row) if i.row else ""
         rows.append(["Lỗi" if i.severity == "error" else "Lưu ý", i.code, i.message, link])
     if len(rows) == 1:
-        rows.append(["OK", "", "Không phát hiện bẫy nào trong các phép kiểm", ""])
+        rows.append(["OK", "", "Bảng cân đối tài khoản không có lỗi nào trong các phép kiểm sổ cái. Phần đối chiếu đơn hàng với sổ cái và các lỗi query (nếu có) nằm ở sheet Doi chieu.", ""])
     return rows
 
 

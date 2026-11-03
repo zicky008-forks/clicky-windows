@@ -119,6 +119,7 @@ class OrderFile:
     columns: dict
     date_order: Optional[str]
     footers: list = field(default_factory=list)   # rows with no date, e.g. a "Tổng cộng" line: not orders
+    delimiter: str = ","           # the file's own column separator; the repaired query must read it the same way
 
     @property
     def number_style(self) -> Optional[str]:
@@ -164,17 +165,34 @@ class SourceTruth:
     outside: list = field(default_factory=list)          # (doc, file, date, amount) dated outside that period
 
 
-def read_csv(path: Path) -> list:
+def _read_text(path: Path) -> str:
     raw = path.read_bytes()
     for enc in ("utf-8-sig", "cp1258", "latin-1"):
         try:
-            text = raw.decode(enc)
-            break
+            return raw.decode(enc)
         except UnicodeDecodeError:
             continue
+    return raw.decode("latin-1")
+
+
+def sniff_delimiter(text: str) -> str:
+    """The column separator, judged on the header line: data rows may hold decimal commas ("1234,5")
+    in a file separated by semicolons, so counting over the whole sample can pick the wrong one."""
+    header = next((line for line in text.splitlines() if line.strip()), "")
+    counts = {d: header.count(d) for d in (",", ";", "\t")}
+    if max(counts.values()):
+        return max(counts, key=counts.get)
     sample = text[:4096]
-    delim = max((",", ";", "\t"), key=sample.count)
+    return max((",", ";", "\t"), key=sample.count)
+
+
+def _parse(text: str, delim: str) -> list:
     return [row for row in csv.reader(text.splitlines(), delimiter=delim) if any(c.strip() for c in row)]
+
+
+def read_csv(path: Path) -> list:
+    text = _read_text(path)
+    return _parse(text, sniff_delimiter(text))
 
 
 def load_order_file(path: Path) -> Optional[OrderFile]:
@@ -182,9 +200,11 @@ def load_order_file(path: Path) -> Optional[OrderFile]:
     if path.suffix.lower() != ".csv":
         return None
     try:
-        rows = read_csv(path)
+        text = _read_text(path)
     except OSError:
         return None
+    delim = sniff_delimiter(text)
+    rows = _parse(text, delim)
     if len(rows) < 2:
         return None
     cols = find_columns(rows[0])
@@ -197,7 +217,7 @@ def load_order_file(path: Path) -> Optional[OrderFile]:
         blank = cols["date"] >= len(r) or not str(r[cols["date"]] or "").strip()
         (footers if blank else data).append(r)
     order = date_order([r[cols["date"]] for r in data if cols["date"] < len(r)])
-    return OrderFile(path, rows[0], data, cols, order, footers)
+    return OrderFile(path, rows[0], data, cols, order, footers, delim)
 
 
 def find_order_files(folder: Path) -> list:

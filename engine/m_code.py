@@ -196,13 +196,19 @@ def _m_text(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
 
 
+def _m_sep(value: str) -> str:
+    """A separator as an M text literal; a tab is written as #(tab) rather than a raw tab character."""
+    return '"#(tab)"' if value == "\t" else _m_text(value)
+
+
 def folder_query(folder: str, file_cultures: dict, typed: list, doc_column: Optional[str] = None,
-                 folder_parameter: Optional[str] = None, delimiter: str = ",",
+                 folder_parameter: Optional[str] = None, delimiter=",",
                  key_columns: Optional[list] = None, period: Optional[tuple] = None) -> str:
     """M that combines CSV exports in a folder, reading each file's dates in that file's own format.
 
     file_cultures maps file name → culture ('vi-VN' / 'en-US'); files not listed use the
     first culture given. typed is [(column, M type)], e.g. [("Ngay", "type date")].
+    delimiter is one separator for all files, or a dict file name → separator (each file's own).
     Rows are de-duplicated on the document number only, and no row is dropped for
     an error: a type error stays visible so it can be counted. key_columns replaces the
     document number as the de-duplication key: [branch, doc] when branches reuse numbers,
@@ -214,13 +220,28 @@ def folder_query(folder: str, file_cultures: dict, typed: list, doc_column: Opti
     rules = " else ".join(f"if [Name] = {_m_text(n)} then {_m_text(c)}" for n, c in file_cultures.items())
     culture_expr = f"{rules} else {_m_text(default)}" if rules else _m_text(default)
     types = ", ".join("{" + _m_text(col) + ", " + t + "}" for col, t in typed)
+    # One separator for every file, or each file's own when exports mix "," and ";".
+    seps = delimiter if isinstance(delimiter, dict) else {}
+    common = Counter(seps.values()).most_common(1)[0][0] if seps else (delimiter if isinstance(delimiter, str) else ",")
+    if len(set(seps.values())) > 1:
+        sep_rules = " else ".join(f"if [Name] = {_m_text(n)} then {_m_sep(d)}" for n, d in seps.items())
+        sep_expr = f"{sep_rules} else {_m_sep(common)}"
+    else:
+        sep_expr = None
     lines = [
         "let",
         f"    Nguon = Folder.Files({source}),",
         '    LocCsv = Table.SelectRows(Nguon, each Text.Lower([Extension]) = ".csv"),',
         f"    DinhDang = Table.AddColumn(LocCsv, \"DinhDang\", each {culture_expr}),",
-        "    DocFile = Table.AddColumn(DinhDang, \"Bang\", each Table.TransformColumnTypes(",
-        f"        Table.PromoteHeaders(Csv.Document([Content], [Delimiter = {_m_text(delimiter)}, Encoding = 65001]), [PromoteAllScalars = true]),",
+    ]
+    previous = "DinhDang"
+    if sep_expr:
+        lines.append(f"    PhanCach = Table.AddColumn(DinhDang, \"PhanCach\", each {sep_expr}),")
+        previous = "PhanCach"
+    sep = "[PhanCach]" if sep_expr else _m_sep(common)
+    lines += [
+        f"    DocFile = Table.AddColumn({previous}, \"Bang\", each Table.TransformColumnTypes(",
+        f"        Table.PromoteHeaders(Csv.Document([Content], [Delimiter = {sep}, Encoding = 65001]), [PromoteAllScalars = true]),",
         f"        {{{types}}}, [DinhDang])),",
         "    GopFile = Table.Combine(DocFile[Bang]),",
     ]

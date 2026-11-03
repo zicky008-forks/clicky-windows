@@ -114,7 +114,13 @@ class PowerQuery:
                 qt.RowNumbers = False
                 qt.RefreshStyle = 1                     # xlInsertDeleteCells
                 qt.AdjustColumnWidth = True
-            lo.QueryTable.Refresh(False)
+            # No Excel dialog may sit behind the overlay waiting for a click: errors come back as exceptions.
+            alerts = app.DisplayAlerts
+            app.DisplayAlerts = False
+            try:
+                lo.QueryTable.Refresh(False)
+            finally:
+                app.DisplayAlerts = alerts
         except Exception as exc:
             log.warning("Power Query load failed for %s: %s", name, exc)
             return str(exc)

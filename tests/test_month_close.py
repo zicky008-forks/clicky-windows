@@ -330,7 +330,8 @@ def test_query_that_excel_cannot_load_still_gets_the_fix_offered(folder):
     bridge = FakeBridge(folder)
     pq = BrokenPQ(bridge, folder)
     said = _text(month_close.start(bridge, pq, sources.DAY_FIRST))
-    assert "Excel báo lỗi khi tải query DonHang" in said and month_close.pending()
+    assert "Excel chưa tải được query DonHang" in said and month_close.pending()
+    assert "DataSource.Error" not in said and "không mở được thư mục" in bridge.sheets["Doi chieu"][9][4]
     assert bridge.sheets["Doi chieu"][3][4] == "Chưa đọc được bảng query"
     assert "khớp sổ cái đến từng đồng" in _text(month_close.approve(bridge, pq))
 
@@ -344,7 +345,7 @@ def test_table_clicky_cannot_read_back_shows_no_gap_and_offers_no_fix(folder):
     bridge = FakeBridge(folder)
     pq = UnreadablePQ(bridge, folder)
     said = _text(month_close.start(bridge, pq, sources.DAY_FIRST))
-    assert "lỗi của Clicky" in said and "Excel báo lỗi" not in said
+    assert "lỗi của Clicky" in said and "Excel chưa tải được" not in said
     assert not month_close.pending()
     gap_row = bridge.sheets["Doi chieu"][6]
     assert gap_row[2] == "" and gap_row[3] == "" and gap_row[4].startswith("Chưa đối chiếu được")
@@ -484,3 +485,65 @@ def test_changing_figures_roll_and_the_old_profit_is_shown_struck():
                 "note", was="556 triệu", roll=(556_000_000, 436_000_000))
     card = shapes_for((10, 10, 100, 30), beat)[1]
     assert card["was"] == "556 triệu" and card["roll"] == [556_000_000, 436_000_000]
+
+
+# ── Blind-case findings: ";" exports and a reload that fails ─────────────────
+
+def test_separator_is_judged_on_the_header_not_on_decimal_commas():
+    assert sources.sniff_delimiter("Ngay;SoCT;ThanhTien\n05/10/2026;HN1;1234,5\n06/10/2026;HN2;99,25,1\n") == ";"
+    assert sources.sniff_delimiter("Ngay,SoCT,ThanhTien\n05/10/2026,HN1,1234\n") == ","
+    assert sources.sniff_delimiter("Ngay\tSoCT\tThanhTien\n") == "\t"
+
+
+def test_fixed_query_reads_each_file_with_its_own_separator(folder):
+    """Blind case: the export used ";" (UTF-8 with BOM) and the repaired query read it with ",",
+    so the reload failed with "column ... wasn't found"."""
+    path = folder / "DonHang" / "DonHang_HCM_T10.csv"
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(HEADER)
+        for doc, d, kh, cost in HCM:
+            w.writerow([doc, d, kh, "Sữa", 1000, 1_400_000, 1_400_000_000, cost, "HCM"])
+    files = {f.name: f for f in sources.find_order_files(folder)}
+    assert files["DonHang_HCM_T10.csv"].delimiter == ";" and files["DonHang_HN_T10.csv"].delimiter == ","
+    bridge = FakeBridge(folder)
+    pq = FakePQ(bridge, folder)
+    month_close.start(bridge, pq, sources.DAY_FIRST)
+    fixed = month_close._PENDING["formula"]
+    assert 'if [Name] = "DonHang_HCM_T10.csv" then ";"' in fixed and "[Delimiter = [PhanCach]" in fixed
+    assert "khớp sổ cái đến từng đồng" in _text(month_close.approve(bridge, pq))
+
+
+def test_one_separator_for_all_files_is_written_as_a_literal():
+    from engine import m_code
+    m = m_code.folder_query("C:\\x", {"a.csv": "vi-VN"}, [("Ngay", "type date")], delimiter={"a.csv": ";", "b.csv": ";"})
+    assert '[Delimiter = ";"' in m and "PhanCach" not in m
+    assert '[Delimiter = "#(tab)"' in m_code.folder_query("C:\\x", {}, [], delimiter="\t")
+
+
+def test_failed_reload_puts_the_old_query_back_and_says_so_in_vietnamese(folder):
+    class ReloadFails(FakePQ):
+        def load(self, name):
+            if "XoaTrungTheoSoCT" in self.queries[name]:
+                return ("(-2147352567, 'Exception occurred.', (0, None, \"[Expression.Error] The column 'Ngay' "
+                        "of the table wasn't found.\", None, 0, -2146827284), None)")
+            return super().load(name)
+    bridge = FakeBridge(folder)
+    pq = ReloadFails(bridge, folder)
+    month_close.start(bridge, pq, sources.DAY_FIRST)
+    before = pq.queries["DonHang"]
+    beats = month_close.approve(bridge, pq)
+    shown = " ".join(f"{b.text} {b.label} {b.value} {b.note}" for b in beats)
+    assert "Exception" not in shown and "Expression.Error" not in shown and "-2147352567" not in shown
+    assert beats[0].text == "Em chưa sửa được query DonHang. Query cũ vẫn giữ nguyên. Chưa lập báo cáo."
+    assert beats[0].mark == "warn" and beats[0].note == "Excel không tìm thấy cột Ngay trong file đơn hàng."
+    assert beats[0].ref == "'Doi chieu'!A10:E10" and bridge.sheets["Doi chieu"][9][0] == "Chưa sửa được query"
+    assert pq.queries["DonHang"] == before and not month_close.pending()
+    assert "BC thang" not in bridge.sheets
+
+
+def test_load_errors_become_one_plain_sentence():
+    vi = month_close.load_error_vi
+    assert vi("DataFormat.Error: We couldn't convert to Number.") == "Excel gặp một giá trị không đổi được sang số hoặc ngày."
+    assert vi("Formula.Firewall: Query 'X' references other queries") .startswith("Excel chặn query")
+    assert vi("something else entirely") == "Excel báo lỗi khi tải query."
