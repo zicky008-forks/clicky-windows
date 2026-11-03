@@ -449,9 +449,11 @@ def test_play_shows_one_idea_at_a_time_then_offers_the_buttons(monkeypatch):
     assert between.count("sig_clear_drawings") == 1 and between.count("sig_draw") == 2
     assert all(a[2] == NO_BUBBLE for n, a in m.log if n == "sig_point_at")
     assert names.index("sig_draw") < names.index("sig_point_at") < names.index("say")
-    # The question beat keeps the last card up and ends with the buttons.
-    assert names[-1] == "sig_choices" and m.log[-1][1] == ("Em sửa giúp anh nhé?", ["Sửa giúp tôi", "Để tôi xem"])
-    assert "sig_clear_drawings" not in names[names.index("say", second_say + 1) - 1:]
+    # The question beat keeps the last card up; its buttons come with the question, not after it is read.
+    ask = names.index("sig_choices")
+    assert m.log[ask][1] == ("Em sửa giúp anh nhé?", ["Sửa giúp tôi", "Để tôi xem"])
+    assert names[ask + 1] == "say" and m.log[ask + 1][1] == ("Em sửa giúp anh nhé?",)
+    assert "sig_clear_drawings" not in names[ask:]
     # The chat panel steps aside for the whole walk-through and stays away while the buttons are up.
     assert names[0] == "sig_guided" and m.log[0][1] == (True,)
     assert ("sig_guided", (False,)) not in m.log

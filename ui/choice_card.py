@@ -83,7 +83,8 @@ class ChoiceCard(QWidget):
         self.adjustSize()
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         area = screen.availableGeometry()
-        self.move(area.center().x() - self.width() // 2, area.bottom() - self.height() - 96)
+        # Bottom-right, above Excel's sheet tabs and status bar: the corner least likely to hold figures.
+        self.move(area.right() - self.width() - 28, area.bottom() - self.height() - 72)
         self.show()
         self.raise_()
 

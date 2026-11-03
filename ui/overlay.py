@@ -208,6 +208,7 @@ class CursorOverlay(QWidget):
 
         # Optional highlight ring around detected element (x, y, radius)
         self._ring: Optional[tuple] = None
+        self._quiet = False
         self._ring_phase: float = 0.0
 
         # Teaching annotations — list of shape dicts the overlay paints each
@@ -270,8 +271,10 @@ class CursorOverlay(QWidget):
         self._bubble_text = "" if label == NO_BUBBLE else (label or random.choice(POINTER_PHRASES))
         self._bubble_scale = 0.5
         self._bubble_alpha = 0.0
-        # Halo ring around the actual target pixel
-        self._ring = (x, y, 26.0)
+        # Halo ring around the actual target pixel, unless a framed range and its card already mark the spot:
+        # then the ring and glow would only cover the neighbouring figures.
+        self._quiet = label == NO_BUBBLE
+        self._ring = None if self._quiet else (x, y, 26.0)
         self._ring_phase = 0.0
         self._lock_timer.stop()   # dwell controlled by phase machine, not timer
         self._begin_flight(self._display_pos, self._locked_pos, _PHASE_FLYING)
@@ -736,7 +739,7 @@ class CursorOverlay(QWidget):
                 h += rect.height()
             h += pad
             anchor = ann["anchor"]
-            x, y = place_card(anchor, (CARD_WIDTH, h), self._card_screen(anchor))
+            x, y = place_card(anchor, (CARD_WIDTH, h), self._card_screen(anchor), ann.get("avoid"))
             layout = ann["_layout"] = (x, y, h, parts)
         x, y, h, parts = layout
         line = stem(ann["anchor"], (x, y, x + CARD_WIDTH, y + h))
@@ -847,9 +850,10 @@ class CursorOverlay(QWidget):
         p.save()
         p.translate(cx, cy)
 
-        # Glow — drawn unrotated so it's a round halo
+        # Glow — drawn unrotated so it's a round halo (none while resting beside a framed range)
         glow = QColor(CURSOR_BLUE)
-        for i, (r_mul, alpha) in enumerate(((2.2, 35), (1.6, 55), (1.15, 85))):
+        halo = () if getattr(self, "_quiet", False) and self._locked_pos is not None else ((2.2, 35), (1.6, 55), (1.15, 85))
+        for i, (r_mul, alpha) in enumerate(halo):
             glow.setAlpha(alpha)
             p.setBrush(QBrush(glow))
             p.setPen(Qt.PenStyle.NoPen)

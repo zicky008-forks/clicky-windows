@@ -25,11 +25,13 @@ def tone_of(mark: str) -> str:
     return mark if mark in TONES else "info"
 
 
-def place_card(anchor, size, screen) -> tuple:
+def place_card(anchor, size, screen, avoid=None) -> tuple:
     """Top-left (x, y) for a card of size (w, h) explaining anchor (l, t, r, b) inside screen (l, t, r, b).
 
-    Tries below the range, then above, then right, then left, and takes the first
-    spot that fits on the screen; the card never covers the range it explains.
+    avoid, when given, is the part of the sheet on screen that holds values (l, t, r, b): the card first
+    looks for a spot that covers neither the range nor any figure, beside the range or just past the
+    filled area. Without such a spot it falls back to below, above, right, then left of the range; the
+    card never covers the range it explains.
     """
     l, t, r, b = anchor
     w, h = size
@@ -41,8 +43,21 @@ def place_card(anchor, size, screen) -> tuple:
     def clamp_y(y):
         return max(st + MARGIN, min(y, sb - MARGIN - h))
 
-    for x, y in ((clamp_x(l), b + GAP), (clamp_x(l), t - GAP - h), (r + GAP, clamp_y(t)), (l - GAP - w, clamp_y(t))):
-        if sl + MARGIN <= x and x + w <= sr - MARGIN and st + MARGIN <= y and y + h <= sb - MARGIN:
+    def fits(x, y):
+        return sl + MARGIN <= x and x + w <= sr - MARGIN and st + MARGIN <= y and y + h <= sb - MARGIN
+
+    def clear_of(box, x, y):
+        return box is None or x + w <= box[0] or box[2] <= x or y + h <= box[1] or box[3] <= y
+
+    beside = [(clamp_x(l), b + GAP), (clamp_x(l), t - GAP - h), (r + GAP, clamp_y(t)), (l - GAP - w, clamp_y(t))]
+    if avoid is not None:
+        al, at, ar, ab = avoid
+        past = [(ar + GAP, clamp_y(t)), (clamp_x(l), ab + GAP), (al - GAP - w, clamp_y(t))]
+        for x, y in beside + past:
+            if fits(x, y) and clear_of(anchor, x, y) and clear_of(avoid, x, y):
+                return x, y
+    for x, y in beside:
+        if fits(x, y):
             return x, y
     return clamp_x(r + GAP), clamp_y(b + GAP)
 
@@ -73,6 +88,16 @@ def stem(anchor, card) -> tuple:
     anchor and card are (l, t, r, b); returns (x1, y1, x2, y2) from the card edge to the range edge,
     or () when they touch or overlap.
     """
+    line = _stem(anchor, card)
+    if line and abs(line[2] - line[0]) + abs(line[3] - line[1]) > STEM_MAX:
+        return ()            # a long line would cross other figures; the card's colour and the frame tie them
+    return line
+
+
+STEM_MAX = 48
+
+
+def _stem(anchor, card) -> tuple:
     al, at, ar, ab = anchor
     cl, ct, cr, cb = card
 
@@ -96,9 +121,13 @@ def stem(anchor, card) -> tuple:
     return ()
 
 
-def pointer_spot(box, edge: float = 14.0) -> tuple:
-    """Where the pointer rests for a range: just left of it, at mid height, or just right when the
-    range starts at the screen's left edge. It never sits on the figure it is pointing at."""
+def pointer_spot(box, screen=None) -> tuple:
+    """Where the pointer rests for a framed range: just under its bottom edge, near its left end, with the tip
+    touching the frame. Excel draws text at the bottom of a cell, so the top of the cell below is the emptiest
+    place next to the range; when the range is at the bottom of the screen, it rests just above instead."""
     l, t, r, b = box
-    x = l - edge if l - edge >= 4 else r + edge
-    return x, (t + b) / 2
+    x = min(l + 12, (l + r) / 2)
+    y = b + 6
+    if screen is not None and y + 14 > screen[3]:
+        y = t - 6
+    return x, y
