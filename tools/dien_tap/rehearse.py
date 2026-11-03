@@ -61,12 +61,30 @@ class Clock:
         self.last = now
 
 
+AUTO_PRESS = []        # (driver, labels): buttons pressed whenever they come up, e.g. the intake receipt's confirm
+
+
+def _auto_press(events) -> None:
+    for driver, labels, done in AUTO_PRESS:
+        for i, e in enumerate(events):
+            if e.get("event") != "choices" or i in done:
+                continue
+            hit = next((lab for lab in e.get("labels") or [] if lab in labels), None)
+            if hit:
+                done.add(i)
+                say(f"   Bấm \"{hit}\"")
+                if driver.wait_for(hit, 20):
+                    driver.press(hit)
+
+
 def wait_log(log: Path, done, timeout: float, quiet: float = 0.0) -> list:
-    """Poll the scene log until done(events) holds (then `quiet` seconds with no new event), or time runs out."""
+    """Poll the scene log until done(events) holds (then `quiet` seconds with no new event), or time runs out.
+    Buttons registered in AUTO_PRESS are pressed as they appear."""
     end = time.monotonic() + timeout
     events = []
     while time.monotonic() < end:
         events = checks.read_log(log)
+        _auto_press(events)
         if done(events):
             if not quiet:
                 return events
@@ -212,6 +230,8 @@ def main(argv=None) -> int:
     ap.add_argument("--no-visual", action="store_true", help="Bỏ phần chụp màn hình và chấm bằng ảnh")
     ap.add_argument("--local-only", action="store_true",
                     help="Bật chế độ 'Chỉ chạy trên máy, không gửi gì' (CLICKY_LOCAL_ONLY=1) và chấm không có lần gửi nào")
+    ap.add_argument("--auto-press", action="append", default=None,
+                    help="Nút robot bấm bất cứ khi nào hiện ra (mặc định: \"Đúng rồi, làm tiếp\" khi đáp án không chấm phiếu nhận)")
     ap.add_argument("--tamper", default=None, metavar="SHEET!CELL=DELTA",
                     help="Việc 3b: nhờ Clicky (móc thử CLICKY_TEST_TAMPER) cộng DELTA vào ô đó ngay sau khi lưu; "
                          "chấm Clicky có phát hiện đúng ô và đúng số lệch không")
@@ -287,6 +307,10 @@ def main(argv=None) -> int:
     driver.set_text(COMPOSER, args.command)
     driver.press(SEND)
     untouched = None
+    auto = args.auto_press if args.auto_press is not None else (
+        [] if "intake" in expected else ["Đúng rồi, làm tiếp"])
+    if auto:
+        AUTO_PRESS.append((driver, set(auto), set()))
     if "intake" in expected:
         confirm = expected["intake"].get("confirm_label", "Đúng rồi, làm tiếp")
         asked = lambda ev: any(confirm in (e.get("labels") or []) for e in ev if e.get("event") == "choices")  # noqa: E731

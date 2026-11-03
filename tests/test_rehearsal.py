@@ -249,3 +249,27 @@ def test_stalled_stage_is_its_own_failure():
     assert checks.stage_check([]).ok
     c = checks.stage_check([("Chặng 2–3", 302.4)])
     assert not c.ok and c.blocking and "302" in c.detail
+
+
+def test_robot_presses_the_intake_confirm_when_the_case_does_not_grade_it(tmp_path):
+    import rehearse
+
+    class D:
+        pressed = []
+
+        def wait_for(self, name, timeout):
+            return True
+
+        def press(self, name):
+            self.pressed.append(name)
+    log = tmp_path / "scene.jsonl"
+    log.write_text(json.dumps({"t": 1, "event": "choices", "labels": ["Đúng rồi, làm tiếp", "Có chỗ sai"]}) + "\n",
+                   encoding="utf-8")
+    d = D()
+    rehearse.AUTO_PRESS[:] = [(d, {"Đúng rồi, làm tiếp"}, set())]
+    try:
+        rehearse.wait_log(log, lambda ev: True, 2)
+        rehearse.wait_log(log, lambda ev: True, 2)
+    finally:
+        rehearse.AUTO_PRESS.clear()
+    assert d.pressed == ["Đúng rồi, làm tiếp"]
