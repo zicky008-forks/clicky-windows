@@ -80,6 +80,80 @@ def wait_log(log: Path, done, timeout: float, quiet: float = 0.0) -> list:
     return events
 
 
+def answer(driver, log: Path, part: str, timeout: float, question: str = "") -> str | None:
+    """Wait for a choice whose label contains `part` (and question contains `question`), press it; the label or None."""
+    def pick(ev):
+        for e in ev:
+            if e.get("event") == "choices" and question.casefold() in (e.get("question") or "").casefold():
+                for lab in e.get("labels") or []:
+                    if part.casefold() in lab.casefold():
+                        return lab
+        return None
+    label = pick(wait_log(log, lambda ev: pick(ev) is not None, timeout))
+    if label and driver.wait_for(label, 20):
+        driver.press(label)
+        return label
+    return None
+
+
+def file_hash(path: Path) -> str:
+    import hashlib
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+class NetWatch:
+    """Counts Clicky.exe's outside connections (not loopback), sampled every second."""
+
+    def __init__(self, image: str = "Clicky.exe"):
+        import threading
+        self.image, self.seen, self._stop = image, set(), threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self) -> dict:
+        self._stop.set()
+        self._thread.join(timeout=5)
+        return {"connections": len(self.seen), "ports": sorted({p for _, p in self.seen})}
+
+    def _sample(self, pids):
+        try:
+            import psutil
+            for pid in pids:
+                for c in psutil.Process(pid).net_connections(kind="inet"):
+                    if c.raddr and not c.raddr.ip.startswith(("127.", "::1")):
+                        self.seen.add((c.raddr.ip, c.raddr.port))
+            return
+        except ImportError:
+            pass
+        except Exception:
+            return
+        ids = ",".join(map(str, pids))
+        cmd = (f"Get-NetTCPConnection -OwningProcess {ids} -ErrorAction SilentlyContinue | "
+               "Where-Object {$_.RemoteAddress -notmatch '^(127\\.|::1|0\\.0\\.0\\.0|::)$'} | "
+               "ForEach-Object { $_.RemoteAddress + ' ' + $_.RemotePort }")
+        try:
+            out = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True,
+                                 timeout=10).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[1].isdigit():
+                self.seen.add((parts[0], int(parts[1])))
+
+    def _run(self):
+        while not self._stop.is_set():
+            pids = drivers.pids_of(self.image)
+            if pids:
+                self._sample(pids)
+            self._stop.wait(1.0)
+
+
 def open_workbook(source: Path, allow_others: bool, zoom: int | None = None):
     import win32com.client
     excel = win32com.client.Dispatch("Excel.Application")
@@ -138,6 +212,9 @@ def main(argv=None) -> int:
     ap.add_argument("--no-visual", action="store_true", help="Bỏ phần chụp màn hình và chấm bằng ảnh")
     ap.add_argument("--local-only", action="store_true",
                     help="Bật chế độ 'Chỉ chạy trên máy, không gửi gì' (CLICKY_LOCAL_ONLY=1) và chấm không có lần gửi nào")
+    ap.add_argument("--tamper", default=None, metavar="SHEET!CELL=DELTA",
+                    help="Việc 3b: nhờ Clicky (móc thử CLICKY_TEST_TAMPER) cộng DELTA vào ô đó ngay sau khi lưu; "
+                         "chấm Clicky có phát hiện đúng ô và đúng số lệch không")
     ap.add_argument("--egress-log", default=None,
                     help="Nhật ký gửi đi của Clicky (mặc định %%LOCALAPPDATA%%\\Clicky\\gui-di.jsonl)")
     args = ap.parse_args(argv)
@@ -165,12 +242,21 @@ def main(argv=None) -> int:
     egress_start = egress.stat().st_size if egress.exists() else 0
     if args.local_only:
         expected = dict(expected, egress=dict(expected.get("egress") or {}, local_only=True))
+    if args.tamper:
+        ref, _, delta = args.tamper.partition("=")
+        expected = dict(expected, tamper={"cell": ref, "delta": float(delta)})
+        expected.pop("verify", None)            # a clean re-read is not expected on this run
+    hash_before = file_hash(copy)
     clock.lap("Mở Excel")
 
     say(f"2/6 Mở Clicky: {exe}")
     env = dict(os.environ, CLICKY_SCENE_LOG=str(log))
     if args.local_only:
         env["CLICKY_LOCAL_ONLY"] = "1"
+    if args.tamper:
+        env["CLICKY_TEST_TAMPER"] = args.tamper
+    net = NetWatch()
+    net.start()
     subprocess.Popen([exe], env=env, cwd=str(Path(exe).parent))
     watcher = None
     if not args.no_visual:
@@ -205,12 +291,16 @@ def main(argv=None) -> int:
         confirm = expected["intake"].get("confirm_label", "Đúng rồi, làm tiếp")
         asked = lambda ev: any(confirm in (e.get("labels") or []) for e in ev if e.get("event") == "choices")  # noqa: E731
         if asked(wait_log(log, asked, expected.get("first_stage_seconds", 240))):
-            untouched = sheet_values(wb) == baseline
+            untouched = sheet_values(wb) == baseline and file_hash(copy) == hash_before
             say(f"   Phiếu nhận file: bấm \"{confirm}\"")
             if driver.wait_for(confirm, 20):
                 driver.press(confirm)
         else:
             say("   Không thấy phiếu nhận file.")
+    for part in (expected.get("roles") or {}).get("choose", []):
+        got = answer(driver, log, part, expected.get("first_stage_seconds", 240),
+                     expected["roles"].get("ask_contains", ""))
+        say(f"   Chọn nguồn: {got}" if got else f"   Clicky không hỏi chọn \"{part}\"")
     fix = expected.get("fix_label")
     if fix:
         limit = expected.get("first_stage_seconds", 240)
@@ -243,6 +333,7 @@ def main(argv=None) -> int:
     events = checks.read_log(log)
     result = checks.evaluate(events, sheets, expected)
     result.checks.append(checks.stage_check(stalled))
+    network = net.stop()
     egress_text = None
     if "egress" in expected and egress.exists():
         with egress.open("rb") as fh:
@@ -251,14 +342,15 @@ def main(argv=None) -> int:
     elif "egress" in expected and expected["egress"].get("local_only"):
         egress_text = ""
     result.checks += beta_checks.evaluate(events, sheets, expected, untouched_before_confirm=untouched,
-                                          workbook=copy, egress_text=egress_text)
+                                          workbook=copy, egress_text=egress_text, network=network)
     if watcher is not None:
         watcher.stop()
         watcher.join(timeout=10)
         add_visual(result, events, watcher.captures, out)
     meta = {"case": expected.get("case", ""), "clicky": exe, "when": time.strftime("%d/%m/%Y %H:%M"),
             "driver": f"{driver.label} {driver.version}", "steps": clock.steps, "workbook": str(copy),
-            "zoom": args.zoom or "mặc định"}
+            "zoom": args.zoom or "mặc định", "network": network,
+            "mode": "local-only" if args.local_only else ("tamper " + args.tamper if args.tamper else "thường")}
     (out / "ket-qua.md").write_text(checks.report_md(result, meta), encoding="utf-8")
     (out / "ket-qua.json").write_text(json.dumps(
         {"passed": result.passed, "meta": meta,

@@ -27,7 +27,7 @@
     "files_min": 3,
     "must_mention": [
       "Tổng cộng",
-      "trùng"
+      "HCM-HD10341"
     ],
     "_note": "Việc 1: phiếu nêu 2 sổ cân đối + file bán hàng; dòng Tổng cộng và đơn trùng bị bỏ có ghi rõ."
   },
@@ -62,6 +62,7 @@
   },
   "egress": {
     "names": [],
-    "_note": "Việc 6: điền tên khách/NCC/nhân viên của Case 01 vào names. Chạy thêm một lượt với --local-only, số phải giống hệt."
+    "_note": "Việc 6: điền tên khách/NCC/nhân viên (names) và mã số thuế, CCCD, số TK, điện thoại đã cài trong Case 01 (ids). Chạy thêm một lượt --local-only: 0 kết nối, số giống hệt.",
+    "ids": []
   }
 }

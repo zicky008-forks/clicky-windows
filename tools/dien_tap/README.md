@@ -59,12 +59,12 @@ Người dùng bình thường không bao giờ có file này.
 
 | Việc | Mục trong file đáp án | Robot kiểm |
 | --- | --- | --- |
-| 1. Phiếu nhận file | `intake` | phiếu hiện trước cảnh đầu, đủ file, nêu dòng bị bỏ; robot so file trước và lúc phiếu hiện (chưa bấm thì chưa ô nào đổi), rồi bấm "Đúng rồi, làm tiếp" |
+| 1. Phiếu nhận file | `intake` | phiếu hiện trước cảnh đầu, đủ file, nêu dòng bị bỏ; robot so giá trị ô và mã băm file trước và lúc phiếu hiện, không có sự kiện `write` trước khi bấm, rồi bấm "Đúng rồi, làm tiếp" |
 | 2. Không bỏ qua im lặng | `coverage` | mỗi file: dùng + bỏ = tổng; tổng phần bỏ liệt kê khớp |
-| 3. Mở lại file và đối chiếu | `verify` | có sự kiện `verify`; không báo "Khớp sổ cái" khi đối chiếu lại thấy lệch |
+| 3. Mở lại file và đối chiếu | `verify`; `--tamper "BC!C30=1000000"` | có sự kiện `verify`; không báo "Khớp sổ cái" khi lệch. Với `--tamper`, Clicky (móc thử `CLICKY_TEST_TAMPER`) cộng số đó vào ô ngay sau khi lưu; robot chấm đúng ô, đúng số lệch, không giao file |
 | 4. Biên bản + Sơ bộ/Chính thức | `audit` | sheet "Bien ban Clicky" có các dòng cần có, nhãn SƠ BỘ, không tự chuyển CHÍNH THỨC, có `_ban-goc.xlsx` |
-| 5. Vai trò từng nguồn | `roles` | hai nguồn cùng vai trò thì hỏi; số từ ảnh không có trong file |
-| 6. Xem trước dữ liệu rời máy | `egress` | nhật ký gửi đi không lộ tên trong danh mục, chuỗi 10/12/13 số, email; lần đầu có xem trước + duyệt; `--local-only` thì không có lần gửi nào |
+| 5. Vai trò từng nguồn | `roles` (`choose`) | hai nguồn cùng vai trò thì hỏi; robot bấm bản có tên trong `choose`; số từ ảnh không có trong file |
+| 6. Xem trước dữ liệu rời máy | `egress` | nhật ký gửi đi không lộ tên trong danh mục, chuỗi 10/12/13 số, email; lần đầu có xem trước + duyệt; `--local-only` thì không có lần gửi nào và robot đếm 0 kết nối mạng ra ngoài của Clicky.exe (lấy mẫu mỗi giây, ghi vào ket-qua.json `meta.network`) |
 
 Chạy: `--expected case01_beta_expected.json` (việc 1, 2, 3, 4, 6), thêm một lượt `--local-only` (số phải giống hệt), và `--expected case01_nguon_trung_expected.json` trên thư mục biến thể (việc 5). Robot chỉ báo loại lỗi lộ dữ liệu, không in giá trị bị lộ.
 
