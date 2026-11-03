@@ -284,7 +284,7 @@ def _manager(bridge, replies, llm):
 
 
 def _month_close_through_the_manager(case_dir, monkeypatch, local):
-    """"làm báo cáo tháng từ thư mục này" then "sửa giúp tôi", as the user would say them."""
+    """"làm báo cáo tháng từ thư mục này", "đúng rồi, làm tiếp", then "sửa giúp tôi", as the user would say them."""
     import companion_manager as module
     import skills as skills_pkg
     if local:
@@ -309,6 +309,7 @@ def _month_close_through_the_manager(case_dir, monkeypatch, local):
 
     async def run():
         await module.CompanionManager._process_query(manager, "làm báo cáo tháng từ thư mục này")
+        await module.CompanionManager._process_query(manager, "Đúng rồi, làm tiếp")
         await module.CompanionManager._process_query(manager, "Sửa giúp tôi")
         if local:
             # A question that needs AI: with the switch on it must stop before the screenshot and the provider.
@@ -320,7 +321,7 @@ def _month_close_through_the_manager(case_dir, monkeypatch, local):
 
 
 def test_local_only_month_close_numbers_and_beats_are_identical(case, tmp_path, monkeypatch):
-    other = tmp_path / "copy"
+    other = tmp_path.parent / (tmp_path.name + "-copy")   # beside the case, not inside it: the receipt lists every file
     shutil.copytree(case, other)
     off_replies, off_sheets, off_queries, off_llm, off_rec = _month_close_through_the_manager(case, monkeypatch, local=False)
     on_replies, on_sheets, on_queries, on_llm, on_rec = _month_close_through_the_manager(other, monkeypatch, local=True)
