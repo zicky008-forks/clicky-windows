@@ -344,6 +344,7 @@ def main():
     manager.sig_draw.connect(overlay.add_shape)
     manager.sig_clear_drawings.connect(overlay.clear_annotations)
     # Questions Clicky asks get real buttons; a click answers as if the words were typed.
+    manager.sig_intake.connect(choice_card.set_details)
     manager.sig_choices.connect(choice_card.ask)
     choice_card.chosen.connect(manager.submit_text)
     # The last card belongs to the question just answered; it must not linger while Clicky works.
@@ -375,6 +376,12 @@ def main():
             panel.show()
 
     manager.sig_guided.connect(_on_guided)
+
+    def _open_chat():
+        guided_state["panel_was_open"] = False
+        panel.show()
+        panel.raise_()
+    manager.sig_open_chat.connect(_open_chat)
     choice_card.dismissed.connect(lambda: _on_guided(False))
 
     # Errors. The toast names the log file because it only has room for the

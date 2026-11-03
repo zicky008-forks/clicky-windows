@@ -12,6 +12,11 @@ from typing import Optional
 
 from office.cellref import CellRef, col_letters, parse_ref
 
+try:                                # the rehearsal robot checks that nothing is written before the user confirms
+    import scene_log
+except ImportError:                 # pragma: no cover
+    scene_log = None
+
 log = logging.getLogger(__name__)
 
 MAX_CONTEXT_ROWS = 30
@@ -150,6 +155,8 @@ class ExcelBridge:
         height, width = len(rows), max(len(r) for r in rows)
         if height * width > MAX_WRITE_CELLS:
             return False
+        if scene_log is not None:
+            scene_log.record("write", ref=text, rows=height, cols=width)
         def cell(v):
             return float(v) if isinstance(v, Decimal) else v
         grid = tuple(tuple(cell(r[i]) if i < len(r) else "" for i in range(width)) for r in rows)
@@ -175,6 +182,8 @@ class ExcelBridge:
                 final, n = f"{base} {n}", n + 1
             ws = wb.Worksheets.Add(After=wb.Worksheets(wb.Worksheets.Count))
             ws.Name = final
+            if scene_log is not None:
+                scene_log.record("write", ref=f"{final}!", add_sheet=True)
             return final
         except Exception:
             return None
@@ -205,6 +214,25 @@ class ExcelBridge:
             return path or None
         except Exception:
             return None
+
+    def workbook_path(self) -> Optional[str]:
+        """Full path of the saved active workbook, or None for a new, unsaved one."""
+        app = self._excel()
+        try:
+            wb = app.ActiveWorkbook
+            return str(wb.FullName) if str(wb.Path or "") else None
+        except Exception:
+            return None
+
+    def save_copy(self, path: str) -> bool:
+        """Save a copy of the workbook as it is now under another name; the open workbook is not renamed or saved."""
+        app = self._excel()
+        try:
+            app.ActiveWorkbook.SaveCopyAs(path)
+            return True
+        except Exception as exc:
+            log.warning("Saving a copy to %s failed: %s", path, exc)
+            return False
 
     def sheet_names(self) -> list:
         app = self._excel()
@@ -296,6 +324,8 @@ class ExcelBridge:
         app = self._excel()
         if ref is None or app is None:
             return
+        if scene_log is not None:
+            scene_log.record("write", ref=text, clear=True)
         self._sheet(app, ref).Range(ref.address).Clear()
 
     def style(self, text: str, bold=None, italic=None, size=None, color=None, fill=None, wrap=None,
