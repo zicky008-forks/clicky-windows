@@ -39,6 +39,7 @@ class FileLine:
     total: Decimal = ZERO            # what the file holds (Phát sinh Nợ, or the sum of its order rows)
     used: Decimal = ZERO
     dropped: Decimal = ZERO
+    shown: str = ""                  # the file's name on disk when `name` is a sheet-style stem (TB_T10 → TB_T10.xlsx)
 
 
 @dataclass
@@ -213,6 +214,8 @@ def build(folder: Path, files: list, tbs: list, truth, ledger: dict, workbook: O
     for i, (name, rows, tb) in enumerate(reversed(picked)):
         previous = picked[0][2] if i == 0 and len(picked) == 2 else None
         line, items = _tb_line(name, rows, tb, previous)
+        on_disk = next(iter(sorted(folder.glob(f"{name}.xls*"))), None)
+        line.shown = on_disk.name if on_disk else ""
         intake.files.append(line)
         intake.dropped += items
     for name, _rows, _tb in tbs[:-2]:
@@ -258,7 +261,7 @@ def card(intake: Intake) -> dict:
         if f.kind.startswith("Sổ cân đối"):
             detail = " · ".join(x for x in (f"Kỳ {f.period}" if f.period else "", f"đơn vị {f.unit}" if f.unit else "",
                                             f.checks) if x)
-            rows.append({"ok": f.ok, "title": f"{f.name} · {f.kind}", "count": f.rows_label, "detail": detail,
+            rows.append({"ok": f.ok, "title": f"{f.shown or f.name} · {f.kind}", "count": f.rows_label, "detail": detail,
                          "role": roles_mod.OFFICIAL})
     sales = [f for f in intake.files if f.kind == "Bán hàng"]
     if sales:
@@ -290,7 +293,7 @@ def summarize_dropped(items: list, limit: int = 4) -> list:
         where = files[0] if len(files) == 1 else f"{len(files)} file"
         total = sum((d.amount for d in ds if d.amount is not None), ZERO)
         if key == "dup":
-            out.append(f"{len(ds)} đơn bị xuất 2 lần ở {where}, bỏ 1 bản ({spoken(total)})")
+            out.append(f"{len(ds)} đơn trùng ở {where}: xuất 2 lần, bỏ 1 bản ({spoken(total)})")
         elif key == "out":
             out.append(f"{len(ds)} đơn ngoài kỳ ở {where} ({spoken(total)})")
         elif key == "foot":

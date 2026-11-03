@@ -615,12 +615,12 @@ def test_receipt_comes_first_and_nothing_is_written_before_it_is_confirmed(folde
     assert bridge.writes == [] and bridge.copies == [] and pq.queries == {}          # not one cell touched
     card = beats[0].intake["card"]
     titles = [r["title"] for r in card["rows"]]
-    assert titles[0] == "TB_T10 · Sổ cân đối T10" and titles[1] == "TB_T09 · Sổ cân đối T09"
+    assert titles[0] == "TB_T10.xlsx · Sổ cân đối T10" and titles[1] == "TB_T09.xlsx · Sổ cân đối T09"
     assert titles[2].startswith("Bán hàng") and card["rows"][2]["count"] == "6 đơn"
     assert "khớp Nợ = Có" in card["rows"][0]["detail"] and "Kỳ 01/10/2026–31/10/2026" in card["rows"][0]["detail"]
     assert "khớp Có TK 511" in card["rows"][2]["detail"]
     left = " ".join(card["left_out"])
-    assert "Tổng cộng" in left and "xuất 2 lần" in left and "file không dùng" in left
+    assert "Tổng cộng" in left and "trùng" in left and "file không dùng" in left
     log = beats[0].intake["log"]
     assert len(log["files"]) == 5                       # 2 trial balances, 2 sales files, the query written by an AI
     for f in log["files"]:
