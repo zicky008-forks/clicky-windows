@@ -43,6 +43,35 @@ TRI_ROTATION_DEG = -35.0
 
 # #3380FF
 CURSOR_BLUE = QColor(0x33, 0x80, 0xFF)
+HAT_BLUE = QColor(0x25, 0x63, 0xEB)       # nón lá, same blue as the panel (#2563eb)
+HAT_STRAP = QColor(0x1E, 0x40, 0xAF)
+HAT_RING = QColor(0xCF, 0xE0, 0xFF)
+# Old triangle tip sat at height/1.5 above its centre; the hat's apex stays there.
+TRI_TIP = TRI_SIZE * math.sqrt(3) / 2 / 1.5
+
+
+def _hat_paths():
+    """Nón lá seen from the side, in pointer-local coords (apex up):
+    hat body, two woven rings, chin strap. Same symbol as the app/tray icon."""
+    k = 0.75                      # 32-unit design grid -> ~20 px wide
+
+    def pt(x, y):
+        return QPointF((x - 16) * k, (y - 2.5) * k - TRI_TIP)
+
+    body = QPainterPath()
+    body.moveTo(pt(16, 2.5))
+    body.lineTo(pt(29, 23.5))
+    body.quadTo(pt(16, 28.5), pt(3, 23.5))
+    body.closeSubpath()
+    rings = QPainterPath()
+    rings.moveTo(pt(12.2, 10))
+    rings.quadTo(pt(16, 11.4), pt(19.8, 10))
+    rings.moveTo(pt(8.6, 16.2))
+    rings.quadTo(pt(16, 18.6), pt(23.4, 16.2))
+    strap = QPainterPath()
+    strap.moveTo(pt(9, 26))
+    strap.quadTo(pt(16, 31), pt(23, 26))
+    return body, rings, strap
 
 # Teaching-annotation palette. The LLM picks colors by name; default is the
 # Clicky blue. Chosen for contrast on both light and dark content.
@@ -836,16 +865,13 @@ class CursorOverlay(QWidget):
             p.drawEllipse(QPointF(cx, cy), radius * r_mul, radius * r_mul)
 
     def _draw_triangle(self, p, cx, cy):
-        """Flat blue equilateral triangle, rotated -35° → cursor-like tilt."""
-        size = TRI_SIZE
-        height = size * math.sqrt(3) / 2
+        """The buddy pointer: a blue nón lá (Vietnamese conical hat) seen from the side, rotated -35°.
 
-        # Build triangle in local coords, then rotate/translate
-        path = QPainterPath()
-        path.moveTo(0, -height / 1.5)              # top vertex
-        path.lineTo(-size / 2, height / 3)         # bottom-left
-        path.lineTo( size / 2, height / 3)         # bottom-right
-        path.closeSubpath()
+        From the side the hat is a triangle, so it keeps Clicky's pointing tip; the apex sits
+        exactly where the old triangle tip was (0, -TRI_TIP), so pointing stays aligned.
+        """
+        size = TRI_SIZE
+        body, rings, strap = _hat_paths()
 
         p.save()
         p.translate(cx, cy)
@@ -861,9 +887,15 @@ class CursorOverlay(QWidget):
 
         p.rotate(self._rotation_deg)
         p.scale(self._flight_scale, self._flight_scale)
-        p.setBrush(QBrush(CURSOR_BLUE))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawPath(path)
+        # Thin white rim keeps the hat readable on dark sheets and on blue selections.
+        p.setPen(QPen(QColor(255, 255, 255, 235), 1.1))
+        p.setBrush(QBrush(HAT_BLUE))
+        p.drawPath(body)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(HAT_RING, 1.0))
+        p.drawPath(rings)
+        p.setPen(QPen(HAT_STRAP, 1.1))
+        p.drawPath(strap)
 
         p.restore()
 
