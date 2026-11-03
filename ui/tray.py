@@ -9,15 +9,16 @@ from config import cfg
 from storage import set_setting, setting
 
 
-def _make_tray_icon(color: QColor) -> QIcon:
-    """Tray icon: a nón lá (conical hat) in the state colour, matching the app icon.
+def non_la_pixmap(size: int, color: QColor) -> QPixmap:
+    """The nón lá (conical hat) drawn at ``size`` px: the one Clicky symbol (tray, welcome, cards).
     Must be called AFTER QApplication exists (Qt requirement)."""
     from PyQt6.QtGui import QPainterPath, QPen
     from PyQt6.QtCore import QPointF
-    px = QPixmap(QSize(22, 22))
+    px = QPixmap(QSize(size, size))
     px.fill(Qt.GlobalColor.transparent)
     painter = QPainter(px)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.scale(size / 22.0, size / 22.0)              # drawn on the 22 px tray grid
     hat = QPainterPath()
     hat.moveTo(11, 2)                                   # apex
     hat.lineTo(20.5, 16.5)
@@ -29,7 +30,12 @@ def _make_tray_icon(color: QColor) -> QIcon:
     painter.setPen(QPen(QColor(255, 255, 255, 150), 1.0))
     painter.drawLine(QPointF(7.2, 11.2), QPointF(14.8, 11.2))   # one woven ring
     painter.end()
-    return QIcon(px)
+    return px
+
+
+def _make_tray_icon(color: QColor) -> QIcon:
+    """Tray icon: a nón lá (conical hat) in the state colour, matching the app icon."""
+    return QIcon(non_la_pixmap(22, color))
 
 
 class TrayManager(QObject):

@@ -49,6 +49,8 @@ hidden = [
     # lazily inside functions, so they need to be named explicitly)
     "ui.setup_wizard",
     "ui.api_keys_dialog",
+    # First run: welcome card, plain-words error card and bug-report preview
+    "first_run", "ui.plain_card", "ui.welcome", "ui.error_card", "engine.errors_vi", "engine.bug_report",
     "ui.settings_window",
     "ui.connections_window",
     "ui.jobs_window",

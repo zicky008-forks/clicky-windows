@@ -20,11 +20,12 @@ from office.month_close import Beat
 log = logging.getLogger(__name__)
 
 SAMPLE = "Mau_SongHong_T10"
-OFFER_CHOICES = ("Xem em làm", "Bỏ qua")
+OFFER_CHOICES = ("Xem em làm", "Dùng luôn file của tôi")
 DONE_CHOICES = ("Giờ thử với file của tôi", "Xem lại")
 SAMPLE_TRIGGER = (r"^\s*(xem em làm|xem em lam|xem lại|xem lai|chạy file mẫu|chay file mau|thử file mẫu|thu file mau)"
                   r"\s*[.!]?\s*$")
-OWN_TRIGGER = r"^\s*(giờ thử với file của tôi|gio thu voi file cua toi|thử file của tôi|thu file cua toi)\s*[.!]?\s*$"
+OWN_TRIGGER = (r"^\s*(giờ thử với file của tôi|gio thu voi file cua toi|thử file của tôi|thu file cua toi"
+               r"|dùng luôn file của tôi|dung luon file cua toi)\s*[.!]?\s*$")
 OFFER_TRIGGER = r"\b(file mẫu|file mau)\b"
 PAUSE_S = 2.5                 # a confirmed button stays on screen this long before it is "pressed"
 

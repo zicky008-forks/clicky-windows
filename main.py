@@ -43,7 +43,15 @@ _ensure_std_streams()
 if __name__ == "__main__":
     try:
         import velopack
-        velopack.App().run()
+        _velopack_app = velopack.App()
+        try:   # a fresh Velopack install greets the user again (first_run.py); an update does not
+            from first_run import forget_welcome
+            _hook = getattr(_velopack_app, "on_after_install_fast_callback", None)
+            if callable(_hook):
+                _velopack_app = _hook(lambda *_: forget_welcome()) or _velopack_app
+        except Exception:
+            pass
+        _velopack_app.run()
     except ImportError:
         pass
 
@@ -421,17 +429,21 @@ def main():
     drop_zone.dropped.connect(manager.submit_drop)
     choice_card.dismissed.connect(lambda: _on_guided(False))
 
-    # Errors. The toast names the log file because it only has room for the
-    # message itself — issue #15 was reported with no traceback simply because
-    # nobody knew a log existed.
-    _log_hint = Path(
-        os.environ.get("LOCALAPPDATA", Path.home())
-    ) / "Clicky" / "clicky.log"
-    manager.sig_error.connect(
-        lambda e: tray.show_notification(
-            "Clicky gặp lỗi", f"{e}\n\nChi tiết trong: {_log_hint}"
-        )
-    )
+    # Errors in plain words (engine/errors_vi.py): a card with "Thử lại" and "Báo lỗi". The raw
+    # text goes to clicky.log only; "Báo lỗi" previews the masked log before anything is kept.
+    from ui.error_card import ErrorCard, ReportPreview
+    error_card, report_preview = ErrorCard(), ReportPreview()
+    last_turn = {"text": ""}
+    manager.sig_turn_started.connect(lambda q: last_turn.update(text=q) if q else None)
+    error_card.retry_requested.connect(
+        lambda _kind: manager.submit_text(last_turn["text"]) if last_turn["text"] else None)
+    error_card.report_requested.connect(
+        lambda kind: report_preview.preview(kind, getattr(getattr(manager, "_outgoing", None), "mask", None)))
+
+    def _on_error(raw: str):
+        shown = error_card.show_error(raw)
+        panel.show_error(f"{shown['title']}. {shown['hint']}")
+    manager.sig_error.connect(_on_error)
     def _notice(message: str):
         if guided_state["active"]:
             guided_state["held"].append(message)
@@ -445,7 +457,6 @@ def main():
     panel.on_text_submitted.connect(manager.submit_text)
     panel.on_stop_requested.connect(manager.stop)
     manager.sig_turn_started.connect(panel.begin_turn)
-    manager.sig_error.connect(panel.show_error)
     panel.on_new_chat.connect(manager.clear_history)
     panel.on_new_chat.connect(panel.clear_response)
 
@@ -747,7 +758,7 @@ def main():
     def _apply_capture_policy(allowed=None):
         """Clicky hides its own windows from screen capture, unless the user turned on recording for a demo."""
         hidden = not (_allow_recording() if allowed is None else allowed)
-        for window in (overlay, panel, choice_card, outgoing_card, caption, drop_zone):
+        for window in (overlay, panel, choice_card, outgoing_card, caption, drop_zone, error_card, report_preview):
             try:
                 exclude_window(window, hidden)
             except OSError as exc:
@@ -760,7 +771,16 @@ def main():
     # The chat opens on start, with an example of what to type: a first-time user who does not
     # know the shortcut or the tray icon still sees where to begin. Setting start_hidden keeps it closed.
     from storage import setting as _setting
-    if not _setting("start_hidden", False):
+    import first_run
+    if first_run.welcome_needed() or os.environ.get("CLICKY_FORCE_SETUP", "").strip() in ("1", "true", "yes"):
+        # First start of this install: the 3 promises, then the sample month. Never an AI engine,
+        # provider or API key (those stay in Tray → Setup & Diagnostics for power users).
+        from ui.welcome import WelcomeCard, start_after_welcome
+        welcome = WelcomeCard()
+        welcome.started.connect(lambda: start_after_welcome(manager))
+        QTimer.singleShot(400, welcome.present)
+        _setup_keepalive[0] = welcome           # keep a reference so it isn't GC'd
+    elif not _setting("start_hidden", False):
         QTimer.singleShot(400, panel.show)       # the open chat says what to type; no toast on top of it
     else:
         tray.show_notification(
@@ -768,28 +788,10 @@ def main():
             "Gõ vào khung Clicky, ví dụ: làm báo cáo tháng từ thư mục này",
         )
 
-    # ── First-run setup wizard ────────────────────────────────────────────────
-    # Show the Ollama install / model pull walkthrough on the first launch.
-    # If everything is already wired up, the helper is a no-op.
-    try:
-        from ui.setup_wizard import maybe_show_setup_wizard, SetupWizard
-
-        # Force-show via env var (handy for testing).
-        if os.environ.get("CLICKY_FORCE_SETUP", "").strip() in ("1", "true", "yes"):
-            wiz = SetupWizard()
-            wiz.show()
-            _setup_keepalive[0] = wiz
-        else:
-            wiz = maybe_show_setup_wizard()
-            if wiz is not None:
-                _setup_keepalive[0] = wiz   # keep a reference so it isn't GC'd
-    except Exception as e:
-        print(f"[setup-wizard] skipped: {e}")
-
     sys.exit(app.exec())
 
 
-# Module-level slots keeping references to the setup wizard [0] and the API
+# Module-level slots keeping references to the welcome card or setup wizard [0] and the API
 # keys dialog [1] alive while Qt is running (PyQt will GC them otherwise and
 # the dialog will vanish).
 _setup_keepalive: list = [None, None]

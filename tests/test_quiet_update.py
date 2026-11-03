@@ -2,9 +2,10 @@
 import asyncio
 import sys
 import types
+from unittest import mock
 
-sys.modules.setdefault("httpx", types.ModuleType("httpx"))      # not needed by these paths
-import updates  # noqa: E402
+with mock.patch.dict(sys.modules, {"httpx": sys.modules.get("httpx") or types.ModuleType("httpx")}):
+    import updates                      # httpx is not needed by these paths; nothing leaks to other tests
 
 
 class _Asset:
