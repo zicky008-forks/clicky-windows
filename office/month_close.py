@@ -1013,6 +1013,8 @@ SELF_SAVE_TRIGGER = r"^\s*(để tôi tự lưu|de toi tu luu|tôi tự lưu|toi
 VERIFY_TRIGGER = r"\b(kiểm tra|kiem tra|đối chiếu|doi chieu)\s+(lại\s+|lai\s+)?file\s+(đã\s+|da\s+)?lưu|\bkiem tra file da luu\b"
 # Cells of the saved file that must read back as the code computed them (sheet!cell → đồng).
 _EXPECT: dict = {}
+# The last report's key figures, for the sample run's closing card (code-computed, never typed in).
+_LAST: dict = {}
 
 
 def _save_offer() -> Beat:
@@ -1153,6 +1155,8 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
         net = next(f.value for f in report.figures if f.key == "net_rev")
         _EXPECT.update({f"{sheet}!C{row + 1}": -int(overstated), f"{sheet}!C{row + 2}": int(net - overstated),
                         f"{sheet}!C{row + 3}": int(pat - overstated)})
+    _LAST.clear()
+    _LAST.update(pat=pat, overstated=overstated, real=pat - overstated, report=names["report"])
     beats = [Beat(f"Em đã lập báo cáo tháng{asks}.", f"{sheet}!A4:G{row}", "Báo cáo tháng đã lập", "", "", note)]
     if overstated > 0:
         real = pat - overstated

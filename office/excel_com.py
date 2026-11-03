@@ -224,6 +224,25 @@ class ExcelBridge:
         except Exception:
             return None
 
+    def open_workbook(self, path: str) -> bool:
+        """Open a workbook in Excel (starting Excel when it is not running), maximised and in front."""
+        if self._app is None and sys.platform != "win32":
+            return False
+        try:
+            app = self._excel()
+            if app is None:
+                import pythoncom
+                import win32com.client
+                pythoncom.CoInitialize()
+                app = win32com.client.Dispatch("Excel.Application")
+            app.Visible = True
+            app.Workbooks.Open(path)
+            app.WindowState = -4137            # xlMaximized
+            return True
+        except Exception as exc:
+            log.warning("Opening %s in Excel failed: %s", path, exc)
+            return False
+
     def save(self) -> bool:
         """Save the active workbook in place (only when the user asked Clicky to)."""
         app = self._excel()
