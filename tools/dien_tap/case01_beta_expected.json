@@ -24,12 +24,17 @@
   ],
   "intake": {
     "confirm_label": "Đúng rồi, làm tiếp",
-    "files_min": 3,
+    "files_min": 5,
     "must_mention": [
       "Tổng cộng",
-      "trùng"
+      "HCM-HD10341",
+      "2_Tra_loi_cac_bo_phan",
+      "BaoCao_T10_Clicky_tao_san",
+      "README",
+      "1_M_do_AI_viet",
+      "0_Kiem_tra_may"
     ],
-    "_note": "Việc 1: phiếu nêu 2 sổ cân đối + file bán hàng; dòng Tổng cộng và đơn trùng bị bỏ có ghi rõ."
+    "_note": "Việc 1+2: phiếu nêu TB_T10, TB_T09 và 3 file đơn hàng; dòng 'Tổng cộng' cuối hai sổ cân đối bị bỏ (dòng tổng, tiêu chí 2b); đơn trùng HCM-HD10341; mọi file không dùng làm số (2d), kể cả 1_M_do_AI_viet.txt và 0_Kiem_tra_may.ps1."
   },
   "coverage": {
     "tolerance": 1,
@@ -62,6 +67,10 @@
   },
   "egress": {
     "names": [],
-    "_note": "Việc 6: điền tên khách/NCC/nhân viên của Case 01 vào names. Chạy thêm một lượt với --local-only, số phải giống hệt."
-  }
+    "_note": "Việc 6: điền tên khách/NCC/nhân viên (names) và mã số thuế, CCCD, số TK, điện thoại đã cài trong Case 01 (ids). Chạy thêm một lượt --local-only: 0 kết nối, số giống hệt.",
+    "ids": []
+  },
+  "save_label": "Lưu và kiểm tra",
+  "verify_seconds": 120,
+  "tamper_example": "--tamper \"'BC thang'!C23=5000000\""
 }

@@ -61,12 +61,46 @@ class Clock:
         self.last = now
 
 
+AUTO_PRESS = []        # (driver, labels): buttons pressed whenever they come up, e.g. the intake receipt's confirm
+
+
+def _file_stem(text: str) -> str:
+    import re
+    text = re.sub(r"^\s*Dùng\s+", "", text or "", flags=re.IGNORECASE).strip()
+    return re.sub(r"\.(xlsx|xlsm|xls|csv|pdf|png|jpg|jpeg|txt|docx)$", "", text, flags=re.IGNORECASE).casefold()
+
+
+def match_label(part: str, labels) -> str | None:
+    """The button that names exactly `part`: the whole file name after "Dùng ", never a substring.
+    "TB_T10.xlsx" matches "Dùng TB_T10" but not "Dùng TB_T10_cu" nor "Dùng TB_T10 (1)"."""
+    want = _file_stem(part)
+    return next((lab for lab in labels or [] if _file_stem(lab) == want), None)
+
+
+def _auto_press(events) -> None:
+    for driver, labels, done in AUTO_PRESS:
+        for i, e in enumerate(events):
+            if e.get("event") != "choices" or i in done:
+                continue
+            if callable(labels):
+                hit = labels(e)
+            else:
+                hit = next((lab for lab in e.get("labels") or [] if lab in labels), None)
+            if hit:
+                done.add(i)
+                say(f"   Bấm \"{hit}\"")
+                if driver.wait_for(hit, 20):
+                    driver.press(hit)
+
+
 def wait_log(log: Path, done, timeout: float, quiet: float = 0.0) -> list:
-    """Poll the scene log until done(events) holds (then `quiet` seconds with no new event), or time runs out."""
+    """Poll the scene log until done(events) holds (then `quiet` seconds with no new event), or time runs out.
+    Buttons registered in AUTO_PRESS are pressed as they appear."""
     end = time.monotonic() + timeout
     events = []
     while time.monotonic() < end:
         events = checks.read_log(log)
+        _auto_press(events)
         if done(events):
             if not quiet:
                 return events
@@ -78,6 +112,73 @@ def wait_log(log: Path, done, timeout: float, quiet: float = 0.0) -> list:
             continue
         time.sleep(1.0)
     return events
+
+
+def file_hash(path: Path) -> str:
+    import hashlib
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+class NetWatch:
+    """Counts Clicky.exe's outside connections (not loopback), sampled every second."""
+
+    def __init__(self, image: str = "Clicky.exe"):
+        import threading
+        self.image, self.seen, self._stop = image, set(), threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self) -> dict:
+        self._stop.set()
+        self._thread.join(timeout=5)
+        return {"connections": len(self.seen), "ports": sorted({p for _, p in self.seen})}
+
+    def _sample(self, pids):
+        try:
+            import psutil
+            for pid in pids:
+                for c in psutil.Process(pid).net_connections(kind="inet"):
+                    if c.raddr and not c.raddr.ip.startswith(("127.", "::1")):
+                        self.seen.add((c.raddr.ip, c.raddr.port))
+            return
+        except ImportError:
+            pass
+        except Exception:
+            return
+        ids = ",".join(map(str, pids))
+        cmd = (f"Get-NetTCPConnection -OwningProcess {ids} -ErrorAction SilentlyContinue | "
+               "Where-Object {$_.RemoteAddress -notmatch '^(127\\.|::1|0\\.0\\.0\\.0|::)$'} | "
+               "ForEach-Object { $_.RemoteAddress + ' ' + $_.RemotePort }")
+        try:
+            out = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True,
+                                 timeout=10).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[1].isdigit():
+                self.seen.add((parts[0], int(parts[1])))
+
+    def _run(self):
+        while not self._stop.is_set():
+            pids = drivers.pids_of(self.image)
+            if pids:
+                self._sample(pids)
+            self._stop.wait(1.0)
+
+
+def no_workbook(allow_others: bool):
+    import win32com.client
+    excel = win32com.client.Dispatch("Excel.Application")
+    others = [wb.Name for wb in excel.Workbooks]
+    if others and not allow_others:
+        raise SystemExit(f"Excel đang mở file khác: {', '.join(others)}. Đóng hết rồi chạy lại.")
+    return excel, None, None
 
 
 def open_workbook(source: Path, allow_others: bool, zoom: int | None = None):
@@ -125,7 +226,9 @@ def sheet_values(wb, max_rows: int = 200, max_cols: int = 12) -> dict:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Diễn tập trọn hành trình báo cáo tháng bằng robot.")
-    ap.add_argument("--workbook", required=True, help="File Excel trống của case, nằm trong thư mục dữ liệu tháng")
+    ap.add_argument("--workbook", default=None, help="File Excel trống của case, nằm trong thư mục dữ liệu tháng")
+    ap.add_argument("--sample", action="store_true",
+                    help="Việc 10: gõ \"xem em làm\", Clicky tự chạy file mẫu có sẵn; robot đọc workbook Clicky mở")
     ap.add_argument("--expected", default=str(HERE / "case01_expected.json"), help="Đáp án cần đạt (JSON)")
     ap.add_argument("--clicky", default=None, help="Đường dẫn Clicky.exe (mặc định: bản cài trong LOCALAPPDATA)")
     ap.add_argument("--driver", choices=("auto", "agent-desktop", "uia"), default="auto")
@@ -138,13 +241,26 @@ def main(argv=None) -> int:
     ap.add_argument("--no-visual", action="store_true", help="Bỏ phần chụp màn hình và chấm bằng ảnh")
     ap.add_argument("--local-only", action="store_true",
                     help="Bật chế độ 'Chỉ chạy trên máy, không gửi gì' (CLICKY_LOCAL_ONLY=1) và chấm không có lần gửi nào")
+    ap.add_argument("--auto-press", action="append", default=None,
+                    help="Nút robot bấm bất cứ khi nào hiện ra (mặc định: \"Đúng rồi, làm tiếp\" khi đáp án không chấm phiếu nhận)")
+    ap.add_argument("--tamper", default=None, metavar="SHEET!CELL=DELTA",
+                    help="Việc 3b: nhờ Clicky (móc thử CLICKY_TEST_TAMPER) cộng DELTA vào ô đó ngay sau khi lưu; "
+                         "chấm Clicky có phát hiện đúng ô và đúng số lệch không")
     ap.add_argument("--egress-log", default=None,
                     help="Nhật ký gửi đi của Clicky (mặc định %%LOCALAPPDATA%%\\Clicky\\gui-di.jsonl)")
     args = ap.parse_args(argv)
 
+    if args.sample:
+        if args.expected == ap.get_default("expected"):
+            args.expected = str(HERE / "mau_expected.json")
+        if args.command == ap.get_default("command"):
+            args.command = "xem em làm"
+    elif not args.workbook:
+        ap.error("cần --workbook (hoặc --sample để chạy file mẫu)")
     expected = json.loads(Path(args.expected).read_text(encoding="utf-8"))
-    workbook = Path(args.workbook).resolve()
-    out = Path(args.out) if args.out else workbook.parent / "dien-tap" / time.strftime("%Y%m%d_%H%M%S")
+    workbook = Path(args.workbook).resolve() if args.workbook else None
+    base = workbook.parent if workbook else Path(args.expected).resolve().parent
+    out = Path(args.out) if args.out else base / "dien-tap" / time.strftime("%Y%m%d_%H%M%S")
     out.mkdir(parents=True, exist_ok=True)
     log = out / "scene.jsonl"
     clock = Clock()
@@ -158,19 +274,33 @@ def main(argv=None) -> int:
         say("Không tìm thấy Clicky.exe. Truyền --clicky \"<đường dẫn>\".")
         return 2
 
-    say(f"1/6 Mở bản sao {workbook.name} trong Excel")
-    excel, wb, copy = open_workbook(workbook, args.allow_other_workbooks, args.zoom)
-    baseline = sheet_values(wb) if "intake" in expected else None
-    egress = Path(args.egress_log) if args.egress_log else Path(os.environ.get("LOCALAPPDATA", "")) / "Clicky" / "gui-di.jsonl"
+    if workbook:
+        say(f"1/6 Mở bản sao {workbook.name} trong Excel")
+        excel, wb, copy = open_workbook(workbook, args.allow_other_workbooks, args.zoom)
+    else:
+        say("1/6 File mẫu: Clicky tự mở, robot chỉ kiểm Excel đang trống")
+        excel, wb, copy = no_workbook(args.allow_other_workbooks)
+    baseline = sheet_values(wb) if "intake" in expected and wb is not None else None
+    data_dir = Path(os.environ.get("CLICKY_DATA_DIR") or Path(os.environ.get("LOCALAPPDATA", "")) / "Clicky")
+    egress = Path(args.egress_log) if args.egress_log else data_dir / "gui-di.jsonl"
     egress_start = egress.stat().st_size if egress.exists() else 0
     if args.local_only:
         expected = dict(expected, egress=dict(expected.get("egress") or {}, local_only=True))
+    if args.tamper:
+        ref, _, delta = args.tamper.partition("=")
+        expected = dict(expected, tamper={"cell": ref, "delta": float(delta)})
+        expected.pop("verify", None)            # a clean re-read is not expected on this run
+    hash_before = file_hash(copy) if copy else ""
     clock.lap("Mở Excel")
 
     say(f"2/6 Mở Clicky: {exe}")
     env = dict(os.environ, CLICKY_SCENE_LOG=str(log))
     if args.local_only:
         env["CLICKY_LOCAL_ONLY"] = "1"
+    if args.tamper:
+        env["CLICKY_TEST_TAMPER"] = args.tamper
+    net = NetWatch()
+    net.start()
     subprocess.Popen([exe], env=env, cwd=str(Path(exe).parent))
     watcher = None
     if not args.no_visual:
@@ -201,11 +331,27 @@ def main(argv=None) -> int:
     driver.set_text(COMPOSER, args.command)
     driver.press(SEND)
     untouched = None
+    # The sample plays with no clicks at all: the robot keeps its hands off unless told otherwise.
+    auto = args.auto_press if args.auto_press is not None else (
+        [] if "intake" in expected or args.sample else ["Đúng rồi, làm tiếp"])
+    auto = list(auto) + list(expected.get("auto_press", []))
+    if "verify" in expected or "tamper" in expected:
+        auto.append(expected.get("save_label", "Lưu và kiểm tra"))
+    if "egress" in expected and not args.local_only:
+        auto.append(expected["egress"].get("approve_label", "Gửi đi"))     # the first-send preview card
+    if auto:
+        AUTO_PRESS.append((driver, set(auto), set()))
+    roles = expected.get("roles") or {}
+    if roles.get("choose"):
+        # Which source to use: asked before the receipt, so it is answered whenever it comes up.
+        def chooser(e, parts=tuple(roles["choose"])):
+            return next(filter(None, (match_label(p, e.get("labels")) for p in parts)), None)
+        AUTO_PRESS.append((driver, chooser, set()))
     if "intake" in expected:
         confirm = expected["intake"].get("confirm_label", "Đúng rồi, làm tiếp")
         asked = lambda ev: any(confirm in (e.get("labels") or []) for e in ev if e.get("event") == "choices")  # noqa: E731
         if asked(wait_log(log, asked, expected.get("first_stage_seconds", 240))):
-            untouched = sheet_values(wb) == baseline
+            untouched = wb is not None and sheet_values(wb) == baseline and file_hash(copy) == hash_before
             say(f"   Phiếu nhận file: bấm \"{confirm}\"")
             if driver.wait_for(confirm, 20):
                 driver.press(confirm)
@@ -237,12 +383,22 @@ def main(argv=None) -> int:
     clock.lap("Chặng 2–3: sửa và lập báo cáo")
     if not finished(done_events):
         stalled.append(("Chặng 2–3", clock.steps[-1][1]))
+    if "verify" in expected or "tamper" in expected:
+        say("   Chờ Clicky lưu, mở lại file và đối chiếu")
+        verified = lambda ev: any(e.get("event") == "verify" for e in ev)  # noqa: E731
+        if not verified(wait_log(log, verified, expected.get("verify_seconds", 120), quiet=4.0)):
+            stalled.append(("Lưu và đối chiếu lại", expected.get("verify_seconds", 120)))
+        clock.lap("Lưu và đối chiếu lại")
 
     say("6/6 Đọc số trong file và chấm")
-    sheets = sheet_values(wb)
+    if wb is None:                     # the sample: read the workbook Clicky opened itself
+        wb = excel.ActiveWorkbook
+        copy = Path(wb.FullName) if wb is not None else None
+    sheets = sheet_values(wb) if wb is not None else {}
     events = checks.read_log(log)
     result = checks.evaluate(events, sheets, expected)
     result.checks.append(checks.stage_check(stalled))
+    network = net.stop()
     egress_text = None
     if "egress" in expected and egress.exists():
         with egress.open("rb") as fh:
@@ -251,14 +407,15 @@ def main(argv=None) -> int:
     elif "egress" in expected and expected["egress"].get("local_only"):
         egress_text = ""
     result.checks += beta_checks.evaluate(events, sheets, expected, untouched_before_confirm=untouched,
-                                          workbook=copy, egress_text=egress_text)
+                                          workbook=copy, egress_text=egress_text, network=network)
     if watcher is not None:
         watcher.stop()
         watcher.join(timeout=10)
         add_visual(result, events, watcher.captures, out)
     meta = {"case": expected.get("case", ""), "clicky": exe, "when": time.strftime("%d/%m/%Y %H:%M"),
             "driver": f"{driver.label} {driver.version}", "steps": clock.steps, "workbook": str(copy),
-            "zoom": args.zoom or "mặc định"}
+            "zoom": args.zoom or "mặc định", "network": network,
+            "mode": "local-only" if args.local_only else ("tamper " + args.tamper if args.tamper else "thường")}
     (out / "ket-qua.md").write_text(checks.report_md(result, meta), encoding="utf-8")
     (out / "ket-qua.json").write_text(json.dumps(
         {"passed": result.passed, "meta": meta,

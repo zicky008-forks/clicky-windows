@@ -12,6 +12,11 @@ What Clicky must write to the scene log (scene_log.record) for these checks — 
   status   {label: "SƠ BỘ" | "CHÍNH THỨC"}                         job 4: report status shown/changed
   roles    {files: [{name, role}]}                                 job 5: role given to each input
   ai_call  {chars, preview_shown: bool, approved: bool, local_only: bool}   job 6: every call that leaves the PC
+  write    {ref}                                                   job 1c: every cell write (none before confirm)
+  delivered {path}                                                 job 3b: the file is handed to the user
+
+Test hook (only when the variable is set): CLICKY_TEST_TAMPER="<Sheet!Cell>=<delta>" — right after saving,
+Clicky itself adds <delta> to that cell in the saved file, before re-reading it (job 3b).
 
 And on disk:
   <workbook>_ban-goc.xlsx next to the workbook                     job 4
@@ -68,6 +73,9 @@ def intake_checks(events, expected, untouched_before_confirm) -> list:
     label = spec.get("confirm_label", "Đúng rồi, làm tiếp")
     offered = any(label in (e.get("labels") or []) for e in _events(events, "choices"))
     out.append(Check(f"Có nút \"{label}\"", offered, "" if offered else "không thấy nút xác nhận"))
+    early_writes = writes_before(events, label)
+    out.append(Check("Không có lệnh ghi ô nào trước khi bấm xác nhận", early_writes == 0,
+                     f"{early_writes} lệnh ghi" if early_writes else "không có"))
     if untouched_before_confirm is not None:
         out.append(Check("Chưa bấm xác nhận thì chưa ô nào bị sửa", untouched_before_confirm,
                          "file giữ nguyên tới lúc bấm" if untouched_before_confirm else "đã có ô bị sửa trước khi bấm"))
@@ -144,6 +152,12 @@ def audit_checks(sheets, events, expected, workbook: Path | None) -> list:
     return out
 
 
+def _file_stem(text: str) -> str:
+    """File name named by a button, without "Dùng " and without the extension, for exact comparison."""
+    text = re.sub(r"^\s*Dùng\s+", "", text or "", flags=re.IGNORECASE).strip()
+    return re.sub(r"\.(xlsx|xlsm|xls|csv|pdf|png|jpg|jpeg|txt|docx)$", "", text, flags=re.IGNORECASE).casefold()
+
+
 def roles_checks(sheets, events, expected) -> list:
     """Job 5: two inputs with the same role → one question; figures from photos never used."""
     spec = expected["roles"]
@@ -152,6 +166,10 @@ def roles_checks(sheets, events, expected) -> list:
     if ask:
         asked = any(ask.casefold() in (e.get("question") or "").casefold() for e in _events(events, "choices"))
         out.append(Check("Hỏi khi có hai nguồn cùng vai trò", asked, "" if asked else f"không hỏi về \"{ask}\""))
+    for part in spec.get("choose", []):
+        want = _file_stem(part)
+        chosen = any(_file_stem(e.get("label") or "") == want for e in _events(events, "chosen"))
+        out.append(Check(f"Robot chọn được bản \"{part}\"", chosen, "" if chosen else "Clicky không hỏi / không có lựa chọn này"))
     for value in spec.get("numbers_absent", []):
         found = any(isinstance(c, (int, float)) and not isinstance(c, bool) and abs(c - value) < 0.5
                     for rows in sheets.values() for r in rows or [] for c in r or [])
@@ -160,13 +178,30 @@ def roles_checks(sheets, events, expected) -> list:
     return out
 
 
-def egress_checks(events, expected, egress_text: str | None) -> list:
+_MONEY_NEAR = re.compile(r"(đ|đồng|vnd|doanh thu|giá vốn|lợi nhuận|chi phí|số tiền|tổng)", re.IGNORECASE)
+
+
+def _digits(text: str) -> str:
+    return re.sub(r"[\s.\-_/]", "", text)
+
+
+def egress_checks(events, expected, egress_text: str | None, network: dict | None = None) -> list:
     """Job 6: what leaves the PC is masked, previewed the first time, and nothing leaves in local-only mode."""
     spec = expected["egress"]
     calls = _events(events, "ai_call")
     out = []
     if spec.get("local_only"):
-        out.append(Check("Chế độ chỉ chạy trên máy: không gửi gì", not calls, f"{len(calls)} lần gửi đi"))
+        sent = [c for c in calls if c.get("approved") or not c.get("local_only")]
+        out.append(Check("Chế độ chỉ chạy trên máy: Clicky không gửi gì", not sent,
+                         f"{len(sent)} lần gửi đi" + (f" ({len(calls)} lần dừng tại máy)" if calls and not sent else "")))
+        if egress_text is not None:
+            lines = [ln for ln in egress_text.splitlines() if ln.strip()]
+            out.append(Check("Chế độ chỉ chạy trên máy: nhật ký gửi đi không thêm dòng nào", not lines,
+                             f"{len(lines)} dòng mới"))
+        if network is not None:
+            n = network.get("connections", 0)
+            out.append(Check("Chế độ chỉ chạy trên máy: 0 kết nối mạng ra ngoài", n == 0,
+                             f"{n} kết nối" + (f" (cổng {', '.join(map(str, network.get('ports', [])[:5]))})" if n else "")))
         return out
     if calls:
         first = calls[0]
@@ -175,17 +210,84 @@ def egress_checks(events, expected, egress_text: str | None) -> list:
     if egress_text is None:
         out.append(Check("Có nhật ký gửi đi", False, "không đọc được nhật ký gửi đi"))
         return out
+    flat = _digits(egress_text)
     names = [n for n in spec.get("names", []) if n and n.casefold() in egress_text.casefold()]
-    ids = _IDS.findall(egress_text)
+    ids = [i for i in spec.get("ids", []) if i and _digits(str(i)) in flat]
     mails = _EMAIL.findall(egress_text)
-    leaks = (["tên trong danh mục"] if names else []) + (["chuỗi 10/12/13 số"] if ids else []) + (["email"] if mails else [])
+    leaks = (["tên trong danh mục"] if names else []) + (["mã số đã cài trong case"] if ids else []) \
+        + (["email"] if mails else [])
     # Report the kind of leak only: the leaked value itself is private.
     out.append(Check("Nhật ký gửi đi đã che tên, mã số, email", not leaks,
                      "lộ: " + ", ".join(leaks) if leaks else "không lộ gì"))
+    # A 10–13 digit run not next to a money word may be a tax code or account: shown for a human to look at.
+    loose = 0
+    for part in re.split(r"[;,\n|{}\[\]\"]", egress_text):
+        if _IDS.search(part) and not _MONEY_NEAR.search(part):
+            loose += len(_IDS.findall(part))
+    out.append(Check("Chuỗi 10/12/13 số không đứng cạnh chữ chỉ tiền (cần người xem)", loose == 0,
+                     f"{loose} chỗ" if loose else "không có", blocking=False))
     return out
 
 
-def evaluate(events, sheets, expected, *, untouched_before_confirm=None, workbook=None, egress_text=None) -> list:
+def tamper_checks(events, expected) -> list:
+    """Job 3b: a total changed after saving must be caught: right cell, right amount, file not handed over."""
+    spec = expected["tamper"]
+    v = [e for e in _events(events, "verify")]
+    if not v:
+        return [Check("Phát hiện ô bị sửa sau khi lưu", False, "không có bước đối chiếu lại")]
+    last = v[-1]
+    cell = spec["cell"].split("!")[-1].replace("$", "").upper()
+    diffs = last.get("diffs") or []
+    hit = next((d for d in diffs if str(d.get("cell", "")).split("!")[-1].replace("$", "").upper() == cell), None)
+    amount_ok = False
+    if hit and isinstance(hit.get("want"), (int, float)) and isinstance(hit.get("got"), (int, float)):
+        amount_ok = abs(abs(hit["got"] - hit["want"]) - abs(spec["delta"])) <= spec.get("tolerance", 1)
+    out = [Check("Phát hiện ô bị sửa sau khi lưu", not last.get("ok") and hit is not None,
+                 "đúng ô" if hit else ("báo khớp" if last.get("ok") else "báo lệch nhưng sai ô"))]
+    out.append(Check("Nói đúng số tiền lệch", amount_ok, "" if amount_ok else "số lệch không đúng"))
+    delivered = any(e.get("event") == "delivered" for e in events if e.get("t", 0) >= last.get("t", 0))
+    claimed = any("khớp sổ cái" in _text_of(e).casefold() for e in events
+                  if e.get("t", 0) >= last.get("t", 0) and e.get("event") in ("beat", "card"))
+    out.append(Check("Không giao file khi lệch", not delivered and not claimed,
+                     "vẫn giao file / báo khớp" if delivered or claimed else ""))
+    return out
+
+
+def writes_before(events, label: str) -> int:
+    """Cell writes Clicky logged before the user pressed `label` (scene event 'write')."""
+    pressed = next((e["t"] for e in events if e.get("event") == "chosen" and e.get("label") == label), None)
+    return sum(1 for e in events if e.get("event") == "write" and (pressed is None or e.get("t", 0) < pressed))
+
+
+def sample_checks(events, expected, workbook: Path | None) -> list:
+    """Job 10: "xem em làm" plays the bundled sample alone; the closing card states the real time."""
+    spec = expected["sample"]
+    out = []
+    v = _events(events, "verify")
+    out.append(Check("File mẫu chạy tới đối chiếu lại và khớp", bool(v) and bool(v[-1].get("ok")),
+                     "không có bước đối chiếu" if not v else ("khớp" if v[-1].get("ok") else "lệch")))
+    closing = next((e for e in reversed(_events(events, "beat")) if (e.get("title") or "").startswith("Xong trong")), None)
+    turns = _events(events, "turn")
+    if closing is None or not turns:
+        out.append(Check("Thẻ cuối nói đúng thời gian thật", False, "không thấy thẻ \"Xong trong …\""))
+    else:
+        m = re.match(r"Xong trong (?:(\d+) phút )?(\d+) giây", closing["title"])
+        said = (int(m.group(1) or 0) * 60 + int(m.group(2))) if m else None
+        real = closing["t"] - turns[0]["t"]
+        ok = said is not None and abs(said - real) <= max(spec.get("time_tolerance", 5), 0.15 * real)
+        out.append(Check("Thẻ cuối nói đúng thời gian thật", ok,
+                         f"thẻ ghi {said} giây, robot đo {real:.0f} giây" if said is not None else closing["title"]))
+    if workbook is not None:
+        orig = workbook.with_name(f"{workbook.stem}_ban-goc{workbook.suffix}")
+        out.append(Check("File mẫu còn bản gốc _ban-goc", orig.exists(), orig.name))
+    clicks = [e for e in _events(events, "chosen")]
+    out.append(Check("File mẫu chạy không cần bấm gì", not clicks or spec.get("clicks_ok", False),
+                     f"{len(clicks)} lần bấm" if clicks else "không bấm lần nào", blocking=False))
+    return out
+
+
+def evaluate(events, sheets, expected, *, untouched_before_confirm=None, workbook=None, egress_text=None,
+             network=None) -> list:
     out = []
     if "intake" in expected:
         out += intake_checks(events, expected, untouched_before_confirm)
@@ -198,5 +300,9 @@ def evaluate(events, sheets, expected, *, untouched_before_confirm=None, workboo
     if "roles" in expected:
         out += roles_checks(sheets, events, expected)
     if "egress" in expected:
-        out += egress_checks(events, expected, egress_text)
+        out += egress_checks(events, expected, egress_text, network)
+    if "tamper" in expected:
+        out += tamper_checks(events, expected)
+    if "sample" in expected:
+        out += sample_checks(events, expected, workbook)
     return out

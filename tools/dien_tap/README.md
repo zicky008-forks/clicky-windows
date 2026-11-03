@@ -59,13 +59,19 @@ Người dùng bình thường không bao giờ có file này.
 
 | Việc | Mục trong file đáp án | Robot kiểm |
 | --- | --- | --- |
-| 1. Phiếu nhận file | `intake` | phiếu hiện trước cảnh đầu, đủ file, nêu dòng bị bỏ; robot so file trước và lúc phiếu hiện (chưa bấm thì chưa ô nào đổi), rồi bấm "Đúng rồi, làm tiếp" |
+| 1. Phiếu nhận file | `intake` | phiếu hiện trước cảnh đầu, đủ file, nêu dòng bị bỏ; robot so giá trị ô và mã băm file trước và lúc phiếu hiện, không có sự kiện `write` trước khi bấm, rồi bấm "Đúng rồi, làm tiếp" |
 | 2. Không bỏ qua im lặng | `coverage` | mỗi file: dùng + bỏ = tổng; tổng phần bỏ liệt kê khớp |
-| 3. Mở lại file và đối chiếu | `verify` | có sự kiện `verify`; không báo "Khớp sổ cái" khi đối chiếu lại thấy lệch |
+| 3. Mở lại file và đối chiếu | `verify`; `--tamper "BC!C30=1000000"` | có sự kiện `verify`; không báo "Khớp sổ cái" khi lệch. Với `--tamper`, Clicky (móc thử `CLICKY_TEST_TAMPER`) cộng số đó vào ô ngay sau khi lưu; robot chấm đúng ô, đúng số lệch, không giao file |
 | 4. Biên bản + Sơ bộ/Chính thức | `audit` | sheet "Bien ban Clicky" có các dòng cần có, nhãn SƠ BỘ, không tự chuyển CHÍNH THỨC, có `_ban-goc.xlsx` |
-| 5. Vai trò từng nguồn | `roles` | hai nguồn cùng vai trò thì hỏi; số từ ảnh không có trong file |
-| 6. Xem trước dữ liệu rời máy | `egress` | nhật ký gửi đi không lộ tên trong danh mục, chuỗi 10/12/13 số, email; lần đầu có xem trước + duyệt; `--local-only` thì không có lần gửi nào |
+| 5. Vai trò từng nguồn | `roles` (`choose`) | hai nguồn cùng vai trò thì hỏi; robot bấm bản có tên trong `choose`; số từ ảnh không có trong file |
+| 6. Xem trước dữ liệu rời máy | `egress` | nhật ký gửi đi không lộ tên trong danh mục, chuỗi 10/12/13 số, email; lần đầu có xem trước + duyệt; `--local-only` thì không có lần gửi nào và robot đếm 0 kết nối mạng ra ngoài của Clicky.exe (lấy mẫu mỗi giây, ghi vào ket-qua.json `meta.network`) |
 
 Chạy: `--expected case01_beta_expected.json` (việc 1, 2, 3, 4, 6), thêm một lượt `--local-only` (số phải giống hệt), và `--expected case01_nguon_trung_expected.json` trên thư mục biến thể (việc 5). Robot chỉ báo loại lỗi lộ dữ liệu, không in giá trị bị lộ.
 
 Clicky cần ghi vào nhật ký cảnh các sự kiện `intake`, `verify`, `status`, `roles`, `ai_call`, ghi nhật ký gửi đi `%LOCALAPPDATA%\Clicky\gui-di.jsonl`, và tôn trọng biến môi trường `CLICKY_LOCAL_ONLY=1`. Chi tiết từng trường ở đầu `beta_checks.py`.
+
+### Việc 10: file mẫu "xem em làm"
+
+`python rehearse.py --sample` gõ "xem em làm" (Excel phải trống), không bấm gì, rồi đọc workbook Clicky tự mở. Đáp án `mau_expected.json`: đối chiếu lại khớp, hàng trả lại 120 triệu, lợi nhuận sau thuế thực 436 triệu, còn `_ban-goc`, thẻ cuối "Xong trong N giây" lệch thời gian robot đo không quá 5 giây (hoặc 15%).
+
+Lượt có việc 6: robot tự bấm "Gửi đi" trên thẻ xem trước lần gửi đầu. Nhật ký gửi đi mặc định ở `CLICKY_DATA_DIR` hoặc `%LOCALAPPDATA%\Clicky\gui-di.jsonl`. Với `--local-only`, `ai_call` dừng tại máy (`local_only=true`, chưa duyệt) được chấp nhận; có lần gửi thật hoặc nhật ký thêm dòng thì KHÔNG ĐẠT.
