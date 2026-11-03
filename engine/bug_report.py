@@ -86,7 +86,8 @@ def _tail(path: Path, limit: int = TAIL_BYTES) -> str:
             raw = stream.read()
     except OSError:
         return ""
-    text = raw.decode("utf-8", errors="replace")
+    # Windows logs end lines with \r\n; the saved report is written in text mode, which would double them.
+    text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
     if size > limit:                                   # start on a whole line
         text = text.split("\n", 1)[-1]
     return text
