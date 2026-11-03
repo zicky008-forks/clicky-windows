@@ -14,6 +14,7 @@ class SettingsWindow(QWidget):
     show_sketch = pyqtSignal()
     show_work = pyqtSignal()
     open_connections = pyqtSignal()
+    open_outgoing_log = pyqtSignal()
     microphone_level = pyqtSignal(float)
 
     def __init__(self, manager):
@@ -26,6 +27,16 @@ class SettingsWindow(QWidget):
         layout.addWidget(tabs)
         behavior = QWidget()
         form = QFormLayout(behavior)
+        from office.outgoing import LOCAL_ONLY_LABEL, local_only, local_only_forced
+        self.local_only = QCheckBox(LOCAL_ONLY_LABEL)
+        self.local_only.setChecked(local_only())
+        if local_only_forced():
+            self.local_only.setEnabled(False)             # CLICKY_LOCAL_ONLY=1 keeps it on
+        self.local_only.toggled.connect(lambda value: self.apply(lambda: manager.set_local_only(value)))
+        form.addRow(self.local_only)
+        outgoing_log = QPushButton("Nhật ký gửi đi…")
+        outgoing_log.clicked.connect(self.open_outgoing_log.emit)
+        form.addRow(outgoing_log)
         for label,key,default,callback in (
             ("Protect sensitive screens",'privacy_guard',True,manager.set_privacy_guard),
             ("Allow web searches for current facts",'web_search',False,manager.set_web_search),

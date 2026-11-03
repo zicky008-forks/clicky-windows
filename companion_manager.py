@@ -34,7 +34,7 @@ from tutor_features import (
     multilang, workflow_capture, collab,
 )
 import skills as skills_pkg
-from office import finance_mode
+from office import finance_mode, outgoing
 from office.cellref import parse_ref
 from office.excel_com import ExcelBridge, format_for_prompt as excel_context_prompt, is_excel_window
 from storage import setting, set_setting
@@ -322,6 +322,7 @@ class CompanionManager(QObject):
     sig_external_request    = pyqtSignal(dict)
     sig_external_result     = pyqtSignal(str)
     sig_collab_message      = pyqtSignal(dict)
+    sig_outgoing_preview    = pyqtSignal(dict)            # masked lines to approve before the first send; {} hides the card
 
     def __init__(self):
         super().__init__()
@@ -386,6 +387,9 @@ class CompanionManager(QObject):
         self._privacy_guard = setting("privacy_guard", True)
         self._code_mode_auto = setting("code_mode", True)
         self._excel = ExcelBridge()
+        # Every AI request goes through this gate: masked, approved once, logged, or not sent at all.
+        self._outgoing = outgoing.Outgoing(ask=self._ask_outgoing)
+        self._outgoing_answer = None
         self._multilang = setting("multilang", True)
         self._journal_enabled = setting("journal", True)
         self._ocr_enabled = setting("ocr", True)
@@ -462,7 +466,7 @@ class CompanionManager(QObject):
     async def _job_worker(self):
         while True:
             try:
-                if self._state == AppState.IDLE:
+                if self._state == AppState.IDLE and not outgoing.local_only():
                     job = self._jobs.claim()
                     if job:
                         self._job_task = asyncio.current_task()
@@ -490,6 +494,8 @@ class CompanionManager(QObject):
             await asyncio.sleep(5)
 
     async def _refresh_stale_models(self):
+        if outgoing.local_only():
+            return          # model lists come from the providers' servers
         try:
             from ai.model_registry import refresh_all_stale
             results = await refresh_all_stale()
@@ -677,6 +683,8 @@ class CompanionManager(QObject):
                 _ensure_ollama_running()
                 from ai.ollama_provider import OllamaProvider
                 self._llm = OllamaProvider()
+            # Nothing reaches the provider except through the gate.
+            self._llm = outgoing.GuardedProvider(self._llm, self._outgoing)
         return self._llm
 
     def _get_stt(self):
@@ -1049,6 +1057,11 @@ class CompanionManager(QObject):
             except Exception as e:
                 self.sig_error.emit(f"Skill error: {e}")
 
+            # Everything below can reach the network (AI, pointing, web search). Skills above are local.
+            if outgoing.local_only():
+                await self._reply_local(outgoing.stopped_here(len(transcript)))
+                return
+
             # 2. Screen capture — skipped if sensitive window (password manager etc.)
             #
             # ALSO skipped for "who is X" / "tell me about X" identity questions:
@@ -1146,7 +1159,8 @@ class CompanionManager(QObject):
                         physical_top=shot.physical_top,
                         dpi_scale=shot.dpi_scale,
                         screen_index=shot.index,
-                        user_question=transcript,
+                        # This path calls Anthropic directly, not through the provider: mask and log it here.
+                        user_question=await self._outgoing.cleared_text(transcript, images=1),
                     ))
                 else:
                     # Path B — Universal grid locator (any vision LLM)
@@ -1205,8 +1219,16 @@ class CompanionManager(QObject):
             finance_extra = ""
             if is_excel_window(title) and not (self._privacy_guard and is_sensitive_window(title)):
                 ctx = await asyncio.to_thread(self._excel.context)
-                finance_extra = finance_mode.finance_system_prompt_addendum() + excel_context_prompt(ctx)
-                finance_extra += await asyncio.to_thread(self._power_query_context)
+                if ctx:
+                    # Names and IDs to mask come from the workbook's own catalogue columns.
+                    await asyncio.to_thread(self._outgoing.learn_workbook, self._excel,
+                                            ctx.get("workbook", ""), ctx.get("sheet", ""))
+                excel_block = excel_context_prompt(ctx)
+                # The cells are file content; the pointing instruction that ends the block is not.
+                self._outgoing.file_text("Excel", excel_block.split("\n  To point at a cell", 1)[0])
+                finance_extra = finance_mode.finance_system_prompt_addendum() + excel_block
+                finance_extra += self._outgoing.file_text(
+                    "Power Query", await asyncio.to_thread(self._power_query_context))
             if cfg.response_language:
                 lang_code = cfg.response_language   # user-forced — always wins
             else:
@@ -1231,6 +1253,8 @@ class CompanionManager(QObject):
                 remaining = 16000 - len(doc_extra)
                 if remaining <= 0:
                     break
+                outgoing.learn_text(self._outgoing.catalogue, text)
+                self._outgoing.file_text(fname, text[:remaining])
                 doc_extra += pdf_context.format_for_prompt(fname, text[:remaining])
 
             # 4. Build system prompt with all context
@@ -1423,6 +1447,10 @@ class CompanionManager(QObject):
                 self.sig_external_request.emit(proposed_external)
             if self._guided and self._guided_target:
                 self._arm_guided_watch()
+
+        except outgoing.NotSent as e:
+            # Local-only mode, or the user pressed "Không gửi": nothing left the machine.
+            await self._reply_local(str(e))
 
         except Exception as e:
             # Log the traceback, not just the message. The toast shows one
@@ -1818,7 +1846,7 @@ class CompanionManager(QObject):
         plain TTS when the response contains no drawings."""
         segments = await asyncio.to_thread(self._segment_lesson, full_response)
         if not any(shapes for _, shapes in segments):
-            await self._get_tts().speak(_speakable(clean))
+            await self._get_tts().speak(self._voice_text(clean))
             return
 
         try:
@@ -1844,7 +1872,7 @@ class CompanionManager(QObject):
                     draw_end += 1.0
             if text:
                 try:
-                    await self._get_tts().speak(_speakable(text))
+                    await self._get_tts().speak(self._voice_text(text))
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -1854,6 +1882,14 @@ class CompanionManager(QObject):
             remaining = draw_end - time.monotonic()
             if remaining > 0:
                 await asyncio.sleep(min(remaining, 4.0) + 0.1)
+
+    def _voice_text(self, text: str) -> str:
+        """An online voice sends each sentence to its server, so the names put back into the answer
+        are masked again before it is read; the offline Windows voice reads them as they are."""
+        gate = getattr(self, "_outgoing", None)
+        if gate is not None and cfg.tts_provider() != "sapi":
+            text = gate.mask(text)
+        return _speakable(text)
 
     def _stable_voice_language(self, detected: str) -> str:
         """Debounce language detection before it is allowed to change the voice.
@@ -1913,6 +1949,8 @@ class CompanionManager(QObject):
             self.refresh_ollama_models()
 
     async def _refresh_one_model_list(self, provider: str):
+        if outgoing.local_only():
+            return
         try:
             from ai.model_registry import refresh
             ms = await refresh(provider)
@@ -1925,6 +1963,8 @@ class CompanionManager(QObject):
         self._submit(self._refresh_copilot_models())
 
     async def _refresh_copilot_models(self):
+        if outgoing.local_only():
+            return
         try:
             from ai.github_copilot_provider import refresh_models_to_cache
             models = await refresh_models_to_cache()
@@ -2091,6 +2131,9 @@ class CompanionManager(QObject):
             if self._privacy_guard and is_sensitive_window(title):
                 await self._reply_local("Quiz paused: this window may contain private information.")
                 return
+            if outgoing.local_only():
+                await self._reply_local(outgoing.stopped_here(0))
+                return
             self._current_task = asyncio.current_task()
             self._cancel_flag = False
             screenshots = await asyncio.to_thread(capture_all_screens, privacy_guard=self._privacy_guard)
@@ -2125,6 +2168,33 @@ class CompanionManager(QObject):
             if getattr(self, '_current_task', None) in (None, asyncio.current_task()):
                 self._current_task = None
                 self._emit_state(AppState.IDLE)
+
+    async def _ask_outgoing(self, preview: dict) -> bool:
+        """Show the masked lines and wait for "Gửi đi" / "Không gửi"; Esc counts as "Không gửi"."""
+        future = asyncio.get_running_loop().create_future()
+        self._outgoing_answer = future
+        self.sig_outgoing_preview.emit(preview)
+        try:
+            return await future
+        finally:
+            self._outgoing_answer = None
+            self.sig_outgoing_preview.emit({})
+
+    def answer_outgoing(self, approved: bool):
+        """Called from the card (UI thread)."""
+        future = self._outgoing_answer
+        if future is not None and self._loop:
+            self._loop.call_soon_threadsafe(lambda: future.done() or future.set_result(bool(approved)))
+
+    def set_local_only(self, enabled: bool):
+        set_setting("local_only", bool(enabled))
+        # Cloud speech and online voices are dropped too; the next use picks an on-device one.
+        self._stt = None
+        self._tts = None
+
+    @property
+    def local_only(self) -> bool:
+        return outgoing.local_only()
 
     def set_privacy_guard(self, enabled: bool):
         set_setting("privacy_guard", enabled)

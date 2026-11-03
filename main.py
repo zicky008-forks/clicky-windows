@@ -219,6 +219,14 @@ def main():
     from ui.connections_window import ConnectionsWindow
     connections_window = ConnectionsWindow(manager)
     settings_window.open_connections.connect(connections_window.show)
+    # What leaves the machine: the card before the first send, the log after.
+    from ui.outgoing_card import OutgoingCard, OutgoingLogWindow
+    outgoing_card = OutgoingCard()
+    outgoing_log_window = OutgoingLogWindow()
+    manager.sig_outgoing_preview.connect(outgoing_card.show_preview)
+    outgoing_card.answered.connect(manager.answer_outgoing)
+    settings_window.open_outgoing_log.connect(outgoing_log_window.show)
+    tray.on_outgoing_log.connect(outgoing_log_window.show)
     def _review_external(proposal):
         import json
         from PyQt6.QtWidgets import QMessageBox
@@ -700,7 +708,7 @@ def main():
     def _apply_capture_policy(allowed=None):
         """Clicky hides its own windows from screen capture, unless the user turned on recording for a demo."""
         hidden = not (_allow_recording() if allowed is None else allowed)
-        for window in (overlay, panel, choice_card, caption):
+        for window in (overlay, panel, choice_card, outgoing_card, caption):
             try:
                 exclude_window(window, hidden)
             except OSError as exc:

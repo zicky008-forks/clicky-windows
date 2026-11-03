@@ -326,10 +326,13 @@ class Config:
 
     def stt_provider(self) -> str:
         # Allow explicit override via env (so users can force whisper_cpp etc.)
+        from office.outgoing import local_only
+        nothing_out = local_only()          # "Chỉ chạy trên máy": no cloud transcription either
         forced = os.getenv("CLICKY_STT", "").strip().lower()
-        if forced in ("deepgram", "openai", "whisper_cpp", "faster_whisper", "windows"):
+        if forced in ("deepgram", "openai", "whisper_cpp", "faster_whisper", "windows") and not (
+                nothing_out and forced in ("deepgram", "openai")):
             return forced
-        local_model = self.llm_provider() in {"ollama", "lmstudio"}
+        local_model = nothing_out or self.llm_provider() in {"ollama", "lmstudio"}
         if self.deepgram_api_key and not local_model:
             return "deepgram"
         if self.openai_api_key and not local_model:
@@ -347,6 +350,9 @@ class Config:
         return "windows"
 
     def tts_provider(self) -> str:
+        from office.outgoing import local_only
+        if local_only():
+            return "sapi"                   # online voices send every sentence to their server
         forced = setting("tts_provider", "auto")
         if forced in {"sapi", "edge_tts", "openai", "elevenlabs"}:
             return forced
