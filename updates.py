@@ -1,4 +1,4 @@
-"""Explicit GitHub release updates; never runs a download silently.
+"""GitHub release updates: from Settings on request, or quietly while idle (job 14, Velopack installs only).
 
 Builds installed by Velopack update in place from the latest GitHub release,
 downloading only the changed files when a delta package exists. Other builds
@@ -84,3 +84,62 @@ async def download(asset):
         temporary.replace(path)
         return str(path)
     finally:temporary.unlink(missing_ok=True)
+
+
+# ── Quiet updates (job 14) ────────────────────────────────────────────────────
+# Velopack installs only. The new version is downloaded while Clicky is idle and applied when
+# Clicky exits, so an update never lands while Clicky is working on a file. The next start says
+# one line: "Đã cập nhật bản X. Có gì mới: …". Nothing runs in "Chỉ chạy trên máy" mode: the
+# check itself would be a connection out of the machine.
+PENDING_KEY = 'update_pending'
+CHECK_EVERY_S = 6 * 3600
+_FALLBACK_NOTE = 'chạy ổn định hơn và sửa vài lỗi nhỏ'
+
+
+def first_note(markdown):
+    """The first plain line of the release notes, short enough for one toast line."""
+    for line in (markdown or '').splitlines():
+        text = re.sub(r'[*_`>#\[\]]', '', line).strip(' -\t')
+        text = re.sub(r'\(https?://[^)]*\)', '', text).strip()
+        if text and not text.lower().startswith(('what', 'changes', 'full changelog', 'có gì mới')):
+            return text if len(text) <= 120 else text[:117].rstrip() + '…'
+    return _FALLBACK_NOTE
+
+
+async def quiet_check(is_busy, local_only=False, manager=None):
+    """Download a new release while idle and hand it to Velopack to apply on exit. Returns the version or None."""
+    from storage import set_setting
+    if local_only:
+        return None
+    manager = manager or velopack_manager()
+    if manager is None or is_busy():
+        return None
+    info = await asyncio.to_thread(manager.check_for_updates)
+    if not info or getattr(info, 'IsDowngrade', False):
+        return None
+    target = info.TargetFullRelease
+    version = str(getattr(target, 'Version', '') or '')
+    if is_busy():
+        return None                 # the user started something while we checked: try at the next round
+    await asyncio.to_thread(manager.download_updates, info)
+    set_setting(PENDING_KEY, {'version': version, 'note': first_note(getattr(target, 'NotesMarkdown', ''))})
+    manager.wait_exit_then_apply_updates(info, silent=True, restart=False)
+    return version
+
+
+def after_update_notice(manager=None):
+    """The one line shown on the first start after an update was applied, else None."""
+    from storage import set_setting, setting
+    pending = setting(PENDING_KEY, None)
+    if not isinstance(pending, dict) or not pending.get('version'):
+        return None
+    manager = manager or velopack_manager()
+    current = manager.get_current_version() if manager is not None else VERSION
+    try:
+        applied = version_key(current) >= version_key(pending['version'])
+    except ValueError:
+        applied = current == pending['version']
+    if not applied:
+        return None                 # downloaded, not applied yet: say nothing until it is
+    set_setting(PENDING_KEY, None)
+    return f"Đã cập nhật bản {pending['version']}. Có gì mới: {pending.get('note') or _FALLBACK_NOTE}."

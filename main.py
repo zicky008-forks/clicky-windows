@@ -390,6 +390,30 @@ def main():
         panel.show()
         panel.raise_()
     manager.sig_open_chat.connect(_open_chat)
+
+    # Quiet updates: download while idle, apply when Clicky exits, one line on the next start.
+    def _quiet_update():
+        try:
+            import updates
+        except Exception:
+            return
+        busy = lambda: getattr(manager, "_state", AppState.IDLE) != AppState.IDLE
+        manager._submit(updates.quiet_check(busy, manager.local_only), report_errors=False)
+
+    def _update_notice():
+        try:
+            import updates
+            line = updates.after_update_notice()
+        except Exception:
+            return
+        if line:
+            tray.show_notification("Clicky", line)
+    from PyQt6.QtCore import QTimer as _UpdateTimer
+    _UpdateTimer.singleShot(8_000, _update_notice)
+    _UpdateTimer.singleShot(180_000, _quiet_update)
+    _update_timer = _UpdateTimer(app)
+    _update_timer.timeout.connect(_quiet_update)
+    _update_timer.start(6 * 3600 * 1000)
     # The one drop place for the first real month (after the sample, or "thả file").
     from ui.drop_zone import DropZone
     drop_zone = DropZone()
