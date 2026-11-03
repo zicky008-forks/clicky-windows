@@ -168,3 +168,22 @@ def test_month_close_play_logs_each_beat(tmp_path, monkeypatch):
     kinds = [e["event"] for e in events]
     assert kinds == ["locate", "beat", "spoken"]
     assert events[1]["box"] == [10.0, 20.0, 110.0, 40.0] and events[2]["spoke"] is True
+
+
+def test_find_value_skips_a_title_that_only_mentions_the_label():
+    rows = [["Đối chiếu doanh thu tháng: Power Query, file gốc và sổ cái", "", ""],
+            ["Sổ cái TB_T10", "", 8400000000.0]]
+    assert checks.find_value(rows, "sổ cái") == 8400000000.0
+
+
+def test_text_expectations_catch_missing_warning_and_false_alarm():
+    sheets = dict(SHEETS, **{"Kiem tra": [["Hàng trả lại ghi Nợ 511", "120 triệu"]]})
+    exp = dict(EXPECTED, texts=[
+        {"name": "Báo hàng trả lại", "text": "trả lại", "where": "sheets", "sheet": "Kiem tra", "must": True},
+        {"name": "Không báo động sai về hoá đơn", "text": "hoá đơn trùng", "where": "any", "must": False},
+        {"name": "Nói đến chỗ lệch", "text": "lệch", "where": "said", "must": True}])
+    assert checks.evaluate(good_run(), sheets, exp).passed
+    bad = good_run() + [{"t": 80, "event": "said", "text": "Có hoá đơn trùng"}]
+    res = checks.evaluate(bad, {k: v for k, v in sheets.items() if k != "Kiem tra"}, exp)
+    failed = [c.name for c in res.checks if not c.ok]
+    assert failed == ["Báo hàng trả lại", "Không báo động sai về hoá đơn"]

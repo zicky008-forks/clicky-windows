@@ -53,8 +53,27 @@ def find_value(rows: list, label: str):
                         continue
                     if isinstance(right, (int, float)):
                         return right
-                return None
+                # A title or note that merely mentions the label: keep looking for the real line.
     return None
+
+
+def text_found(text: str, where: str, sheets: dict, events: list, sheet_hint: str = "") -> bool:
+    """Is `text` (case-insensitive) in the sheets, in what Clicky showed or said, or either."""
+    want = text.casefold()
+    if where in ("sheets", "any"):
+        for name, rows in sheets.items():
+            if sheet_hint and sheet_hint.casefold() not in name.casefold():
+                continue
+            for row in rows or []:
+                if any(isinstance(c, str) and want in c.casefold() for c in row or []):
+                    return True
+    if where in ("said", "any"):
+        for e in events:
+            for key in ("text", "title", "value", "note", "question"):
+                v = e.get(key)
+                if isinstance(v, str) and want in v.casefold():
+                    return True
+    return False
 
 
 def find_in_sheets(sheets: dict, label: str, sheet_hint: str = ""):
@@ -137,6 +156,14 @@ def evaluate(events: list, sheets: dict, expected: dict) -> Result:
         ok = value is not None and abs(value - want) <= tol
         shown = "không tìm thấy" if value is None else f"{value:,.0f} (sheet {sheet})"
         add(Check(item["name"], ok, f"Cần {want:,.0f}, thấy {shown}"))
+
+    # Warnings that must appear, and false alarms that must not, checked without revealing any number.
+    for item in expected.get("texts", []):
+        must = item.get("must", True)
+        seen = text_found(item["text"], item.get("where", "any"), sheets, events, item.get("sheet", ""))
+        add(Check(item["name"], seen == must,
+                  ("Có" if seen else "Không có") + f" \"{item['text']}\"" + ("" if seen == must else
+                  (" (cần có)" if must else " (không được có)"))))
 
     limit = expected.get("max_seconds")
     if limit and turns:
