@@ -309,6 +309,9 @@ def main(argv=None) -> int:
     untouched = None
     auto = args.auto_press if args.auto_press is not None else (
         [] if "intake" in expected else ["Đúng rồi, làm tiếp"])
+    auto = list(auto) + list(expected.get("auto_press", []))
+    if "verify" in expected or "tamper" in expected:
+        auto.append(expected.get("save_label", "Lưu và kiểm tra"))
     if auto:
         AUTO_PRESS.append((driver, set(auto), set()))
     if "intake" in expected:
@@ -351,6 +354,12 @@ def main(argv=None) -> int:
     clock.lap("Chặng 2–3: sửa và lập báo cáo")
     if not finished(done_events):
         stalled.append(("Chặng 2–3", clock.steps[-1][1]))
+    if "verify" in expected or "tamper" in expected:
+        say("   Chờ Clicky lưu, mở lại file và đối chiếu")
+        verified = lambda ev: any(e.get("event") == "verify" for e in ev)  # noqa: E731
+        if not verified(wait_log(log, verified, expected.get("verify_seconds", 120), quiet=4.0)):
+            stalled.append(("Lưu và đối chiếu lại", expected.get("verify_seconds", 120)))
+        clock.lap("Lưu và đối chiếu lại")
 
     say("6/6 Đọc số trong file và chấm")
     sheets = sheet_values(wb)

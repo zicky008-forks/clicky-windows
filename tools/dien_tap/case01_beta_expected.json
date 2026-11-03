@@ -64,5 +64,8 @@
     "names": [],
     "_note": "Việc 6: điền tên khách/NCC/nhân viên (names) và mã số thuế, CCCD, số TK, điện thoại đã cài trong Case 01 (ids). Chạy thêm một lượt --local-only: 0 kết nối, số giống hệt.",
     "ids": []
-  }
+  },
+  "save_label": "Lưu và kiểm tra",
+  "verify_seconds": 120,
+  "tamper_example": "--tamper \"'BC thang'!C23=5000000\""
 }
