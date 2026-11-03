@@ -539,6 +539,7 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     """Stage 0: read every file in the folder and say what was read. Nothing in the workbook changes yet."""
     global _PENDING, _AUDIT
     _PENDING, _AUDIT = None, None
+    _EXPECT.clear()
     if not bridge.available():
         return [Beat("Anh mở file Excel đã lưu trong thư mục dữ liệu tháng rồi gọi lại em.")]
     folder_text = bridge.workbook_folder()
@@ -800,7 +801,8 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
     if clean:
         beats.append(Beat(f"Excel khớp sổ cái đến từng đồng: doanh thu {spoken(loaded.amount)}.",
                           ref, "Excel khớp sổ cái", "ok", "0 đ", f"{len(rows)} chứng từ · {spoken(loaded.amount)}"))
-        return beats + build_report(bridge, folder, tbs) + [SAVE_REMINDER]
+        _EXPECT.update({_check_ref("C4"): int(loaded.amount), _check_ref("C7"): 0} if ledger else {})
+        return beats + build_report(bridge, folder, tbs) + [_save_offer()]
 
     beats.append(Beat(f"Báo cáo trong Excel đang {_gap_vi(gap)} so với sổ cái.", ref, "Excel lệch sổ cái", "bad",
                       _signed(gap), f"Query chỉ giữ {len(rows)}/{truth.unique_rows} chứng từ. Chưa được dùng số này."))
@@ -819,8 +821,10 @@ def approve(bridge, pq) -> list:
     global _PENDING
     if stage() == "intake":                        # "ok" / "đồng ý" said to the receipt means the same as its button
         return confirm(bridge, pq)
+    if stage() == "save":
+        return save_and_verify(bridge)
     job, _PENDING = _PENDING, None
-    if not job:
+    if not job or job.get("stage") != "fix_query":
         return []
     # Reloading the query and adding the report sheets would flash a dozen sheets past the user;
     # the screen stays still and the result is shown when it is ready.
@@ -902,12 +906,74 @@ def _approve(bridge, pq, job) -> list:
                    audit.who(), f"{files_n} file đơn hàng")
     # Shown straight as 0 đ: a figure rolling through "−2,9 tỷ" under the title "Đã khớp" reads as a contradiction.
     beats = [Beat("Đã sửa xong. Excel khớp sổ cái đến từng đồng.", ref, "Đã khớp sổ cái", "ok", "0 đ", note)]
-    return beats + build_report(bridge, folder, tbs) + [SAVE_REMINDER]
+    _EXPECT.update({_check_ref("C4"): int(loaded.amount), _check_ref("C7"): 0} if ledger else {})
+    return beats + build_report(bridge, folder, tbs) + [_save_offer()]
 
 
 # Clicky changes the open workbook but never saves it for the user; closing without saving
 # loses the fix and the report, so the last thing it says is how to keep them.
 SAVE_REMINDER = Beat("Em chưa lưu file. Anh bấm Ctrl + S để giữ kết quả nhé.")
+SAVE_CHOICES = ("Lưu và kiểm tra", "Để tôi tự lưu")
+SAVE_TRIGGER = r"^\s*(lưu và kiểm tra|luu va kiem tra|lưu đi|luu di|lưu giúp|luu giup)\b(\s+\S+){0,3}\s*[.!]?\s*$"
+SELF_SAVE_TRIGGER = r"^\s*(để tôi tự lưu|de toi tu luu|tôi tự lưu|toi tu luu|để tôi lưu|de toi luu)\b(\s+\S+){0,3}\s*[.!]?\s*$"
+VERIFY_TRIGGER = r"\b(kiểm tra|kiem tra|đối chiếu|doi chieu)\s+(lại\s+|lai\s+)?file\s+(đã\s+|da\s+)?lưu|\bkiem tra file da luu\b"
+# Cells of the saved file that must read back as the code computed them (sheet!cell → đồng).
+_EXPECT: dict = {}
+
+
+def _save_offer() -> Beat:
+    """The last question: Clicky saves only when asked, then opens the saved file and checks it."""
+    global _PENDING
+    _PENDING = {"stage": "save"}
+    return Beat("Em lưu file rồi mở lại bản đã lưu để đối chiếu với sổ cái nhé?", choices=SAVE_CHOICES)
+
+
+def save_and_verify(bridge) -> list:
+    """Save the workbook, re-read the saved xlsx from disk and compare its key cells with the code's figures."""
+    global _PENDING
+    if stage() == "save":
+        _PENDING = None
+    if not bridge.available():
+        return [Beat("Em không thấy file Excel đang mở, nên chưa lưu được.")]
+    if not _try(bridge, "save"):
+        return [Beat("Em chưa lưu được file. Anh bấm Ctrl + S rồi gọi \"kiểm tra file đã lưu\" nhé.",
+                     label="Chưa lưu được", mark="warn")]
+    return verify_saved(bridge)
+
+
+def verify_saved(bridge) -> list:
+    from engine import saved_check
+    path = _try(bridge, "workbook_path")
+    if not path or not _EXPECT:
+        return [Beat("Em chưa có số nào để đối chiếu với file đã lưu. Anh chạy báo cáo tháng trước nhé.")]
+    try:
+        saved_check.tamper_from_env(Path(path))
+        ok, diffs = saved_check.check(Path(path), _EXPECT)
+    except Exception as exc:
+        log.warning("re-reading the saved workbook failed: %s", exc)
+        ok, diffs = False, [{"cell": "", "want": None, "got": None}]
+    scene_log.record("verify", ok=ok, path=path, diffs=diffs)
+    if ok:
+        scene_log.record("delivered", path=path)
+        return [Beat("Em đã mở lại file đã lưu: khớp sổ cái 0 đ. File sẵn sàng để gửi.",
+                     _check_ref("A7:E7") if _check_ref("C7") in _EXPECT else None,
+                     "Khớp sổ cái", "ok", "0 đ", f"Đã đọc lại {len(_EXPECT)} ô từ file trên đĩa · {Path(path).name}")]
+    first = diffs[0]
+    if first["cell"]:
+        where = first["cell"]
+        got = "trống" if first["got"] is None else spoken(Decimal(first["got"]))
+        detail = f"Ô {where}: cần {spoken(Decimal(first['want']))}, file ghi {got}."
+    else:
+        where, detail = "", "Em không đọc lại được file đã lưu."
+    more = f" Còn {len(diffs) - 1} ô khác lệch." if len(diffs) > 1 else ""
+    return [Beat("File đã lưu không giống số em tính, em chưa giao file này. Anh đừng gửi bản này nhé.",
+                 where or None, "File đã lưu bị lệch", "bad",
+                 _signed(Decimal(first["got"] - first["want"])) if first.get("got") is not None and first.get("want") is not None
+                 else "Lệch", detail + more)]
+
+
+def self_save() -> list:
+    return [Beat("Anh bấm Ctrl + S để lưu nhé. Lưu xong anh gõ \"kiểm tra file đã lưu\", em mở lại và đối chiếu.")]
 
 
 def reject() -> list:
@@ -916,6 +982,9 @@ def reject() -> list:
         return []
     if stage() == "intake":
         return wrong()
+    if stage() == "save":
+        _PENDING = None
+        return self_save()
     _PENDING = None
     return [Beat("Em giữ nguyên query. Số trong Excel vẫn lệch sổ cái, anh đừng dùng cho báo cáo nhé.")]
 
@@ -983,6 +1052,13 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
     asks = (f", kèm {len(report.questions)} câu hỏi cho các bộ phận" if report.questions else "")
     note = "Mọi số là công thức trỏ về sổ cái." + (
         f" {len(report.questions)} câu hỏi xác minh ở sheet {names['questions']}." if report.questions else "")
+    from engine.report_sheet import FIRST_LINE_ROW
+    for i, fig in enumerate(report.figures):
+        _EXPECT[f"{sheet}!C{FIRST_LINE_ROW + i}"] = int(fig.value)
+    if overstated > 0:
+        net = next(f.value for f in report.figures if f.key == "net_rev")
+        _EXPECT.update({f"{sheet}!C{row + 1}": -int(overstated), f"{sheet}!C{row + 2}": int(net - overstated),
+                        f"{sheet}!C{row + 3}": int(pat - overstated)})
     beats = [Beat(f"Em đã lập báo cáo tháng{asks}.", f"{sheet}!A4:G{row}", "Báo cáo tháng đã lập", "", "", note)]
     if overstated > 0:
         real = pat - overstated
@@ -1183,6 +1259,30 @@ async def handle_wrong(manager, transcript: str) -> str:
     return ""
 
 
+async def handle_save(manager, transcript: str) -> str:
+    manager.sig_clear_drawings.emit()
+    beats = await asyncio.to_thread(lambda: save_and_verify(manager._excel))
+    await play(manager, beats)
+    return ""
+
+
+async def handle_verify(manager, transcript: str) -> str:
+    beats = await asyncio.to_thread(lambda: verify_saved(manager._excel))
+    await play(manager, beats)
+    return ""
+
+
+async def handle_self_save(manager, transcript: str) -> str:
+    global _PENDING
+    _PENDING = None
+    await play(manager, self_save())
+    return ""
+
+
+def save_pending() -> bool:
+    return stage() == "save"
+
+
 async def handle_final(manager, transcript: str) -> str:
     beats = await asyncio.to_thread(lambda: make_final(manager._excel))
     await play(manager, beats)
@@ -1197,6 +1297,12 @@ SKILLS = [
      "description": "Người dùng xác nhận Clicky đọc đúng các file; bắt đầu tính."},
     {"name": "Phiếu nhận file có chỗ sai", "trigger": WRONG_TRIGGER, "handler": handle_wrong, "when": intake_pending,
      "description": "Dừng trước khi sửa gì, mở khung chat để người dùng nói chỗ sai."},
+    {"name": "Lưu và kiểm tra file", "trigger": SAVE_TRIGGER, "handler": handle_save, "when": save_pending,
+     "description": "Lưu file, mở lại bản đã lưu và đối chiếu các tổng chính với sổ cái."},
+    {"name": "Tự lưu file", "trigger": SELF_SAVE_TRIGGER, "handler": handle_self_save, "when": save_pending,
+     "description": "Người dùng tự lưu; Clicky nhắc cách kiểm tra sau."},
+    {"name": "Kiểm tra file đã lưu", "trigger": VERIFY_TRIGGER, "handler": handle_verify,
+     "description": "Mở lại file đã lưu trên đĩa và đối chiếu các tổng chính với số Clicky đã tính."},
     {"name": "Chốt báo cáo chính thức", "trigger": FINAL_TRIGGER, "handler": handle_final,
      "description": "Đổi trạng thái báo cáo từ Sơ bộ sang Chính thức và ghi vào Biên bản."},
     {"name": "Đồng ý bản sửa", "trigger": APPROVE_TRIGGER, "handler": handle_approve, "when": pending,

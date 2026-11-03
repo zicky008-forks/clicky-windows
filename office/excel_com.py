@@ -224,6 +224,16 @@ class ExcelBridge:
         except Exception:
             return None
 
+    def save(self) -> bool:
+        """Save the active workbook in place (only when the user asked Clicky to)."""
+        app = self._excel()
+        try:
+            app.ActiveWorkbook.Save()
+            return True
+        except Exception as exc:
+            log.warning("Saving the workbook failed: %s", exc)
+            return False
+
     def save_copy(self, path: str) -> bool:
         """Save a copy of the workbook as it is now under another name; the open workbook is not renamed or saved."""
         app = self._excel()

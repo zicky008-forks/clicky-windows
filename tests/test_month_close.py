@@ -270,7 +270,7 @@ def test_approve_fixes_verifies_then_builds_the_report(folder):
     _begin(bridge, pq, sources.DAY_FIRST)
     beats = month_close.approve(bridge, pq)
     said = _text(beats)
-    assert not month_close.pending()
+    assert month_close.stage() == "save"                      # only the save question is left
     done = beats[0]
     assert done.text == "Đã sửa xong. Excel khớp sổ cái đến từng đồng." and done.mark == "ok" and done.value == "0 đ"
     assert done.note == "6 chứng từ · doanh thu 8,4 tỷ · giá vốn khớp TK 632"
@@ -290,7 +290,8 @@ def test_approve_fixes_verifies_then_builds_the_report(folder):
     report_beat = next(b for b in beats if b.text.startswith("Em đã lập báo cáo tháng"))
     assert report_beat.ref.startswith("'BC thang'!A4:G") and "công thức trỏ về sổ cái" in report_beat.note
     assert "Lợi nhuận thực" in said
-    assert beats[-1] is month_close.SAVE_REMINDER             # the file is never saved behind the user's back
+    assert beats[-1].choices == month_close.SAVE_CHOICES      # the file is never saved behind the user's back
+    assert "Ctrl + S" in _text(month_close.reject()) and not month_close.pending()
     assert month_close.approve(bridge, pq) == []              # nothing left to approve
 
 
@@ -339,7 +340,7 @@ def test_clean_query_goes_straight_to_the_report(folder):
     said = _text(_begin(bridge, pq, sources.DAY_FIRST))
     assert "Excel khớp sổ cái đến từng đồng: doanh thu 8,4 tỷ." in said
     assert any("Clicky tạo query mới" in r[4] for r in bridge.sheets["Doi chieu"][9:])
-    assert "Lợi nhuận thực là 436 triệu" in said and not month_close.pending()
+    assert "Lợi nhuận thực là 436 triệu" in said and month_close.stage() == "save"
 
 
 def test_query_that_excel_cannot_load_still_gets_the_fix_offered(folder):
@@ -685,3 +686,65 @@ def test_making_it_official_after_a_restart_only_changes_the_status_line(folder)
     month_close.make_final(bridge)
     status = next(r for r in bridge.sheets["Bien ban Clicky"] if r and r[0] == "Trạng thái")
     assert status[1] == "CHÍNH THỨC" and "Chính thức" in status[3]
+
+
+# ── Beta job 3: open the saved file again and compare before handing it over ──
+
+def _saved_workbook(path, bridge, expect, tweak=None):
+    """Write what the fake workbook holds to a real xlsx, as Excel would save it (values cached)."""
+    from openpyxl import Workbook
+    from engine import saved_check
+    wb = Workbook()
+    wb.remove(wb.active)
+    for ref, value in expect.items():
+        sheet, cell = saved_check.split(ref)
+        ws = wb[sheet] if sheet in wb.sheetnames else wb.create_sheet(sheet)
+        ws[cell] = value + (tweak.get(ref, 0) if tweak else 0)
+    wb.save(path)
+
+
+class SavingBridge(CopyingBridge):
+    def __init__(self, folder, tweak=None):
+        super().__init__(folder)
+        self.tweak, self.saved = tweak, 0
+
+    def save(self):
+        self.saved += 1
+        _saved_workbook(self.path, self, month_close._EXPECT, self.tweak)
+        return True
+
+
+def _to_the_save_question(bridge, folder):
+    pq = FakePQ(bridge, folder)
+    _begin(bridge, pq, sources.DAY_FIRST)
+    month_close.approve(bridge, pq)
+    assert month_close.stage() == "save"
+    return pq
+
+
+def test_saved_file_is_read_back_and_only_then_called_matching(folder):
+    bridge = SavingBridge(folder)
+    pq = _to_the_save_question(bridge, folder)
+    assert {"'Doi chieu'!C7", "'BC thang'!C23"} <= set(month_close._EXPECT)
+    assert month_close._EXPECT["'BC thang'!C23"] == 436_000_000
+    beats = month_close.approve(bridge, pq)                       # "Lưu và kiểm tra"
+    assert bridge.saved == 1
+    assert beats[0].label == "Khớp sổ cái" and beats[0].value == "0 đ" and beats[0].mark == "ok"
+
+
+def test_a_cell_changed_in_the_saved_file_is_caught_and_the_file_is_not_handed_over(folder):
+    bridge = SavingBridge(folder, tweak={"'BC thang'!C23": 5_000_000})
+    pq = _to_the_save_question(bridge, folder)
+    beats = month_close.approve(bridge, pq)
+    said = " ".join(f"{b.text} {b.label} {b.note}" for b in beats)
+    assert "Khớp sổ cái" not in said and beats[0].mark == "bad"
+    assert beats[0].ref == "'BC thang'!C23" and "cần 436 triệu, file ghi 441 triệu" in beats[0].note
+    assert "chưa giao" in beats[0].text
+
+
+def test_tamper_hook_changes_the_saved_cell_only_when_asked(folder, monkeypatch):
+    bridge = SavingBridge(folder)
+    pq = _to_the_save_question(bridge, folder)
+    monkeypatch.setenv("CLICKY_TEST_TAMPER", "'Doi chieu'!C7=1000")
+    beats = month_close.approve(bridge, pq)
+    assert beats[0].mark == "bad" and beats[0].ref == "'Doi chieu'!C7"
