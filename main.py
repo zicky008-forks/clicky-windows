@@ -697,18 +697,17 @@ def main():
                 manager.sig_error.emit(f"Could not change screen-capture visibility of Clicky's window: {exc}")
     _apply_capture_policy()
     tray.on_toggle_recording.connect(_apply_capture_policy)
-    # Panel is hidden by default — user can open it from the tray menu if needed
     manager.start()        # begin ambient mic + wake-word scanning
     app.aboutToQuit.connect(manager.shutdown)
 
-    providers = cfg.describe()
-    _hk = "+".join(p.strip().capitalize() for p in cfg.hotkey.split("+"))
+    # The chat opens on start, with an example of what to type: a first-time user who does not
+    # know the shortcut or the tray icon still sees where to begin. Setting start_hidden keeps it closed.
+    from storage import setting as _setting
+    if not _setting("start_hidden", False):
+        QTimer.singleShot(400, panel.show)
     tray.show_notification(
-        "Clicky is running",
-        (f"Say 'Clicky' or press {_hk}  |  LLM: {providers['llm']}"
-         if cfg.ambient_mic() else
-         f"Press {_hk}, ask your question, and Clicky answers when you stop "
-         f"talking  |  LLM: {providers['llm']}"),
+        "Clicky đã sẵn sàng",
+        "Gõ vào khung Clicky, ví dụ: làm báo cáo tháng từ thư mục này",
     )
 
     # ── First-run setup wizard ────────────────────────────────────────────────

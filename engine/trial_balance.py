@@ -75,9 +75,10 @@ class TrialBalance:
 
 
 # Section headers that sit above the Nợ/Có row in two-row headers.
-_SECTIONS = (("open", ("dau ky", "dau nam", "opening", "beginning")),
-             ("move", ("phat sinh", "trong ky", "movement", "during", "period")),
-             ("close", ("cuoi ky", "cuoi nam", "closing", "ending")))
+# TT99 (S06-DN) and monthly or quarterly exports say "đầu tháng / cuối tháng", "đầu quý / cuối quý".
+_SECTIONS = (("open", ("dau ky", "dau nam", "dau thang", "dau quy", "opening", "beginning")),
+             ("move", ("phat sinh", "trong ky", "trong thang", "trong quy", "movement", "during", "period")),
+             ("close", ("cuoi ky", "cuoi nam", "cuoi thang", "cuoi quy", "closing", "ending")))
 
 
 def _side(text: str) -> Optional[str]:
