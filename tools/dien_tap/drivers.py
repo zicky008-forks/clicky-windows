@@ -177,10 +177,17 @@ class Uia:
         ctl = self._find(name)
         if ctl is None:
             raise DriverError(f"Không thấy ô \"{name}\"")
-        ctl.GetValuePattern().SetValue(text)
+        pattern = ctl.GetPattern(self.auto.PatternId.ValuePattern)
+        if pattern is None:
+            raise DriverError(f"Ô \"{name}\" không nhận chữ (không có ValuePattern)")
+        pattern.SetValue(text)
 
     def press(self, name: str) -> None:
         ctl = self._find(name)
         if ctl is None:
             raise DriverError(f"Không thấy nút \"{name}\"")
-        ctl.GetInvokePattern().Invoke()
+        # Control(Name=...) returns the generic Control class, which has no GetInvokePattern(): ask for the pattern by id.
+        pattern = ctl.GetPattern(self.auto.PatternId.InvokePattern)
+        if pattern is None:
+            raise DriverError(f"Nút \"{name}\" không bấm được (không có InvokePattern)")
+        pattern.Invoke()

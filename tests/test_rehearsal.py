@@ -187,3 +187,49 @@ def test_text_expectations_catch_missing_warning_and_false_alarm():
     res = checks.evaluate(bad, {k: v for k, v in sheets.items() if k != "Kiem tra"}, exp)
     failed = [c.name for c in res.checks if not c.ok]
     assert failed == ["Báo hàng trả lại", "Không báo động sai về hoá đơn"]
+
+
+class _FakeAuto:
+    class PatternId:
+        ValuePattern = 10002
+        InvokePattern = 10000
+
+    def __init__(self):
+        self.calls = []
+
+
+class _GenericControl:
+    """Like uiautomation's Control returned by Control(Name=...): no GetValuePattern / GetInvokePattern."""
+
+    def __init__(self, log):
+        self.log = log
+
+    def GetPattern(self, pid):
+        log = self.log
+
+        class P:
+            def SetValue(self, text):
+                log.append(("set", pid, text))
+
+            def Invoke(self):
+                log.append(("invoke", pid))
+        return P()
+
+
+def test_uia_driver_uses_patterns_by_id_on_generic_controls():
+    d = drivers.Uia.__new__(drivers.Uia)
+    d.auto = _FakeAuto()
+    log = []
+    d._find = lambda name: _GenericControl(log)
+    d.set_text("Tin nhắn cho Clicky", "làm báo cáo")
+    d.press("Gửi")
+    assert log == [("set", 10002, "làm báo cáo"), ("invoke", 10000)]
+
+
+def test_robot_crash_exits_2_not_1(monkeypatch):
+    import rehearse
+
+    def boom(argv=None):
+        raise AttributeError("x")
+    monkeypatch.setattr(rehearse, "main", boom)
+    assert rehearse.run() == 2

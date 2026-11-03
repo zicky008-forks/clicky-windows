@@ -208,5 +208,21 @@ def main(argv=None) -> int:
     return 0 if result.passed else 1
 
 
+def run() -> int:
+    """A crash is 'could not run' (2), never confused with KHÔNG ĐẠT (1)."""
+    try:
+        return main()
+    except SystemExit as exc:
+        if isinstance(exc.code, str):
+            say(exc.code)
+            return 2
+        return exc.code if isinstance(exc.code, int) else 2
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        say("Robot bị lỗi giữa chừng (mã 2): đây là lỗi của robot, chưa chấm được Clicky.")
+        return 2
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())
