@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import checks          # noqa: E402
 import drivers         # noqa: E402
 import visual          # noqa: E402
+import beta_checks     # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 COMPOSER = "Tin nhắn cho Clicky"
@@ -135,6 +136,10 @@ def main(argv=None) -> int:
     ap.add_argument("--chat-shortcut", default="ctrl+alt+t", help="Phím tắt mở khung chat Clicky")
     ap.add_argument("--zoom", type=int, default=None, help="Độ phóng Excel cho lần chạy (ví dụ 85, 100, 130)")
     ap.add_argument("--no-visual", action="store_true", help="Bỏ phần chụp màn hình và chấm bằng ảnh")
+    ap.add_argument("--local-only", action="store_true",
+                    help="Bật chế độ 'Chỉ chạy trên máy, không gửi gì' (CLICKY_LOCAL_ONLY=1) và chấm không có lần gửi nào")
+    ap.add_argument("--egress-log", default=None,
+                    help="Nhật ký gửi đi của Clicky (mặc định %%LOCALAPPDATA%%\\Clicky\\gui-di.jsonl)")
     args = ap.parse_args(argv)
 
     expected = json.loads(Path(args.expected).read_text(encoding="utf-8"))
@@ -155,10 +160,17 @@ def main(argv=None) -> int:
 
     say(f"1/6 Mở bản sao {workbook.name} trong Excel")
     excel, wb, copy = open_workbook(workbook, args.allow_other_workbooks, args.zoom)
+    baseline = sheet_values(wb) if "intake" in expected else None
+    egress = Path(args.egress_log) if args.egress_log else Path(os.environ.get("LOCALAPPDATA", "")) / "Clicky" / "gui-di.jsonl"
+    egress_start = egress.stat().st_size if egress.exists() else 0
+    if args.local_only:
+        expected = dict(expected, egress=dict(expected.get("egress") or {}, local_only=True))
     clock.lap("Mở Excel")
 
     say(f"2/6 Mở Clicky: {exe}")
     env = dict(os.environ, CLICKY_SCENE_LOG=str(log))
+    if args.local_only:
+        env["CLICKY_LOCAL_ONLY"] = "1"
     subprocess.Popen([exe], env=env, cwd=str(Path(exe).parent))
     watcher = None
     if not args.no_visual:
@@ -188,6 +200,17 @@ def main(argv=None) -> int:
     say(f"3/6 Gõ lệnh: {args.command}")
     driver.set_text(COMPOSER, args.command)
     driver.press(SEND)
+    untouched = None
+    if "intake" in expected:
+        confirm = expected["intake"].get("confirm_label", "Đúng rồi, làm tiếp")
+        asked = lambda ev: any(confirm in (e.get("labels") or []) for e in ev if e.get("event") == "choices")  # noqa: E731
+        if asked(wait_log(log, asked, expected.get("first_stage_seconds", 240))):
+            untouched = sheet_values(wb) == baseline
+            say(f"   Phiếu nhận file: bấm \"{confirm}\"")
+            if driver.wait_for(confirm, 20):
+                driver.press(confirm)
+        else:
+            say("   Không thấy phiếu nhận file.")
     fix = expected.get("fix_label")
     if fix:
         limit = expected.get("first_stage_seconds", 240)
@@ -220,6 +243,15 @@ def main(argv=None) -> int:
     events = checks.read_log(log)
     result = checks.evaluate(events, sheets, expected)
     result.checks.append(checks.stage_check(stalled))
+    egress_text = None
+    if "egress" in expected and egress.exists():
+        with egress.open("rb") as fh:
+            fh.seek(egress_start)
+            egress_text = fh.read().decode("utf-8", "replace")
+    elif "egress" in expected and expected["egress"].get("local_only"):
+        egress_text = ""
+    result.checks += beta_checks.evaluate(events, sheets, expected, untouched_before_confirm=untouched,
+                                          workbook=copy, egress_text=egress_text)
     if watcher is not None:
         watcher.stop()
         watcher.join(timeout=10)

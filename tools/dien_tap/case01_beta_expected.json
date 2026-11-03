@@ -1,0 +1,67 @@
+{
+  "case": "Case 01 Sông Hồng T10 (beta 16/11: 6 việc giao diện)",
+  "fix_label": "Sửa giúp tôi",
+  "final_title": "Lợi nhuận sau thuế",
+  "voice": "text_ok",
+  "first_stage_seconds": 240,
+  "second_stage_seconds": 300,
+  "max_seconds": 300,
+  "numbers": [
+    {
+      "name": "Chênh lệch Excel − sổ cái sau khi sửa = 0",
+      "sheet": "Doi chieu",
+      "label": "Chênh lệch Excel",
+      "value": 0,
+      "tolerance": 0
+    },
+    {
+      "name": "Lợi nhuận sau thuế thực = 436 triệu",
+      "sheet": "BC",
+      "label": "Lợi nhuận sau thuế thực",
+      "value": 436000000,
+      "tolerance": 1000000
+    }
+  ],
+  "intake": {
+    "confirm_label": "Đúng rồi, làm tiếp",
+    "files_min": 3,
+    "must_mention": [
+      "Tổng cộng",
+      "trùng"
+    ],
+    "_note": "Việc 1: phiếu nêu 2 sổ cân đối + file bán hàng; dòng Tổng cộng và đơn trùng bị bỏ có ghi rõ."
+  },
+  "coverage": {
+    "tolerance": 1,
+    "_note": "Việc 2: mỗi file dùng + bỏ = tổng."
+  },
+  "verify": {
+    "ok": true,
+    "ok_text": "Khớp sổ cái",
+    "_note": "Việc 3: mở lại file đã lưu và đối chiếu. Thử cố tình sửa ô: chạy với verify.ok=false sau khi bên làm có cách chèn lỗi."
+  },
+  "audit": {
+    "sheet": "Bien ban Clicky",
+    "rows": [
+      [
+        "5111",
+        "521",
+        "120"
+      ],
+      [
+        "828"
+      ],
+      [
+        "436"
+      ]
+    ],
+    "status": "SƠ BỘ",
+    "not_status": "CHÍNH THỨC",
+    "original_copy": true,
+    "_note": "Việc 4: dòng 120 triệu Nợ 5111 → 521, dòng tính lại 8.280 và 436; mặc định SƠ BỘ; có _ban-goc.xlsx."
+  },
+  "egress": {
+    "names": [],
+    "_note": "Việc 6: điền tên khách/NCC/nhân viên của Case 01 vào names. Chạy thêm một lượt với --local-only, số phải giống hệt."
+  }
+}
