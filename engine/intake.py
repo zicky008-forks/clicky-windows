@@ -17,7 +17,7 @@ from typing import Optional
 
 from engine import roles as roles_mod, sources
 from engine.monthly_report import fmt, spoken
-from engine.trial_balance import ZERO, fold, parse_amount
+from engine.trial_balance import ZERO, _is_total, fold, parse_amount
 
 TOLERANCE = Decimal(1)
 DATA_SUFFIXES = {".csv", ".xlsx", ".xlsm", ".xls", ".txt", ".m", ".pq", ".pdf", ".png", ".jpg", ".jpeg", ".docx", ".doc",
@@ -121,6 +121,21 @@ def _tb_line(name: str, rows, tb, previous=None) -> tuple:
         dropped += amount
         items.append(Dropped(f"Dòng {row_no} mã TK \"{account}\"", name, amount,
                              f"mã tài khoản không đọc được, {spoken(moved)} chưa vào báo cáo"))
+    # The sheet's own total line ("Tổng cộng") is not an account: it is set aside, and kept as a check.
+    cr_col = tb.columns.get("cr")
+    for i in range(tb.header_row, len(rows)):
+        raw = rows[i] or []
+        label = next((str(c).strip() for c in raw[:3] if isinstance(c, str) and c.strip() and _is_total(c)), None)
+        if not label:
+            continue
+        t_dr = abs(_amount(_cell(raw, dr_col - 1))) if dr_col else ZERO
+        t_cr = abs(_amount(_cell(raw, cr_col - 1))) if cr_col else ZERO
+        if not (t_dr or t_cr):
+            continue
+        same = abs(t_dr - dr) <= TOLERANCE and abs(t_cr - cr) <= TOLERANCE
+        items.append(Dropped(f"Dòng \"{label}\" cuối sổ (dòng {i + 1})", name, None,
+                             f"không phải tài khoản, ghi phát sinh Nợ {spoken(t_dr)} / Có {spoken(t_cr)}; dùng làm mốc kiểm: "
+                             + ("khớp tổng các tài khoản chi tiết" if same else "lệch tổng các tài khoản chi tiết")))
     new = []
     if previous is not None:
         before = {l.account for l in previous.leaves}
@@ -170,8 +185,6 @@ def _unused_files(folder: Path, used: set, workbook: Optional[str], roles: dict)
         if p.name.startswith("~$") or p.name in used or p.name == workbook or ORIGINAL_TAG in p.stem:
             continue
         suffix = p.suffix.lower()
-        if suffix not in DATA_SUFFIXES:
-            continue
         role = roles_mod.of_file(p.name)
         roles[p.name] = role
         if role == roles_mod.PLAN:
@@ -186,6 +199,8 @@ def _unused_files(folder: Path, used: set, workbook: Optional[str], roles: dict)
             why = "không có cột ngày và cột số tiền, không phải file đơn hàng"
         elif suffix in (".xlsx", ".xlsm"):
             why = "không phải sổ cân đối tài khoản"
+        elif suffix not in DATA_SUFFIXES:
+            why = "không phải file số liệu (chương trình, lối tắt…), em không mở file này"
         else:
             why = "không phải file số liệu, em không lấy số từ file này"
         out.append(Dropped(f"File {p.name}", p.name, None, why, rows=0))
@@ -284,7 +299,8 @@ def summarize_dropped(items: list, limit: int = 4) -> list:
     for d in items:
         key = ("dup" if d.what.startswith("Đơn") and "xuất 2 lần" in d.what else
                "out" if d.what.startswith("Đơn") else
-               "foot" if d.what.startswith("Dòng \"") else
+               "foot" if d.what.startswith("Dòng \"") and "cuối file" in d.what else
+               "tbfoot" if d.what.startswith("Dòng \"") else
                "tb" if d.what.startswith("Dòng ") else "file")
         groups.setdefault(key, []).append(d)
     out = []
@@ -298,6 +314,8 @@ def summarize_dropped(items: list, limit: int = 4) -> list:
             out.append(f"{len(ds)} đơn ngoài kỳ ở {where} ({spoken(total)})")
         elif key == "foot":
             out.append(f"{len(ds)} dòng \"Tổng cộng\" cuối file (dùng làm mốc kiểm)")
+        elif key == "tbfoot":
+            out.append(f"{len(ds)} dòng \"Tổng cộng\" cuối sổ cân đối (dùng làm mốc kiểm)")
         elif key == "tb":
             out.append(f"{len(ds)} dòng sổ cân đối có mã TK không đọc được ({spoken(total)})")
         else:
