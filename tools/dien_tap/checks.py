@@ -181,7 +181,8 @@ def evaluate(events: list, sheets: dict, expected: dict) -> Result:
     for item in expected.get("numbers", []):
         sheet, value = find_in_sheets(sheets, item["label"], item.get("sheet", ""))
         want, tol = item["value"], item.get("tolerance", 0)
-        ok = value is not None and abs(value - want) <= tol
+        got = abs(value) if value is not None and item.get("abs") else value      # "Trừ hàng trả lại" may be negative
+        ok = got is not None and abs(got - want) <= tol
         shown = "không tìm thấy" if value is None else f"{value:,.0f} (sheet {sheet})"
         add(Check(item["name"], ok, f"Cần {want:,.0f}, thấy {shown}"))
 

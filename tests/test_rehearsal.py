@@ -289,3 +289,11 @@ def test_source_choice_never_matches_a_longer_name_sharing_the_prefix():
         assert rehearse.match_label("TB_T10.xlsx", labels) == "Dùng TB_T10"
         assert rehearse.match_label("TB_T10 (1).xlsx", labels) == "Dùng TB_T10 (1)"
     assert rehearse.match_label("TB_T10.xlsx", ["Dùng TB_T10 (1)", "Dùng TB_T10_cu"]) is None
+
+
+def test_returns_line_may_be_negative_on_the_report():
+    exp = {"numbers": [{"name": "Hàng trả lại 120 triệu", "sheet": "BC", "label": "hàng trả lại",
+                        "value": 120000000, "tolerance": 1000000, "abs": True}]}
+    sheets = {"BC thang": [["Trừ hàng trả lại", None, -120000000.0]]}
+    res = checks.evaluate([], sheets, exp)
+    assert [c for c in res.checks if c.name == "Hàng trả lại 120 triệu"][0].ok

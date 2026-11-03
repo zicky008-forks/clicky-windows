@@ -191,7 +191,13 @@ def egress_checks(events, expected, egress_text: str | None, network: dict | Non
     calls = _events(events, "ai_call")
     out = []
     if spec.get("local_only"):
-        out.append(Check("Chế độ chỉ chạy trên máy: Clicky không gửi gì", not calls, f"{len(calls)} lần gửi đi"))
+        sent = [c for c in calls if c.get("approved") or not c.get("local_only")]
+        out.append(Check("Chế độ chỉ chạy trên máy: Clicky không gửi gì", not sent,
+                         f"{len(sent)} lần gửi đi" + (f" ({len(calls)} lần dừng tại máy)" if calls and not sent else "")))
+        if egress_text is not None:
+            lines = [ln for ln in egress_text.splitlines() if ln.strip()]
+            out.append(Check("Chế độ chỉ chạy trên máy: nhật ký gửi đi không thêm dòng nào", not lines,
+                             f"{len(lines)} dòng mới"))
         if network is not None:
             n = network.get("connections", 0)
             out.append(Check("Chế độ chỉ chạy trên máy: 0 kết nối mạng ra ngoài", n == 0,
@@ -253,6 +259,33 @@ def writes_before(events, label: str) -> int:
     return sum(1 for e in events if e.get("event") == "write" and (pressed is None or e.get("t", 0) < pressed))
 
 
+def sample_checks(events, expected, workbook: Path | None) -> list:
+    """Job 10: "xem em làm" plays the bundled sample alone; the closing card states the real time."""
+    spec = expected["sample"]
+    out = []
+    v = _events(events, "verify")
+    out.append(Check("File mẫu chạy tới đối chiếu lại và khớp", bool(v) and bool(v[-1].get("ok")),
+                     "không có bước đối chiếu" if not v else ("khớp" if v[-1].get("ok") else "lệch")))
+    closing = next((e for e in reversed(_events(events, "beat")) if (e.get("title") or "").startswith("Xong trong")), None)
+    turns = _events(events, "turn")
+    if closing is None or not turns:
+        out.append(Check("Thẻ cuối nói đúng thời gian thật", False, "không thấy thẻ \"Xong trong …\""))
+    else:
+        m = re.match(r"Xong trong (?:(\d+) phút )?(\d+) giây", closing["title"])
+        said = (int(m.group(1) or 0) * 60 + int(m.group(2))) if m else None
+        real = closing["t"] - turns[0]["t"]
+        ok = said is not None and abs(said - real) <= max(spec.get("time_tolerance", 5), 0.15 * real)
+        out.append(Check("Thẻ cuối nói đúng thời gian thật", ok,
+                         f"thẻ ghi {said} giây, robot đo {real:.0f} giây" if said is not None else closing["title"]))
+    if workbook is not None:
+        orig = workbook.with_name(f"{workbook.stem}_ban-goc{workbook.suffix}")
+        out.append(Check("File mẫu còn bản gốc _ban-goc", orig.exists(), orig.name))
+    clicks = [e for e in _events(events, "chosen")]
+    out.append(Check("File mẫu chạy không cần bấm gì", not clicks or spec.get("clicks_ok", False),
+                     f"{len(clicks)} lần bấm" if clicks else "không bấm lần nào", blocking=False))
+    return out
+
+
 def evaluate(events, sheets, expected, *, untouched_before_confirm=None, workbook=None, egress_text=None,
              network=None) -> list:
     out = []
@@ -270,4 +303,6 @@ def evaluate(events, sheets, expected, *, untouched_before_confirm=None, workboo
         out += egress_checks(events, expected, egress_text, network)
     if "tamper" in expected:
         out += tamper_checks(events, expected)
+    if "sample" in expected:
+        out += sample_checks(events, expected, workbook)
     return out

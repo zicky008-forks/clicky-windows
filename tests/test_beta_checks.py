@@ -156,3 +156,27 @@ def test_case01_beta_asks_for_every_unused_file():
     real = json.loads((HERE / "case01_beta_expected.json").read_text(encoding="utf-8"))["intake"]
     for name in ("2_Tra_loi_cac_bo_phan", "BaoCao_T10_Clicky_tao_san", "README", "1_M_do_AI_viet", "0_Kiem_tra_may"):
         assert name in real["must_mention"]
+
+
+def test_local_only_allows_calls_stopped_on_the_pc_but_not_sent_ones():
+    spec = {"egress": {"local_only": True}}
+    stopped = run({"t": 4, "event": "ai_call", "chars": 50, "preview_shown": False, "approved": False, "local_only": True})
+    out = beta_checks.evaluate(stopped, {}, spec, egress_text="")
+    assert all(c.ok for c in out), out
+    out = names(beta_checks.evaluate(stopped, {}, spec, egress_text='{"text": "x"}\n'))
+    assert not out["Chế độ chỉ chạy trên máy: nhật ký gửi đi không thêm dòng nào"].ok
+
+
+def test_sample_card_must_state_the_real_time(tmp_path):
+    wb = tmp_path / "Mau_SongHong_T10.xlsx"
+    wb.write_bytes(b"x")
+    (tmp_path / "Mau_SongHong_T10_ban-goc.xlsx").write_bytes(b"x")
+    spec = {"sample": {}}
+    ev = [{"t": 10.0, "event": "turn", "text": "xem em làm"}, {"t": 80.0, "event": "verify", "ok": True},
+          {"t": 84.0, "event": "beat", "title": "Xong trong 74 giây"}]
+    assert all(c.ok for c in beta_checks.evaluate(ev, {}, spec, workbook=wb))
+    ev[-1]["title"] = "Xong trong 30 giây"
+    out = names(beta_checks.evaluate(ev, {}, spec, workbook=wb))
+    assert not out["Thẻ cuối nói đúng thời gian thật"].ok
+    ev[-1]["title"] = "Xong trong 1 phút 14 giây"
+    assert names(beta_checks.evaluate(ev, {}, spec, workbook=wb))["Thẻ cuối nói đúng thời gian thật"].ok

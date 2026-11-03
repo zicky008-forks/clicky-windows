@@ -69,3 +69,9 @@ Người dùng bình thường không bao giờ có file này.
 Chạy: `--expected case01_beta_expected.json` (việc 1, 2, 3, 4, 6), thêm một lượt `--local-only` (số phải giống hệt), và `--expected case01_nguon_trung_expected.json` trên thư mục biến thể (việc 5). Robot chỉ báo loại lỗi lộ dữ liệu, không in giá trị bị lộ.
 
 Clicky cần ghi vào nhật ký cảnh các sự kiện `intake`, `verify`, `status`, `roles`, `ai_call`, ghi nhật ký gửi đi `%LOCALAPPDATA%\Clicky\gui-di.jsonl`, và tôn trọng biến môi trường `CLICKY_LOCAL_ONLY=1`. Chi tiết từng trường ở đầu `beta_checks.py`.
+
+### Việc 10: file mẫu "xem em làm"
+
+`python rehearse.py --sample` gõ "xem em làm" (Excel phải trống), không bấm gì, rồi đọc workbook Clicky tự mở. Đáp án `mau_expected.json`: đối chiếu lại khớp, hàng trả lại 120 triệu, lợi nhuận sau thuế thực 436 triệu, còn `_ban-goc`, thẻ cuối "Xong trong N giây" lệch thời gian robot đo không quá 5 giây (hoặc 15%).
+
+Lượt có việc 6: robot tự bấm "Gửi đi" trên thẻ xem trước lần gửi đầu. Nhật ký gửi đi mặc định ở `CLICKY_DATA_DIR` hoặc `%LOCALAPPDATA%\Clicky\gui-di.jsonl`. Với `--local-only`, `ai_call` dừng tại máy (`local_only=true`, chưa duyệt) được chấp nhận; có lần gửi thật hoặc nhật ký thêm dòng thì KHÔNG ĐẠT.
