@@ -152,6 +152,12 @@ def audit_checks(sheets, events, expected, workbook: Path | None) -> list:
     return out
 
 
+def _file_stem(text: str) -> str:
+    """File name named by a button, without "Dùng " and without the extension, for exact comparison."""
+    text = re.sub(r"^\s*Dùng\s+", "", text or "", flags=re.IGNORECASE).strip()
+    return re.sub(r"\.(xlsx|xlsm|xls|csv|pdf|png|jpg|jpeg|txt|docx)$", "", text, flags=re.IGNORECASE).casefold()
+
+
 def roles_checks(sheets, events, expected) -> list:
     """Job 5: two inputs with the same role → one question; figures from photos never used."""
     spec = expected["roles"]
@@ -161,9 +167,8 @@ def roles_checks(sheets, events, expected) -> list:
         asked = any(ask.casefold() in (e.get("question") or "").casefold() for e in _events(events, "choices"))
         out.append(Check("Hỏi khi có hai nguồn cùng vai trò", asked, "" if asked else f"không hỏi về \"{ask}\""))
     for part in spec.get("choose", []):
-        stem = re.sub(r"\.\w+$", "", part)
-        pat = re.compile(r"(?<![\w.])" + re.escape(stem) + r"(\.\w+)?(?![\w])", re.IGNORECASE)
-        chosen = any(pat.search(e.get("label") or "") for e in _events(events, "chosen"))
+        want = _file_stem(part)
+        chosen = any(_file_stem(e.get("label") or "") == want for e in _events(events, "chosen"))
         out.append(Check(f"Robot chọn được bản \"{part}\"", chosen, "" if chosen else "Clicky không hỏi / không có lựa chọn này"))
     for value in spec.get("numbers_absent", []):
         found = any(isinstance(c, (int, float)) and not isinstance(c, bool) and abs(c - value) < 0.5

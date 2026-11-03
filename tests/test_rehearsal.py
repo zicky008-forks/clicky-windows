@@ -281,3 +281,11 @@ def test_source_choice_matches_the_named_book_not_the_old_copy():
     assert rehearse.match_label("TB_T10.xlsx", labels) == "Dùng TB_T10"
     assert rehearse.match_label("TB_T10_cu.xlsx", labels) == "Dùng TB_T10_cu"
     assert rehearse.match_label("KeHoach_2026.xlsx", labels) is None
+
+
+def test_source_choice_never_matches_a_longer_name_sharing_the_prefix():
+    import rehearse
+    for labels in (["Dùng TB_T10 (1)", "Dùng TB_T10"], ["Dùng TB_T10", "Dùng TB_T10 (1)"]):
+        assert rehearse.match_label("TB_T10.xlsx", labels) == "Dùng TB_T10"
+        assert rehearse.match_label("TB_T10 (1).xlsx", labels) == "Dùng TB_T10 (1)"
+    assert rehearse.match_label("TB_T10.xlsx", ["Dùng TB_T10 (1)", "Dùng TB_T10_cu"]) is None

@@ -144,3 +144,8 @@ def test_choose_check_does_not_accept_the_old_copy():
     spec = {"roles": {"choose": ["TB_T10.xlsx"]}}
     assert not beta_checks.evaluate(run({"t": 5, "event": "chosen", "label": "Dùng TB_T10_cu"}), {}, spec)[0].ok
     assert beta_checks.evaluate(run({"t": 5, "event": "chosen", "label": "Dùng TB_T10"}), {}, spec)[0].ok
+
+
+def test_choose_check_needs_the_exact_file_name():
+    spec = {"roles": {"choose": ["TB_T10.xlsx"]}}
+    assert not beta_checks.evaluate(run({"t": 5, "event": "chosen", "label": "Dùng TB_T10 (1)"}), {}, spec)[0].ok

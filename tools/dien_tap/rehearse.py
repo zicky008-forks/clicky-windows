@@ -64,15 +64,17 @@ class Clock:
 AUTO_PRESS = []        # (driver, labels): buttons pressed whenever they come up, e.g. the intake receipt's confirm
 
 
-def match_label(part: str, labels) -> str | None:
-    """The button that names `part`: "TB_T10.xlsx" matches "Dùng TB_T10" but not "Dùng TB_T10_cu"."""
+def _file_stem(text: str) -> str:
     import re
-    stem = re.sub(r"\.(xlsx|xlsm|xls|csv|pdf|png|jpg|txt)$", "", part.strip(), flags=re.IGNORECASE)
-    pat = re.compile(r"(?<![\w.])" + re.escape(stem) + r"(\.\w+)?(?![\w])", re.IGNORECASE)
-    for lab in labels or []:
-        if lab == part:
-            return lab
-    return next((lab for lab in labels or [] if pat.search(lab)), None)
+    text = re.sub(r"^\s*Dùng\s+", "", text or "", flags=re.IGNORECASE).strip()
+    return re.sub(r"\.(xlsx|xlsm|xls|csv|pdf|png|jpg|jpeg|txt|docx)$", "", text, flags=re.IGNORECASE).casefold()
+
+
+def match_label(part: str, labels) -> str | None:
+    """The button that names exactly `part`: the whole file name after "Dùng ", never a substring.
+    "TB_T10.xlsx" matches "Dùng TB_T10" but not "Dùng TB_T10_cu" nor "Dùng TB_T10 (1)"."""
+    want = _file_stem(part)
+    return next((lab for lab in labels or [] if _file_stem(lab) == want), None)
 
 
 def _auto_press(events) -> None:
