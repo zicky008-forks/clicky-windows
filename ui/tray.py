@@ -10,15 +10,24 @@ from storage import set_setting, setting
 
 
 def _make_tray_icon(color: QColor) -> QIcon:
-    """Generate a simple coloured circle as the tray icon.
+    """Tray icon: a nón lá (conical hat) in the state colour, matching the app icon.
     Must be called AFTER QApplication exists (Qt requirement)."""
+    from PyQt6.QtGui import QPainterPath, QPen
+    from PyQt6.QtCore import QPointF
     px = QPixmap(QSize(22, 22))
     px.fill(Qt.GlobalColor.transparent)
     painter = QPainter(px)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    hat = QPainterPath()
+    hat.moveTo(11, 2)                                   # apex
+    hat.lineTo(20.5, 16.5)
+    hat.quadTo(QPointF(11, 20.5), QPointF(1.5, 16.5))   # curved brim
+    hat.closeSubpath()
     painter.setBrush(QBrush(color))
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawEllipse(3, 3, 16, 16)
+    painter.setPen(QPen(QColor(255, 255, 255, 220), 1.0))
+    painter.drawPath(hat)
+    painter.setPen(QPen(QColor(255, 255, 255, 150), 1.0))
+    painter.drawLine(QPointF(7.2, 11.2), QPointF(14.8, 11.2))   # one woven ring
     painter.end()
     return QIcon(px)
 
@@ -67,9 +76,9 @@ class TrayManager(QObject):
 
         # Icons MUST be created after QApplication exists
         self._icons = {
-            "idle":      _make_tray_icon(QColor(80, 80, 120)),
+            "idle":      _make_tray_icon(QColor(0x25, 0x63, 0xEB)),
             "listening": _make_tray_icon(QColor(50, 200, 100)),
-            "thinking":  _make_tray_icon(QColor(0, 120, 255)),
+            "thinking":  _make_tray_icon(QColor(124, 58, 237)),
             "speaking":  _make_tray_icon(QColor(255, 140, 0)),
         }
 
