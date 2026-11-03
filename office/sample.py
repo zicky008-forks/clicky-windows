@@ -87,6 +87,7 @@ async def run(manager) -> str:
         if await asyncio.to_thread(bridge.workbook_path) == str(workbook):
             break
         await asyncio.sleep(0.5)
+    mc.use_folder(None)                         # the sample reads its own folder, never a dropped one
     mc._CHOSEN.clear()
     mc._PICKS.clear()
     order = mc.machine_date_order()
@@ -114,8 +115,8 @@ async def handle_run(manager, transcript: str) -> str:
 
 
 async def handle_own(manager, transcript: str) -> str:
-    await mc.play(manager, [Beat("Chị lưu file Excel báo cáo vào thư mục có 2 sổ cân đối và các file bán hàng, mở nó lên, "
-                                 "rồi gõ: làm báo cáo từ thư mục này.")])
+    """After the sample: the one drop place for the user's own files."""
+    manager.sig_drop_zone.emit()
     return ""
 
 

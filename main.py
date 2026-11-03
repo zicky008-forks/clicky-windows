@@ -390,6 +390,11 @@ def main():
         panel.show()
         panel.raise_()
     manager.sig_open_chat.connect(_open_chat)
+    # The one drop place for the first real month (after the sample, or "thả file").
+    from ui.drop_zone import DropZone
+    drop_zone = DropZone()
+    manager.sig_drop_zone.connect(drop_zone.open)
+    drop_zone.dropped.connect(manager.submit_drop)
     choice_card.dismissed.connect(lambda: _on_guided(False))
 
     # Errors. The toast names the log file because it only has room for the
@@ -718,7 +723,7 @@ def main():
     def _apply_capture_policy(allowed=None):
         """Clicky hides its own windows from screen capture, unless the user turned on recording for a demo."""
         hidden = not (_allow_recording() if allowed is None else allowed)
-        for window in (overlay, panel, choice_card, outgoing_card, caption):
+        for window in (overlay, panel, choice_card, outgoing_card, caption, drop_zone):
             try:
                 exclude_window(window, hidden)
             except OSError as exc:

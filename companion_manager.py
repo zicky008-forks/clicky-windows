@@ -312,6 +312,7 @@ class CompanionManager(QObject):
     sig_choices             = pyqtSignal(str, list)       # (question, button labels) → clickable choice card
     sig_intake              = pyqtSignal(dict)            # the receipt ("Em đọc được những gì") shown with the next choices
     sig_open_chat           = pyqtSignal()                # bring the chat panel up so the user can type
+    sig_drop_zone           = pyqtSignal()                # show the one drop place for the user's own files
     sig_guided              = pyqtSignal(bool)            # True while Clicky walks through the screen step by step
     sig_recording_state     = pyqtSignal(bool, str)       # (is_recording, output_dir)
     sig_turn_started        = pyqtSignal(str)
@@ -964,6 +965,33 @@ class CompanionManager(QObject):
         self.stop()
         self._guided = guided
         self._request_future = self._submit(self._process_query(text))
+
+    def submit_drop(self, paths: list):
+        """Files or a folder dropped on the drop zone (UI thread): start the month close on them."""
+        paths = [str(p) for p in paths if str(p).strip()]
+        if not paths:
+            return
+        self.stop()
+        self._request_future = self._submit(self._process_drop(paths))
+
+    async def _process_drop(self, paths: list):
+        from office import drop
+        self._current_task = asyncio.current_task()
+        self._cancel_flag = False
+        self._emit_state(AppState.THINKING)
+        self.sig_turn_started.emit("")
+        try:
+            await drop.handle(self, paths)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("reading the dropped files failed")
+            self.sig_error.emit("Em chưa đọc được các file vừa thả. File của chị chưa bị thay đổi gì. "
+                                "Chị thả lại thử nhé, nếu vẫn vậy thì bấm Báo lỗi.")
+        finally:
+            if self._current_task is asyncio.current_task():
+                self._current_task = None
+                self._emit_state(AppState.IDLE)
 
     def begin_dictation(self):
         self.stop()

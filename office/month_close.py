@@ -392,6 +392,24 @@ def _style_check_sheet(bridge, sheet: str, n_details: int, gap_state: Optional[s
         bridge.format_numbers(f"{s}!B{top + 1}:C{last}")
 
 
+# The folder the user dropped on the drop zone; None reads the folder the open workbook is saved in.
+_SOURCE: Optional[str] = None
+
+
+def _data_folder(bridge) -> Optional[Path]:
+    """Where the trial balances and sales exports are read from. The workbook must be saved either way:
+    the original is kept next to it before the first change."""
+    own = bridge.workbook_folder()
+    if not own:
+        return None
+    return Path(_SOURCE or own)
+
+
+def use_folder(folder: Optional[Path]) -> None:
+    global _SOURCE
+    _SOURCE = str(folder) if folder else None
+
+
 # Which file the user chose when two trial balances cover the same period: (year, month) → file stem.
 _CHOSEN: dict = {}
 
@@ -578,10 +596,9 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     _EXPECT.clear()
     if not bridge.available():
         return [Beat("Anh mở file Excel đã lưu trong thư mục dữ liệu tháng rồi gọi lại em.")]
-    folder_text = bridge.workbook_folder()
-    if not folder_text:
+    folder = _data_folder(bridge)
+    if folder is None:
         return [Beat("File Excel này chưa được lưu. Anh lưu nó vào thư mục có các file đơn hàng và file cân đối tài khoản, rồi gọi lại em.")]
-    folder = Path(folder_text)
     files = sources.find_order_files(folder)
     if not files:
         return [Beat(f"Em không thấy file đơn hàng CSV nào trong thư mục {folder.name}.")]
@@ -778,10 +795,9 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
     _PENDING = None
     if not bridge.available():
         return [Beat("Anh mở file Excel đã lưu trong thư mục dữ liệu tháng rồi gọi lại em.")]
-    folder_text = bridge.workbook_folder()
-    if not folder_text:
+    folder = _data_folder(bridge)
+    if folder is None:
         return [Beat("File Excel này chưa được lưu. Anh lưu nó vào thư mục có các file đơn hàng và file cân đối tài khoản, rồi gọi lại em.")]
-    folder = Path(folder_text)
     files = sources.find_order_files(folder)
     if not files:
         return [Beat(f"Em không thấy file đơn hàng CSV nào trong thư mục {folder.name}.")]
@@ -1317,12 +1333,18 @@ def _pq(manager):
 
 
 async def handle_start(manager, transcript: str) -> str:
+    await run_from(manager, None)   # typed "làm báo cáo từ thư mục này": the open workbook's own folder
+    return ""
+
+
+async def run_from(manager, folder: Optional[Path]) -> None:
+    """Start a fresh month close on a folder (the dropped one) or on the open workbook's folder."""
+    use_folder(folder)
     _CHOSEN.clear()                 # a new run asks again: the folder may have changed since
     _PICKS.clear()
     order = machine_date_order()
     beats = await asyncio.to_thread(lambda: start(manager._excel, _pq(manager), order))
     await play(manager, beats)
-    return ""
 
 
 async def handle_approve(manager, transcript: str) -> str:
