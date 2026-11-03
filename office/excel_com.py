@@ -221,6 +221,20 @@ class ExcelBridge:
         except Exception:
             pass
 
+    def content_rect(self):
+        """Physical screen pixels of the filled part of the sheet on screen (UsedRange ∩ visible), or None."""
+        app = self._excel()
+        try:
+            ws, win = app.ActiveSheet, app.ActiveWindow
+            filled = app.Intersect(ws.UsedRange, win.VisibleRange)
+            if filled is None:
+                return None
+            name = ws.Name.replace("'", "''")
+            return self.screen_rect(f"'{name}'!{filled.Address.replace('$', '')}")
+        except Exception as exc:
+            log.debug("content_rect failed: %s", exc)
+            return None
+
     def scroll_home(self, name: str) -> None:
         """Show a sheet from its top-left corner, so a report is seen from its title down."""
         app = self._excel()

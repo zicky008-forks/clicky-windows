@@ -61,9 +61,26 @@ def test_stem_ties_the_card_to_its_range():
     assert (x1, x2) == (1684, 1700) and 100 <= y2 <= 1000          # card on the left: line to the range's left edge
 
 
-def test_pointer_rests_beside_the_range_not_on_it():
+def test_pointer_rests_just_under_the_frame_not_on_figures():
     from ui.card_layout import pointer_spot
     x, y = pointer_spot((300, 200, 420, 222))
-    assert x < 300 and 200 <= y <= 222
-    x, _ = pointer_spot((0, 200, 420, 222))
-    assert x > 420
+    assert 300 <= x <= 320 and 222 < y <= 230          # tip touches the bottom edge, near the left end
+    _, y = pointer_spot((300, 1020, 420, 1040), SCREEN)
+    assert y < 1020                                    # bottom of the screen: rests just above instead
+
+
+def test_card_keeps_off_the_figures_when_it_can():
+    filled = (0, 100, 1200, 700)                       # the sheet's values on screen
+    anchor = (200, 300, 320, 322)                      # a range inside them
+    x, y = place_card(anchor, (360, 140), SCREEN, filled)
+    assert _overlaps((x, y, x + 360, y + 140), filled) is False and x >= 1200
+    x, y = place_card((0, 560, 1900, 600), (360, 140), SCREEN, (0, 100, 1900, 600))   # report as wide as the screen
+    assert y >= 600                                     # goes under the report, not over it
+    full = (0, 0, 1920, 1040)                           # nowhere free: still never on the range itself
+    x, y = place_card(anchor, (360, 140), SCREEN, full)
+    assert not _overlaps((x, y, x + 360, y + 140), anchor)
+
+
+def test_no_long_stem_across_the_sheet():
+    from ui.card_layout import stem
+    assert stem((200, 300, 320, 322), (1216, 300, 1576, 440)) == ()

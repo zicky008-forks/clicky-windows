@@ -681,9 +681,8 @@ def _approve(bridge, pq, job) -> list:
     cost_ok = not ledger or "cost" not in loaded.columns or abs(loaded.cost - ledger["cost"]) <= TOLERANCE
     note = f"{len(rows)} chứng từ · doanh thu {spoken(loaded.amount)}" + (
         " · giá vốn khớp TK 632" if cost_ok and ledger and "cost" in loaded.columns else "")
-    # The gap counts down to zero on the card, so the fix is seen happening rather than swapped in.
-    roll = (job["gap"], 0) if job.get("gap") else ()
-    beats = [Beat("Đã sửa xong. Excel khớp sổ cái đến từng đồng.", ref, "Đã khớp sổ cái", "ok", "0 đ", note, roll=roll)]
+    # Shown straight as 0 đ: a figure rolling through "−2,9 tỷ" under the title "Đã khớp" reads as a contradiction.
+    beats = [Beat("Đã sửa xong. Excel khớp sổ cái đến từng đồng.", ref, "Đã khớp sổ cái", "ok", "0 đ", note)]
     return beats + build_report(bridge, folder, tbs) + [SAVE_REMINDER]
 
 
@@ -787,15 +786,17 @@ CLEAR_AFTER_S = 8.0       # the last card fades this long after Clicky stops tal
 FINAL_HOLD_S = 25.0       # ...unless it is a warning: that one stays up long enough to read, screenshot, act on
 
 
-def shapes_for(box: tuple, beat: Beat) -> list:
-    """Overlay shapes for one beat: the range lit with the rest of the screen dimmed, and one card beside it."""
+def shapes_for(box: tuple, beat: Beat, avoid: tuple = None) -> list:
+    """Overlay shapes for one beat: the range lit with the rest of the screen dimmed, and one card beside it.
+    avoid: the filled part of the sheet on screen, which the card keeps off when it can."""
     from ui.card_layout import tone_of
     l, t, r, b = box
     tone = tone_of(beat.mark)
     shapes = [{"kind": "spotlight", "x1": l, "y1": t, "x2": r, "y2": b, "tone": tone}]
     if beat.label or beat.value or beat.note:
         shapes.append({"kind": "card", "anchor": [l, t, r, b], "title": beat.label, "was": beat.was,
-                       "value": beat.value, "note": beat.note, "tone": tone, "roll": list(beat.roll)})
+                       "value": beat.value, "note": beat.note, "tone": tone, "roll": list(beat.roll),
+                       "avoid": list(avoid) if avoid else None})
     return shapes
 
 
@@ -814,6 +815,16 @@ async def _locate(manager, ref_text: str):
     except Exception as exc:
         log.warning("pointing at %s failed: %s", ref_text, exc)
         scene_log.record("locate", ref=ref_text, excel_rect=None, box=None, error=str(exc)[:200])
+        return None
+
+
+async def _filled_area(manager):
+    """Logical screen box of the cells holding values on screen, so a card can keep off the figures."""
+    try:
+        rect = await asyncio.to_thread(manager._excel.content_rect)
+        return manager._physical_to_logical_bbox(rect) if rect else None
+    except Exception as exc:
+        log.debug("filled area unknown: %s", exc)
         return None
 
 
@@ -841,13 +852,17 @@ async def play(manager, beats: list) -> None:
                          note=beat.note, mark=beat.mark, text=beat.text, choices=list(beat.choices or []))
         if box:
             manager.sig_clear_drawings.emit()
-            for shape in shapes_for(box, beat):
+            avoid = await _filled_area(manager)
+            for shape in shapes_for(box, beat, avoid):
                 manager.sig_draw.emit(shape)
             l, t, r, b = box
             manager.sig_point_hold.emit(True)
             # The pointer stops beside the range, never on it: it must not hide the figure being explained.
             manager.sig_point_at.emit(*pointer_spot(box), NO_BUBBLE)
         log.info("beat: %s", beat.text)
+        if beat.choices:
+            # The question's buttons appear with the question, not after it has been read out.
+            manager.sig_choices.emit(beat.text, list(beat.choices))
         spoke = await manager._reply_local(beat.text)
         scene_log.record("spoken", i=i, spoke=spoke)
         if spoke is False and BEAT_GAP_S:
@@ -857,8 +872,6 @@ async def play(manager, beats: list) -> None:
         if box:
             manager.sig_point_release.emit()
             last_card = beat
-        if beat.choices:
-            manager.sig_choices.emit(beat.text, list(beat.choices))
     if beats and not beats[-1].choices:
         def fade():
             if getattr(manager, "_month_close_run", None) is run:
