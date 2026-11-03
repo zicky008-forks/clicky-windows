@@ -53,6 +53,7 @@ hidden = [
     "ui.connections_window",
     "ui.jobs_window",
     "ui.drawing_board",
+    "ui.outgoing_card", "office.outgoing", "engine.redact",
     "storage", "session_store", "drawing", "drive", "jobs", "desktop",
     "response_blocks", "browser_bridge", "connectors", "screen.privacy", "updates",
     "audio.narration", "audio.devices", "audio.tts.sapi_tts_provider",
