@@ -24,6 +24,7 @@ from engine import m_code, sources
 from engine.monthly_report import spoken
 from engine.trial_balance import ZERO
 from office.power_query import ReadFailed
+import scene_log
 
 log = logging.getLogger(__name__)
 
@@ -805,11 +806,13 @@ async def _locate(manager, ref_text: str):
             await asyncio.to_thread(manager._excel.activate, ref.sheet)
         rect = await asyncio.to_thread(manager._excel.screen_rect, ref_text, True)
         box = manager._physical_to_logical_bbox(rect) if rect else None
+        scene_log.record("locate", ref=ref_text, excel_rect=rect, box=box)
         if not box:
             log.warning("cannot place %s on screen (Excel rect %s)", ref_text, rect)
         return box
     except Exception as exc:
         log.warning("pointing at %s failed: %s", ref_text, exc)
+        scene_log.record("locate", ref=ref_text, excel_rect=None, box=None, error=str(exc)[:200])
         return None
 
 
@@ -833,6 +836,8 @@ async def play(manager, beats: list) -> None:
             if BEAT_GAP_S:
                 await asyncio.sleep(BEAT_GAP_S)
         box = await _locate(manager, beat.ref) if beat.ref else None
+        scene_log.record("beat", i=i, ref=beat.ref, box=box, title=beat.label, value=beat.value, was=beat.was,
+                         note=beat.note, mark=beat.mark, text=beat.text, choices=list(beat.choices or []))
         if box:
             manager.sig_clear_drawings.emit()
             for shape in shapes_for(box, beat):
@@ -842,6 +847,7 @@ async def play(manager, beats: list) -> None:
             # The pointer stops beside the range, never on it: it must not hide the figure being explained.
             manager.sig_point_at.emit(*pointer_spot(box), NO_BUBBLE)
         spoke = await manager._reply_local(beat.text)
+        scene_log.record("spoken", i=i, spoke=spoke)
         if spoke is False and BEAT_GAP_S:
             await asyncio.sleep(reading_seconds(beat.text))
         if box:

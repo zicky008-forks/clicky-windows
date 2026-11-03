@@ -350,6 +350,9 @@ def main():
     choice_card.chosen.connect(lambda _label: overlay.clear_annotations())
     choice_card.dismissed.connect(overlay.clear_annotations)
     manager.sig_turn_started.connect(lambda _q: choice_card.hide())
+    # Rehearsals only (CLICKY_SCENE_LOG set): log every card, box and sentence for the robot to check.
+    import scene_log
+    scene_log.connect(manager, choice_card)
 
     # While Clicky walks through the sheet step by step the cards carry everything, so the chat
     # panel steps aside instead of covering a third of the screen, and comes back afterwards.

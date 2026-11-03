@@ -1,0 +1,195 @@
+"""Diễn tập: a robot plays the accountant through one whole month-close case, then grades the run.
+
+Run on the Windows test PC, with practice data only:
+
+    python tools\\dien_tap\\rehearse.py --workbook "C:\\...\\Case01\\BaoCao_T10.xlsx"
+
+What it does, like a person would:
+ 1. copies the blank workbook next to itself (the original stays clean) and opens it in Excel;
+ 2. starts Clicky with the scene log on;
+ 3. types "làm báo cáo tháng từ thư mục này" into Clicky's chat box and presses Gửi;
+ 4. waits for the fix question and presses "Sửa giúp tôi";
+ 5. waits for the report, reads the numbers left in the workbook through Excel itself;
+ 6. grades the run (tools/dien_tap/checks.py) and writes ket-qua.md + ket-qua.json + scene.jsonl.
+
+Privacy: it refuses to run while another workbook is open in Excel, and nothing it writes
+leaves this PC. Exit code 0 = ĐẠT, 1 = KHÔNG ĐẠT, 2 = could not run.
+"""
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import checks          # noqa: E402
+import drivers         # noqa: E402
+
+HERE = Path(__file__).resolve().parent
+COMPOSER = "Tin nhắn cho Clicky"
+SEND = "Gửi"
+
+
+def say(text: str) -> None:
+    print(text, flush=True)
+
+
+def find_clicky() -> str | None:
+    base = os.environ.get("LOCALAPPDATA", "")
+    hits = sorted(glob.glob(os.path.join(base, "*", "current", "Clicky.exe")), key=os.path.getmtime, reverse=True)
+    return hits[0] if hits else None
+
+
+class Clock:
+    def __init__(self):
+        self.t0 = self.last = time.monotonic()
+        self.steps = []
+
+    def lap(self, name: str) -> None:
+        now = time.monotonic()
+        self.steps.append((name, now - self.last))
+        self.last = now
+
+
+def wait_log(log: Path, done, timeout: float, quiet: float = 0.0) -> list:
+    """Poll the scene log until done(events) holds (then `quiet` seconds with no new event), or time runs out."""
+    end = time.monotonic() + timeout
+    events = []
+    while time.monotonic() < end:
+        events = checks.read_log(log)
+        if done(events):
+            if not quiet:
+                return events
+            n = len(events)
+            time.sleep(quiet)
+            events = checks.read_log(log)
+            if len(events) == n:
+                return events
+            continue
+        time.sleep(1.0)
+    return events
+
+
+def open_workbook(source: Path, allow_others: bool):
+    import win32com.client
+    excel = win32com.client.Dispatch("Excel.Application")
+    others = [wb.Name for wb in excel.Workbooks]
+    if others and not allow_others:
+        raise SystemExit(f"Excel đang mở file khác: {', '.join(others)}. Đóng hết rồi chạy lại "
+                         "(diễn tập chỉ dùng số giả lập).")
+    stamp = time.strftime("%m%d_%H%M%S")
+    copy = source.with_name(f"{source.stem}_dientap_{stamp}{source.suffix}")
+    shutil.copy2(source, copy)
+    excel.Visible = True
+    wb = excel.Workbooks.Open(str(copy))
+    excel.WindowState = -4137          # xlMaximized
+    return excel, wb, copy
+
+
+def sheet_values(wb, max_rows: int = 200, max_cols: int = 12) -> dict:
+    out = {}
+    for ws in wb.Worksheets:
+        rng = ws.Range(ws.Cells(1, 1), ws.Cells(max_rows, max_cols))
+        values = rng.Value2 or ()
+        out[ws.Name] = [list(r) for r in values]
+    return out
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Diễn tập trọn hành trình báo cáo tháng bằng robot.")
+    ap.add_argument("--workbook", required=True, help="File Excel trống của case, nằm trong thư mục dữ liệu tháng")
+    ap.add_argument("--expected", default=str(HERE / "case01_expected.json"), help="Đáp án cần đạt (JSON)")
+    ap.add_argument("--clicky", default=None, help="Đường dẫn Clicky.exe (mặc định: bản cài trong LOCALAPPDATA)")
+    ap.add_argument("--driver", choices=("auto", "agent-desktop", "uia"), default="auto")
+    ap.add_argument("--agent-desktop", default="agent-desktop", help="Đường dẫn agent-desktop.exe")
+    ap.add_argument("--command", default="làm báo cáo tháng từ thư mục này")
+    ap.add_argument("--out", default=None, help="Thư mục kết quả (mặc định: dien-tap\\<giờ> cạnh file Excel)")
+    ap.add_argument("--allow-other-workbooks", action="store_true")
+    args = ap.parse_args(argv)
+
+    expected = json.loads(Path(args.expected).read_text(encoding="utf-8"))
+    workbook = Path(args.workbook).resolve()
+    out = Path(args.out) if args.out else workbook.parent / "dien-tap" / time.strftime("%Y%m%d_%H%M%S")
+    out.mkdir(parents=True, exist_ok=True)
+    log = out / "scene.jsonl"
+    clock = Clock()
+
+    if drivers.pids_of("Clicky.exe"):
+        say("Clicky đang chạy. Thoát Clicky (khay hệ thống → Thoát) rồi chạy lại, để robot mở bản có nhật ký cảnh.")
+        return 2
+    exe = args.clicky or find_clicky()
+    if not exe or not Path(exe).exists():
+        say("Không tìm thấy Clicky.exe. Truyền --clicky \"<đường dẫn>\".")
+        return 2
+
+    say(f"1/6 Mở bản sao {workbook.name} trong Excel")
+    excel, wb, copy = open_workbook(workbook, args.allow_other_workbooks)
+    clock.lap("Mở Excel")
+
+    say(f"2/6 Mở Clicky: {exe}")
+    env = dict(os.environ, CLICKY_SCENE_LOG=str(log))
+    subprocess.Popen([exe], env=env, cwd=str(Path(exe).parent))
+    driver = None
+    if args.driver in ("auto", "agent-desktop"):
+        try:
+            driver = drivers.AgentDesktop(args.agent_desktop)
+        except drivers.DriverError as exc:
+            if args.driver == "agent-desktop":
+                say(f"agent-desktop không dùng được: {exc}")
+                return 2
+            say(f"   agent-desktop không dùng được ({exc}); dùng uiautomation.")
+    if driver is None:
+        driver = drivers.Uia("Clicky.exe")
+    if not driver.wait_for(COMPOSER, 90):
+        say("Không thấy khung chat Clicky sau 90 giây. Mở khung chat (bấm biểu tượng Clicky) rồi chạy lại.")
+        return 2
+    clock.lap("Clicky sẵn sàng")
+
+    say(f"3/6 Gõ lệnh: {args.command}")
+    driver.set_text(COMPOSER, args.command)
+    driver.press(SEND)
+    fix = expected.get("fix_label")
+    if fix:
+        events = wait_log(log, lambda ev: any(fix in (e.get("labels") or []) for e in ev if e.get("event") == "choices"),
+                          expected.get("first_stage_seconds", 240))
+        clock.lap("Chặng 1: đối chiếu và chỉ chỗ lệch")
+        if any(fix in (e.get("labels") or []) for e in events if e.get("event") == "choices"):
+            say(f"4/6 Bấm \"{fix}\"")
+            if driver.wait_for(fix, 20):
+                driver.press(fix)
+            else:
+                say(f"   Không thấy nút \"{fix}\" trên màn hình.")
+        else:
+            say("4/6 Clicky không hỏi sửa. Ghi nhận và chấm tiếp.")
+
+    say("5/6 Chờ Clicky làm xong báo cáo")
+    target = expected.get("final_title", "")
+    wait_log(log, lambda ev: any(target and target in (e.get("title") or "") for e in ev if e.get("event") == "beat")
+             or (not target and len(ev) > 0), expected.get("second_stage_seconds", 300), quiet=6.0)
+    clock.lap("Chặng 2–3: sửa và lập báo cáo")
+
+    say("6/6 Đọc số trong file và chấm")
+    sheets = sheet_values(wb)
+    events = checks.read_log(log)
+    result = checks.evaluate(events, sheets, expected)
+    meta = {"case": expected.get("case", ""), "clicky": exe, "when": time.strftime("%d/%m/%Y %H:%M"),
+            "driver": f"{driver.label} {driver.version}", "steps": clock.steps, "workbook": str(copy)}
+    (out / "ket-qua.md").write_text(checks.report_md(result, meta), encoding="utf-8")
+    (out / "ket-qua.json").write_text(json.dumps(
+        {"passed": result.passed, "meta": meta,
+         "checks": [{"name": c.name, "ok": c.ok, "detail": c.detail, "blocking": c.blocking} for c in result.checks]},
+        ensure_ascii=False, indent=2), encoding="utf-8")
+    say(("ĐẠT" if result.passed else "KHÔNG ĐẠT") + f". Kết quả: {out / 'ket-qua.md'}")
+    for c in result.checks:
+        say(f"  [{'x' if c.ok else ' '}] {c.name}: {c.detail}")
+    return 0 if result.passed else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

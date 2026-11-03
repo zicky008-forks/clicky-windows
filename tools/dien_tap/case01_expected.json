@@ -1,0 +1,15 @@
+{
+  "case": "Case 01 Sông Hồng T10",
+  "fix_label": "Sửa giúp tôi",
+  "final_title": "Lợi nhuận sau thuế",
+  "voice": "text_ok",
+  "first_stage_seconds": 240,
+  "second_stage_seconds": 300,
+  "max_seconds": 240,
+  "numbers": [
+    {"name": "Chênh lệch Excel − sổ cái sau khi sửa = 0", "sheet": "Doi chieu",
+     "label": "Chênh lệch Excel", "value": 0, "tolerance": 0},
+    {"name": "Lợi nhuận sau thuế thực = 436 triệu", "sheet": "BC",
+     "label": "Lợi nhuận sau thuế thực", "value": 436000000, "tolerance": 1000000}
+  ]
+}
