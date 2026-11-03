@@ -92,6 +92,19 @@ def open_workbook(source: Path, allow_others: bool):
     return excel, wb, copy
 
 
+def open_chat(shortcut: str) -> None:
+    """Press Clicky's text shortcut (default Ctrl+Alt+T), the way a person opens the chat box."""
+    keys = {"ctrl": "{Ctrl}", "alt": "{Alt}", "shift": "{Shift}", "win": "{Win}"}
+    parts = [p.strip().lower() for p in shortcut.split("+") if p.strip()]
+    combo = "".join(keys.get(p, p) for p in parts)
+    try:
+        import uiautomation as auto
+        auto.SendKeys(combo, waitTime=0.3)
+        say(f"   Khung chat chưa mở, bấm {shortcut}")
+    except Exception as exc:
+        say(f"   Không bấm được phím tắt mở chat: {exc}")
+
+
 def sheet_values(wb, max_rows: int = 200, max_cols: int = 12) -> dict:
     out = {}
     for ws in wb.Worksheets:
@@ -111,6 +124,7 @@ def main(argv=None) -> int:
     ap.add_argument("--command", default="làm báo cáo tháng từ thư mục này")
     ap.add_argument("--out", default=None, help="Thư mục kết quả (mặc định: dien-tap\\<giờ> cạnh file Excel)")
     ap.add_argument("--allow-other-workbooks", action="store_true")
+    ap.add_argument("--chat-shortcut", default="ctrl+alt+t", help="Phím tắt mở khung chat Clicky")
     args = ap.parse_args(argv)
 
     expected = json.loads(Path(args.expected).read_text(encoding="utf-8"))
@@ -146,8 +160,11 @@ def main(argv=None) -> int:
             say(f"   agent-desktop không dùng được ({exc}); dùng uiautomation.")
     if driver is None:
         driver = drivers.Uia("Clicky.exe")
-    if not driver.wait_for(COMPOSER, 90):
-        say("Không thấy khung chat Clicky sau 90 giây. Mở khung chat (bấm biểu tượng Clicky) rồi chạy lại.")
+    # Clicky starts with the chat hidden; a person opens it with the text shortcut, so the robot does too.
+    if not driver.wait_for(COMPOSER, 20):
+        open_chat(args.chat_shortcut)
+    if not driver.wait_for(COMPOSER, 70):
+        say("Không thấy khung chat Clicky sau 90 giây, kể cả sau khi bấm phím tắt mở chat. Máy có đang khóa màn hình không?")
         return 2
     clock.lap("Clicky sẵn sàng")
 
