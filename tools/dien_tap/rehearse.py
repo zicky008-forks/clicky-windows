@@ -46,7 +46,10 @@ def say(text: str) -> None:
 
 def find_clicky() -> str | None:
     base = os.environ.get("LOCALAPPDATA", "")
-    hits = sorted(glob.glob(os.path.join(base, "*", "current", "Clicky.exe")), key=os.path.getmtime, reverse=True)
+    # Velopack builds live in <app>\current\, the Setup-Clicky-bi installer in Programs\Clicky\: newest wins.
+    hits = glob.glob(os.path.join(base, "*", "current", "Clicky.exe")) + \
+        glob.glob(os.path.join(base, "Programs", "Clicky*", "Clicky.exe"))
+    hits = sorted(hits, key=os.path.getmtime, reverse=True)
     return hits[0] if hits else None
 
 
