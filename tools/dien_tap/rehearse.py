@@ -246,6 +246,8 @@ def main(argv=None) -> int:
     ap.add_argument("--tamper", default=None, metavar="SHEET!CELL=DELTA",
                     help="Việc 3b: nhờ Clicky (móc thử CLICKY_TEST_TAMPER) cộng DELTA vào ô đó ngay sau khi lưu; "
                          "chấm Clicky có phát hiện đúng ô và đúng số lệch không")
+    ap.add_argument("--lan", type=int, default=1,
+                    help="Chạy cùng case N lượt liền; chỉ ĐẠT khi mọi lượt đều đạt (xử lý ở run_laps)")
     ap.add_argument("--egress-log", default=None,
                     help="Nhật ký gửi đi của Clicky (mặc định %%LOCALAPPDATA%%\\Clicky\\gui-di.jsonl)")
     args = ap.parse_args(argv)
@@ -458,10 +460,79 @@ def add_visual(result, events, captures, out: Path) -> None:
         result.checks.append(checks.Check(name, e["ok"], detail, blocking=e["blocking"]))
 
 
+def close_between_laps(keep: set) -> None:
+    """Between two laps: quit Clicky and close, without saving, every workbook the lap opened.
+    Workbooks that were open before lap 1 (only with --allow-other-workbooks) are left alone."""
+    subprocess.run(["taskkill", "/IM", "Clicky.exe", "/F"], capture_output=True)
+    try:
+        import win32com.client
+        excel = win32com.client.Dispatch("Excel.Application")
+        for wb in list(excel.Workbooks):
+            if wb.FullName not in keep:
+                wb.Close(SaveChanges=False)
+    except Exception as exc:
+        say(f"   Không đóng được file Excel của lượt trước: {exc}")
+    time.sleep(3)
+
+
+def open_workbook_names() -> set:
+    try:
+        import win32com.client
+        return {wb.FullName for wb in win32com.client.Dispatch("Excel.Application").Workbooks}
+    except Exception:
+        return set()
+
+
+def run_laps(argv, runner=None, cleanup=None, before=None) -> int:
+    """--lan N: the same case N times in a row; ĐẠT only when every lap is ĐẠT (pass^k).
+
+    A customer runs the month close once and must get it right that once, so one lucky pass
+    proves little. Each lap gets its own result folder; the summary names every lap that failed.
+    Exit code: 1 if any lap is KHÔNG ĐẠT, else 2 if any lap could not run, else 0."""
+    runner = runner or main
+    cleanup = cleanup or close_between_laps
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--lan", type=int, default=1)
+    pre.add_argument("--out", default=None)
+    known, rest = pre.parse_known_args(argv)
+    if known.lan <= 1:
+        return runner(rest + (["--out", known.out] if known.out else []))
+    keep = before() if before else open_workbook_names()
+    codes, times = [], []
+    for i in range(1, known.lan + 1):
+        say(f"===== Lượt {i}/{known.lan} =====")
+        lap_argv = list(rest) + (["--out", str(Path(known.out) / f"lan-{i}")] if known.out else [])
+        t0 = time.monotonic()
+        try:
+            code = runner(lap_argv)
+        except SystemExit as exc:
+            if isinstance(exc.code, str):
+                say(exc.code)
+            code = exc.code if isinstance(exc.code, int) else 2
+        codes.append(code)
+        times.append(time.monotonic() - t0)
+        if i < known.lan:
+            cleanup(keep)
+    names = {0: "ĐẠT", 1: "KHÔNG ĐẠT", 2: "không chạy được"}
+    passed = sum(c == 0 for c in codes)
+    lines = [f"# Tổng hợp {known.lan} lượt: {'ĐẠT' if passed == known.lan else 'KHÔNG ĐẠT'} ({passed}/{known.lan} lượt đạt)",
+             "", "Chỉ ĐẠT khi mọi lượt đều đạt: khách chạy một lần là phải đúng lần đó.", "",
+             "| Lượt | Kết quả | Thời gian |", "| --- | --- | --- |"]
+    lines += [f"| {i} | {names.get(c, str(c))} | {t:.0f} giây |" for i, (c, t) in enumerate(zip(codes, times), 1)]
+    text = "\n".join(lines) + "\n"
+    say(text)
+    if known.out:
+        Path(known.out).mkdir(parents=True, exist_ok=True)
+        (Path(known.out) / "tong-hop.md").write_text(text, encoding="utf-8")
+    if any(c == 1 for c in codes):
+        return 1
+    return 2 if any(c != 0 for c in codes) else 0
+
+
 def run() -> int:
     """A crash is 'could not run' (2), never confused with KHÔNG ĐẠT (1)."""
     try:
-        return main()
+        return run_laps(sys.argv[1:])
     except SystemExit as exc:
         if isinstance(exc.code, str):
             say(exc.code)

@@ -297,3 +297,35 @@ def test_returns_line_may_be_negative_on_the_report():
     sheets = {"BC thang": [["Trừ hàng trả lại", None, -120000000.0]]}
     res = checks.evaluate([], sheets, exp)
     assert [c for c in res.checks if c.name == "Hàng trả lại 120 triệu"][0].ok
+
+
+def test_laps_pass_only_when_every_lap_passes(tmp_path):
+    """--lan N is pass^k: one KHÔNG ĐẠT lap fails the whole run, and each lap has its own folder."""
+    import rehearse
+    seen, cleaned = [], []
+
+    def runner(argv):
+        seen.append(argv)
+        return [0, 1, 0][len(seen) - 1]
+
+    code = rehearse.run_laps(["--workbook", "x.xlsx", "--lan", "3", "--out", str(tmp_path)],
+                             runner=runner, cleanup=cleaned.append, before=set)
+    assert code == 1
+    assert [a[-1] for a in seen] == [str(tmp_path / f"lan-{i}") for i in (1, 2, 3)]
+    assert all("--lan" not in a for a in seen)
+    assert len(cleaned) == 2                       # between laps only; the last lap stays open to inspect
+    summary = (tmp_path / "tong-hop.md").read_text(encoding="utf-8")
+    assert "KHÔNG ĐẠT (2/3 lượt đạt)" in summary
+
+
+def test_laps_all_pass_and_could_not_run():
+    import rehearse
+    assert rehearse.run_laps(["--lan", "2"], runner=lambda a: 0, cleanup=lambda k: None, before=set) == 0
+    assert rehearse.run_laps(["--lan", "2"], runner=lambda a: 2, cleanup=lambda k: None, before=set) == 2
+
+
+def test_single_lap_is_unchanged():
+    import rehearse
+    seen = []
+    assert rehearse.run_laps(["--workbook", "x.xlsx", "--out", "o"], runner=lambda a: seen.append(a) or 0) == 0
+    assert seen == [["--workbook", "x.xlsx", "--out", "o"]]
