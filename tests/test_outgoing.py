@@ -380,3 +380,62 @@ def test_pointing_that_calls_anthropic_directly_is_masked_and_logged(case):
     assert "Minh Anh" not in asked and "0101234567" not in asked
     entry = outgoing.read_log()[0]
     assert entry["sent"] and entry["text"]["user"] == asked and entry["images"] == 1
+
+
+def _named(cls_name):
+    """A FakeProvider whose class carries a real provider's name (recipient() goes by the class name)."""
+    return type(cls_name, (FakeProvider,), {})("Dạ.")
+
+
+def test_the_card_says_who_receives_where_it_goes_and_what_is_sent(case):
+    asked = []
+
+    async def ask(preview):
+        asked.append(preview)
+        return True
+
+    gate = _gate_for(case, ask)
+    provider = outgoing.GuardedProvider(_named("ClaudeProvider"), gate)
+    block = gate.file_text("Excel", _excel_block())
+    asyncio.run(_drain(provider, user_text="Tóm tắt", screenshots_b64=["x"], history=[], system_prompt=block))
+    shown = asked[0]
+    assert shown["to"] == "Anthropic, công ty làm AI Claude" and shown["where"] == "api.anthropic.com"
+    assert shown["what"].startswith(f"{len(shown['lines'])} dòng số liệu đã che tên, câu chị hỏi, 1 ảnh màn hình")
+    assert shown["what"].endswith("ký tự). Không gửi file nào.")
+    entry = outgoing.read_log()[0]
+    assert entry["to"] == shown["to"] and entry["where"] == "api.anthropic.com"
+
+
+def test_a_different_ai_company_asks_again(case):
+    asked = []
+
+    async def ask(preview):
+        asked.append(preview["to"])
+        return True
+
+    gate = _gate_for(case, ask)
+    block = gate.file_text("Excel", _excel_block())
+    for name in ("ClaudeProvider", "ClaudeProvider", "GeminiProvider"):
+        provider = outgoing.GuardedProvider(_named(name), gate)
+        asyncio.run(_drain(provider, user_text="Tóm tắt", screenshots_b64=[], history=[], system_prompt=block))
+    assert asked == ["Anthropic, công ty làm AI Claude", "Google, AI Gemini"]
+
+
+def test_a_local_server_is_said_to_stay_on_the_machine():
+    fake = _named("OpenAIProvider")
+    fake._custom_server = True
+    fake._client = SimpleNamespace(base_url="http://localhost:1234/v1/")
+    assert outgoing.recipient(fake) == ("AI chạy ngay trên máy chị", "không rời máy chị")
+    fake._client = SimpleNamespace(base_url="https://ai.congty.vn/v1/")
+    assert outgoing.recipient(fake) == ("Máy chủ AI đã nhập trong Cài đặt", "ai.congty.vn")
+    assert outgoing.recipient(_named("OllamaProvider"))[1] == "không rời máy chị"
+
+
+def test_card_shows_the_three_consent_lines(qt_app):
+    from ui.outgoing_card import OutgoingCard
+    card = OutgoingCard()
+    card.show_preview({"summary": "s", "lines": ["a"], "to": "Anthropic, công ty làm AI Claude",
+                       "where": "api.anthropic.com", "what": "1 dòng số liệu đã che tên"})
+    assert card.consent_text() == {"to": "Anthropic, công ty làm AI Claude", "where": "api.anthropic.com",
+                                   "what": "1 dòng số liệu đã che tên"}
+    card.send_button.click()

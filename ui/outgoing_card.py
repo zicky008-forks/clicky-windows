@@ -10,15 +10,17 @@ import subprocess
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics
 from PyQt6.QtWidgets import (
-    QApplication, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
-    QVBoxLayout, QWidget,
+    QApplication, QFrame, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout, QLabel, QPlainTextEdit,
+    QPushButton, QVBoxLayout, QWidget,
 )
 
 from ui.choice_card import _CARD, _PRIMARY, _SECONDARY
 
 VISIBLE_LINES = 12
 TITLE = "Những dòng này sẽ gửi cho AI"
-NOTE = "Tên và mã số đã được che. Lần sau em gửi luôn và ghi vào Nhật ký gửi đi."
+NOTE = ("Tên và mã số đã được che. Lần sau em gửi luôn cho bên nhận này và ghi vào Nhật ký gửi đi. "
+        "Đổi sang AI khác thì em hỏi lại.")
+CONSENT_ROWS = (("to", "Ai nhận"), ("where", "Gửi đi đâu"), ("what", "Gửi gì"))
 SEND, DONT_SEND = "Gửi đi", "Không gửi"
 _LINES = ("QPlainTextEdit { background: #F8FAFC; color: #0F172A; border: 1px solid #E2E8F0;"
           " border-radius: 8px; padding: 6px; }")
@@ -67,6 +69,25 @@ class OutgoingCard(QWidget):
         top.addWidget(close, alignment=Qt.AlignmentFlag.AlignTop)
         body.addLayout(top)
 
+        # Before anything leaves: who receives it, where it goes, exactly what is sent.
+        consent = QGridLayout()
+        consent.setHorizontalSpacing(12)
+        consent.setVerticalSpacing(4)
+        self._consent = {}
+        for row, (key, text) in enumerate(CONSENT_ROWS):
+            name = QLabel(text)
+            name.setStyleSheet("color: #64748B;")
+            name.setFont(QFont("Segoe UI", 9))
+            value = QLabel()
+            value.setWordWrap(True)
+            value.setStyleSheet("color: #0F172A;")
+            value.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+            consent.addWidget(name, row, 0, alignment=Qt.AlignmentFlag.AlignTop)
+            consent.addWidget(value, row, 1)
+            self._consent[key] = value
+        consent.setColumnStretch(1, 1)
+        body.addLayout(consent)
+
         self._summary = QLabel()
         self._summary.setWordWrap(True)
         self._summary.setStyleSheet("color: #1E3A5F;")
@@ -107,6 +128,8 @@ class OutgoingCard(QWidget):
             self._open = False
             self.hide()
             return
+        for key, value in self._consent.items():
+            value.setText(preview.get(key, ""))
         self._summary.setText(preview.get("summary", ""))
         lines = list(preview.get("lines") or [])
         self._lines.setPlainText("\n".join(lines))
@@ -124,6 +147,9 @@ class OutgoingCard(QWidget):
 
     def lines_text(self) -> str:
         return self._lines.toPlainText()
+
+    def consent_text(self) -> dict:
+        return {key: value.text() for key, value in self._consent.items()}
 
     def summary_text(self) -> str:
         return self._summary.text()

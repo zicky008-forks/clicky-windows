@@ -269,7 +269,7 @@ def test_report_is_masked_previewed_and_kept_locally():
     from engine import bug_report
     from storage import data_dir
     _write_log("2026-11-03 INFO opened workbook for Công ty Minh Anh\n2026-11-03 WARNING Call was rejected\n")
-    report = bug_report.prepare("excel_dialog", masker=lambda t: t.replace("Minh Anh", "Khách #01"))
+    report = bug_report.prepare("excel_dialog", masker=lambda t: t.replace("Minh Anh", "Khách #01"), with_log=True)
     assert report.ready
     assert "Khách #01" in report.body and "Minh Anh" not in report.body
     assert "Lỗi: Excel đang mở hộp thoại" in report.body
@@ -283,13 +283,13 @@ def test_report_sends_nothing_without_a_working_masker(monkeypatch):
     from storage import data_dir
     _write_log("Công ty Minh Anh MST 0101234567\n")
     monkeypatch.setattr(bug_report, "find_masker", lambda: None)
-    report = bug_report.prepare("generic")
+    report = bug_report.prepare("generic", with_log=True)
     assert not report.ready and report.body == "" and "Bản sau" in report.message
     assert bug_report.send(report) is None and not (data_dir() / "bao-loi").exists()
 
     def broken(_text):
         raise RuntimeError("boom")
-    assert not bug_report.prepare("generic", masker=broken).ready
+    assert not bug_report.prepare("generic", masker=broken, with_log=True).ready
 
 
 def test_report_uses_the_job_6_masker_by_default_and_hides_the_windows_user(monkeypatch):
@@ -297,7 +297,7 @@ def test_report_uses_the_job_6_masker_by_default_and_hides_the_windows_user(monk
     from engine import bug_report
     home = str(Path.home())
     _write_log(f"opened {home}/BaoCao_T10.xlsx; MST: 0101234567-001\n")
-    report = bug_report.prepare("generic")
+    report = bug_report.prepare("generic", with_log=True)
     assert report.ready
     assert "0101234567" not in report.body and home not in report.body
 
@@ -318,9 +318,20 @@ def test_error_card_and_preview(qt_app, monkeypatch):
     card.retry_button.click()
     assert kinds == [shown["kind"]] * 2
 
-    _write_log("INFO ok\n")
+    _write_log("2026-11-03 INFO opened Công ty Minh Anh\n2026-11-03 WARNING com_error -2147418111\n")
     preview = ReportPreview()
-    preview.preview("excel_not_responding", masker=lambda t: t)
+    preview.preview("excel_not_responding", masker=lambda t: t.replace("Minh Anh", "Khách #01"))
+    # Counts only by default: the consent lines, and not one word of the log.
+    body = preview.report.body
+    assert "Chế độ: chỉ gửi số đếm, không gửi nội dung" in body and "Nhật ký: 2 dòng · 1 cảnh báo · 0 lỗi" in body
+    assert "com_error ×1" in body and "Minh Anh" not in body and "Khách #01" not in body
+    assert preview.consent_values["to"].text() == bug_report.RECIPIENT
+    assert preview.consent_values["where"].text() == bug_report.DESTINATION
+    assert preview.consent_values["what"].text() == bug_report.COUNTS_ONLY
+    assert not preview.with_log.isChecked()
+    preview.with_log.setChecked(True)                                  # the user chooses to add the log
+    assert "Khách #01" in preview.report.body and "Minh Anh" not in preview.report.body
+    assert preview.consent_values["what"].text() == bug_report.WITH_LOG
     assert preview.text.toPlainText() == preview.report.body and preview.send_button.isVisibleTo(preview)
     sent = []
     preview.sent.connect(sent.append)
@@ -330,7 +341,8 @@ def test_error_card_and_preview(qt_app, monkeypatch):
 
     monkeypatch.setattr(bug_report, "find_masker", lambda: None)
     empty = ReportPreview()
-    assert not empty.preview("generic").ready
-    assert not empty.send_button.isVisibleTo(empty) and not empty.text.isVisibleTo(empty)
-    assert empty.cancel_button.text() == "Đóng" and empty.lead.text() == bug_report.NOT_READY
+    assert empty.preview("generic").ready                              # counts need no masker
+    empty.with_log.setChecked(True)                                    # no masker: the log never goes
+    assert not empty.with_log.isChecked() and empty.lead.text() == bug_report.LOG_NOT_READY
+    assert "Chế độ: chỉ gửi số đếm" in empty.report.body and empty.send_button.isVisibleTo(empty)
     card.close(), preview.close(), empty.close()

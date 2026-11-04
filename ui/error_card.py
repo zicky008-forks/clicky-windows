@@ -8,7 +8,7 @@ from typing import Callable, Optional
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QVBoxLayout
+from PyQt6.QtWidgets import QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPlainTextEdit, QVBoxLayout
 
 from engine import bug_report, errors_vi
 from ui.plain_card import PRIMARY_QSS, SECONDARY_QSS, CardWindow, button, label
@@ -95,6 +95,22 @@ class ReportPreview(CardWindow):
         self.body.addLayout(top)
         self.lead = label("", "body", 10)
         self.body.addWidget(self.lead)
+        # Before anything is kept or sent: who receives it, where it goes, what is in it.
+        self.consent = QFrame()
+        grid = QGridLayout(self.consent)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        self.consent_values = {}
+        for row, (key, name) in enumerate((("to", "Ai nhận"), ("where", "Gửi đi đâu"), ("what", "Gửi gì"))):
+            grid.addWidget(label(name, "body", 9), row, 0, alignment=Qt.AlignmentFlag.AlignTop)
+            value = label("", "title", 10, QFont.Weight.DemiBold)
+            grid.addWidget(value, row, 1)
+            self.consent_values[key] = value
+        grid.setColumnStretch(1, 1)
+        self.body.addWidget(self.consent)
+        self.with_log = QCheckBox("Kèm nhật ký đã che tên (giúp đội Clicky tìm lỗi nhanh hơn)")
+        self.with_log.toggled.connect(lambda _on: self._refresh())
+        self.body.addWidget(self.with_log)
         self.text = QPlainTextEdit()
         self.text.setReadOnly(True)
         self.text.setMinimumHeight(260)
@@ -107,25 +123,47 @@ class ReportPreview(CardWindow):
         self.report: Optional[bug_report.Report] = None
 
     def preview(self, kind: str = "", masker: Optional[Callable[[str], str]] = None) -> bug_report.Report:
-        report = bug_report.prepare(kind, masker)
+        """Counts only by default ("chỉ gửi số đếm, không gửi nội dung"); the box adds the masked log."""
+        self._kind, self._masker = kind, masker
+        self.with_log.blockSignals(True)
+        self.with_log.setChecked(False)
+        self.with_log.blockSignals(False)
+        report = self._refresh()
+        self.present()
+        return report
+
+    def _refresh(self) -> bug_report.Report:
+        with_log = self.with_log.isChecked()
+        kind, masker = getattr(self, "_kind", ""), getattr(self, "_masker", None)
+        report = bug_report.prepare(kind, masker, with_log=with_log)
+        lead = "Chị xem trước, em chỉ làm khi chị bấm Gửi."
+        if with_log and not report.ready:          # no working masker: an unmasked log never goes
+            with_log = False
+            self.with_log.blockSignals(True)
+            self.with_log.setChecked(False)
+            self.with_log.blockSignals(False)
+            report = bug_report.prepare(kind, masker)
+            lead = bug_report.LOG_NOT_READY
         self.report = report
         if report.ready:
             self.title.setText("Em sẽ gửi đúng nội dung này")
-            self.lead.setText("Đã che tên và mã số em đọc được trong file. Không kèm file nào của chị.")
+            self.lead.setText(lead)
+            self.consent_values["to"].setText(bug_report.RECIPIENT)
+            self.consent_values["where"].setText(bug_report.DESTINATION)
+            self.consent_values["what"].setText(bug_report.WITH_LOG if with_log else bug_report.COUNTS_ONLY)
+            for widget in (self.consent, self.with_log, self.text, self.send_button):
+                widget.show()
             self.text.setPlainText(report.body)
-            self.text.show()
-            self.send_button.show()
             self.cancel_button.setText("Thôi")
         else:
             self._message("Chưa gửi được báo lỗi", report.message)
-        self.present()
         return report
 
     def _message(self, title: str, text: str) -> None:
         self.title.setText(title)
         self.lead.setText(text)
-        self.text.hide()
-        self.send_button.hide()
+        for widget in (self.consent, self.with_log, self.text, self.send_button):
+            widget.hide()
         self.cancel_button.setText("Đóng")
         self.adjustSize()
 

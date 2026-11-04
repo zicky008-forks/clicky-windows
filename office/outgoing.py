@@ -17,6 +17,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from ai.base_provider import BaseLLMProvider, Message
 from engine import redact
@@ -148,6 +149,32 @@ def learn_text(catalogue: redact.Catalogue, text: str) -> int:
 
 # ── One request ──────────────────────────────────────────────────────────────
 
+# Who receives a request and where it goes, said on the card before the first send.
+_RECIPIENTS = {
+    "ClaudeProvider": ("Anthropic, công ty làm AI Claude", "api.anthropic.com"),
+    "OpenAIProvider": ("OpenAI, công ty làm ChatGPT", "api.openai.com"),
+    "GeminiProvider": ("Google, AI Gemini", "generativelanguage.googleapis.com"),
+    "GitHubCopilotProvider": ("GitHub Copilot của Microsoft", "api.githubcopilot.com"),
+    "OllamaProvider": ("AI chạy ngay trên máy chị (Ollama)", "không rời máy chị"),
+    "LMStudioProvider": ("AI chạy ngay trên máy chị (LM Studio)", "không rời máy chị"),
+}
+COMPUTER_USE = ("Anthropic, công ty làm AI Claude", "api.anthropic.com")
+_UNKNOWN = ("Nhà cung cấp AI đang chọn trong Cài đặt", "máy chủ của nhà cung cấp đó")
+
+
+def recipient(provider) -> tuple:
+    """(who, where) for the provider behind the door; a custom OpenAI-style server is named by its host."""
+    name = type(provider).__name__
+    who, where = _RECIPIENTS.get(name, _UNKNOWN)
+    if name == "OpenAIProvider" and getattr(provider, "_custom_server", False):
+        base = str(getattr(getattr(provider, "_client", None), "base_url", "") or "")
+        host = urlparse(base).hostname or "máy chủ đã nhập trong Cài đặt"
+        local = host in ("localhost", "127.0.0.1", "::1")
+        who = "AI chạy ngay trên máy chị" if local else "Máy chủ AI đã nhập trong Cài đặt"
+        where = "không rời máy chị" if local else host
+    return who, where
+
+
 class Send:
     """One request after masking: what goes out, and what the card and the log show."""
 
@@ -155,6 +182,7 @@ class Send:
                  counts: dict, images: int):
         self.system, self.user, self.history = system, user, history
         self.lines, self.sources, self.counts, self.images = lines, sources, counts, images
+        self.to, self.where = _UNKNOWN
 
     @property
     def from_files(self) -> bool:
@@ -168,8 +196,18 @@ class Send:
     def summary(self) -> str:
         return redact.summary(len(self.lines), self.counts, self.images)
 
+    @property
+    def what(self) -> str:
+        """The third consent line: exactly what goes, and what never goes."""
+        parts = [f"{len(self.lines)} dòng số liệu đã che tên", "câu chị hỏi"]
+        if self.images:
+            parts.append(f"{self.images} ảnh màn hình")
+        chars = f"{self.chars:,}".replace(",", ".")
+        return ", ".join(parts) + f" ({chars} ký tự). Không gửi file nào."
+
     def preview(self) -> dict:
-        return {"summary": self.summary, "lines": list(self.lines), "images": self.images}
+        return {"summary": self.summary, "lines": list(self.lines), "images": self.images,
+                "to": self.to, "where": self.where, "what": self.what}
 
 
 class Outgoing:
@@ -233,6 +271,7 @@ class Outgoing:
     async def cleared_text(self, text: str, images: int = 0) -> str:
         """For a caller that reaches an AI without a provider (Computer Use pointing): masked, gated, logged."""
         send = self.prepare(text, "", [], images=images)
+        send.to, send.where = COMPUTER_USE
         await self.clear(send)
         return send.user
 
@@ -242,11 +281,12 @@ class Outgoing:
             _record(chars=send.chars, preview_shown=False, approved=False, local_only=True)
             raise LocalOnly()
         shown, approved = False, True
-        if send.from_files and not setting(APPROVED_KEY, False):
+        # The approval names who receives: a new AI company (Settings changed) asks again.
+        if send.from_files and setting(APPROVED_KEY, False) != send.to:
             shown = True
             approved = bool(self.ask) and bool(await self.ask(send.preview()))
             if approved:
-                set_setting(APPROVED_KEY, True)
+                set_setting(APPROVED_KEY, send.to)
         _record(chars=send.chars, preview_shown=shown, approved=approved, local_only=False)
         if not approved:
             write_log(send, sent=False)
@@ -259,7 +299,8 @@ def write_log(send: Send, sent: bool, shown: bool = False) -> None:
     """One JSON line per request: the exact masked text sent, when, how long, and what was covered."""
     entry = {"time": datetime.now().isoformat(timespec="seconds"), "sent": sent, "card": shown,
              "summary": send.summary, "chars": send.chars, "lines": len(send.lines), "masked": send.counts,
-             "images": send.images, "sources": send.sources, "preview": send.lines}
+             "images": send.images, "sources": send.sources, "preview": send.lines,
+             "to": send.to, "where": send.where}
     if sent:
         entry["text"] = {"system": send.system, "user": send.user,
                          "history": [{"role": m.role, "content": m.content} for m in send.history]}
@@ -300,6 +341,7 @@ class GuardedProvider(BaseLLMProvider):
     async def stream_response(self, user_text: str, screenshots_b64: list, history: list,
                               system_prompt: str, model: Optional[str] = None):
         send = self._gate.prepare(user_text, system_prompt, history, images=len(screenshots_b64 or []))
+        send.to, send.where = recipient(self._inner)
         await self._gate.clear(send)
         back = redact.Unmasker(self._gate.catalogue)
         async for chunk in self._inner.stream_response(user_text=send.user, screenshots_b64=screenshots_b64,
