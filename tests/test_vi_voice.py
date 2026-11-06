@@ -95,3 +95,58 @@ def test_wav_header_and_rate():
     data = vi_offline_tts.to_wav([0.0, 0.5, -0.5], 22050)
     with wave.open(io.BytesIO(data)) as w:
         assert w.getframerate() == 22050 and w.getnframes() == 3
+
+
+def _fake_vieneu(root: Path, subs):
+    snap = root / "vieneu" / "hub" / vi_offline_tts.VIENEU_REPO_DIR / "snapshots" / "abc"
+    for sub in subs:
+        (snap / sub).mkdir(parents=True)
+        (snap / sub / "vieneu_prefill.onnx").write_bytes(b"x")
+
+
+def test_vieneu_bundle_is_found_with_its_precisions(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLICKY_VOICE_DIR", str(tmp_path))
+    assert vi_offline_tts.find_vieneu() is None
+    _fake_vieneu(tmp_path, ["onnx_int8", "onnx_update"])
+    found = vi_offline_tts.find_vieneu()
+    assert sorted(found["precisions"]) == ["fp32", "int8"]
+
+
+@pytest.mark.parametrize("have, vnni, want", [
+    (["int8", "fp32"], True, "int8"),
+    (["int8", "fp32"], False, "fp32"),
+    (["int8"], False, ""),            # int8 without VNNI garbles audio: no VieNeu, Piper reads instead
+    (["fp32"], True, "fp32"),
+])
+def test_int8_only_on_vnni(monkeypatch, have, vnni, want):
+    monkeypatch.setattr(vi_offline_tts, "cpu_has_vnni", lambda: vnni)
+    assert vi_offline_tts.vieneu_precision(have) == want
+
+
+def test_vieneu_deps_pin_the_same_onnxruntime_as_sherpa():
+    root = Path(__file__).resolve().parents[1]
+    reqs = (root / "requirements-vieneu.txt").read_text(encoding="utf-8")
+    assert "onnxruntime==1.28.0" in reqs   # same API line as sherpa's bundled 1.28.2
+    assert "gradio" not in reqs.replace("without gradio", "") and "librosa" not in reqs.replace("librosa or", "")
+
+
+def test_tai_vieneu_flatten_makes_snapshot_files_real(tmp_path):
+    # onnxruntime 1.28 rejects .data weights whose symlink resolves into blobs/ (outside the model folder).
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "tai_vieneu", Path(__file__).resolve().parents[1] / "tools" / "giong_noi" / "tai_vieneu.py")
+    tai = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tai)
+    repo = tmp_path / "models--pnnbao-ump--VieNeu-TTS-v3-Turbo"
+    (repo / "blobs").mkdir(parents=True)
+    (repo / "blobs" / "abc").write_bytes(b"weights")
+    snap = repo / "snapshots" / "rev" / "onnx_int8"
+    snap.mkdir(parents=True)
+    try:
+        (snap / "vieneu_backbone_shared.data").symlink_to(repo / "blobs" / "abc")
+    except OSError:
+        pytest.skip("no symlink permission")
+    assert tai.flatten(tmp_path) == 1
+    f = snap / "vieneu_backbone_shared.data"
+    assert not f.is_symlink() and f.read_bytes() == b"weights"
+    assert not (repo / "blobs").exists()
