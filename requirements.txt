@@ -20,6 +20,8 @@ numpy>=1.26.0
 av>=12.0.0,<19
 
 # STT - local (free)
+# Offline Vietnamese (Zipformer-30M via sherpa-onnx, Apache-2.0). The model files ship in voice/asr-vi.
+sherpa-onnx>=2.0.1,<3
 faster-whisper>=1.0.0
 
 # STT - whisper.cpp via pywhispercpp (3-5x faster, same engine as Handy)

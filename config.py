@@ -329,9 +329,14 @@ class Config:
         from office.outgoing import local_only
         nothing_out = local_only()          # "Chỉ chạy trên máy": no cloud transcription either
         forced = os.getenv("CLICKY_STT", "").strip().lower()
-        if forced in ("deepgram", "openai", "whisper_cpp", "faster_whisper", "windows") and not (
+        if forced in ("deepgram", "openai", "whisper_cpp", "faster_whisper", "sherpa_vi", "typed") and not (
                 nothing_out and forced in ("deepgram", "openai")):
             return forced
+        # Offline Vietnamese (sherpa-onnx Zipformer) comes first: it understands accountants' Vietnamese,
+        # costs nothing and keeps every word on the PC.
+        from audio.stt import sherpa_vi_stt
+        if sherpa_vi_stt.available():
+            return "sherpa_vi"
         local_model = nothing_out or self.llm_provider() in {"ollama", "lmstudio"}
         if self.deepgram_api_key and not local_model:
             return "deepgram"
@@ -344,10 +349,9 @@ class Config:
             return "whisper_cpp"
         if importlib.util.find_spec("faster_whisper"):
             return "faster_whisper"
-        # The slim Clicky BI build ships no local speech model: the talk key
-        # opens the typed chat and starts Windows voice typing (Win+H), which
-        # understands Vietnamese and costs nothing.
-        return "windows"
+        # No speech model at all: the talk key opens the typed chat. Never Windows voice typing (Win+H):
+        # it sends audio to Microsoft and types into whatever window has focus.
+        return "typed"
 
     def tts_provider(self) -> str:
         from office.outgoing import local_only
