@@ -667,3 +667,60 @@ def test_a_total_that_nets_an_accrual_with_its_next_period_reversal_is_explained
     total_finding = next(x for x in review.findings if x.group == 1)
     labels = [label for label, _ in total_finding.causes]
     assert any("cấn trừ" in l for l in labels) and not any("chưa giải thích" in l for l in labels), total_finding.causes
+
+
+@pytest.mark.parametrize("own_base", [False, True])
+def test_a_channel_table_with_its_revenue_column_before_the_cost_and_percent(tmp_path, own_base):
+    """'Kênh | Doanh thu kênh | Chi phí | %DTT': the current figure is the money column the %DTT stands beside;
+    the channel's own revenue is a denominator the pack may have used by mistake."""
+    from tests.bod_case import CHANNELS, PERIOD, revenue
+    answers = make_case(tmp_path, plant=True)
+    want = next(a for a in answers if a["group"] == 2)
+
+    def with_revenue(ws):
+        rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        ws.delete_rows(1, ws.max_row)
+        for i, r in enumerate(rows, 1):
+            if r[0] == "Kênh":
+                ws.append([r[0], "Doanh thu kênh"] + r[1:])
+            elif r[0] in CHANNELS:
+                own = revenue([PERIOD], channel=r[0])
+                pct = r[2]
+                if own_base and i == int(want["where"][-1]):
+                    pct = float(Decimal(str(r[1])) / own)          # cost / the channel's own revenue
+                ws.append([r[0], int(own), r[1], pct])
+            elif r[0] and str(r[0]).startswith("Tổng"):
+                ws.append([r[0], None] + r[1:])
+            else:
+                ws.append(r)
+    _edit_xlsx(tmp_path / "Pack_BOD_T10_ban_nhap.xlsx", "Theo kenh", with_revenue)
+    review = bod_check.review(tmp_path)[0]
+    g2 = [x for x in review.findings if x.group == 2]
+    assert [x.where for x in g2] == [want["where"].replace("!C", "!D")], [(x.where, x.message) for x in g2]
+    assert close(want["code"], want["expected"], g2[0].expected)
+
+
+@pytest.mark.parametrize("heads", [
+    ["Chỉ tiêu (khối Thương mại)", "Kỳ", "Thực tế FY25/26", "Kế hoạch FY25/26 gốc", "Kế hoạch FY25/26 sửa (revised)"],
+    ["Chỉ tiêu (khối Thương mại)", "Kỳ", "Thực tế FY25/26", "Gốc FY25/26", "Sửa (revised) FY25/26"],
+])
+def test_last_year_version_words_before_or_after_the_fiscal_year_and_a_bracketed_label(tmp_path, heads):
+    from openpyxl import Workbook
+    from tests.bod_case import COSTS, DEPTS, FY_MONTHS, TM, plan_amount
+    answers = make_case(tmp_path, plant=True)
+    (tmp_path / "NamTruoc_FY2526.xlsx").unlink()
+    wb = Workbook()
+    ws = wb.active
+    ws.append(heads)
+    keys = list(COSTS) + [(TM, "P06", "CE06")]
+    for d in [d for d in DEPTS if d.startswith("P")]:
+        for m in FY_MONTHS:
+            mine = [k for k in keys if k[0] == TM and k[1] == d]
+            ws.append([f"{d} - {DEPTS[d]}", f"{m[5:]}/{int(m[:4]) - 1}"]
+                      + [int(sum(plan_amount(v, *k, m) for k in mine)) for v in ("Thực tế", "AOP", "AOPR")])
+    wb.save(tmp_path / "SoLieu_NamTruoc.xlsx")
+    review = bod_check.review(tmp_path)[0]
+    want = next(a for a in answers if a["group"] == 4)
+    got = [x for x in review.findings if x.group == 4]
+    assert [x.where for x in got] == [want["where"]] and close(want["code"], want["expected"], got[0].expected), \
+        (_group(review, 4), review.unused)

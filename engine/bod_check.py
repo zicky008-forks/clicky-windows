@@ -719,6 +719,7 @@ def check_lines(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Covera
                 default = votes.most_common(1)[0][0] if votes else None
             override = _rule_votes(f, s, cur, months, pct_scale)
             rev_here = next((s.num(r, cur.value) for r in s.rows if _is_revenue(r.label) and s.num(r, cur.value)), None)
+            rev_col = next((c for c in s.cols if c.role == "revenue" and c.ytd == cur.value.ytd), None)
             fill = {}                        # the %DTT a row should carry, for a row that prints none
             for r in s.rows:
                 value = s.num(r, cur.value)
@@ -735,6 +736,9 @@ def check_lines(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Covera
                     if abs(want - pct) > PCT_TOLERANCE:
                         used = next((n for n, b in f.candidate_bases(months, f.channel(r.label, r.section))
                                      if abs(value / b - pct) <= PCT_TOLERANCE), "")
+                        own = s.num(r, rev_col) if rev_col is not None else None
+                        if not used and own and abs(value / own - pct) <= PCT_TOLERANCE:
+                            used = f"doanh thu của chính dòng này (cột '{rev_col.text}')"
                         if used:            # a printed % that fits no known revenue is not called wrong
                             out.append(Finding(2, "wrong_base", _cell(s, r, cur.pct),
                                                f"{r.label}: %DTT phải là {fmt_pct(want)} (chia cho {base_label[0]} theo quy tắc "
