@@ -355,11 +355,16 @@ class Config:
 
     def tts_provider(self) -> str:
         from office.outgoing import local_only
-        if local_only():
-            return "sapi"                   # online voices send every sentence to their server
+        from audio.tts import vi_offline_tts
+        offline_vi = vi_offline_tts.available()     # VieNeu / Piper on the PC: Vietnamese, free, private
         forced = setting("tts_provider", "auto")
-        if forced in {"sapi", "edge_tts", "openai", "elevenlabs"}:
-            return forced
+        if local_only():
+            # Online voices send every sentence to their server.
+            return "vi_offline" if offline_vi and forced != "sapi" else "sapi"
+        if forced in {"sapi", "edge_tts", "openai", "elevenlabs", "vi_offline"}:
+            return forced if forced != "vi_offline" or offline_vi else "sapi"
+        if offline_vi:
+            return "vi_offline"
         if self.llm_provider() in {"ollama", "lmstudio"}:
             return "sapi"
         if self.elevenlabs_api_key:

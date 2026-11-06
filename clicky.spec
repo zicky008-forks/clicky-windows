@@ -21,8 +21,8 @@ from PyInstaller.utils.hooks import collect_all
 
 # CLICKY_EDITION=bi builds the Clicky BI edition: Excel/finance work with cloud
 # AI. It leaves out offline OCR, figure detection, lesson video recording and
-# local speech models, which make up much of the installer and are not used
-# there. Without a speech model the talk key starts Windows voice typing.
+# Whisper speech models, which make up much of the installer and are not used
+# there. Vietnamese speech and voice run offline through sherpa-onnx (voice/).
 EDITION = os.environ.get("CLICKY_EDITION", "full").strip().lower()
 BI_LEAVES_OUT = ["rapidocr_onnxruntime", "onnxruntime", "cv2", "imageio", "imageio_ffmpeg",
                  "pywhispercpp", "faster_whisper", "ctranslate2"]
@@ -94,6 +94,9 @@ datas.append(("assets/mau", "assets/mau"))       # the sample month (made-up com
 if os.path.isdir(os.path.join("voice", "asr-vi")):  # offline Vietnamese speech (tools/giong_noi/tai_model.py)
     datas.append((os.path.join("voice", "asr-vi"), os.path.join("voice", "asr-vi")))
     datas.append(("audio/stt/hotwords_vi.txt", "audio/stt"))
+if os.path.isdir(os.path.join("voice", "tts-piper-vi")):  # offline Vietnamese voice + its phoneme table
+    datas.append((os.path.join("voice", "tts-piper-vi"), os.path.join("voice", "tts-piper-vi")))
+    datas.append(("audio/tts/vi_phonemes.tsv", "audio/tts"))
 for pkg in (
     "sherpa_onnx",              # offline Vietnamese speech (its own onnxruntime DLL under sherpa_onnx/lib)
     "faster_whisper",
