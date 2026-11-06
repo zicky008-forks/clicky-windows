@@ -173,6 +173,31 @@ class Board:
 BOARD = Board()
 
 
+def record_widget(name: str, placed: dict) -> None:
+    """Rehearsals: where a Clicky window landed and whether it covers a figure (scene log "widget")."""
+    try:
+        import scene_log
+        scene_log.record("widget", name=name, **placed)
+    except Exception:
+        pass
+
+
+def settle(name: str, preferred, size, bounds) -> tuple:
+    """Where a Clicky window (button card, caption, notice card) goes: its usual place unless figures,
+    a card or another Clicky window are there, then the nearest free place. It is then taken on the board.
+
+    Returns (x, y, log) where log is what the rehearsal robot checks: rect, moved, covers_figures.
+    """
+    w, h = size
+    x, y = free_spot(preferred, size, bounds, BOARD.figures + BOARD.others(name), BOARD.words)
+    rect = (x, y, x + w, y + h)
+    BOARD.take(name, rect)
+    return x, y, {"rect": list(rect), "screen": list(bounds), "moved": (x, y) != tuple(preferred),
+                  "figures": len(BOARD.figures),
+                  "covers_figures": sum(1 for f in BOARD.figures if overlap(rect, [f]) > 0),
+                  "covers_cards": sum(1 for f in BOARD.others(name) if overlap(rect, [f]) > 0)}
+
+
 def reading_seconds(text: str) -> float:
     """How long a sentence stays up when it is not read aloud: about 3 words a second, 2.5 to 9 seconds."""
     return max(2.5, min(9.0, 1.0 + len(text.split()) / 3.0))

@@ -134,3 +134,19 @@ def test_button_card_moves_off_figures_and_off_the_explanation_card():
     BOARD.release("card")
     assert BOARD.others("choice") == []
     BOARD.clear()
+
+
+def test_every_clicky_window_settles_off_figures_and_cards():
+    """Caption, notice card and outgoing card use the same rule as the button card."""
+    from ui.card_layout import BOARD, overlap, settle
+    BOARD.clear()
+    usual = (650, 980)                                          # the caption's bottom-centre place, 620 × 50
+    x, y, log = settle("caption", usual, (620, 50), SCREEN)
+    assert (x, y) == usual and not log["moved"] and log["figures"] == 0
+    BOARD.show_sheet([(0, 900, 1920, 1040)])                    # a report reaching the bottom of the screen
+    BOARD.take("card1", (1300, 300, 1660, 440))
+    x, y, log = settle("caption", usual, (620, 50), SCREEN)
+    assert log["moved"] and log["covers_figures"] == 0 and log["covers_cards"] == 0
+    assert overlap((x, y, x + 620, y + 50), [(1300, 300, 1660, 440)]) == 0
+    assert BOARD.others("x") and ("caption" in BOARD._taken)
+    BOARD.clear()

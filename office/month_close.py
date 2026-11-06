@@ -1405,6 +1405,8 @@ async def play(manager, beats: list) -> None:
     from ui.card_layout import NO_BUBBLE, pointer_spot, reading_seconds
     run = object()
     manager._month_close_run = run
+    import turn_clock
+    turn_clock.of(manager).mark("ready")
     guided = getattr(manager, "sig_guided", None)     # the chat panel steps aside while Clicky guides
     if guided is not None:
         guided.emit(True)
@@ -1419,6 +1421,11 @@ async def play(manager, beats: list) -> None:
             if BEAT_GAP_S:
                 await asyncio.sleep(BEAT_GAP_S)
         box = await _locate(manager, beat.ref) if beat.ref else None
+        if box:
+            manager.sig_point_hold.emit(True)
+            # The pointer flies the moment the range is known; the frame and the card land while it travels.
+            # It stops beside the range, never on it: it must not hide the figure being explained.
+            manager.sig_point_at.emit(*pointer_spot(box), NO_BUBBLE)
         graphic = await _graphic_shape(manager, beat.graphic, box) if beat.graphic else None
         scene_log.record("beat", i=i, ref=beat.ref, box=box, title=beat.label, value=beat.value, was=beat.was,
                          note=beat.note, mark=beat.mark, text=beat.text, choices=list(beat.choices or []),
@@ -1432,10 +1439,6 @@ async def play(manager, beats: list) -> None:
             if graphic:
                 graphic.update(avoid=_as_boxes(figures) or None, soft=_as_boxes(words) or None)
                 manager.sig_draw.emit(graphic)
-        if box:
-            manager.sig_point_hold.emit(True)
-            # The pointer stops beside the range, never on it: it must not hide the figure being explained.
-            manager.sig_point_at.emit(*pointer_spot(box), NO_BUBBLE)
         log.info("beat: %s", beat.text)
         if beat.intake:
             # The receipt: what was read and what was left out, logged before anything is drawn or changed.
