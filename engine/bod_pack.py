@@ -44,7 +44,8 @@ FY_RE = [re.compile(r"\bfy ?(\d\d) ?(\d\d)\b"), re.compile(r"\bnd ?(\d\d) ?(\d\d
 
 def version_of(k: str) -> str:
     """The scenario a header names, folded: 'aopr1', 'aopr', 'aop', 'muf', 'thuc te', or ''."""
-    m = re.search(r"\baopr ?(\d+)\b|\baopr\b|\brevised\b|\bdieu chinh\b", k)
+    m = re.search(r"\baopr ?(\d+)\b|\baopr\b|\brevised\b|\bdieu chinh\b|\b(?:ke hoach|kh|ngan sach) (?:da )?sua\b|"
+                  r"\bsua doi\b|\bcap nhat\b|\breforecast\b", k)
     if m:
         return f"aopr{m.group(1)}" if m.lastindex and m.group(1) else "aopr"
     if re.search(r"\baop\b|\bbudget\b|\bngan sach goc\b|\bke hoach goc\b|\bkh goc\b|\boriginal\b", k):

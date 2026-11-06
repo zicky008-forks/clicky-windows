@@ -243,10 +243,20 @@ UNASSIGNED_RE = re.compile(r"^(n ?a|na|none|null|nan|0+|khong|khong co|chua gan|
                            r"unassigned|unallocated|chua co|trong|blank|\?+|x+)$")
 
 
+UNASSIGNED_WORDS = re.compile(r"\b(chua (gan|phan bo|xac dinh|co ma)|khong (xac dinh|phan bo|gan|ro)|unassigned|"
+                              r"unallocated|not assigned|no department)\b")
+
+
+def _named_unassigned(name) -> bool:
+    """A department name that says there is none ('Chưa gán phòng ban'); a blank name says nothing."""
+    k = key(str(name or "").replace("#", " "))
+    return bool(k) and unassigned(name)
+
+
 def unassigned(code) -> bool:
     """'', '-', '#N/A', 'N/A', 'Chưa gán', '0': no department."""
     k = key(str(code or "").replace("#", " "))
-    return not k or bool(UNASSIGNED_RE.match(k))
+    return not k or bool(UNASSIGNED_RE.match(k) or UNASSIGNED_WORDS.search(k))
 
 
 def _cost_account(acct: str, prefixes) -> bool:
@@ -275,7 +285,8 @@ def read_gl(t: Table, cost_prefixes=("6",), fy_start: int = 7) -> list:
         cur = str(t.get(v, "ma_tt", "") or "").strip().upper()
         out.append(Entry(period or "", amount, division=str(t.get(v, "khoi", "") or "").strip(),
                          site=str(t.get(v, "phap_nhan", "") or "").strip(), channel=str(t.get(v, "kenh", "") or "").strip(),
-                         dept="" if unassigned(t.get(v, "pb")) else str(t.get(v, "pb")).strip(),
+                         dept="" if unassigned(t.get(v, "pb")) or _named_unassigned(t.get(v, "pb_ten"))
+                         else str(t.get(v, "pb")).strip(),
                          element=str(t.get(v, "ce", "") or "").strip(),
                          account=acct, usd=fc if fc is not None and (cur in ("", "USD")) else None,
                          ref=str(t.get(v, "so_ct", "") or "").strip(), text=str(t.get(v, "dien_giai", "") or "").strip(),

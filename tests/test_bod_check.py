@@ -366,3 +366,224 @@ def test_plan_lines_are_only_compared_with_a_ledger_that_carries_their_kind(tmp_
     assert not [x for x in review.findings if x.group == 5], [x.message for x in review.findings if x.group == 5]
     _, _, state, text = _group(review, 5)
     assert state == "mot_phan" and "CHƯA KIỂM ĐƯỢC" in text and "doanh thu" in text.lower() and "Cần:" in text, text
+
+
+def test_a_selling_and_admin_total_covers_641_and_642_even_when_the_catalogue_lists_only_641(tmp_path):
+    make_case(tmp_path, plant=False)
+    pack = tmp_path / "Pack_BOD_T10_ban_nhap.xlsx"
+    shown = {}
+
+    def relabel(ws):
+        for row in ws.iter_rows():
+            if row[0].value == "Tổng chi phí":
+                row[0].value = "Chi phí BH&QL"
+                shown["v"] = Decimal(str(row[1].value))
+    _edit_xlsx(pack, "Tong hop", relabel)
+
+    def only_641(ws):
+        for row in ws.iter_rows(min_row=2):
+            if str(row[2].value).startswith("642"):
+                row[2].value = None
+    _edit_xlsx(tmp_path / "DanhMuc_CauHinh.xlsx", "Cost element", only_641)
+    review = bod_check.review(tmp_path)[0]
+    assert not [x for x in review.findings if x.group == 1], [x.message for x in review.findings if x.group == 1]
+    assert _group(review, 1)[2] == "ok"
+
+    _edit_xlsx(pack, "Tong hop", lambda ws: [setattr(r[1], "value", int(shown["v"]) - 50_000_000)
+                                             for r in ws.iter_rows() if r[0].value == "Chi phí BH&QL"])
+    total = next(x for x in bod_check.review(tmp_path)[0].findings if x.group == 1)
+    assert total.expected == shown["v"]
+
+
+def test_account_lists_read_ranges_numbers_and_exclusions():
+    assert bod_check.accounts("6421-6423") == ["6421", "6422", "6423"]
+    assert bod_check.accounts(6421.0) == ["6421"]
+    assert bod_check.accounts("641*, 642 (trừ 6425)") == ["641", "642"]
+
+
+def test_a_sales_export_with_run_together_headers_is_read(tmp_path):
+    """Accounting programs export 'NgayHoaDon', 'THANHTIEN', 'KenhBH': no spaces, no diacritics."""
+    import csv
+    make_case(tmp_path, plant=False)
+    path = tmp_path / "Mastersale_T07-T10.csv"
+    with open(path, encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.reader(fh))
+    rows[0] = ["NgayHoaDon", "SoHoaDon", "Site", "KhoiKD", "KenhBH", "MaHang", "SoLuong", "THANHTIEN", "ChietKhau",
+               "DoanhThuThuan"]
+    for r in rows[1:]:
+        if r[0][:4].isdigit():
+            r[0] = f"{r[0][8:10]}/{r[0][5:7]}/{r[0][:4]}"
+    with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+        csv.writer(fh).writerows(rows)
+    review = bod_check.review(tmp_path)[0]
+    assert "Mastersale_T07-T10.csv" not in dict(review.unused)
+    assert _group(review, 2)[2] == "ok" and not review.findings, (_group(review, 2), review.findings)
+
+
+@pytest.mark.parametrize("plant", [True, False])
+def test_last_year_as_an_indicator_table_one_column_per_version(tmp_path, plant):
+    """Last year as 'Chỉ tiêu | Kỳ | Thực tế | Kế hoạch gốc | Kế hoạch sửa': the label column names the
+    department, the period column the month, each version has its own column."""
+    from openpyxl import Workbook
+    from tests.bod_case import COSTS, DEPTS, FY_MONTHS, TM, plan_amount
+    answers = make_case(tmp_path, plant=plant)
+    (tmp_path / "NamTruoc_FY2526.xlsx").unlink()
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Chi tieu"
+    ws.append(["BẢNG CHỈ TIÊU NĂM TRƯỚC (giả lập)"])
+    ws.append([])
+    ws.append(["Chỉ tiêu", "Kỳ", "Thực tế", "Kế hoạch gốc", "Kế hoạch sửa"])
+    keys = list(COSTS) + [(TM, "P06", "CE06")]
+    for d in [d for d in DEPTS if d.startswith("P")]:
+        for m in FY_MONTHS:
+            mine = [k for k in keys if k[0] == TM and k[1] == d]
+            ws.append([f"{d} - {DEPTS[d]}", f"{m[5:]}/{int(m[:4]) - 1}"]
+                      + [int(sum(plan_amount(v, *k, m) for k in mine)) for v in ("Thực tế", "AOP", "AOPR")])
+    wb.save(tmp_path / "NamTruoc_FY2526.xlsx")
+    review = bod_check.review(tmp_path)[0]
+    got = [(x.group, x.where, x.expected) for x in review.findings if x.group == 4]
+    want = [a for a in answers if a["group"] == 4]
+    assert len(got) == len(want), got
+    for a in want:
+        assert any(w == a["where"] and close(a["code"], a["expected"], e) for _, w, e in got), (a, got)
+    assert _group(review, 4)[2] == ("loi" if plant else "ok"), _group(review, 4)
+
+
+def test_last_year_rows_clicky_cannot_find_are_not_checked_not_clean(tmp_path):
+    """A last-year file that holds other lines than the pack compares: those rows are said as not checked."""
+    from openpyxl import Workbook
+    make_case(tmp_path, plant=False)
+    (tmp_path / "NamTruoc_FY2526.xlsx").unlink()
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Chỉ tiêu", "Kỳ", "Thực tế", "Kế hoạch gốc", "Kế hoạch sửa"])
+    ws.append(["P01 - Kinh doanh B2B", "07/2025", 1, 2, 3])
+    wb.save(tmp_path / "NamTruoc_FY2526.xlsx")
+    review = bod_check.review(tmp_path)[0]
+    _, _, state, text = _group(review, 4)
+    assert state != "ok" and "CHƯA KIỂM ĐƯỢC" in text and "năm trước" in text.lower(), text
+
+
+def test_an_unreadable_last_year_file_leaves_the_last_year_part_not_checked(tmp_path):
+    from openpyxl import Workbook
+    make_case(tmp_path, plant=False)
+    wb = Workbook()
+    wb.active.append(["Ghi chú", "Nội dung"])
+    wb.active.append(["Số năm trước", "xem file của phòng kế toán"])
+    wb.save(tmp_path / "NamTruoc_FY2526.xlsx")
+    review = bod_check.review(tmp_path)[0]
+    _, _, state, text = _group(review, 4)
+    assert state != "ok" and "CHƯA KIỂM ĐƯỢC" in text and "năm trước" in text.lower(), text
+    assert "không thấy lỗi (đã soát" not in text
+
+
+def _cut_rows(ws):
+    head = next(r for r in ws.iter_rows() if r[0].value == "Phòng ban")
+    return head[0].row, {str(r[0].value)[:3]: r for r in ws.iter_rows(min_row=head[0].row + 1) if r[0].value}
+
+
+def test_the_no_cut_list_is_spared_only_the_flat_cut_unless_a_rule_ties_it_to_step_2(tmp_path):
+    """Step 2 (cut the requested increase above the ceiling) applies to every department: a no-cut department
+    cut at step 2 is not an error, whether the rule sentence names step 3 only or says nothing."""
+    make_case(tmp_path, plant=False)
+    pack = tmp_path / "Pack_BOD_T10_ban_nhap.xlsx"
+
+    def step2_on_p05(ws):
+        _, rows = _cut_rows(ws)
+        rows["P05"][3].value = 40_000_000                    # P05 asked 40m above its base
+        rows["P04"][4].value = rows["P04"][4].value - 40_000_000
+    _edit_xlsx(pack, "Cat giam", step2_on_p05)
+    review = bod_check.review(tmp_path)[0]
+    assert not [x for x in review.findings if x.code == "no_cut_touched"], [x.message for x in review.findings]
+    assert bod_check.no_cut_steps(["danh sach khong cat chi duoc mien buoc 3 cat deu"]) == {"cut3"}
+    assert bod_check.no_cut_steps(["phong trong danh sach khong cat duoc mien ca hai buoc"]) == {"cut2", "cut3"}
+    assert bod_check.no_cut_steps(["danh sach khong cat khong bi cat phan xin tang"]) == {"cut2", "cut3"}
+
+
+@pytest.mark.parametrize("where", ["params", "pack"])
+def test_a_cut_target_labelled_muc_tieu_is_found_in_the_parameters_or_the_pack(tmp_path, where):
+    from tests.bod_case import CEILING, cut_plan
+    make_case(tmp_path, plant=False)
+    target = int(sum(v[0] for v in cut_plan().values()) - CEILING)
+
+    def target_not_ceiling(ws):
+        for row in ws.iter_rows():
+            if row[0].value and "Trần" in str(row[0].value):
+                row[0].value, row[1].value = ("Mục tiêu tiết kiệm (đ)", target) if where == "params" else ("Ghi chú", "-")
+    _edit_xlsx(tmp_path / "CatGiam_ThamSo.xlsx", "Tham so", target_not_ceiling)
+    if where == "pack":
+        _edit_xlsx(tmp_path / "Pack_BOD_T10_ban_nhap.xlsx", "Cat giam",
+                   lambda ws: (ws.append([]), ws.append(["Mục tiêu", None, None, None, None, target])))
+    review = bod_check.review(tmp_path)[0]
+    assert _group(review, 6)[2] == "ok", _group(review, 6)
+
+    def wrong_flat_cut(ws):
+        _, rows = _cut_rows(ws)
+        rows["P01"][4].value = rows["P01"][4].value - 7_000_000
+    _edit_xlsx(tmp_path / "Pack_BOD_T10_ban_nhap.xlsx", "Cat giam", wrong_flat_cut)
+    levers = [x for x in bod_check.review(tmp_path)[0].findings if x.code == "levers_vs_gap"]
+    assert levers and levers[0].expected == target, levers
+
+
+def test_a_row_missing_both_its_percent_and_its_point_gap_is_reported_for_both(tmp_path):
+    make_case(tmp_path, plant=False)
+    keep = {}
+
+    def blank_both(ws):
+        for row in ws.iter_rows():
+            if str(row[0].value).startswith("P02"):
+                keep.update(pct=Decimal(str(row[2].value)), pp=Decimal(str(row[6].value)), n=row[0].row)
+                row[2].value = row[6].value = None
+    _edit_xlsx(tmp_path / "Pack_BOD_T10_ban_nhap.xlsx", "Tong hop", blank_both)
+    found = {x.where: x for x in bod_check.review(tmp_path)[0].findings}
+    pct, pp = found.get(f"'Tong hop'!C{keep['n']}"), found.get(f"'Tong hop'!G{keep['n']}")
+    assert pct and pct.code == "missing_pct" and close("missing_pct", keep["pct"], pct.expected), found
+    assert pp and pp.code == "missing_pp" and close("missing_pp", keep["pp"], pp.expected), found
+    assert len(found) == 2, found
+
+
+@pytest.mark.parametrize("how", ["catalogue_code", "name_column", "word_code"])
+def test_cost_with_no_department_is_a_data_note_however_the_detail_writes_it(tmp_path, how):
+    """'P99' that the catalogue calls 'Chưa phân bổ', a name column saying 'Chưa gán phòng ban', or a code
+    'CHUA_GAN': each is cost with no department, said in the data notes."""
+    import csv
+    from openpyxl import load_workbook
+    make_case(tmp_path, plant=False)
+    gl = next(tmp_path.glob("GL_*.csv"))
+    with open(gl, encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.reader(fh))
+    head = rows[0]
+    pb = next(i for i, h in enumerate(head) if "Phong_ban" in h or "Phòng ban" in h or "phong_ban" in h.lower())
+    if how == "name_column":
+        head.insert(pb + 1, "Ten phong ban")
+    for r in rows[1:]:
+        if how == "name_column":
+            r.insert(pb + 1, "Chưa gán phòng ban" if not r[pb].strip() else "")
+            if not r[pb].strip() and r[0][:1].isdigit():
+                r[pb] = "P04"            # the name column, not the code, says there is no department
+        elif not r[pb].strip() and r[0][:1].isdigit():
+            r[pb] = "P99" if how == "catalogue_code" else "CHUA_GAN"
+    with open(gl, "w", encoding="utf-8-sig", newline="") as fh:
+        csv.writer(fh).writerows(rows)
+    if how == "catalogue_code":
+        cfg = tmp_path / "DanhMuc_CauHinh.xlsx"
+        wb = load_workbook(cfg)
+        ws = wb["Phong ban"]
+        ws.append(["P99", "Chưa phân bổ"] + [None] * (ws.max_column - 2))
+        wb.save(cfg)
+    review = bod_check.review(tmp_path)[0]
+    assert "Chi phí chưa gán phòng ban" in [t for t, _, _ in review.notes], review.notes
+    assert not [x for x in review.findings if x.group == 1], [x.message for x in review.findings]
+
+
+def test_more_than_ten_errors_in_one_group_are_doubted_not_reported():
+    from engine.bod_review import Finding
+    cov = bod_check.Coverage()
+    cov.ran(5, 40)
+    many = [Finding(5, "locked_month_plan", f"'AOPR'!E{i}", "x", Decimal(1), Decimal(2)) for i in range(11)]
+    one = [Finding(7, "fx_rate_type", "'Ty gia'!F7", "y", Decimal(1), Decimal(2))]
+    keep, notes = bod_check._too_many(many + one, cov)
+    assert keep == one and notes and "11" in notes[0][0]
+    state, text = cov.status(5, keep)
+    assert state != "ok" and "CHƯA KIỂM ĐƯỢC" in text and "khớp sai" in text, text

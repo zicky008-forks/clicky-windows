@@ -25,6 +25,7 @@ from typing import Callable, Optional
 import scene_log
 from engine import bod_review as rv
 from engine.bod_inputs import Bundle, Config, load, num
+from engine.bod_inputs import unassigned as unassigned_label
 from engine.bod_pack import Col, Group, Pack, Row, Sheet, fy_of, pack_month, pack_period, read_pack, to_num, version_of
 from engine.bod_review import D, Finding, PCT_TOLERANCE, VND_TOLERANCE, ZERO, fmt_pct, fmt_vnd
 from engine.tables import is_total, key
@@ -65,8 +66,18 @@ def shift_year(period: str, years: int) -> str:
 
 
 def accounts(text) -> list:
-    """'641*, 6421; 6428x' -> ['641', '6421', '6428']: account prefixes as a mapping writes them."""
-    return [t.rstrip("*xX.") for t in re.split(r"[\s,;/|+]+", str(text or "")) if re.match(r"\d", t)]
+    """'641*, 6421; 6428x' -> ['641', '6421', '6428']: account prefixes as a mapping writes them. A range
+    '6421-6428' gives each account in it, a number read as 6421.0 gives '6421', and 'trừ 6425' is left out."""
+    text = re.split(r"\b(?:tru|ngoai tru|except|excl)\b|trừ", str(text or ""), maxsplit=1)[0]
+    out = []
+    for t in re.split(r"[\s,;/|+]+", text):
+        t = re.sub(r"\.0+$", "", t.strip("()")).rstrip("*xX.")
+        rng = re.fullmatch(r"(\d+)\s*[-–]\s*(\d+)", t)
+        if rng and len(rng.group(1)) == len(rng.group(2)) and 0 <= int(rng.group(2)) - int(rng.group(1)) <= 200:
+            out += [str(n) for n in range(int(rng.group(1)), int(rng.group(2)) + 1)]
+        elif re.fullmatch(r"\d+", t):
+            out.append(t)
+    return out
 
 
 def words(text) -> str:
@@ -84,7 +95,13 @@ class Facts:
     def __init__(self, b: Bundle, division: str, fy_start: int):
         self.b, self.cfg, self.division, self.fy_start = b, b.config, division, fy_start
         prefixes = sorted({t for e in self.cfg.elements.values() for t in accounts(e.get("tk"))}, key=len, reverse=True)
-        self.cost_prefixes = tuple(p for p in prefixes if p) or ("6",)
+        # selling (641) and administration (642) are operating costs on every Vietnamese chart, whatever the
+        # catalogue lists; the catalogue adds its own accounts
+        self.cost_prefixes = tuple(sorted({p for p in prefixes if p} | {"641", "642"}, key=len, reverse=True)) \
+            if prefixes else ("6",)
+        has641 = any(str(e.account).startswith("641") for e in b.gl)
+        self.sell_admin = (("641",), ("642",)) if has641 or not any(str(e.account).startswith("642") for e in b.gl) \
+            else (("6421",), ("6422",))     # TT133 books selling under 6421 and administration under 6422
         self.canon = {}                      # every division: 'tm' and 'thuong mai' -> one name
         for e in b.gl:
             d = self.cfg.depts.get(e.dept) or {}
@@ -116,6 +133,13 @@ class Facts:
             if e.get("ten"):
                 names["element"][key(e["ten"])] = code
                 names["element"][key(f"{code} {e['ten']}")] = code
+        # an indicator table names a department or a cost element in its label column: read it as that, so a
+        # department label never becomes a BOD line of its own
+        for p in self.plans:
+            if p["dong"] and not p["dept"] and not p["element"]:
+                hit = _label_dim(names, p["dong"], ("dept", "element"))
+                if hit:
+                    p[hit[0]], p["dong"] = hit[1], (self._line_of(hit[1], "")[0] if hit[0] == "element" else "")
         for r in self.gl + self.plans:
             for dim in ("dong", "dept", "element", "channel", "nhom"):
                 if r.get(dim):
@@ -143,6 +167,8 @@ class Facts:
     def _rec(self, e) -> dict:
         dong, nhom = self._line_of(e.element, e.account)
         dept = e.dept if not self.strict_depts or key(e.dept) in self.known_depts else ""
+        if dept and unassigned_label((self.cfg.depts.get(dept) or {}).get("ten", "x")):
+            dept = ""                        # the catalogue's own 'P99 - Chưa phân bổ' is no department
         return {"period": e.period, "amount": e.amount, "division": e.division, "site": e.site, "channel": e.channel,
                 "dept": dept, "dept_raw": e.dept, "element": e.element, "account": e.account, "dong": dong, "nhom": nhom,
                 "usd": e.usd, "text": e.text, "ref": e.ref, "where": e.where, "cost": self.is_cost(e.account)}
@@ -287,6 +313,20 @@ class Facts:
                 seen.add(n)
                 uniq.append((n, v))
         return uniq
+
+
+def _label_dim(names: dict, text: str, dims: tuple) -> Optional[tuple]:
+    """(dimension, value) a label names: the whole label, else one token that is a code ('P01 - Kinh doanh')."""
+    k = key(text)
+    for dim in dims:
+        if k in names[dim]:
+            return dim, names[dim][k]
+    for token in re.split(r"[\s\-–:|/]+", str(text).strip()):
+        t = key(token)
+        for dim in dims:
+            if t and t in names[dim] and t == key(names[dim][t]):
+                return dim, names[dim][t]
+    return None
 
 
 def _same_version(a: str, b: str) -> bool:
@@ -542,16 +582,16 @@ def check_totals(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Cover
                 for r in totals:
                     v = s.num(r, g.value)
                     if v is not None:
-                        cands.append((_cell(s, r, g.value), v, _months_for(g.value, period, fy, f.fy_start), i))
+                        cands.append((_cell(s, r, g.value), v, _months_for(g.value, period, fy, f.fy_start), i, r.label))
             best = {}
             for c in cands:                                  # subtotals ('Cộng chi phí bán hàng') are not the total
                 if c[3] not in best or abs(c[1]) > abs(best[c[3]][1]):
                     best[c[3]] = c
-            cands = [c[:3] for c in best.values()]
+            cands = [c[:3] + (c[4],) for c in best.values()]
         for where, label, v in (s.loose if s.kind == "other" else []):
             if re.search(r"tong chi phi", key(label)) and not any(c[0] == where for c in cands):
                 cands.append((where, v, [period] if not re.search(r"luy ke|ytd", key(label)) else
-                              _months_for(Col(0, "", "", "value", ytd=True), period, fy, f.fy_start)))
+                              _months_for(Col(0, "", "", "value", ytd=True), period, fy, f.fy_start), label))
         all_cands += cands
     if not f.gl:
         cov.cannot(1, "chưa đọc được sổ chi tiết chi phí",
@@ -561,16 +601,32 @@ def check_totals(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Cover
         cov.cannot(1, f"sổ chi tiết không có dòng chi phí nào của khối {f.division or '(chưa rõ)'}",
                    "sổ chi tiết có cột khối và tài khoản chi phí khớp danh mục")
         return out
-    for where, value, months in all_cands:
+    for where, value, months, label in all_cands:
         cov.ran(1)
-        out += _total_finding(f, where, value, months)
+        out += _total_finding(f, where, value, months, label)
     return out
 
 
-def _total_finding(f: Facts, where: str, value: Decimal, months: list) -> list:
+SELL_RE = re.compile(r"ban hang|\bbh\b|cpbh|selling|\bsales exp")
+ADMIN_RE = re.compile(r"quan ly|\bql(dn)?\b|cpql|\bg a\b|admin")
+
+
+def cost_scope(f: Facts, label: str) -> Optional[tuple]:
+    """Account prefixes a total row covers, from its words: 'bán hàng' 641, 'quản lý' 642, both (BH&QL) both;
+    None for every operating cost ('Tổng chi phí', 'Chi phí hoạt động')."""
+    k = key(label).replace("&", " ")
+    sell, admin = bool(SELL_RE.search(k)), bool(ADMIN_RE.search(k))
+    if not (sell or admin):
+        return None
+    return (f.sell_admin[0] if sell else ()) + (f.sell_admin[1] if admin else ())
+
+
+def _total_finding(f: Facts, where: str, value: Decimal, months: list, label: str = "") -> list:
     months = set(months)
     first, last = min(months), max(months)
-    mine = [r for r in f.gl if f.in_division(r) and r["cost"]]
+    scope = cost_scope(f, label)
+    in_scope = (lambda r: r["cost"]) if scope is None else (lambda r: str(r["account"]).startswith(scope))
+    mine = [r for r in f.gl if f.in_division(r) and in_scope(r)]
     truth = sum((r["amount"] for r in mine if r["period"] in months), ZERO)
     gap = D(value) - truth
     if abs(gap) <= VND_TOLERANCE:
@@ -582,12 +638,12 @@ def _total_finding(f: Facts, where: str, value: Decimal, months: list) -> list:
          sum((r["amount"] for r in mine if r["period"] > last), ZERO)),
         ("Bút toán của kỳ trước (bộ BOD cộng vào)", sum((r["amount"] for r in mine if r["period"] < first), ZERO)),
         ("Chi phí của khối khác cùng kỳ (bộ BOD cộng vào)",
-         sum((r["amount"] for r in f.gl if r["cost"] and r["period"] in months and not f.in_division(r)), ZERO)),
+         sum((r["amount"] for r in f.gl if in_scope(r) and r["period"] in months and not f.in_division(r)), ZERO)),
         ("Chi phí chưa gán phòng ban (bộ BOD bỏ ra)", -sum((r["amount"] for r in inside if not r["dept"]), ZERO)),
         ("Chiết khấu cho nhà phân phối ghi vào chi phí (bộ BOD bỏ ra)",
          -sum((r["amount"] for r in inside if distributor(r)), ZERO)),
         ("Dòng không thuộc tài khoản chi phí (bộ BOD cộng vào)",
-         sum((r["amount"] for r in f.gl if not r["cost"] and r["period"] in months and f.in_division(r)), ZERO)),
+         sum((r["amount"] for r in f.gl if not in_scope(r) and r["period"] in months and f.in_division(r)), ZERO)),
     ]
     later = sorted({r["period"] for r in mine if r["period"] > last})
     for p in later:
@@ -653,12 +709,18 @@ def check_lines(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Covera
                             votes[name] += 1
                 default = votes.most_common(1)[0][0] if votes else None
             override = _rule_votes(f, s, cur, months, pct_scale)
+            rev_here = next((s.num(r, cur.value) for r in s.rows if _is_revenue(r.label) and s.num(r, cur.value)), None)
+            fill = {}                        # the %DTT a row should carry, for a row that prints none
             for r in s.rows:
                 value = s.num(r, cur.value)
                 if value is None:
                     continue
                 pct = s.num(r, cur.pct) / pct_scale if cur.pct and s.num(r, cur.pct) is not None else None
                 want, base_label = _want_pct(f, r, value, months, default, override)
+                if pct is None:
+                    w = want if want is not None else (value / rev_here if rev_here else None)
+                    if w is not None:
+                        fill[r.n] = w
                 if cur.pct is not None and pct is not None and want is not None and base_label[1] == "rule":
                     cov.ran(2)
                     if abs(want - pct) > PCT_TOLERANCE:
@@ -676,7 +738,7 @@ def check_lines(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Covera
                                            + (f", phải là {fmt_pct(want)}" if want is not None else ""), want, None))
             # 3. comparisons: gap in money and in points
             for g in groups[1:]:
-                out += _check_compare(s, cur, g, pct_scale, cov)
+                out += _check_compare(s, cur, g, pct_scale, cov, fill)
     return out
 
 
@@ -767,7 +829,10 @@ def _compare_base(s: Sheet, cur: Group, g: Group, pct_scale: Decimal, cur_pct: d
     return best[1] if best else None
 
 
-def _check_compare(s: Sheet, cur: Group, g: Group, pct_scale: Decimal, cov: Optional[Coverage] = None) -> list:
+def _check_compare(s: Sheet, cur: Group, g: Group, pct_scale: Decimal, cov: Optional[Coverage] = None,
+                   fill: Optional[dict] = None) -> list:
+    """Gaps against one compared scenario. fill: {row: the %DTT the row should carry} for rows that print no
+    %DTT, so a row missing both its %DTT and its point gap is reported for both."""
     cov = cov or Coverage()
     out = []
     rows = [r for r in s.rows if s.num(r, cur.value) is not None and s.num(r, g.value) is not None]
@@ -800,6 +865,7 @@ def _check_compare(s: Sheet, cur: Group, g: Group, pct_scale: Decimal, cov: Opti
              if r.n in cur_pct and r.n in cmp_pct and s.num(r, g.pp) is not None and not _is_revenue(r.label)]
     scale = _pp_scale(pairs)
     sign = _sign([(w * scale, got) for w, got in pairs]) if pairs else 1
+    cur_pct = {**{n: v for n, v in (fill or {}).items()}, **cur_pct}
     for r in rows:
         if r.n not in cur_pct or r.n not in cmp_pct or _is_revenue(r.label):
             continue
@@ -843,13 +909,17 @@ def check_versions(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Cov
                                    "phòng ban hoặc cost element")
                     continue
                 allowed = convention_previous(f.cfg, available) if col_fy < fy else []
-                matched, cells = Counter(), []
+                matched, cells, printed = Counter(), [], 0
                 for r in s.rows:
                     match = f.matcher(r.label, r.section)
                     v = s.num(r, col)
                     if match is None or v is None:
                         continue
+                    if not r.total and not _is_revenue(r.label) and not unassigned_label(r.label):
+                        printed += 1
                     values = {ver: f.plan(ver, match, months) for ver in available}
+                    if all(x is None for x in values.values()):
+                        continue
                     hit = [ver for ver, x in values.items() if x is not None and abs(x - v) <= VND_TOLERANCE]
                     for h in hit:
                         matched[h] += 1
@@ -860,6 +930,10 @@ def check_versions(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Cov
                                       f"({', '.join(v.upper() for v in available)})", "")
                     continue
                 cov.ran(4, len(cells))
+                found = sum(1 for r, _, _ in cells if not r.total)
+                if found < printed and col_fy < fy:
+                    cov.partly(4, f"cột '{col.text}': {printed - found}/{printed} dòng không tìm thấy số "
+                                  f"FY{col_fy % 100:02d}/{(col_fy + 1) % 100:02d} để so (cần file năm trước có các dòng này)")
                 used = matched.most_common(1)[0][0]
                 if used == "thuc te":
                     continue            # last year's actual: a legitimate comparison, not a plan version
@@ -1004,8 +1078,8 @@ CUT_ROLES = (("cut2", r"buoc ?2|cat phan (xin )?tang|phan xin tang|cat tang"), (
              ("after", r"sau cat|con lai|duoc duyet|ngan sach duyet|final"),
              ("request", r"de xuat|xin|yeu cau|request|de nghi|du kien|nhu cau|dang ky|proposed|ke hoach phong"),
              ("base", r"co so|nam truoc|tham chieu|base|goc"))
-TARGET_RE = re.compile(r"muc tieu cat|can cat|so cat can|tong cat giam can|target|chenh (lech )?can cat|phai cat|"
-                       r"khoang cach (den|toi) tran|vuot tran")
+TARGET_RE = re.compile(r"\bmuc tieu\b|can cat|so cat can|tong cat giam can|target|chenh (lech )?can cat|phai cat|"
+                       r"khoang cach (den|toi) tran|vuot tran|tiet kiem|savings")
 
 
 def _rule_texts(b: Bundle, pack: Pack) -> list:
@@ -1021,31 +1095,42 @@ def _rule_texts(b: Bundle, pack: Pack) -> list:
 
 
 def no_cut_steps(texts: list) -> set:
-    """Which steps the no-cut list is spared from, by the client's rule sentence. Without one: both."""
-    steps = {"cut2", "cut3"}
+    """Which steps the no-cut list is spared from. The list is about the flat cut (step 3); the cut of the
+    requested increase above the ceiling (step 2) applies to every department unless a rule sentence ties the
+    list to step 2 or to every step."""
+    steps = {"cut3"}
+    step2 = r"(buoc ?2|phan xin tang|cat tang)"
     for t in texts:
         if not re.search(r"khong cat|mien cat|bao ve", t):
             continue
-        only3 = re.search(r"(chi|only).{0,30}(buoc ?3|cat deu)|mien.{0,20}(buoc ?3|cat deu)|"
-                          r"khong (ap dung|tham gia|bi|chiu).{0,20}(buoc ?3|cat deu)", t)
-        all2 = re.search(r"(buoc ?2|phan xin tang|cat tang).{0,60}(moi phong|tat ca|toan bo|ca phong|ap dung cho moi)", t)
-        if only3 or all2:
-            steps = {"cut3"}
+        if re.search(rf"{step2}.{{0,60}}(moi phong|tat ca|toan bo|ca phong|ap dung cho moi)", t):
+            continue
+        if re.search(r"ca (2|hai) buoc|moi buoc|tat ca cac buoc|buoc 2 va (buoc )?3|ca buoc 2", t) or \
+                re.search(rf"(khong cat|mien cat|mien|khong (ap dung|tham gia|bi cat|bi|chiu)).{{0,25}}{step2}", t):
+            steps.add("cut2")
     return steps
 
 
 def cut_params(b: Bundle, pack: Pack) -> tuple:
     """(ceiling, where it was read, extra no-cut names, target to cut or None)."""
     from engine.bod_pack import read_sheet
-    ceiling, where, names, target = None, "", set(), None
+    ceiling, where, names, target, pack_target = None, "", set(), None, None
     sheets = [read_sheet(n, rows) for n, rows in b.cut] + pack.of("cut")
     for s in sheets:
         for addr, label, v in s.loose:
             k = key(label)
             if CEILING_RE.search(k) and ceiling is None and not TARGET_RE.search(k):
                 ceiling, where = v, addr
-            elif TARGET_RE.search(k) and target is None and s.kind != "cut":
-                target = v
+            elif TARGET_RE.search(k) and not LEVERS_RE.search(k):
+                if s.kind != "cut" and target is None:
+                    target = v
+                elif s.kind == "cut" and pack_target is None:
+                    pack_target = v
+        if s.kind == "cut":
+            for r in s.rows:
+                k = key(r.label)
+                if TARGET_RE.search(k) and not LEVERS_RE.search(k) and pack_target is None:
+                    pack_target = next((s.num(r, c) for c in s.cols if s.num(r, c)), None)
         for x in s.grid:
             cells = [str(v) for v in (x or []) if isinstance(v, str)]
             for i, t in enumerate(cells):
@@ -1060,7 +1145,7 @@ def cut_params(b: Bundle, pack: Pack) -> tuple:
                 for _, v in t.rows:
                     if _truthy(t.get(v, "khong_cat", "")):
                         names.add(str(t.get(v, "ma", "") or t.get(v, "ten", "")).strip())
-    return ceiling, where, {n for n in names if n}, target
+    return ceiling, where, {n for n in names if n}, target if target is not None else pack_target
 
 
 def check_cuts(f: Facts, b: Bundle, pack: Pack, cov: Optional[Coverage] = None) -> list:
@@ -1085,6 +1170,9 @@ def check_cuts(f: Facts, b: Bundle, pack: Pack, cov: Optional[Coverage] = None) 
             if r.total:
                 total_row = r
                 continue
+            k = key(r.label)
+            if (TARGET_RE.search(k) or CEILING_RE.search(k) or LEVERS_RE.search(k)) and not f.matcher(r.label, r.section):
+                continue                     # 'Mục tiêu', 'Trần', 'Tổng đòn bẩy': not a department
             c2, c3 = s.num(r, roles.get("cut2")) or ZERO, s.num(r, roles.get("cut3")) or ZERO
             lines.append((r, s.num(r, roles.get("request")), abs(c2), abs(c3)))
         cov.ran(6, len(lines))
@@ -1101,8 +1189,11 @@ def check_cuts(f: Facts, b: Bundle, pack: Pack, cov: Optional[Coverage] = None) 
                                        f"nhưng bộ BOD cắt {fmt_vnd(amount)}", ZERO, amount))
         levers = sum((c2 + c3 for _, _, c2, c3 in lines), ZERO)
         requests = [q for _, q, _, _ in lines if q is not None]
-        gap = target if target is not None else (sum(requests, ZERO) - ceiling
-                                                 if ceiling is not None and requests else None)
+        asked = sum(requests, ZERO)
+        if target is not None and requests and abs(target) > asked / 2:
+            # "Mục tiêu chi phí" is a spending target, i.e. a ceiling, not the amount to cut
+            ceiling, target = abs(target), None
+        gap = target if target is not None else (asked - ceiling if ceiling is not None and requests else None)
         where_total = next((addr for addr, label, _ in s.loose if LEVERS_RE.search(key(label))), "")
         if not where_total and total_row is not None:
             where_total = _cell(s, total_row, roles.get("cut3") or roles.get("cut2"))
@@ -1204,9 +1295,12 @@ def data_notes(f: Facts, period: str, fy: int) -> list:
     no_dept = [r for r in mine if not r["dept"] and r["period"] in months]
     if no_dept:
         codes = sorted({r["dept_raw"] for r in no_dept if r.get("dept_raw")})
+        unknown = [c for c in codes if key(c) not in f.known_depts]
         notes.append(("Chi phí chưa gán phòng ban",
                       f"{len(no_dept)} dòng, {fmt_vnd(sum((r['amount'] for r in no_dept), ZERO))} đ"
-                      + (f" (mã phòng ghi '{', '.join(codes[:4])}', không có trong danh mục phòng ban)" if codes else "")
+                      + (f" (mã phòng ghi '{', '.join(codes[:4])}'"
+                         + (", không có trong danh mục phòng ban)" if unknown else ", danh mục ghi là chưa phân bổ)")
+                         if codes else "")
                       + ": cần hỏi kế toán gán phòng.", ", ".join(r["where"] for r in no_dept[:5])))
     later = [r for r in mine if r["period"] > period]
     if later:
@@ -1222,6 +1316,28 @@ def data_notes(f: Facts, period: str, fy: int) -> list:
                       f"({', '.join(sorted({r['account'] for r in disc}))}); thường phải là giảm trừ doanh thu (521). "
                       "Cần hỏi kế toán trước khi trình.", ", ".join(r["where"] for r in disc[:5])))
     return notes
+
+
+MANY = 10
+
+
+def _too_many(findings: list, cov: Coverage) -> tuple:
+    """A group that finds more than MANY errors has most likely matched the wrong lines, not met a pack that is
+    wrong everywhere. Those are not reported as errors: the group says it could not check, and every place is
+    listed in the notes so nothing is dropped in silence."""
+    counts = Counter(x.group for x in findings)
+    keep, notes = [], []
+    for g, n in counts.items():
+        if n <= MANY:
+            continue
+        mine = [x for x in findings if x.group == g]
+        cov.cannot(g, f"{n} chỗ lệch cùng lúc: nhiều khả năng em khớp sai dòng hoặc cột, không phải bộ BOD sai hàng loạt, "
+                      "nên em chưa báo là lỗi", "chị xác nhận cách đọc bảng (dòng, cột, phiên bản) trong ghi chú")
+        notes.append((f"Nhóm {g}: {n} chỗ lệch em chưa dám báo lỗi",
+                      "; ".join(x.message for x in mine[:3]) + (" …" if n > 3 else ""),
+                      ", ".join(x.where for x in mine[:8])))
+    keep = [x for x in findings if counts[x.group] <= MANY]
+    return keep, notes
 
 
 def _merge(findings: list) -> list:
@@ -1291,9 +1407,14 @@ def review(folder: Path, fy_start: int = 7) -> list:
             f = Facts(b, division, fy_start)
             found = check_totals(f, pack, period, fy, cov) + check_lines(f, pack, period, fy, cov) \
                 + check_versions(f, pack, period, fy, cov) + check_months(f, pack, period, fy, cov) + check_cuts(f, b, pack, cov)
+            from engine.bod_inputs import hint_of
+            for name, why in b.unused:
+                if hint_of(Path(name).stem) == "prior":
+                    cov.cannot(4, f"phần so năm trước: chưa đọc được file {name} ({why})",
+                               "file năm trước có phiên bản (hoặc một cột mỗi phiên bản), tháng hoặc kỳ, và dòng chỉ tiêu")
             fx, fx_notes = check_fx_sheets(f, b, pack, period, fy, cov)
-            rv_.findings = _merge(found + fx)
-            rv_.notes = data_notes(f, period, fy) + fx_notes
+            rv_.findings, doubtful = _too_many(_merge(found + fx), cov)
+            rv_.notes = data_notes(f, period, fy) + fx_notes + doubtful
         for x in rv_.findings:
             scene_log.record("bod_finding", pack=path.name, group=x.group, code=x.code, where=x.where,
                              expected=None if x.expected is None else str(x.expected),
