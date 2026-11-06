@@ -22,6 +22,11 @@ import time
 import wave
 from pathlib import Path
 
+# Windows consoles and CI runners default to cp1252, which cannot print Vietnamese.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1]))
 

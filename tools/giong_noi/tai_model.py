@@ -17,6 +17,11 @@ import tarfile
 import urllib.request
 from pathlib import Path
 
+# Windows consoles and CI runners default to cp1252, which cannot print Vietnamese.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 BASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
 MODELS = {
     # Weights: Apache-2.0 (huggingface.co/zzasdf/viet_iter3_pseudo_label). About 70,000 hours. Shipped.
