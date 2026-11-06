@@ -64,6 +64,11 @@ def shift_year(period: str, years: int) -> str:
     return f"{int(period[:4]) + years:04d}{period[4:]}"
 
 
+def accounts(text) -> list:
+    """'641*, 6421; 6428x' -> ['641', '6421', '6428']: account prefixes as a mapping writes them."""
+    return [t.rstrip("*xX.") for t in re.split(r"[\s,;/|+]+", str(text or "")) if re.match(r"\d", t)]
+
+
 def words(text) -> str:
     """Folded text with punctuation as spaces, for whole-word matching: 'DTT site S1, mọi khối' -> 'dtt site s1 moi khoi'."""
     return re.sub(r"[^0-9a-z%]+", " ", key(text)).strip()
@@ -74,8 +79,14 @@ class Facts:
 
     def __init__(self, b: Bundle, division: str, fy_start: int):
         self.b, self.cfg, self.division, self.fy_start = b, b.config, division, fy_start
-        prefixes = sorted({e["tk"] for e in self.cfg.elements.values() if e.get("tk")}, key=len, reverse=True)
+        prefixes = sorted({t for e in self.cfg.elements.values() for t in accounts(e.get("tk"))}, key=len, reverse=True)
         self.cost_prefixes = tuple(p for p in prefixes if p) or ("6",)
+        self.aliases = {key(division)} if division else set()
+        for _ in range(2):                   # 'TM' in the detail, 'Thương mại' in sales and titles: one division
+            for e in b.gl:
+                d = self.cfg.depts.get(e.dept) or {}
+                if e.division and d.get("khoi") and ({key(e.division), key(d["khoi"])} & self.aliases):
+                    self.aliases |= {key(e.division), key(d["khoi"])}
         self.gl = [self._rec(e) for e in b.gl]
         self.plans = [self._plan(p) for p in b.plans]
         names = defaultdict(dict)
@@ -107,7 +118,7 @@ class Facts:
         dong, nhom = e.get("dong", ""), e.get("nhom", "")
         if not dong:
             for m in self.cfg.bod:
-                if m.get("ce") and m["ce"] == element or m.get("tk") and str(account).startswith(m["tk"]):
+                if m.get("ce") and m["ce"] == element or any(str(account).startswith(t) for t in accounts(m.get("tk"))):
                     dong, nhom = m["dong"], nhom or m.get("nhom", "")
                     break
         return dong, nhom
@@ -156,7 +167,7 @@ class Facts:
         return ""
 
     def in_division(self, r: dict) -> bool:
-        return not self.division or not r.get("division") or key(r["division"]) == key(self.division)
+        return not self.division or not r.get("division") or key(r["division"]) in self.aliases
 
     def actual(self, match: Callable, periods) -> Decimal:
         periods = set(periods)
@@ -195,7 +206,8 @@ class Facts:
         periods = set(periods)
         rows = [s for s in self.b.sales if s.month in periods
                 and (site is None or key(s.site) == key(site))
-                and (division is None or key(s.division) == key(division))
+                and (division is None or key(s.division) == key(division)
+                     or key(division) in self.aliases and key(s.division) in self.aliases)
                 and (channel is None or key(s.channel) == key(channel))]
         return sum((s.net for s in rows), ZERO) if rows else None
 
@@ -256,6 +268,15 @@ def find_division(pack: Pack, b: Bundle) -> tuple:
     for d in names:
         if re.search(rf"(^| )(khoi )?{re.escape(words(d))}( |$)", k):
             return d, "tiêu đề bộ BOD"
+    # the detail may hold division codes ('TM') while the title says the name: go through the departments
+    by_code = defaultdict(set)
+    for e in b.gl:
+        d = b.config.depts.get(e.dept)
+        if e.division and d and d.get("khoi"):
+            by_code[e.division].add(d["khoi"])
+    for code, names_ in by_code.items():
+        if any(re.search(rf"(^| )(khoi )?{re.escape(words(n))}( |$)", k) for n in names_):
+            return code, "tiêu đề bộ BOD và danh mục phòng ban"
     rule = b.config.rule("khoi")
     if isinstance(rule, str) and rule.strip():
         return rule.strip(), "danh mục cấu hình"

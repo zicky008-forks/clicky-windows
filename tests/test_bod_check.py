@@ -186,3 +186,22 @@ def test_other_layout_row_numbers_percent_as_numbers_ytd_and_fx_sign(tmp_path, p
     for a in answers:
         hit = [x for x in found if x.where == a["where"] and x.group == a["group"]]
         assert hit and close(a["code"], a["expected"], hit[0].expected), (a, [(x.where, x.expected) for x in found])
+
+
+def test_division_codes_in_the_detail_and_account_lists_in_the_mapping(tmp_path):
+    """The detail says 'TM', titles and sales say 'Thương mại'; the mapping writes accounts as '641*, 642*'."""
+    answers = make_case(tmp_path, plant=True)
+    gl = next(tmp_path.glob("GL_*.csv"))
+    gl.write_text(gl.read_text(encoding="utf-8-sig").replace(",Thương mại,", ",TM,").replace(",Sản xuất,", ",SX,"),
+                  encoding="utf-8-sig")
+    from openpyxl import load_workbook
+    cfg = tmp_path / "DanhMuc_CauHinh.xlsx"
+    wb = load_workbook(cfg)
+    ws = wb["Cost element"]
+    for row in ws.iter_rows(min_row=2):
+        row[2].value = row[2].value[:3] + "*, " + row[2].value[:3] + "8"
+    wb.save(cfg)
+    review = bod_check.review(tmp_path)[0]
+    assert review.division in ("TM", "Thương mại")
+    found = {(x.group, x.where) for x in review.findings}
+    assert found == {(a["group"], a["where"]) for a in answers}
