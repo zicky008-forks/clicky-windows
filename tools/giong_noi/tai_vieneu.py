@@ -63,17 +63,37 @@ def fetch(out: Path, precisions: list) -> int:
 
 
 def flatten(cache: Path) -> int:
-    """Replace each snapshot symlink with a copy of its blob, then drop blobs/. Returns files replaced."""
+    """Replace each snapshot symlink with its blob (moved, not copied), then drop blobs/.
+
+    Returns files replaced. Fails loudly if blobs/ is left behind: it would double the installer size.
+    """
     done = 0
     for repo in cache.glob("models--*"):
+        moved = {}                                    # blob -> first real file made from it
         for link in sorted((repo / "snapshots").rglob("*")):
-            if link.is_symlink():
-                target = link.resolve(strict=True)
-                link.unlink()
-                shutil.copy2(target, link)
-                done += 1
-        shutil.rmtree(repo / "blobs", ignore_errors=True)
+            if not link.is_symlink():
+                continue
+            target = link.resolve(strict=False)
+            link.unlink()
+            if target in moved:                       # two names for one blob: copy the one already moved
+                shutil.copy2(moved[target], link)
+            else:
+                shutil.move(str(target), str(link))
+                moved[target] = link
+            done += 1
+        blobs = repo / "blobs"
+        if blobs.exists():
+            shutil.rmtree(blobs, onerror=_force_remove)
+        if blobs.exists():
+            raise SystemExit(f"Không xoá được {blobs}: bộ cài sẽ chứa model hai lần")
     return done
+
+
+def _force_remove(func, path, _exc):
+    import os
+    import stat
+    os.chmod(path, stat.S_IWRITE)                     # Windows marks some downloaded files read-only
+    func(path)
 
 
 def main(argv=None) -> int:
