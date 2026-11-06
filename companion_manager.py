@@ -985,6 +985,28 @@ class CompanionManager(QObject):
         turn_clock.of(self).start("drop")
         self._request_future = self._submit(self._process_drop(paths))
 
+    def submit_bod_review(self, folder: str):
+        """Review the BOD draft pack in a folder (UI thread), e.g. from Clicky.exe --bod-review."""
+        self.stop()
+        self._request_future = self._submit(self._process_bod(folder))
+
+    async def _process_bod(self, folder: str):
+        from office import bod_skill
+        self._current_task = asyncio.current_task()
+        self._cancel_flag = False
+        self._emit_state(AppState.THINKING)
+        try:
+            await bod_skill.run(self, Path(folder))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("BOD review failed")
+            self.sig_error.emit("Em chưa soát được bộ BOD. File của chị chưa bị thay đổi gì.")
+        finally:
+            if self._current_task is asyncio.current_task():
+                self._current_task = None
+                self._emit_state(AppState.IDLE)
+
     async def _process_drop(self, paths: list):
         from office import drop
         self._current_task = asyncio.current_task()

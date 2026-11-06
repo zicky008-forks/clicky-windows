@@ -124,3 +124,53 @@ def test_percent_columns_attach_by_name_when_not_beside_their_value():
             Col(5, "", "chenh lech", "diff"), Col(6, "", "diem %", "pp")]
     cur, cmp_ = _groups(cols)
     assert cur.pct.index == 3 and cmp_.pct.index == 4 and cmp_.diff.index == 5 and cmp_.pp.index == 6
+
+
+# ── in the app ──────────────────────────────────────────────────────────────────
+
+def test_chat_words_start_the_review():
+    import re
+    from office import bod_skill
+    for text in ("soát bộ BOD", "Soat bo BOD giúp em", "kiểm tra bộ BOD trước khi trình", "rà soát pack tháng 10"):
+        assert re.search(bod_skill.TRIGGER, text, re.I), text
+    assert not re.search(bod_skill.TRIGGER, "làm báo cáo tháng từ thư mục này", re.I)
+    assert bod_skill.args(["Clicky.exe", "--bod-review", "D:/case"]) == "D:/case"
+
+
+def test_one_beat_per_finding_pointing_at_its_cell(planted):
+    from office import bod_skill
+    _, answers, reviews = planted
+    beats = bod_skill.beats_for(reviews, {"verified": True})
+    refs = [b.ref for b in beats if b.ref]
+    assert sorted(refs) == sorted(a["where"] for a in answers)
+    assert "9 chỗ" in beats[0].text and "không sửa gì" in beats[-1].text
+    fx = next(b for b in beats if b.ref == "'Ty gia'!F7")
+    assert fx.value == "759.000 đ" and fx.was == "908.500 đ" and fx.mark == "bad"
+
+
+def test_run_writes_results_and_plays(tmp_path):
+    import asyncio
+    from office import bod_skill, month_close as mc
+    make_case(tmp_path, plant=True)
+    played = []
+
+    class Bridge:
+        def workbook_folder(self): return None
+        def workbook_path(self): return None
+        def open_workbook(self, p): played.append(("open", p)); return True
+
+    class M:
+        _excel = Bridge()
+
+    async def fake_play(manager, beats):
+        played.append(("play", len(beats)))
+
+    orig = mc.play
+    mc.play = fake_play
+    try:
+        asyncio.run(bod_skill.run(M(), tmp_path))
+    finally:
+        mc.play = orig
+    assert (tmp_path / "Clicky_soat_BOD" / "ket-qua.md").exists()
+    assert played[0][0] == "open" and played[0][1].endswith("Pack_BOD_T10_ban_nhap.xlsx")
+    assert played[-1] == ("play", 12)

@@ -55,6 +55,8 @@ hidden = [
     "office.sample", "office.drop", "ui.drop_zone", "engine.intake", "engine.audit", "engine.saved_check", "engine.roles",
     # Latency clock, and the three graphics drawn from engine figures (leader tags, sticky notes, profit bridge)
     "turn_clock", "engine.visuals", "ui.graphics_paint",
+    # BOD draft pack review ("soát bộ BOD", Clicky.exe --bod-review)
+    "office.bod_skill", "engine.bod_check", "engine.bod_inputs", "engine.bod_pack", "engine.bod_review", "engine.tables",
     "ui.settings_window",
     "ui.connections_window",
     "ui.jobs_window",

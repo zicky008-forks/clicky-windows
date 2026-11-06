@@ -752,6 +752,7 @@ def main():
             _start_present(spec, xlsx, deck)
     tray.on_present.connect(_pick_present)
     _present_cli = present_args(sys.argv)
+    from office.bod_skill import args as bod_args
 
     # ── Global hotkey ─────────────────────────────────────────────────────────
     _shortcuts = []
@@ -813,6 +814,8 @@ def main():
         welcome.started.connect(lambda: start_after_welcome(manager))
         QTimer.singleShot(400, welcome.present)
         _setup_keepalive[0] = welcome           # keep a reference so it isn't GC'd
+    elif bod_args(sys.argv):
+        QTimer.singleShot(800, lambda: manager.submit_bod_review(bod_args(sys.argv)))
     elif _present_cli:
         QTimer.singleShot(600, lambda: _start_present(_present_cli["spec"], _present_cli["xlsx"], _present_cli["deck"]))
     elif not _setting("start_hidden", False):
