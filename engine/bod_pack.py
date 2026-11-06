@@ -44,10 +44,12 @@ FY_RE = [re.compile(r"\bfy ?(\d\d) ?(\d\d)\b"), re.compile(r"\bnd ?(\d\d) ?(\d\d
 
 def version_of(k: str) -> str:
     """The scenario a header names, folded: 'aopr1', 'aopr', 'aop', 'muf', 'thuc te', or ''."""
-    m = re.search(r"\baopr ?(\d+)\b|\baopr\b|\brevised\b|\bdieu chinh\b", k)
+    m = re.search(r"\baopr ?(\d+)\b|\baopr\b|\brevised\b|\bdieu chinh\b|\b(?:ke hoach|kh|ngan sach|ban) (?:da )?sua\b|"
+                  r"^sua\b|\bsua doi\b|\bcap nhat\b|\breforecast\b", k)
     if m:
         return f"aopr{m.group(1)}" if m.lastindex and m.group(1) else "aopr"
-    if re.search(r"\baop\b|\bbudget\b|\bngan sach goc\b", k):
+    if re.search(r"\baop\b|\bbudget\b|\bngan sach goc\b|\bke hoach goc\b|\bkh goc\b|\boriginal\b|"
+                 r"^(ban |so )?goc\b|\bban goc\b", k):
         return "aop"
     if re.search(r"\bmuf\b|\bdu bao\b|\bforecast\b|\bfc\b", k):
         return "muf"
@@ -68,7 +70,14 @@ def fy_of(k: str) -> Optional[int]:
     return None
 
 
+EN_MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+EN_MONTH_RE = re.compile(r"(?:^| )(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?: (?:20)?\d\d)?$")
+
+
 def month_of(k: str) -> Optional[int]:
+    m = EN_MONTH_RE.search(k)
+    if m:
+        return EN_MONTHS[m.group(1)]
     for rx in MONTH_RE:
         m = rx.search(k)
         if m:
@@ -229,6 +238,17 @@ def _order_column(rows: list, r: int, c: int, k: str) -> bool:
         sum(1 for a, b in zip(nums, nums[1:]) if b == a + 1) >= len(nums) // 2
 
 
+def _code_column(rows: list, r: int, c: int, k: str) -> bool:
+    """'Mã kênh' holding '01', '02' (or 1, 2): codes, not amounts."""
+    if not re.search(r"\b(ma|code|kenh|channel|site|khoi|nhom|loai)\b", k) or re.search(r"tien|gia tri|chi phi|amount|so tien", k):
+        return False
+    vals = [(x or [None] * (c + 1))[c] if c < len(x or []) else None for x in rows[r + 1:r + 60]]
+    vals = [v for v in vals if v is not None and str(v).strip()]
+    if not vals:
+        return False
+    return all(isinstance(v, str) for v in vals) or all(isinstance(v, (int, float)) and v == int(v) and 0 <= v <= 999 for v in vals)
+
+
 def _numeric_below(rows: list, r: int, c: int) -> bool:
     for x in rows[r + 1:r + 60]:
         v = (x or [None] * (c + 1))[c] if c < len(x or []) else None
@@ -237,7 +257,19 @@ def _numeric_below(rows: list, r: int, c: int) -> bool:
     return False
 
 
+def _dated_headers(rows: list) -> list:
+    """Month headers typed as real dates (Excel shows 'Jul-26') read as '07/2026'; body cells stay as they are."""
+    import datetime as dt
+    out = list(rows)
+    for r, values in enumerate(rows[:HEADER_SCAN]):
+        dates = [v for v in values or [] if isinstance(v, (dt.date, dt.datetime))]
+        if len(dates) >= 2:
+            out[r] = [f"{v.month:02d}/{v.year}" if isinstance(v, (dt.date, dt.datetime)) else v for v in values]
+    return out
+
+
 def read_sheet(name: str, rows: list) -> Sheet:
+    rows = _dated_headers(rows)
     best, best_r = 0, -1
     for r, values in enumerate(rows[:HEADER_SCAN]):
         s = _score(values or [])
@@ -255,7 +287,7 @@ def read_sheet(name: str, rows: list) -> Sheet:
     label_col = None
     for c, t in enumerate(texts):
         k = key(t)
-        numeric = _numeric_below(rows, best_r, c) and not _order_column(rows, best_r, c, k)
+        numeric = _numeric_below(rows, best_r, c) and not _order_column(rows, best_r, c, k) and not _code_column(rows, best_r, c, k)
         if label_col is None and (LABEL_RE.match(k) or not numeric) and k and not PCT_RE.search(k):
             role = "label"
             label_col = c
@@ -270,13 +302,15 @@ def read_sheet(name: str, rows: list) -> Sheet:
     text_cols = [c.index for c in sheet.cols if c.role in ("label",)] + \
                 [c.index for c in sheet.cols if c.role == "text" and c.index < min((x.index for x in sheet.cols
                                                                                    if x.role in ("value", "month")), default=0)]
+    code_cols = {c.index for c in sheet.cols if c.role == "text" and _code_column(rows, best_r, c.index, c.k)}
     section = ""
     for i in range(best_r + 1, len(rows)):
         values = list(rows[i] or [])
         if not any(v is not None and str(v).strip() for v in values):
             continue
         label = " ".join(str(values[c]).strip() for c in sorted(text_cols) if c < len(values) and values[c] is not None
-                         and str(values[c]).strip() and not re.fullmatch(r"[\d.,\s]+|[IVXivx]+\.?", str(values[c]).strip()))
+                         and str(values[c]).strip() and (c in code_cols or
+                                                         not re.fullmatch(r"[\d.,\s]+|[IVXivx]+\.?", str(values[c]).strip())))
         numbers = [c for c in sheet.cols if c.role in ("value", "pct", "diff", "pp", "month")
                    and c.index < len(values) and to_num(values[c.index]) is not None]
         if not numbers:

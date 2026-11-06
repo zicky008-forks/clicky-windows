@@ -45,3 +45,21 @@ def test_missing_mistakes_and_no_finish_fail(tmp_path, monkeypatch):
     res = bod_robot.grade(events, True, answers)
     assert not res.ok
     assert not bod_robot.grade([], True, answers).ok
+
+
+def test_a_group_clicky_could_not_check_fails_the_run_and_is_said(tmp_path, monkeypatch):
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    make_case(tmp_path / "case", plant=True)
+    (tmp_path / "case" / "Mastersale_T07-T10.csv").unlink()
+    reviews = bod_check.review(tmp_path / "case")
+    out = bod_check.write_outputs(reviews, tmp_path / "case" / "Clicky_soat_BOD")
+    beats = bod_skill.beats_for(reviews, out)
+    assert any("chưa kiểm được nhóm 2" in b.text.lower() for b in beats)
+    events = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
+    res = bod_robot.grade(events, True)
+    line = next(l for l in res.lines if l.name == "Đủ 7 nhóm đều kiểm được")
+    assert not line.ok and "2" in line.detail
+    from openpyxl import load_workbook
+    rows = list(load_workbook(out["xlsx"])["Cac nhom kiem"].iter_rows(values_only=True))
+    assert any(r[1] == 2 and "CHƯA KIỂM ĐƯỢC" in str(r[3]) for r in rows)

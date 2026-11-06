@@ -20,16 +20,29 @@ def key(text) -> str:
     return re.sub(r"[\s_./()\-:]+", " ", fold(text)).strip()
 
 
+def _split_camel(text: str) -> str:
+    """'NgayHoaDon' -> 'Ngay Hoa Don'; 'Khối KD', 'B2B' unchanged."""
+    out = []
+    for i, ch in enumerate(text):
+        if i and ch.isupper() and text[i - 1].islower():
+            out.append(" ")
+        out.append(ch)
+    return "".join(out)
+
+
 def matches(cell, synonyms) -> int:
-    """Strength of a header cell against a field's synonyms: 3 exact, 2 all synonym words present, 0 none."""
-    k = key(cell)
+    """Strength of a header cell against a field's synonyms: 3 exact, 2 all synonym words present, 0 none.
+    Headers an accounting program exports run together ('NgayHoaDon', 'THANHTIEN'): CamelCase is split into
+    words and a header equal to a synonym once spaces are removed is exact too."""
+    k = key(_split_camel(str(cell))) if cell is not None else ""
     if not k:
         return 0
     words = set(k.split())
+    compact = k.replace(" ", "")
     best = 0
     for s in synonyms:
         s = key(s)
-        if k == s:
+        if k == s or (s and compact == s.replace(" ", "")):
             return 3
         if s and set(s.split()) <= words:
             best = max(best, 2)

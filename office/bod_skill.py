@@ -47,8 +47,13 @@ def beats_for(reviews: list, out: Optional[dict]) -> list:
         return [Beat("Em không thấy bộ BOD nào trong thư mục này. Tên file bộ BOD thường có chữ BOD, pack hoặc bản nháp.")]
     r0 = reviews[0]
     period = f"tháng {r0.period[5:]}/{r0.period[:4]}" if r0.period else ""
-    if not total:
+    gaps = [(g, title) for r in reviews for g, title, state, text in r.groups()
+            if state in ("chua", "mot_phan") or "CHƯA KIỂM ĐƯỢC" in text]
+    if not total and not gaps:
         beats.append(Beat(f"Em đã soát bộ BOD {period}: không thấy lỗi nào trong 7 nhóm kiểm.", mark="ok"))
+    elif not total:
+        beats.append(Beat(f"Em đã soát bộ BOD {period}: chưa thấy lỗi ở phần em kiểm được, nhưng còn phần chưa kiểm được.",
+                          mark="warn"))
     else:
         beats.append(Beat(f"Em đã soát bộ BOD {period}: có {total} chỗ cần sửa trước khi trình. Em chỉ từng chỗ."))
     for r in reviews:
@@ -60,6 +65,10 @@ def beats_for(reviews: list, out: Optional[dict]) -> list:
         if r.notes:
             beats.append(Beat(f"Sổ chi tiết còn {len(r.notes)} điểm cần hỏi kế toán, không phải lỗi của bộ BOD. "
                               "Em ghi trong file kết quả.", mark="warn"))
+    if gaps:
+        names = ", ".join(f"nhóm {g} ({SHORT.get(g, title).lower()})" for g, title in gaps)
+        beats.append(Beat(f"Em chưa kiểm được {names}. Em ghi lý do và file cần thêm trong file kết quả; "
+                          "chưa nên trình khi còn phần này.", mark="warn"))
     if out:
         ok = out.get("verified")
         beats.append(Beat("Em đã ghi kết quả và biên bản vào thư mục " + OUT_DIR
