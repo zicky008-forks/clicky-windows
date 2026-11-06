@@ -14,7 +14,7 @@ Which engine is the default is decided by the blind listening test (tools/giong_
 
 Voice files, first match wins: CLICKY_VOICE_DIR, <app folder>/voice, %LOCALAPPDATA%/Clicky/voice
   tts-piper-vi/  vi_VN-vais1000-medium.onnx + tokens.txt
-  vieneu/        Hugging Face cache for VieNeu (HF_HOME points here, so it never re-downloads)
+  vieneu/hub/    Hugging Face cache for VieNeu (tools/giong_noi/tai_vieneu.py); read offline, never downloaded at run time
 """
 from __future__ import annotations
 
@@ -52,9 +52,35 @@ def piper_available() -> bool:
     return importlib.util.find_spec("sherpa_onnx") is not None and find_piper() is not None
 
 
+VIENEU_REPO_DIR = "models--pnnbao-ump--VieNeu-TTS-v3-Turbo"
+VIENEU_SUBFOLDER = {"int8": "onnx_int8", "fp32": "onnx_update"}
+
+
+def find_vieneu() -> Optional[dict]:
+    """The bundled VieNeu files (tools/giong_noi/tai_vieneu.py) and which precisions they hold."""
+    for root in _roots():
+        hub = root / VIENEU_SUBDIR / "hub"
+        snaps = sorted((hub / VIENEU_REPO_DIR / "snapshots").glob("*")) if hub.is_dir() else []
+        have = [p for p, sub in VIENEU_SUBFOLDER.items()
+                if any((s / sub / "vieneu_prefill.onnx").is_file() for s in snaps)]
+        if have:
+            return {"hub": hub, "precisions": have}
+    return None
+
+
+def vieneu_precision(have: list) -> str:
+    """int8 only on a CPU with VNNI (else it can garble the audio); fp32 otherwise, when it is bundled."""
+    if "int8" in have and cpu_has_vnni():
+        return "int8"
+    return "fp32" if "fp32" in have else ""
+
+
 def vieneu_available() -> bool:
     import importlib.util
-    return importlib.util.find_spec("vieneu") is not None
+    if importlib.util.find_spec("vieneu") is None:
+        return False
+    found = find_vieneu()
+    return bool(found and vieneu_precision(found["precisions"]))
 
 
 def cpu_has_vnni() -> bool:
@@ -127,14 +153,15 @@ class VieneuVi:
     name = "vieneu"
 
     def __init__(self, voice: Optional[str] = VIENEU_VOICE):
-        for root in _roots():
-            cache = root / VIENEU_SUBDIR
-            if cache.is_dir():
-                os.environ.setdefault("HF_HOME", str(cache))
-                os.environ.setdefault("HF_HUB_OFFLINE", "1")   # use the bundled files, never call home
-                break
+        found = find_vieneu()
+        self.precision = vieneu_precision(found["precisions"]) if found else ""
+        if not self.precision:
+            raise FileNotFoundError("Chưa có giọng VieNeu dùng được trên máy này (voice/vieneu)")
+        # Read only the bundled files and never call Hugging Face: set before huggingface_hub is imported.
+        os.environ["HF_HUB_CACHE"] = str(found["hub"])
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
         from vieneu import Vieneu
-        self.precision = "int8" if cpu_has_vnni() else "fp32"
         self._tts = Vieneu(backend="onnx", precision=self.precision)
         self.voice = voice
 
