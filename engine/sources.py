@@ -19,6 +19,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
+from engine import roles
 from engine.trial_balance import ZERO, fold, parse_amount, read_trial_balance
 
 # Header words after fold() with spaces removed.
@@ -303,6 +304,8 @@ def find_trial_balances(folder: Path, read_rows) -> list:
     for p in sorted(folder.glob("*.xlsx")):
         if p.name.startswith("~$"):
             continue
+        if roles.is_plan(p.name):
+            continue  # an AOP/AOPR laid out like a trial balance is a plan, never "Số chính thức"
         try:
             rows = read_rows(p)
             tb = read_trial_balance(rows, p.stem[:31])
@@ -341,6 +344,21 @@ def ledger_movement(tb, prefix: str, side: str) -> Decimal:
 def revenue_account(tb) -> str:
     """5111 (goods) when the ledger splits 511, else 511."""
     return "5111" if any(l.account.startswith("5111") for l in tb.leaves) else "511"
+
+
+def revenue_scope(tb, source_gross: Decimal, tol: Decimal = Decimal(1)) -> str:
+    """The 511 scope the order files cover: 5111 alone, or every 511 sub-account.
+
+    A sales export may hold goods only (5111) or goods and finished products together
+    (5111 + 5112 ...). Picking 5111 by default reports a false gap equal to the other
+    sub-accounts. Take the scope whose credit movement matches the files; when neither
+    matches, keep the default so the gap is still reported, never hidden.
+    """
+    default = revenue_account(tb)
+    for acct in dict.fromkeys((default, "511")):
+        if abs(ledger_movement(tb, acct, "cr") - source_gross) <= tol:
+            return acct
+    return default
 
 
 def returns_in_revenue(tb) -> Decimal:

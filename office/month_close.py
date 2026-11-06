@@ -458,6 +458,19 @@ def _ledger(folder: Path) -> tuple:
                  "cost": sources.ledger_movement(tb, "632", "dr")}
 
 
+def _rescope(tbs, ledger: dict, truth) -> dict:
+    """Compare against the 511 scope the order files cover (5111 alone or every 511 sub-account),
+    so a sales file holding goods and finished products is not reported short by 5112."""
+    if not ledger:
+        return ledger
+    tb = tbs[-1][2]
+    acct = sources.revenue_scope(tb, truth.gross)
+    if acct == ledger["rev_acct"]:
+        return ledger
+    revenue = sources.ledger_movement(tb, acct, "cr")
+    return dict(ledger, rev_acct=acct, revenue=revenue, gross=revenue)
+
+
 def _net_of_returns(ledger: dict, truth) -> dict:
     """When the order files carry return slips (negative rows) the files and the query hold net sales,
     so the ledger side becomes Có 511 − Nợ 521; sales and returns are still compared one by one."""
@@ -608,7 +621,7 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     tbs, ledger = _ledger(folder)
     period = sources.period_of(tbs[-1][1]) if tbs else None
     truth = sources.truth(files, period)
-    ledger = _net_of_returns(ledger, truth)
+    ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
     receipt = intake_mod.build(folder, files, tbs, truth, ledger, _workbook_name(bridge),
                                set_aside=[(name, f"bản sổ cân đối T{p[1]:02d} khác; anh đã chọn dùng {_CHOSEN[p]}"
                                            if p in _CHOSEN else "bản cũ hơn của cùng kỳ")
@@ -804,7 +817,7 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
     tbs, ledger = _ledger(folder)
     period = sources.period_of(tbs[-1][1]) if tbs else None
     truth = sources.truth(files, period)
-    ledger = _net_of_returns(ledger, truth)
+    ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
     beats, notes = [], []
     if truth.outside:
         out_amt = sum((a for *_, a in truth.outside), ZERO)
@@ -979,7 +992,7 @@ def _approve(bridge, pq, job) -> list:
     files = sources.find_order_files(folder)
     tbs, ledger = _ledger(folder)
     truth = sources.truth(files, sources.period_of(tbs[-1][1]) if tbs else None)
-    ledger = _net_of_returns(ledger, truth)
+    ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
     result = pq.load(job["name"])
     if isinstance(result, ReadFailed):
         return [Beat("Em đã sửa query nhưng chưa đọc lại được bảng kết quả. Đây là lỗi của Clicky.",

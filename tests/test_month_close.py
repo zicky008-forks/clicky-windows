@@ -791,3 +791,29 @@ def test_receipt_rows_carry_their_role(folder):
     beats = month_close.start(bridge, FakePQ(bridge, folder), sources.DAY_FIRST)
     roles_shown = [r.get("role") for r in beats[0].intake["card"]["rows"]]
     assert roles_shown[:3] == ["Số chính thức", "Số chính thức", "Chi tiết để giải thích"]
+
+
+def test_revenue_scope_follows_what_the_order_files_cover():
+    """Case 07 class: a sales file with goods and finished products must be compared with all of 511,
+    not 5111 alone (that reported a false gap equal to 5112); goods-only files still use 5111."""
+    from types import SimpleNamespace as L
+    ledger = L(leaves=[L(account="5111", cr=Decimal(700), dr=0), L(account="5112", cr=Decimal(300), dr=0)])
+    assert sources.revenue_scope(ledger, Decimal(1000)) == "511"
+    assert sources.revenue_scope(ledger, Decimal(700)) == "5111"
+    # Neither matches: keep the default so the gap is reported, never hidden.
+    assert sources.revenue_scope(ledger, Decimal(900)) == "5111"
+
+
+def test_plan_versions_are_not_duplicates_and_never_official(tmp_path):
+    """AOP and AOPR1 side by side are versions used together: no 'which one?' question, and a plan
+    laid out like a trial balance is never read as Số chính thức. Only the same scenario twice is a copy."""
+    from engine import roles
+    assert roles.plan_scenario("AOP_FY2627_v6.xlsx") == "AOP"
+    assert roles.plan_scenario("AOPR1 FY26-27.xlsx") == "AOPR1"
+    assert roles.plan_scenario("TB_T10.xlsx") == ""
+    assert roles.is_plan("AOPR1 FY26-27.xlsx") and roles.is_plan("MUF_T10.xlsx")
+    assert not roles.is_plan("TB_T10.xlsx") and not roles.is_plan("DonHang_HN_T10.csv")
+    _write_tb(tmp_path / "AOP_FY2627.xlsx", [["Bảng cân đối số phát sinh tháng 10 năm 2026"], ["511", "Doanh thu", 0, 0, 0, 9]])
+    from engine.cli import read_rows
+    names = [n for n, _, _ in sources.find_trial_balances(tmp_path, read_rows)]
+    assert "AOP_FY2627" not in names

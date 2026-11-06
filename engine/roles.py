@@ -11,20 +11,41 @@ same thing (two trial balances of one month, two plans) Clicky asks which one to
 """
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
 from engine.trial_balance import fold
 
 OFFICIAL, DETAIL, PLAN, REASON, NOTE = "Số chính thức", "Chi tiết để giải thích", "Kế hoạch", "Lý do", "Ghi chú"
-_PLAN_WORDS = ("ke hoach", "kehoach", "plan", "budget", "ngan sach", "ngansach", "du toan", "dutoan", "target", "chi tieu")
+_PLAN_WORDS = ("ke hoach", "kehoach", "plan", "budget", "ngan sach", "ngansach", "du toan", "dutoan", "target", "chi tieu",
+               "forecast", "du bao", "dubao")
 _REASON_SUFFIXES = {".eml", ".msg", ".docx", ".doc", ".pdf", ".rtf"}
 _NOTE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".heic", ".txt", ".m", ".pq", ".md"}
 
 
+def _tokens(name: str) -> list:
+    return re.findall(r"[a-z]+\d*", fold(Path(name).stem))
+
+
+def plan_scenario(name: str) -> str:
+    """'AOPR1' from 'AOPR1_FY2627.xlsx', 'AOP' from 'AOP FY26-27 v6.xlsx'; '' when no scenario token.
+
+    Two plan files are only a duplicate when they carry the same scenario for the same period;
+    AOP, AOPR1 and MUF side by side are versions the report compares, so Clicky never asks to pick one.
+    """
+    for tok in _tokens(name):
+        m = re.fullmatch(r"(aopr|aop|muf|rf|le|fc|forecast|budget|plan)(\d*)", tok)
+        if m:
+            return (m.group(1) + m.group(2)).upper()
+    return ""
+
+
 def is_plan(name: str) -> bool:
     t = fold(Path(name).stem).replace("_", " ").replace("-", " ")
-    return any(w in t or w.replace(" ", "") in t.replace(" ", "") for w in _PLAN_WORDS)
+    if any(w in t or w.replace(" ", "") in t.replace(" ", "") for w in _PLAN_WORDS):
+        return True
+    return any(re.fullmatch(r"(aopr|aop|muf)\d*", tok) for tok in _tokens(name))
 
 
 def of_file(name: str, *, trial_balance: bool = False, orders: bool = False) -> str:
