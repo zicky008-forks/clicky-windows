@@ -25,6 +25,7 @@ from present import hotkeys
 log = logging.getLogger(__name__)
 
 POLL_MS = 300
+FORCE_PANEL = "CLICKY_PRESENT_FORCE_PANEL"     # robot on a one-screen PC: show the box anyway
 DUPLICATE_NOTICE = ("Máy đang để chế độ Nhân bản màn hình nên khán giả sẽ thấy ô hỏi. "
                     "Anh chị bấm Win+P, chọn Mở rộng (Extend), rồi bấm Ctrl+Alt+H để hỏi.")
 
@@ -154,6 +155,9 @@ class PresentMode(QObject):
         screens = QApplication.screens()
         primary = screens.index(QApplication.primaryScreen()) if QApplication.primaryScreen() in screens else 0
         self.layout = layout(self._screens(), self._show_window_logical(), primary)
+        if self.layout.mode == "duplicate" and os.environ.get(FORCE_PANEL) == "1":
+            self._show_panel_anywhere()          # rehearsal on a one-screen PC only, never in front of people
+            return
         if self.layout.mode == "duplicate":
             self.panel.hide()
             self.manager.sig_notice.emit(DUPLICATE_NOTICE)
@@ -193,16 +197,21 @@ class PresentMode(QObject):
         self.panel.set_slide(info, self.total)
 
     def _on_ask_key(self) -> None:
-        if self.layout is not None and self.layout.mode == "duplicate":
+        scene_log.record("present_key", key="ask")
+        if self.layout is not None and self.layout.mode == "duplicate" and os.environ.get(FORCE_PANEL) != "1":
             self.manager.sig_notice.emit(DUPLICATE_NOTICE)
             return
         self.panel.focus_ask()
 
     def _on_asked(self, question: str) -> None:
+        if self.live is None:
+            return
         r = self.live.ask(question)
         self.panel.show_answer(r)
 
     def _on_picked(self, entry_id: str, caption: str) -> None:
+        if self.live is None:
+            return
         self.panel.show_answer(self.live.pick(entry_id, caption))
 
     def _dismiss(self) -> None:
@@ -210,6 +219,9 @@ class PresentMode(QObject):
         self.bridge.focus_show()
 
     def _on_back_key(self) -> None:
+        scene_log.record("present_key", key="back")
+        if self.live is None:
+            return
         self.live.back()
         self._dismiss()
 
