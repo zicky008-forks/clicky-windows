@@ -791,3 +791,35 @@ def test_receipt_rows_carry_their_role(folder):
     beats = month_close.start(bridge, FakePQ(bridge, folder), sources.DAY_FIRST)
     roles_shown = [r.get("role") for r in beats[0].intake["card"]["rows"]]
     assert roles_shown[:3] == ["Số chính thức", "Số chính thức", "Chi tiết để giải thích"]
+
+
+def test_cards_keep_off_each_block_of_figures_not_just_the_used_range():
+    """The card is told where every block of figures is; without that read it keeps off the whole filled area."""
+    import asyncio
+    from office import month_close
+
+    class Excel:
+        def __init__(self, boxes):
+            self.boxes = boxes
+
+        def figure_boxes(self):
+            return self.boxes
+
+        def content_rect(self):
+            return (0, 0, 800, 600)
+
+    class M:
+        def __init__(self, boxes):
+            self._excel = Excel(boxes)
+
+        def _physical_to_logical_bbox(self, rect):
+            return tuple(v / 2 for v in rect)
+
+    figures, words = asyncio.run(month_close._figures(M({"numbers": [(200, 100, 800, 600)],
+                                                          "text": [(0, 100, 200, 600)]})))
+    assert figures == [(100, 50, 400, 300)] and words == [(0, 50, 100, 300)]
+    figures, words = asyncio.run(month_close._figures(M(None)))
+    assert figures == [(0, 0, 400, 300)] and words == []
+    beat = month_close.Beat("Lợi nhuận thật", "C9", label="LNST thực", value="436tr")
+    card = month_close.shapes_for((10, 10, 100, 30), beat, figures, words)[1]
+    assert card["avoid"] == [[0, 0, 400, 300]] and card["soft"] is None

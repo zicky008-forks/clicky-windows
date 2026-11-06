@@ -25,17 +25,41 @@ def tone_of(mark: str) -> str:
     return mark if mark in TONES else "info"
 
 
-def place_card(anchor, size, screen, avoid=None) -> tuple:
+def _boxes(avoid) -> list:
+    """avoid as a list of (l, t, r, b): one box, a list of boxes, or nothing."""
+    if not avoid:
+        return []
+    if len(avoid) == 4 and all(isinstance(v, (int, float)) for v in avoid):
+        return [tuple(avoid)]
+    return [tuple(b) for b in avoid if b and len(b) == 4]
+
+
+def overlap(rect, boxes) -> float:
+    """Area of rect (l, t, r, b) lying over any of boxes (counted once per box)."""
+    l, t, r, b = rect
+    total = 0.0
+    for bl, bt, br, bb in _boxes(boxes):
+        w, h = min(r, br) - max(l, bl), min(b, bb) - max(t, bt)
+        if w > 0 and h > 0:
+            total += w * h
+    return total
+
+
+def place_card(anchor, size, screen, avoid=None, soft=None) -> tuple:
     """Top-left (x, y) for a card of size (w, h) explaining anchor (l, t, r, b) inside screen (l, t, r, b).
 
-    avoid, when given, is the part of the sheet on screen that holds values (l, t, r, b): the card first
-    looks for a spot that covers neither the range nor any figure, beside the range or just past the
-    filled area. Without such a spot it falls back to below, above, right, then left of the range; the
-    card never covers the range it explains.
+    avoid: what the card must not cover, the cells holding figures on screen: one box (the filled area)
+    or a list of boxes (each block of figures, and other cards already up). soft: cells it should rather
+    not cover either (labels). The card never covers the range it explains when anything else fits.
+
+    Order: a spot beside the range or just past the figures; then the free spot nearest the range
+    anywhere on screen (clear of figures and labels, then of figures only); last, where it covers the
+    least figure area. Without avoid it simply goes below, above, right, then left of the range.
     """
     l, t, r, b = anchor
     w, h = size
     sl, st, sr, sb = screen
+    hard, labels = _boxes(avoid), _boxes(soft)
 
     def clamp_x(x):
         return max(sl + MARGIN, min(x, sr - MARGIN - w))
@@ -46,20 +70,107 @@ def place_card(anchor, size, screen, avoid=None) -> tuple:
     def fits(x, y):
         return sl + MARGIN <= x and x + w <= sr - MARGIN and st + MARGIN <= y and y + h <= sb - MARGIN
 
-    def clear_of(box, x, y):
-        return box is None or x + w <= box[0] or box[2] <= x or y + h <= box[1] or box[3] <= y
+    def clear(boxes, x, y):
+        return all(x + w <= bl or br <= x or y + h <= bt or bb <= y for bl, bt, br, bb in boxes)
 
     beside = [(clamp_x(l), b + GAP), (clamp_x(l), t - GAP - h), (r + GAP, clamp_y(t)), (l - GAP - w, clamp_y(t))]
-    if avoid is not None:
-        al, at, ar, ab = avoid
-        past = [(ar + GAP, clamp_y(t)), (clamp_x(l), ab + GAP), (al - GAP - w, clamp_y(t))]
-        for x, y in beside + past:
-            if fits(x, y) and clear_of(anchor, x, y) and clear_of(avoid, x, y):
+    if not hard and not labels:
+        for x, y in beside:
+            if fits(x, y):
                 return x, y
-    for x, y in beside:
-        if fits(x, y):
+        return clamp_x(r + GAP), clamp_y(b + GAP)
+
+    everything = [tuple(anchor)] + hard
+    al, at = min(bx[0] for bx in hard or [anchor]), min(bx[1] for bx in hard or [anchor])
+    ar, ab = max(bx[2] for bx in hard or [anchor]), max(bx[3] for bx in hard or [anchor])
+    past = [(ar + GAP, clamp_y(t)), (clamp_x(l), ab + GAP), (al - GAP - w, clamp_y(t))]
+    for x, y in beside + past:
+        if fits(x, y) and clear(everything + labels, x, y):
             return x, y
-    return clamp_x(r + GAP), clamp_y(b + GAP)
+
+    return _nearest_free(anchor, size, screen, hard, labels, keep_off=tuple(anchor),
+                         extra=(clamp_x(l), r + GAP, l - GAP - w), extra_y=(clamp_y(t), b + GAP, t - GAP - h))
+
+
+def _nearest_free(target, size, screen, hard, labels, keep_off=None, extra=(), extra_y=()):
+    """The spot nearest target (l, t, r, b) for a card of size (w, h): clear of figures and words, then of
+    figures only, then the one covering the least figure area. keep_off is never covered when avoidable.
+
+    Candidates hug the edges of the screen and of every box, so a free gap between two blocks of figures
+    is found as surely as the empty columns past the report.
+    """
+    l, t, r, b = target
+    w, h = size
+    sl, st, sr, sb = screen
+
+    def fits(x, y):
+        return sl + MARGIN <= x and x + w <= sr - MARGIN and st + MARGIN <= y and y + h <= sb - MARGIN
+
+    def clear(boxes, x, y):
+        return all(x + w <= bl or br <= x or y + h <= bt or bb <= y for bl, bt, br, bb in boxes)
+
+    firm = ([tuple(keep_off)] if keep_off else []) + list(hard)
+    xs = {sl + MARGIN, sr - MARGIN - w, *extra}
+    ys = {st + MARGIN, sb - MARGIN - h, *extra_y}
+    for bl, bt, br, bb in firm + list(labels):
+        xs.update((br + GAP, bl - GAP - w, max(sl + MARGIN, min(bl, sr - MARGIN - w))))
+        ys.update((bb + GAP, bt - GAP - h, max(st + MARGIN, min(bt, sb - MARGIN - h))))
+    spots = [(x, y) for x in xs for y in ys if fits(x, y)]
+    if not spots:
+        return max(sl + MARGIN, min(r + GAP, sr - MARGIN - w)), max(st + MARGIN, min(b + GAP, sb - MARGIN - h))
+
+    def distance(spot):
+        x, y = spot
+        dx = max(l - (x + w), x - r, 0)
+        dy = max(t - (y + h), y - b, 0)
+        return dx * dx + dy * dy
+    spots.sort(key=lambda s: (distance(s), s))
+    for boxes in (firm + list(labels), firm):
+        for x, y in spots:
+            if clear(boxes, x, y):
+                return x, y
+    # Nowhere free: keep off keep_off if possible, and cover the least of the figures.
+    return min(spots, key=lambda s: (bool(keep_off) and not clear([tuple(keep_off)], *s),
+                                     overlap((s[0], s[1], s[0] + w, s[1] + h), hard), distance(s)))
+
+
+def free_spot(preferred, size, screen, avoid=None, soft=None) -> tuple:
+    """Top-left for a card that has its own usual place (preferred (x, y)), moved to the nearest free spot
+    when that place would cover a figure, another card, or (if avoidable) words."""
+    x, y = preferred
+    w, h = size
+    hard, labels = _boxes(avoid), _boxes(soft)
+    rect = (x, y, x + w, y + h)
+    if not overlap(rect, hard) and not overlap(rect, labels):
+        return x, y
+    return _nearest_free(rect, size, screen, hard, labels)
+
+
+class Board:
+    """What is on screen right now, shared by the overlay's cards and the button card, so neither is put
+    over the sheet's figures or over the other. Coordinates are logical screen pixels."""
+
+    def __init__(self):
+        self.figures, self.words, self._taken = [], [], {}
+
+    def show_sheet(self, figures, words=None) -> None:
+        self.figures, self.words = _boxes(figures), _boxes(words)
+
+    def take(self, name: str, rect) -> None:
+        self._taken[name] = tuple(rect)
+
+    def release(self, prefix: str = "") -> None:
+        for name in [n for n in self._taken if n.startswith(prefix)]:
+            del self._taken[name]
+
+    def others(self, name: str = "") -> list:
+        return [r for n, r in self._taken.items() if n != name]
+
+    def clear(self) -> None:
+        self.__init__()
+
+
+BOARD = Board()
 
 
 def reading_seconds(text: str) -> float:

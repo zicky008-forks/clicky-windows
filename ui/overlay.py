@@ -23,7 +23,7 @@ from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPainterPath, QCursor, QFont, QFontMetrics,
 )
 
-from ui.card_layout import CARD_WIDTH, NO_BUBBLE, ROLL_S, TONES, place_card, roll_amount, stem
+from ui.card_layout import BOARD, CARD_WIDTH, NO_BUBBLE, ROLL_S, TONES, overlap, place_card, roll_amount, stem
 
 
 MODE_IDLE      = "idle"
@@ -357,6 +357,8 @@ class CursorOverlay(QWidget):
         shape["dur"] = dur
         shape.setdefault("color", "blue")
         shape.setdefault("ttl", None)
+        if shape.get("kind") == "card" and (shape.get("avoid") or shape.get("soft")):
+            BOARD.show_sheet(shape.get("avoid"), shape.get("soft"))     # the button card keeps off them too
         self._draw_queue_end = start + dur + SHAPE_GAP_SECONDS
         self._annotations.append(shape)
 
@@ -375,6 +377,8 @@ class CursorOverlay(QWidget):
                         "size": "s", "ttl": ttl})
 
     def clear_annotations(self):
+        BOARD.release("card")
+        BOARD.show_sheet([], [])
         self._annotations = []
         self._draw_queue_end = 0.0
         self._last_tip = None
@@ -768,12 +772,23 @@ class CursorOverlay(QWidget):
                 h += rect.height()
             h += pad
             anchor = ann["anchor"]
-            x, y = place_card(anchor, (CARD_WIDTH, h), self._card_screen(anchor), ann.get("avoid"))
+            screen = self._card_screen(anchor)
+            name = f"card{id(ann)}"
+            # Other cards already up (the button card, an earlier note) count as figures: never stacked.
+            x, y = place_card(anchor, (CARD_WIDTH, h), screen, (ann.get("avoid") or []) + BOARD.others(name),
+                              ann.get("soft"))
+            BOARD.take(name, (x, y, x + CARD_WIDTH, y + h))
             layout = ann["_layout"] = (x, y, h, parts)
-            # Rehearsals: where the card really landed, so the robot can check it covers no figure.
+            # Rehearsals: where the card really landed and what it lies over, so the robot can check that it
+            # covers no figure (covers_figures 0) without guessing from a screenshot.
             import scene_log
-            scene_log.record("card", rect=[x, y, x + CARD_WIDTH, y + h], anchor=list(anchor),
-                             title=ann.get("title") or "")
+            rect = [x, y, x + CARD_WIDTH, y + h]
+            figures = ann.get("avoid") or []
+            scene_log.record("card", rect=rect, anchor=list(anchor), title=ann.get("title") or "",
+                             screen=list(screen), figures=len(figures),
+                             covers_figures=sum(1 for f in figures if overlap(rect, [f]) > 0),
+                             covers_words=sum(1 for f in ann.get("soft") or [] if overlap(rect, [f]) > 0),
+                             covers_range=overlap(rect, [anchor]) > 0)
         x, y, h, parts = layout
         line = stem(ann["anchor"], (x, y, x + CARD_WIDTH, y + h))
         x, y = x - self.x(), y - self.y() + (1.0 - u) * 8

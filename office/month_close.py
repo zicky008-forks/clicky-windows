@@ -1225,9 +1225,10 @@ CLEAR_AFTER_S = 8.0       # the last card fades this long after Clicky stops tal
 FINAL_HOLD_S = 25.0       # ...unless it is a warning: that one stays up long enough to read, screenshot, act on
 
 
-def shapes_for(box: tuple, beat: Beat, avoid: tuple = None) -> list:
+def shapes_for(box: tuple, beat: Beat, avoid=None, soft=None) -> list:
     """Overlay shapes for one beat: the range lit with the rest of the screen dimmed, and one card beside it.
-    avoid: the filled part of the sheet on screen, which the card keeps off when it can."""
+    avoid: the figures on screen (one box or a list of boxes), which the card never covers when anything
+    else fits; soft: the cells holding words, which it keeps off when it can."""
     from ui.card_layout import tone_of
     l, t, r, b = box
     tone = tone_of(beat.mark)
@@ -1235,8 +1236,16 @@ def shapes_for(box: tuple, beat: Beat, avoid: tuple = None) -> list:
     if beat.label or beat.value or beat.note:
         shapes.append({"kind": "card", "anchor": [l, t, r, b], "title": beat.label, "was": beat.was,
                        "value": beat.value, "note": beat.note, "tone": tone, "roll": list(beat.roll),
-                       "avoid": list(avoid) if avoid else None})
+                       "avoid": _as_boxes(avoid) or None, "soft": _as_boxes(soft) or None})
     return shapes
+
+
+def _as_boxes(boxes) -> list:
+    if not boxes:
+        return []
+    if len(boxes) == 4 and all(isinstance(v, (int, float)) for v in boxes):
+        return [list(boxes)]
+    return [list(b) for b in boxes if b]
 
 
 async def _locate(manager, ref_text: str):
@@ -1267,6 +1276,30 @@ async def _filled_area(manager):
         return None
 
 
+async def _figures(manager):
+    """(figures, words) on screen as lists of logical boxes, so a card keeps off every figure.
+
+    Each block of figures is its own box, so a card can use a gap inside a full sheet. Without the
+    detailed read, the whole filled area counts as figures: the card then goes past it, as before.
+    """
+    read = getattr(manager._excel, "figure_boxes", None)
+    found = None
+    if read is not None:
+        try:
+            found = await asyncio.to_thread(read)
+        except Exception as exc:
+            log.debug("figures on screen unknown: %s", exc)
+    if found and (found.get("numbers") or found.get("text")):
+        many = getattr(manager, "_physical_to_logical_boxes", None)
+        convert = many or (lambda rects: [manager._physical_to_logical_bbox(r) for r in rects])
+        numbers = [b for b in convert(found.get("numbers", [])) if b]
+        words = [b for b in convert(found.get("text", [])) if b]
+        if numbers or words:
+            return numbers, words
+    filled = await _filled_area(manager)
+    return ([filled] if filled else []), []
+
+
 async def play(manager, beats: list) -> None:
     """One idea at a time: light up the beat's range, show its card, say its one sentence, pause, next.
 
@@ -1294,8 +1327,8 @@ async def play(manager, beats: list) -> None:
                          note=beat.note, mark=beat.mark, text=beat.text, choices=list(beat.choices or []))
         if box:
             manager.sig_clear_drawings.emit()
-            avoid = await _filled_area(manager)
-            for shape in shapes_for(box, beat, avoid):
+            figures, words = await _figures(manager)
+            for shape in shapes_for(box, beat, figures, words):
                 manager.sig_draw.emit(shape)
             l, t, r, b = box
             manager.sig_point_hold.emit(True)

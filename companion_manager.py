@@ -1650,6 +1650,18 @@ class CompanionManager(QObject):
                 return None
         return physical_to_logical(bbox, shots)
 
+    def _physical_to_logical_boxes(self, boxes):
+        """Many physical boxes → logical, reading the monitor layout once (a sheet's figures, cell by block)."""
+        from screen.capture import monitor_geometry, physical_to_logical
+        shots = self._screens_ctx
+        if not shots:
+            try:
+                shots = monitor_geometry()
+            except Exception as exc:
+                _log.warning("reading monitor geometry failed: %s", exc)
+                return []
+        return [physical_to_logical(b, shots) for b in boxes]
+
     def _excel_bbox(self, ref: str):
         """Cell or range → logical bbox, computed by Excel itself."""
         rect = self._excel.screen_rect(ref)
