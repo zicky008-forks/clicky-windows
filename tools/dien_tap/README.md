@@ -114,3 +114,31 @@ Máy chỉ có 1 màn hình thì robot bật `CLICKY_PRESENT_FORCE_PANEL=1` đ�
 Kết quả: `ket-qua.md`, `ket-qua.json`, `scene.jsonl`, `anh/slide-NN.png`. Mã thoát: 0 = ĐẠT, 1 = KHÔNG ĐẠT, 2 = không chạy được.
 
 Clicky ghi các sự kiện sau vào nhật ký cảnh: `present_preflight`, `present_start`, `present_slide` (gồm `targets`, `rects` theo pixel thật, `missed`, `missing`), `present_frames`, `present_key`, `present_answer`, `present_back`, `present_end`.
+
+### Diễn tập soát bộ BOD (Case 07 lớp 2)
+
+Chỉ dùng **số giả lập**. Case của người chấm độc lập do thread chấm giải nén ra thư mục; robot không mở file đáp án.
+
+```bat
+:: 1. Tự kiểm trước: case tự tạo có 9 lỗi biết trước (phải ĐẠT)
+python tools\dien_tap\bod_robot.py --tu-tao
+:: 2. Case thật của người chấm (thư mục đã giải nén)
+python tools\dien_tap\bod_robot.py --thu-muc <thu_muc_case_07>
+```
+
+Robot làm:
+
+1. Từ chối chạy khi Excel hoặc PowerPoint đang mở file khác.
+2. Chép thư mục case vào thư mục kết quả (`case\`). Thư mục gốc không bị đụng.
+3. Bật "Cho phép quay màn hình Clicky" trong lúc chạy, chạy xong trả về như cũ.
+4. Mở Clicky với `--bod-review <case>`, `CLICKY_SCENE_LOG` và `CLICKY_LOCAL_ONLY=1`.
+5. Mỗi lần Clicky sáng một ô sai trên bộ BOD, robot chụp mọi màn hình (`anh\loi-NN.png`).
+6. Đóng bộ BOD trong Excel không lưu, kiểm mã băm của bộ BOD.
+
+**Cổng ĐẠT:** Clicky soát xong và ghi kết quả; mở lại file kết quả thấy khớp; mỗi lỗi một thẻ chỉ vào ô; mọi thẻ nằm đúng ô trên màn hình; bộ BOD không bị sửa. Với `--tu-tao` thêm: bắt đủ 9/9 lỗi đúng ô đúng số, báo động sai không quá 1.
+
+Kết quả cho người chấm: `ket-qua-robot.md`, `ket-qua-robot.json`, `scene.jsonl`, `anh\loi-NN.png`, và trong `case\Clicky_soat_BOD\`: `ket-qua.md` của Clicky, file `Clicky_soat_BOD_<kỳ>.xlsx` (sheet "Ket qua soat" và "Bien ban Clicky"). Mã thoát: 0 = ĐẠT, 1 = KHÔNG ĐẠT, 2 = không chạy được.
+
+Không cần bản cài vẫn chạy được phần tính: `python -m engine.bod_check <thu_muc_case>`.
+
+Clicky ghi các sự kiện: `bod_start`, `bod_receipt` (mọi file, vai trò, dòng dùng, dòng bỏ), `bod_finding` (nhóm, mã kiểm, ô, số đúng, số bộ BOD ghi), `bod_done` (số lỗi, đường dẫn kết quả, `verified`), cùng `beat`, `locate`, `spoken` như lúc chốt tháng.
