@@ -176,6 +176,24 @@ def _order_lines(files: list, truth, period: Optional[tuple]) -> tuple:
     return lines, items
 
 
+def _csv_why(p: Path) -> str:
+    """Why a CSV was not read, true to what its header holds (never 'no date column' when it has one)."""
+    import csv as _csv
+    try:
+        with open(p, newline="", encoding="utf-8-sig") as f:
+            header = next(_csv.reader(f), [])
+    except (OSError, UnicodeDecodeError):
+        return "em chưa mở được file CSV này"
+    cols = sources.find_columns(header)
+    if "date" not in cols or "amount" not in cols:
+        return "không có cột ngày và cột số tiền, không phải file đơn hàng"
+    from engine.trial_balance import fold
+    text = re.sub(r"[^a-z0-9]", "", fold(p.stem + " " + " ".join(str(h) for h in header)))
+    kind = "sổ chi tiết chi phí" if any(w in text for w in ("chiphi", "cost", "expense")) \
+        else "file có cột ngày và số tiền nhưng không phải đơn bán hàng"
+    return f"{kind}; bản này chưa đọc loại file này, em không lấy số từ file này"
+
+
 def _unused_files(folder: Path, used: set, workbook: Optional[str], roles: dict) -> list:
     """Every data-looking file in the folder (and one level down) that Clicky did not read, with why."""
     out = []
@@ -196,7 +214,7 @@ def _unused_files(folder: Path, used: set, workbook: Optional[str], roles: dict)
         elif suffix == ".xls":
             why = "định dạng .xls cũ, em chưa đọc được; anh mở và lưu lại thành .xlsx"
         elif suffix == ".csv":
-            why = "không có cột ngày và cột số tiền, không phải file đơn hàng"
+            why = _csv_why(p)
         elif suffix in (".xlsx", ".xlsm"):
             why = "không phải sổ cân đối tài khoản"
         elif suffix not in DATA_SUFFIXES:

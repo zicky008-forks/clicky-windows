@@ -800,8 +800,9 @@ def test_revenue_scope_follows_what_the_order_files_cover():
     ledger = L(leaves=[L(account="5111", cr=Decimal(700), dr=0), L(account="5112", cr=Decimal(300), dr=0)])
     assert sources.revenue_scope(ledger, Decimal(1000)) == "511"
     assert sources.revenue_scope(ledger, Decimal(700)) == "5111"
-    # Neither matches: keep the default so the gap is reported, never hidden.
-    assert sources.revenue_scope(ledger, Decimal(900)) == "5111"
+    # Neither matches: the closer scope, so a real 100 gap is not reported as 300 + 100.
+    assert sources.revenue_scope(ledger, Decimal(900)) == "511"
+    assert sources.revenue_scope(ledger, Decimal(650)) == "5111"
 
 
 def test_plan_versions_are_not_duplicates_and_never_official(tmp_path):
@@ -817,3 +818,14 @@ def test_plan_versions_are_not_duplicates_and_never_official(tmp_path):
     from engine.cli import read_rows
     names = [n for n, _, _ in sources.find_trial_balances(tmp_path, read_rows)]
     assert "AOP_FY2627" not in names
+
+
+def test_unread_cost_ledger_csv_is_named_truthfully(tmp_path):
+    from engine import intake
+    p = tmp_path / "SoChiTiet_ChiPhi_T10.csv"
+    p.write_text("SoCT,Ngay,TK,ThanhTien\nPC1,05/10/2026,6421,1000\n", encoding="utf-8")
+    why = intake._csv_why(p)
+    assert "sổ chi tiết chi phí" in why and "không có cột ngày" not in why
+    q = tmp_path / "ghi_chu.csv"
+    q.write_text("a,b\n1,2\n", encoding="utf-8")
+    assert "không có cột ngày" in intake._csv_why(q)

@@ -352,13 +352,14 @@ def revenue_scope(tb, source_gross: Decimal, tol: Decimal = Decimal(1)) -> str:
     A sales export may hold goods only (5111) or goods and finished products together
     (5111 + 5112 ...). Picking 5111 by default reports a false gap equal to the other
     sub-accounts. Take the scope whose credit movement matches the files; when neither
-    matches, keep the default so the gap is still reported, never hidden.
+    matches, take the closer one; the gap is still reported, never hidden.
     """
     default = revenue_account(tb)
-    for acct in dict.fromkeys((default, "511")):
-        if abs(ledger_movement(tb, acct, "cr") - source_gross) <= tol:
-            return acct
-    return default
+    scopes = list(dict.fromkeys((default, "511")))
+    # Exact match first; otherwise the closest scope, so a real gap in a goods+products file is not
+    # inflated by the whole of 5112. The receipt names the scope used.
+    return min(scopes, key=lambda a: (abs(ledger_movement(tb, a, "cr") - source_gross) > tol,
+                                      abs(ledger_movement(tb, a, "cr") - source_gross)))
 
 
 def returns_in_revenue(tb) -> Decimal:
