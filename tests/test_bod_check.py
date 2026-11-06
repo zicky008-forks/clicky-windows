@@ -844,3 +844,70 @@ def test_no_group_with_an_unchecked_part_ever_reads_as_clean():
         from engine.bod_review import Finding
         state, text = cov.status(4, [Finding(4, "wrong_version", "'A'!B1", "m", Decimal(1), Decimal(2))])
         assert state == "loi" and "CHƯA KIỂM ĐƯỢC" in text, text
+
+
+@pytest.mark.parametrize("plant", [True, False])
+@pytest.mark.parametrize("where_division", ["label_header", "title_row", "nowhere"])
+def test_last_year_indicator_rows_take_the_division_the_table_names_once(tmp_path, plant, where_division):
+    """Grader V4: last year's file holds one indicator in all 3 versions, under 'Chỉ tiêu (khối Thương mại)'
+    (or a title row naming the division, or no division at all). The pack's line reads 'Chi phí bán hàng khối
+    Thương mại'. The division is given to every row below, the label is matched without its 'khối …' part, and
+    the plan version error is caught, not said as not checked."""
+    from openpyxl import Workbook
+    from tests.bod_case import COSTS, ELEMENTS, FY_MONTHS, LOCKED, TM, plan_amount
+    make_case(tmp_path, plant=False)
+    (tmp_path / "NamTruoc_FY2526.xlsx").unlink()
+    sell = [k for k in COSTS if k[0] == TM and ELEMENTS[k[2]][3] == "Chi phí bán hàng"]
+    amount = {v: {m: int(sum(plan_amount(v, *k, m) for k in sell)) for m in FY_MONTHS} for v in ("Thực tế", "AOP", "AOPR")}
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Chi tieu"
+    ws.append(["CHỈ TIÊU NĂM TRƯỚC – KHỐI THƯƠNG MẠI (giả lập)" if where_division == "title_row" else "CHỈ TIÊU NĂM TRƯỚC"])
+    ws.append([])
+    ws.append(["Chỉ tiêu (khối Thương mại)" if where_division == "label_header" else "Chỉ tiêu", "Kỳ", "Thực tế",
+               "Kế hoạch gốc", "Kế hoạch sửa"])
+    for m in FY_MONTHS:
+        ws.append(["Chi phí bán hàng", f"{m[5:]}/{int(m[:4]) - 1}"] + [amount[v][m] for v in ("Thực tế", "AOP", "AOPR")])
+    wb.save(tmp_path / "NamTruoc_FY2526.xlsx")
+    used = "AOP" if plant else "AOPR"
+    facts = bod_check.Facts(bod_check.load(tmp_path, 7), TM, 7)
+    actual = int(facts.actual(lambda r: r["dong"] == "Chi phí bán hàng", LOCKED))
+    assert actual
+
+    def one_line(ws):
+        ws.delete_rows(5, ws.max_row)
+        ws["C4"] = f"Năm trước {used} FY25/26"
+        last = sum(amount[used][m] for m in LOCKED)
+        ws.append(["Chi phí bán hàng khối Thương mại", actual, last, actual - last])
+    _edit_xlsx(tmp_path / "Pack_BOD_T10_ban_nhap.xlsx", "So nam truoc", one_line)
+    review = bod_check.review(tmp_path)[0]
+    got = [x for x in review.findings if x.group == 4]
+    _, _, state, text = _group(review, 4)
+    if plant:
+        assert [x.where for x in got] == ["'So nam truoc'!C4"], (text, got)
+        assert got[0].expected == sum(amount["AOPR"][m] for m in LOCKED), got[0].message
+    else:
+        assert not got and state == "ok", text
+    assert "CHƯA KIỂM ĐƯỢC" not in text, text
+
+
+def test_a_last_year_table_of_another_division_is_not_compared_with_this_one(tmp_path):
+    """The table names 'khối Sản xuất' once: its rows are that division's, never matched to Thương mại's line."""
+    from openpyxl import Workbook
+    from tests.bod_case import FY_MONTHS
+    make_case(tmp_path, plant=False)
+    (tmp_path / "NamTruoc_FY2526.xlsx").unlink()
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Chỉ tiêu (khối Sản xuất)", "Kỳ", "Thực tế", "Kế hoạch gốc", "Kế hoạch sửa"])
+    for m in FY_MONTHS:
+        ws.append(["Chi phí bán hàng", f"{m[5:]}/{int(m[:4]) - 1}", 1, 2, 3])
+    wb.save(tmp_path / "NamTruoc_FY2526.xlsx")
+
+    def one_line(ws):
+        ws.delete_rows(5, ws.max_row)
+        ws.append(["Chi phí bán hàng khối Thương mại", 8, 8, 0])
+    _edit_xlsx(tmp_path / "Pack_BOD_T10_ban_nhap.xlsx", "So nam truoc", one_line)
+    review = bod_check.review(tmp_path)[0]
+    _, _, state, text = _group(review, 4)
+    assert not [x for x in review.findings if x.group == 4] and "CHƯA KIỂM ĐƯỢC" in text, text

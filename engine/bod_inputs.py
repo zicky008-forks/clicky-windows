@@ -339,6 +339,7 @@ class PlanRow:
     month_no: Optional[int] = None      # month without a year yet: resolved by load() from the file's fiscal year
     fy: Optional[int] = None            # first year of the fiscal year, when the file or header says it
     approved: str = ""                  # 'YYYY-MM-DD' the version was approved, when the file says it
+    table_division: str = ""            # folded words after 'khối' the table names once for every row (header, title)
 
 
 def day_of(value) -> str:
@@ -376,10 +377,25 @@ def _plan_month(thang, nam, fy_start: int) -> tuple:
     return "", (int(mk[5:]) if mk else None), fy
 
 
+def table_division(t: Table, rows: Optional[list] = None) -> str:
+    """The division a table names once for all its rows, when it has no division column: in the label column's
+    header ('Chỉ tiêu (khối Thương mại)') or in a title row above the header ('Chi phí năm trước - khối TM').
+    The folded words after 'khối' ('thuong mai gia lap'): the caller keeps only a division it knows. '' when the
+    table names none, or names several."""
+    if "khoi" in t.columns:
+        return ""
+    texts = [t.headers[c] for f, c in t.columns.items() if f in ("dong", "pb", "ce") and c < len(t.headers)]
+    for r in (rows or [])[:max(t.header_row - 1, 0)]:
+        texts += [v for v in r if isinstance(v, str)]
+    found = {m.group(1).strip() for text in texts for m in [re.search(r"(?:^| )khoi ([a-z0-9&].*)$", key(text))] if m}
+    return found.pop() if len(found) == 1 else ""
+
+
 def read_plan(t: Table, default_version: str = "", fy_start: int = 7, rows: Optional[list] = None,
               file_fy: Optional[int] = None) -> list:
     """Long tables (one amount column) and wide ones: one column per version ('Thực tế', 'AOP', 'AOPR1') or per
     month ('T7' .. 'T6', '07/2026'), each column read into its own rows."""
+    td = table_division(t, rows)
     if "tien" in t.columns:
         out = []
         for n, v in t.rows:
@@ -390,7 +406,7 @@ def read_plan(t: Table, default_version: str = "", fy_start: int = 7, rows: Opti
             month, month_no, fy = _plan_month(t.get(v, "thang"), t.get(v, "nam"), fy_start)
             out.append(PlanRow(str(t.get(v, "phien_ban", default_version) or default_version).strip(), month, amount,
                                rate=num(t.get(v, "ty_gia")), where=f"{t.sheet}!{n}", month_no=month_no,
-                               fy=fy or file_fy, **_dims(t, v)))
+                               fy=fy or file_fy, table_division=td, **_dims(t, v)))
         return out
     from engine.bod_pack import fy_of, month_of, version_of
     from openpyxl.utils import get_column_letter
@@ -418,7 +434,7 @@ def read_plan(t: Table, default_version: str = "", fy_start: int = 7, rows: Opti
             month, month_no, fy = _plan_month(thang, t.get(v, "nam"), fy_start)
             out.append(PlanRow(version, month, amount, rate=num(t.get(v, "ty_gia")),
                                where=f"{t.sheet}!{get_column_letter(c + 1)}{n}", month_no=month_no,
-                               fy=fy or col_fy or file_fy, **dims))
+                               fy=fy or col_fy or file_fy, table_division=td, **dims))
         if not hit:
             t.skipped.append((n, "không có số tiền"))
     return out

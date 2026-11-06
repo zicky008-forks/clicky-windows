@@ -115,6 +115,10 @@ class Facts:
                 d = self.cfg.depts.get(e.dept) or {}
                 if e.division and d.get("khoi") and ({key(e.division), key(d["khoi"])} & self.aliases):
                     self.aliases |= {key(e.division), key(d["khoi"])}
+        self.known_divisions = sorted({key(e.division) for e in b.gl if e.division}
+                                      | {key(x.division) for x in b.sales if x.division} | set(self.canon)
+                                      | {key(d["khoi"]) for d in self.cfg.depts.values() if d.get("khoi")}, key=len,
+                                      reverse=True)
         known = {key(c) for c in self.cfg.depts} | {key(d.get("ten", "")) for d in self.cfg.depts.values()}
         codes = [e.dept for e in b.gl if e.dept]
         # a code the department list does not know is unassigned, unless the detail uses another coding altogether
@@ -173,11 +177,19 @@ class Facts:
                 "dept": dept, "dept_raw": e.dept, "element": e.element, "account": e.account, "dong": dong, "nhom": nhom,
                 "usd": e.usd, "text": e.text, "ref": e.ref, "where": e.where, "cost": self.is_cost(e.account)}
 
+    def known_division(self, words_: str) -> str:
+        """The division folded words start with ('thuong mai gia lap' -> 'thuong mai'), '' for none the detail,
+        the sales or the catalogue know."""
+        k = key(words_)
+        return next((d for d in self.known_divisions if d and (k == d or k.startswith(d + " "))), "")
+
     def _plan(self, p) -> dict:
         dong, nhom = self._line_of(p.element, "")
         v = version_of(key(p.version)) or key(p.version)
+        # a table that names its division once ('Chỉ tiêu (khối Thương mại)') gives it to every row below
+        division = p.division or self.known_division(getattr(p, "table_division", ""))
         return {"version": v, "period": p.month, "fy": fiscal_year(p.month, self.fy_start) if p.month else None,
-                "amount": p.amount, "division": p.division, "dept": p.dept, "element": p.element, "site": p.site,
+                "amount": p.amount, "division": division, "dept": p.dept, "element": p.element, "site": p.site,
                 "approved": p.approved,
                 "dong": p.line or dong, "nhom": nhom, "channel": p.channel, "rate": p.rate, "where": p.where}
 
@@ -201,7 +213,25 @@ class Facts:
                     if t and t in self.names[dim] and t == key(self.names[dim][t]):
                         v = self.names[dim][t]
                         return lambda r, d=dim, v=v: r.get(d) == v
+        # 'Chi phí BH&QL khối Thương mại': the line, in that division
+        rest, division = self.division_part(label)
+        if rest and division:
+            inner = self.matcher(rest, section)
+            if inner is not None:
+                return lambda r: inner(r) and (not r.get("division") or self.same_division(r["division"], division))
         return None
+
+    def division_part(self, label: str) -> tuple:
+        """('chi phi bh&ql', 'thuong mai') for a label naming its division with 'khối …'; ('', '') otherwise."""
+        k = key(label)
+        for d in self.known_divisions:
+            m = re.search(rf"(?:^| )khoi {re.escape(d)}(?= |$)", k)
+            if m:
+                return (k[:m.start()] + " " + k[m.end():]).strip(" -–"), d
+        m = re.search(r"(?:^| )khoi ([a-z0-9&].*)$", k)
+        if m and k[:m.start()].strip(" -–"):
+            return k[:m.start()].strip(" -–"), m.group(1).strip()
+        return "", ""
 
     def row_filter(self, label: str, section: str = "") -> Optional[Callable]:
         """The matcher, narrowed to the site and the division a row names in its text columns ('S2', 'Thương mại')."""
