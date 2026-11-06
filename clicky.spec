@@ -53,6 +53,8 @@ hidden = [
     "first_run", "ui.plain_card", "ui.welcome", "ui.error_card", "engine.errors_vi", "engine.bug_report",
     # Sample month, the drop zone for the first real month, the receipt, audit and saved-file check
     "office.sample", "office.drop", "ui.drop_zone", "engine.intake", "engine.audit", "engine.saved_check", "engine.roles",
+    # Latency clock, and the three graphics drawn from engine figures (leader tags, sticky notes, profit bridge)
+    "turn_clock", "engine.visuals", "ui.graphics_paint",
     "ui.settings_window",
     "ui.connections_window",
     "ui.jobs_window",

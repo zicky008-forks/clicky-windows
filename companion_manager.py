@@ -34,6 +34,7 @@ from tutor_features import (
     multilang, workflow_capture, collab,
 )
 import skills as skills_pkg
+import turn_clock
 from office import finance_mode, outgoing
 from office.cellref import parse_ref
 from office.excel_com import ExcelBridge, format_for_prompt as excel_context_prompt, is_excel_window
@@ -392,6 +393,9 @@ class CompanionManager(QObject):
         self._excel = ExcelBridge()
         # Every AI request goes through this gate: masked, approved once, logged, or not sent at all.
         self._outgoing = outgoing.Outgoing(ask=self._ask_outgoing)
+        # How fast each turn feels: key release / Enter / button → first thing on screen.
+        self._clock = turn_clock.TurnClock()
+        turn_clock.connect(self, self._clock)
         self._outgoing_answer = None
         self._multilang = setting("multilang", True)
         self._journal_enabled = setting("journal", True)
@@ -890,6 +894,7 @@ class CompanionManager(QObject):
 
     async def _end_capture_and_process(self):
         self._current_task = asyncio.current_task()
+        turn_clock.of(self).start("voice")
         try:
             pcm = self._listener.stop_recording()
             self._listener.on_recorded_pcm = None
@@ -934,6 +939,7 @@ class CompanionManager(QObject):
                 finally:self._live_stt_future = None
             if not transcript:
                 transcript = await asyncio.wait_for(self._get_stt().transcribe(pcm), timeout=90)
+            turn_clock.of(self).mark("transcript")
             _log.info("transcript: %r (provider=%s)",
                       transcript[:120], cfg.llm_provider())
             if not transcript.strip():
@@ -963,6 +969,7 @@ class CompanionManager(QObject):
             return
         guided = self._guided and is_next(text)
         self.stop()
+        turn_clock.of(self).start("typed")
         self._guided = guided
         self._request_future = self._submit(self._process_query(text))
 
@@ -972,6 +979,7 @@ class CompanionManager(QObject):
         if not paths:
             return
         self.stop()
+        turn_clock.of(self).start("drop")
         self._request_future = self._submit(self._process_drop(paths))
 
     async def _process_drop(self, paths: list):
@@ -1006,7 +1014,7 @@ class CompanionManager(QObject):
         self.sig_turn_started.emit(transcript)
         pointing_held = False
         search_task = locate_task = None
-        narration_task = None
+        narration_task = excel_task = None
         try:
             # ── Voice commands — short-circuit before LLM ──
             if is_stop(transcript):
@@ -1102,6 +1110,11 @@ class CompanionManager(QObject):
             # actually wants when they ask "who is MrBeast" while on YouTube.
             sensitive = self._privacy_guard and is_sensitive_window(title)
             identity_q = is_identity_question(transcript)
+            # Excel is read over COM while the screen is captured, not after it.
+            excel_window = is_excel_window(title)
+            excel_task = None
+            if excel_window and not sensitive:
+                excel_task = asyncio.create_task(self._excel_prompt_context())
             if sensitive or identity_q:
                 screenshots = []
                 images_b64 = []
@@ -1120,7 +1133,7 @@ class CompanionManager(QObject):
             # models) can draw on them accurately by echoing the numbers.
             self._figures_ctx = []
             fig_extra = ""
-            if screenshots:
+            if screenshots and not excel_window:      # a sheet's grid is all rectangles: nothing to find there
                 try:
                     from ai.figure_detector import detect_figures, figures_prompt
                     self._figures_ctx = await asyncio.to_thread(
@@ -1246,19 +1259,7 @@ class CompanionManager(QObject):
 
             # ── Per-turn enrichment: code mode, language, OCR, attached docs ──
             code_active = self._code_mode_auto and code_mode.is_code_window(title)
-            finance_extra = ""
-            if is_excel_window(title) and not (self._privacy_guard and is_sensitive_window(title)):
-                ctx = await asyncio.to_thread(self._excel.context)
-                if ctx:
-                    # Names and IDs to mask come from the workbook's own catalogue columns.
-                    await asyncio.to_thread(self._outgoing.learn_workbook, self._excel,
-                                            ctx.get("workbook", ""), ctx.get("sheet", ""))
-                excel_block = excel_context_prompt(ctx)
-                # The cells are file content; the pointing instruction that ends the block is not.
-                self._outgoing.file_text("Excel", excel_block.split("\n  To point at a cell", 1)[0])
-                finance_extra = finance_mode.finance_system_prompt_addendum() + excel_block
-                finance_extra += self._outgoing.file_text(
-                    "Power Query", await asyncio.to_thread(self._power_query_context))
+            finance_extra = await excel_task if excel_task else ""
             if cfg.response_language:
                 lang_code = cfg.response_language   # user-forced — always wins
             else:
@@ -1350,6 +1351,7 @@ class CompanionManager(QObject):
                         self.sig_error.emit(f"Voice unavailable; the answer is shown in the panel. {exc}")
 
             narration_task = asyncio.create_task(speak_queued())
+            turn_clock.of(self).mark("context")
             async for chunk in self._get_llm().stream_response(
                 user_text=transcript,
                 screenshots_b64=images_b64,
@@ -1492,7 +1494,7 @@ class CompanionManager(QObject):
             self.sig_error.emit(friendly_request_error(e, cfg.llm_provider()))
 
         finally:
-            for task in (search_task, locate_task, narration_task):
+            for task in (search_task, locate_task, narration_task, excel_task):
                 if task and not task.done():
                     task.cancel()
             if narration_task:
@@ -1503,6 +1505,20 @@ class CompanionManager(QObject):
             if self._current_task is asyncio.current_task():
                 self._current_task = None
                 self._emit_state(AppState.IDLE)
+
+    async def _excel_prompt_context(self) -> str:
+        """The open sheet, the workbook's catalogue for masking and its Power Query, for the AI prompt."""
+        ctx = await asyncio.to_thread(self._excel.context)
+        if ctx:
+            # Names and IDs to mask come from the workbook's own catalogue columns.
+            await asyncio.to_thread(self._outgoing.learn_workbook, self._excel,
+                                    ctx.get("workbook", ""), ctx.get("sheet", ""))
+        excel_block = excel_context_prompt(ctx)
+        # The cells are file content; the pointing instruction that ends the block is not.
+        self._outgoing.file_text("Excel", excel_block.split("\n  To point at a cell", 1)[0])
+        extra = finance_mode.finance_system_prompt_addendum() + excel_block
+        extra += self._outgoing.file_text("Power Query", await asyncio.to_thread(self._power_query_context))
+        return extra
 
     async def _reply_local(self, msg: str) -> bool:
         """Show + speak a message that doesn't need an LLM round-trip; False when it was not read aloud."""
@@ -1633,6 +1649,18 @@ class CompanionManager(QObject):
                 _log.warning("reading monitor geometry failed: %s", exc)
                 return None
         return physical_to_logical(bbox, shots)
+
+    def _physical_to_logical_boxes(self, boxes):
+        """Many physical boxes → logical, reading the monitor layout once (a sheet's figures, cell by block)."""
+        from screen.capture import monitor_geometry, physical_to_logical
+        shots = self._screens_ctx
+        if not shots:
+            try:
+                shots = monitor_geometry()
+            except Exception as exc:
+                _log.warning("reading monitor geometry failed: %s", exc)
+                return []
+        return [physical_to_logical(b, shots) for b in boxes]
 
     def _excel_bbox(self, ref: str):
         """Cell or range → logical bbox, computed by Excel itself."""

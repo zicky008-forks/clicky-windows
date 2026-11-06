@@ -502,7 +502,9 @@ def test_fix_runs_behind_a_still_screen_and_ends_on_the_profit_card(folder):
     _begin(bridge, pq, sources.DAY_FIRST)
     beats = month_close.approve(bridge, pq)
     assert bridge.screen == [False, True]                    # frozen while sheets are added, released after
-    assert beats[-2].text.startswith("Lợi nhuận thực là")    # the warning is the last scene before the save line
+    # The warning, then how 556 becomes 436, then what to check before the boss sees it, then the save line.
+    assert beats[-4].text.startswith("Lợi nhuận thực là")
+    assert beats[-3].graphic["kind"] == "bridge" and beats[-2].graphic["kind"] == "notes"
     assert any(name == "BC thang" and widths["A"] >= 30 for name, widths, _ in bridge.layouts)
     assert ("'BC thang'!A4:I4", ) == tuple(r for r, o in bridge.styles if r == "'BC thang'!A4:I4")[:1]
 
@@ -832,3 +834,33 @@ def test_unread_cost_ledger_csv_is_named_truthfully(tmp_path):
     q = tmp_path / "ghi_chu.csv"
     q.write_text("a,b\n1,2\n", encoding="utf-8")
     assert "không có cột ngày" in intake._csv_why(q)
+def test_cards_keep_off_each_block_of_figures_not_just_the_used_range():
+    """The card is told where every block of figures is; without that read it keeps off the whole filled area."""
+    import asyncio
+    from office import month_close
+
+    class Excel:
+        def __init__(self, boxes):
+            self.boxes = boxes
+
+        def figure_boxes(self):
+            return self.boxes
+
+        def content_rect(self):
+            return (0, 0, 800, 600)
+
+    class M:
+        def __init__(self, boxes):
+            self._excel = Excel(boxes)
+
+        def _physical_to_logical_bbox(self, rect):
+            return tuple(v / 2 for v in rect)
+
+    figures, words = asyncio.run(month_close._figures(M({"numbers": [(200, 100, 800, 600)],
+                                                          "text": [(0, 100, 200, 600)]})))
+    assert figures == [(100, 50, 400, 300)] and words == [(0, 50, 100, 300)]
+    figures, words = asyncio.run(month_close._figures(M(None)))
+    assert figures == [(0, 0, 400, 300)] and words == []
+    beat = month_close.Beat("Lợi nhuận thật", "C9", label="LNST thực", value="436tr")
+    card = month_close.shapes_for((10, 10, 100, 30), beat, figures, words)[1]
+    assert card["avoid"] == [[0, 0, 400, 300]] and card["soft"] is None

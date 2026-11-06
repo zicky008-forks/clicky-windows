@@ -160,3 +160,55 @@ def test_reveal_keeps_the_report_title_and_labels_in_view():
     assert reveal_scroll(20, 1, 1, 24, 12) == (1, 1)       # fits under the title: start from the top
     assert reveal_scroll(20, 1, 3, 18, 12) == (14, 1)      # does not fit: a third of the way down, column A kept
     assert reveal_scroll(200, 1, 30, 30, 12) == (190, 30)
+
+
+def test_figure_blocks_split_a_sheet_into_figures_and_words():
+    from office.excel_com import figure_blocks
+    grid = [
+        ["Báo cáo tháng 10", None, None, None],
+        ["Chỉ tiêu", "T09", "T10", None],
+        ["Doanh thu", 1_200_000_000, 1_350_000_000, None],
+        ["Giá vốn", 800_000_000, 905_000_000, None],
+        [None, None, None, None],
+        ["TK 6411", 12.5, None, "ghi chú"],
+    ]
+    blocks = figure_blocks(grid)
+    assert ("t", 0, 3, 0, 0) in blocks                    # the title and the row labels under it: one column
+    assert ("n", 1, 3, 1, 2) in blocks                    # "T09"/"T10" headers and the amounts: one block
+    assert ("n", 5, 5, 0, 1) in blocks                    # an account code counts as a figure
+    assert ("t", 5, 5, 3, 3) in blocks
+    assert not any(b[1] <= 4 <= b[2] for b in blocks)     # the empty row stays free
+
+
+def test_figure_boxes_map_each_block_to_screen_pixels():
+    class Cols:
+        def __init__(self, rng):
+            self.rng = rng
+
+        def __call__(self, j):
+            return type("C", (), {"Left": self.rng.Left + (j - 1) * 48.0})()
+
+    class Rows:
+        def __init__(self, rng):
+            self.rng = rng
+
+        def __call__(self, i):
+            return type("R", (), {"Top": self.rng.Top + (i - 1) * 15.0})()
+
+    class Filled:
+        Left, Top, Width, Height = 0.0, 0.0, 3 * 48.0, 3 * 15.0
+        Value2 = (("Chỉ tiêu", "T10", None), ("Doanh thu", 1350.0, None), (None, None, "x"))
+
+    filled = Filled()
+    filled.Columns, filled.Rows = Cols(filled), Rows(filled)
+    pane = type("P", (), {"VisibleRange": object(),
+                          "PointsToScreenPixelsX": lambda self, pt: 100 + pt * 96 / 72,
+                          "PointsToScreenPixelsY": lambda self, pt: 200 + pt * 96 / 72})()
+    win = type("W", (), {"Zoom": 100, "Panes": type("PS", (), {"Count": 1, "__call__": lambda self, i: pane})()})()
+    app = type("A", (), {"ActiveSheet": type("S", (), {"UsedRange": object()})(), "ActiveWindow": win,
+                         "Hwnd": 0, "Intersect": lambda self, a, b: filled})()
+    bridge = ExcelBridge(app=app, dpi=96)
+    boxes = bridge.figure_boxes()
+    assert boxes["numbers"] == [(164.0, 200.0, 228.0, 240.0)]          # B1:B2, "T10" and 1350
+    assert (100.0, 200.0, 164.0, 240.0) in boxes["text"]               # A1:A2 labels
+    assert (228.0, 240.0, 292.0, 260.0) in boxes["text"]               # C3
