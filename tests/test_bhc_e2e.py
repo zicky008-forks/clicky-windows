@@ -58,3 +58,14 @@ def test_a_stage_that_could_not_run_fails_the_summary():
 def test_the_app_takes_a_folder_to_drop_from_its_command_line():
     assert drop.args(["Clicky.exe", "--drop", "C:/case"]) == "C:/case"
     assert drop.args(["Clicky.exe"]) is None and drop.args(["Clicky.exe", "--drop"]) is None
+
+
+def test_a_close_stuck_on_a_query_says_where_it_stopped():
+    events = [{"event": "intake", "files": []}, {"event": "close_step", "step": "read_folder"},
+              {"event": "close_step", "step": "query_load", "state": "start"},
+              {"event": "close_step", "step": "query_load", "state": "timeout", "dialog": "Privacy levels"}]
+    assert bhc_e2e.stopped(events)
+    res = bhc_e2e.grade_close(events, KEY, True, True)
+    line = next(l for l in res.lines if l.name.startswith("2b."))
+    assert not line.ok and "query_load (timeout, Excel hỏi: Privacy levels)" in line.detail
+    assert not bhc_e2e.stopped(events[:3])

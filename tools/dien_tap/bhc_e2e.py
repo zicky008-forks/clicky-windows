@@ -74,13 +74,31 @@ def grade_close(events: list, key: dict, sources_unchanged: bool, original_kept:
     res.add("2a. Lợi nhuận sau thuế đúng", want in said, f"cần {want}, Clicky nói {', '.join(said) or 'chưa nói'}")
     ok = bool(verify) and verify[-1].get("ok") is True and any(e.get("event") == "delivered" for e in events)
     diffs = (verify[-1].get("diffs") if verify else None) or []
+    where = last_step(events)
     res.add("2b. Mở lại file đã lưu, đối chiếu khớp", ok,
-            "" if ok else ("; ".join(str(d.get("cell")) for d in diffs) or "chưa đối chiếu lại file đã lưu"))
+            "" if ok else ("; ".join(str(d.get("cell")) for d in diffs) or "chưa đối chiếu lại file đã lưu")
+            + (f"; bước cuối: {where}" if where and not ok else ""))
     res.add("2c. Giữ bản gốc (_ban-goc)", original_kept)
     res.add("2d. File nguồn không bị sửa", sources_unchanged)
     errors = [str(e.get("text", "")) for e in events if e.get("event") == "error"]
     res.add("2e. Không có lỗi hiện cho người dùng", not errors, "; ".join(errors[:3]))
     return res
+
+
+def last_step(events: list) -> str:
+    """Where the month close got to: 'query_load (timeout, Excel hỏi: Privacy levels)', '' when it logged none."""
+    steps = [e for e in events if e.get("event") == "close_step"]
+    if not steps:
+        return ""
+    e = steps[-1]
+    extra = [x for x in (e.get("state"), f"Excel hỏi: {e['dialog']}" if e.get("dialog") else "", e.get("why")) if x]
+    return f"{e.get('step')}" + (f" ({', '.join(extra)})" if extra else "")
+
+
+def stopped(events: list) -> bool:
+    """The month close ended without a report: a query that timed out or failed to load."""
+    return any(e.get("event") == "close_step" and e.get("step") == "query_load"
+               and e.get("state") in ("timeout", "error") for e in events)
 
 
 def summary(stages: list) -> Result:
@@ -144,7 +162,7 @@ def run_close(exe: str, case: Path, key: dict, out: Path, timeout: float) -> Res
                 say(f"   Bấm \"{hit}\"")
                 if driver.wait_for(hit, 20):
                     driver.press(hit)
-        if any(e.get("event") in ("delivered", "error") for e in events) or \
+        if any(e.get("event") in ("delivered", "error") for e in events) or stopped(events) or \
                 any(e.get("event") == "verify" and not e.get("ok") for e in events):
             time.sleep(4.0)
             break

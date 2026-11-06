@@ -27,7 +27,7 @@ from typing import Optional
 from engine import audit, intake as intake_mod, m_code, sources, visuals
 from engine.monthly_report import spoken
 from engine.trial_balance import ZERO
-from office.power_query import ReadFailed
+from office.power_query import LoadTimeout, ReadFailed
 import scene_log
 
 log = logging.getLogger(__name__)
@@ -607,6 +607,7 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     """Stage 0: read every file in the folder and say what was read. Nothing in the workbook changes yet."""
     global _PENDING, _AUDIT
     _PENDING, _AUDIT = None, None
+    _step("read_folder")
     _EXPECT.clear()
     if not bridge.available():
         return [Beat("Anh mở file Excel đã lưu trong thư mục dữ liệu tháng rồi gọi lại em.")]
@@ -707,6 +708,7 @@ def confirm(bridge, pq) -> list:
     if not job or job.get("stage") != "intake":
         return []
     receipt = job["intake"]
+    _step("confirmed")
     _AUDIT = audit.AuditLog(period=job.get("period", ""), original=_keep_original(bridge),
                             dropped=intake_mod.dropped_rows(receipt), coverage=intake_mod.coverage_rows(receipt))
     for what, chosen, others, agreed in job.get("picked", []):
@@ -804,6 +806,27 @@ def make_final(bridge) -> list:
                  f"{_q(audit.SHEET)}!A1:I4", "Đã chốt", "ok", audit.FINAL)]
 
 
+def _step(step: str, **data) -> None:
+    """One line per step of the month close in the scene log, so a run that stops shows where it stopped."""
+    scene_log.record("close_step", step=step, **data)
+
+
+def _load(pq, name: str):
+    """pq.load with its start, end and outcome in the scene log."""
+    import time
+    _step("query_load", name=name, state="start")
+    t0 = time.monotonic()
+    result = pq.load(name)
+    seconds = round(time.monotonic() - t0, 1)
+    if isinstance(result, LoadTimeout):
+        _step("query_load", name=name, state="timeout", seconds=seconds, dialog=result.dialog)
+    elif isinstance(result, str):
+        _step("query_load", name=name, state="error", seconds=seconds, why=load_error_vi(result))
+    else:
+        _step("query_load", name=name, state="ok", seconds=seconds, rows=len(result[2]))
+    return result
+
+
 def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
     global _PENDING
     _PENDING = None
@@ -893,7 +916,8 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
         pq.add(PARAM_NAME, m_code.parameter_query(str(folder)))
         pq.add(name, fixed_m)
 
-    result = pq.load(name)
+    _step("query_add", name=name, origin=origin or "clicky", existing=formula is not None)
+    result = _load(pq, name)
     if isinstance(result, ReadFailed):
         _write_check_sheet(bridge, None, truth, ledger, notes)
         return beats + [Beat("Em chưa đọc lại được bảng query, nên chưa có số chênh lệch. Đây là lỗi của Clicky.",
@@ -906,8 +930,8 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
                            [["Lỗi khi tải query", "", "", "", why_vi + " Chi tiết kỹ thuật ghi trong clicky.log."]] + notes)
         beats.append(Beat(f"Excel chưa tải được query {name}.", _check_ref("A4:E4"), "Query chưa tải được", "bad",
                           "Lỗi tải", why_vi))
-        if formula is None:
-            return beats
+        if formula is None or isinstance(result, LoadTimeout):
+            return beats                        # Excel is busy or asking: a rewritten query would not load either
         _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder)}
         return beats + [_fix_offer()]
     sheet, header, rows = result
@@ -971,6 +995,12 @@ def approve(bridge, pq) -> list:
 
 def load_error_vi(raw: str) -> str:
     """One plain Vietnamese sentence for a Power Query / COM load error; the raw text goes to the log only."""
+    if isinstance(raw, LoadTimeout):
+        if raw.dialog:
+            return (f"Excel đang chờ trả lời hộp thoại \"{raw.dialog}\", nên query chưa tải xong. Chị xem cửa sổ "
+                    "Excel, trả lời hoặc đóng hộp thoại đó, rồi gọi lại em.")
+        return (f"Excel tải query quá {int(raw.seconds)} giây vẫn chưa xong, nên em dừng chờ. Chị đợi Excel rảnh "
+                "(hoặc đóng bớt file đang mở), rồi gọi lại em.")
     text = str(raw or "")
     m = re.search(r"column '([^']+)' of the table wasn't found", text, re.I)
     if m:
@@ -1001,7 +1031,8 @@ def _approve(bridge, pq, job) -> list:
     tbs, ledger = _ledger(folder)
     truth = sources.truth(files, sources.period_of(tbs[-1][1]) if tbs else None)
     ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
-    result = pq.load(job["name"])
+    _step("query_fix", name=job["name"])
+    result = _load(pq, job["name"])
     if isinstance(result, ReadFailed):
         return [Beat("Em đã sửa query nhưng chưa đọc lại được bảng kết quả. Đây là lỗi của Clicky.",
                      label="Chưa kiểm tra được", mark="warn", note=_BACKUP_NOTE)]
@@ -1069,6 +1100,7 @@ def save_and_verify(bridge) -> list:
     global _PENDING
     if stage() == "save":
         _PENDING = None
+    _step("save")
     if not bridge.available():
         return [Beat("Em không thấy file Excel đang mở, nên chưa lưu được.")]
     if not _try(bridge, "save"):
@@ -1154,6 +1186,7 @@ def _audit_returns(report, names: dict, pat_row: int, overstated) -> None:
 def build_report(bridge, folder: Path, tbs: list) -> list:
     from engine.report_sheet import quote
     from office import report_skill
+    _step("build_report", trial_balances=len(tbs))
     if len(tbs) < 2:
         return [Beat("Em chưa thấy đủ hai file cân đối tài khoản, kỳ này và kỳ trước, nên chưa lập báo cáo.")]
     existing = set(bridge.sheet_names())

@@ -5,14 +5,119 @@ cannot read M, which is one reason this app talks to Excel over COM.
 """
 import json
 import logging
+import os
+import sys
+import threading
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from engine import m_code
 from storage import atomic_write, data_dir
 
 log = logging.getLogger(__name__)
 MAX_PROMPT_CHARS = 6000
+# A query over a folder of exports loads in seconds; minutes mean Excel is waiting on someone (a credentials,
+# privacy-level or "file in use" dialog) or is stuck. Clicky stops waiting and says why, never hangs.
+LOAD_TIMEOUT = float(os.environ.get("CLICKY_PQ_TIMEOUT", "180") or 180)
+
+
+def _scene(event: str, **data) -> None:
+    import scene_log
+    scene_log.record(event, **data)
+
+
+class LoadTimeout(str):
+    """Excel did not finish loading the query in time. .seconds waited, .dialog = the title of the dialog Excel
+    showed meanwhile ('' when none was seen)."""
+    seconds = 0.0
+    dialog = ""
+
+
+def excel_dialogs() -> list:
+    """Titles of the dialogs Excel shows right now ('Truy cập Nội dung Web', 'Privacy levels', ...). A disabled
+    main window means a modal dialog is up even when it has no title. [] off Windows or when none."""
+    if sys.platform != "win32":
+        return []
+    try:
+        import win32gui
+        import win32process
+        main = win32gui.FindWindow("XLMAIN", None)
+        if not main:
+            return []
+        _, pid = win32process.GetWindowThreadProcessId(main)
+        found = []
+
+        def visit(hwnd, _):
+            if hwnd != main and win32gui.IsWindowVisible(hwnd) and \
+                    win32process.GetWindowThreadProcessId(hwnd)[1] == pid and win32gui.GetWindow(hwnd, 4) == main:
+                title = win32gui.GetWindowText(hwnd).strip()       # GW_OWNER: a window Excel's main window owns
+                if title:
+                    found.append(title)
+            return True
+        win32gui.EnumWindows(visit, None)
+        if not found and not win32gui.IsWindowEnabled(main):
+            found.append("hộp thoại")
+        return found
+    except Exception as exc:                  # noqa: BLE001 - watching is best effort, never a failure
+        log.debug("listing Excel dialogs failed: %s", exc)
+        return []
+
+
+def refresh_with_timeout(table, timeout: float = None, poll: float = 1.0,
+                         dialogs: Optional[Callable[[], list]] = None, step=None) -> Optional[LoadTimeout]:
+    """table.Refresh(False) on a worker thread, waited for at most `timeout` seconds. None when it finished;
+    a LoadTimeout when it did not (the refresh is left to finish or fail inside Excel). An error raised by the
+    refresh is raised here, as before. step(event, **data) is told when a dialog shows up while waiting."""
+    timeout = LOAD_TIMEOUT if timeout is None else timeout
+    dialogs = dialogs or excel_dialogs
+    result, stream = {}, None
+    oleobj = getattr(table, "_oleobj_", None)
+    if oleobj is not None:                    # a COM object belongs to its thread: hand it over marshalled
+        import pythoncom
+        stream = pythoncom.CoMarshalInterThreadInterfaceInStream(pythoncom.IID_IDispatch, oleobj)
+
+    def work():
+        com = False
+        try:
+            target = table
+            if stream is not None:
+                import pythoncom
+                import win32com.client
+                pythoncom.CoInitialize()
+                com = True
+                target = win32com.client.Dispatch(
+                    pythoncom.CoGetInterfaceAndReleaseStream(stream, pythoncom.IID_IDispatch))
+            target.Refresh(False)
+            result["ok"] = True
+        except Exception as exc:              # noqa: BLE001 - handed back to the caller
+            result["error"] = exc
+        finally:
+            if com:
+                import pythoncom
+                pythoncom.CoUninitialize()
+
+    worker = threading.Thread(target=work, name="clicky-pq-refresh", daemon=True)
+    start = time.monotonic()
+    worker.start()
+    seen = ""
+    while True:
+        worker.join(max(0.01, min(poll, timeout - (time.monotonic() - start))))
+        if not worker.is_alive():
+            break
+        if not seen:
+            titles = dialogs() or []
+            if titles:
+                seen = titles[0]
+                if step:
+                    step("pq_dialog", dialog=seen, seconds=round(time.monotonic() - start, 1))
+        if time.monotonic() - start >= timeout:
+            out = LoadTimeout(f"Power Query refresh did not finish in {timeout:.0f}s"
+                              + (f" (Excel dialog: {seen})" if seen else ""))
+            out.seconds, out.dialog = timeout, seen
+            return out
+    if "error" in result:
+        raise result["error"]
+    return None
 
 
 class PowerQuery:
@@ -93,11 +198,12 @@ class PowerQuery:
             log.debug("table_for %s failed: %s", name, exc)
         return None
 
-    def load(self, name: str) -> tuple:
+    def load(self, name: str, timeout: float = None, step=None) -> tuple:
         """Load (or refresh) a query into a sheet table and return (sheet name, header, rows) or an error string.
 
         Uses the Mashup OLE DB provider the same way Close & Load does, and waits for
-        the refresh to finish so the rows read back are the query's real output.
+        the refresh to finish so the rows read back are the query's real output; at most `timeout` seconds,
+        then a LoadTimeout comes back instead of a hang.
         """
         app = self.bridge._excel()
         try:
@@ -118,9 +224,15 @@ class PowerQuery:
             alerts = app.DisplayAlerts
             app.DisplayAlerts = False
             try:
-                lo.QueryTable.Refresh(False)
+                late = refresh_with_timeout(lo.QueryTable, timeout, step=step or _scene)
             finally:
-                app.DisplayAlerts = alerts
+                try:
+                    app.DisplayAlerts = alerts
+                except Exception as exc:        # noqa: BLE001 - Excel still busy with a late refresh
+                    log.debug("restoring DisplayAlerts failed: %s", exc)
+            if late is not None:
+                log.warning("Power Query load of %s stopped: %s", name, late)
+                return late
         except Exception as exc:
             log.warning("Power Query load failed for %s: %s", name, exc)
             return str(exc)

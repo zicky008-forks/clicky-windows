@@ -864,3 +864,39 @@ def test_cards_keep_off_each_block_of_figures_not_just_the_used_range():
     beat = month_close.Beat("Lợi nhuận thật", "C9", label="LNST thực", value="436tr")
     card = month_close.shapes_for((10, 10, 100, 30), beat, figures, words)[1]
     assert card["avoid"] == [[0, 0, 400, 300]] and card["soft"] is None
+
+
+def _timed_out(dialog=""):
+    from office.power_query import LoadTimeout
+    out = LoadTimeout("Power Query refresh did not finish in 180s")
+    out.seconds, out.dialog = 180.0, dialog
+    return out
+
+
+def test_a_query_excel_does_not_finish_loading_stops_with_the_reason_and_no_fix_offer(folder, tmp_path, monkeypatch):
+    """Excel stuck behind a credentials or privacy dialog: Clicky stops waiting, says which dialog, offers no
+    rewritten query (it would not load either), builds no report, and logs every step it reached."""
+    import json
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+
+    class StuckPQ(FakePQ):
+        def load(self, name):
+            return _timed_out("Truy cập Nội dung Web")
+    bridge = FakeBridge(folder)
+    said = _text(_begin(bridge, StuckPQ(bridge, folder), sources.DAY_FIRST))
+    assert "Excel chưa tải được query DonHang" in said and not month_close.pending()
+    note = bridge.sheets["Doi chieu"][9][4]
+    assert "Truy cập Nội dung Web" in note and "trả lời hoặc đóng hộp thoại" in note and "Power Query refresh" not in note
+    assert "Báo cáo tháng đã lập" not in said
+    steps = [(e["step"], e.get("state")) for e in map(json.loads, log.read_text(encoding="utf-8").splitlines())
+             if e.get("event") == "close_step"]
+    assert ("query_load", "start") in steps and ("query_load", "timeout") in steps
+    assert [s for s, _ in steps].index("read_folder") < [s for s, _ in steps].index("query_load")
+
+
+def test_load_errors_name_a_timeout_in_plain_words():
+    with_dialog = month_close.load_error_vi(_timed_out("Privacy levels"))
+    assert "Privacy levels" in with_dialog and "quyền riêng tư" not in with_dialog
+    plain = month_close.load_error_vi(_timed_out())
+    assert "180 giây" in plain and "gọi lại em" in plain and "Power Query refresh" not in plain
