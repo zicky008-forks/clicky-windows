@@ -3,12 +3,12 @@ add up, and every turn reports how fast the first feedback came.
 
 Read only from the scene log — what Clicky itself measured when it placed each piece:
 
-  card / choice_card / graphic   {rect(s), covers_figures: int, covers_range: bool}   placed off the figures
+  card / choice_card / graphic / widget   {rect(s), covers_figures: int, covers_range: bool}   off the figures
   beat {graphic: {kind: "leaders", figure, sum, ok, tags: [{account, amount}]}}       number → accounts
   beat {graphic: {kind: "bridge", ok, bars: [{label, amount, total}]}}                profit bridge
   beat {graphic: {kind: "notes", notes: [{codes, warn, action, ref}]}}                one note per trap
   graphic {kind: "notes", total, notes}                                               notes really painted
-  latency {source, first_feedback, first_point, done}   ms                            one per turn
+  latency {source, mode: code|ai, label, first_feedback, ready, first_point, first_voice, done}  ms, one per turn
 
 Checked only when the case's expected file has "layout", so an older build is not failed for it.
 """
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from checks import Check
 
-PLACED = ("card", "choice_card", "graphic")
+PLACED = ("card", "choice_card", "graphic", "widget")
 
 
 def _graphics(events, kind):
@@ -104,18 +104,47 @@ def notes_checks(events, spec) -> list:
     return out
 
 
+def _gap(e, a, b):
+    return e[b] - e[a] if isinstance(e.get(a), (int, float)) and isinstance(e.get(b), (int, float)) else None
+
+
 def latency_checks(events, spec) -> list:
+    """Code turns must answer fast; voice turns are measured only. Limits block only on a build that tags
+    each turn with its mode (PR #16): an older build's numbers are shown but cannot fail the run."""
     turns = [e for e in events if e.get("event") == "turn"]
     lat = [e for e in events if e.get("event") == "latency"]
-    limit = spec.get("first_feedback_ms")
-    worst = max((e.get("first_feedback") or 0 for e in lat), default=None)
-    detail = "; ".join(f"{e.get('source', '?')}: phản hồi đầu {e.get('first_feedback')} ms, trỏ đầu "
-                       f"{e.get('first_point', '—')} ms" for e in lat[:6])
+    voice = [e for e in lat if e.get("source") == "voice"]
+    code = [e for e in lat if e.get("source") != "voice" and e.get("mode", "code") == "code"]
+    tagged = any("mode" in e for e in lat)
+
+    def line(e):
+        bits = [f"{e.get('label') or e.get('source', '?')}: phản hồi đầu {e.get('first_feedback')} ms"]
+        for key, word in (("ready", "tính xong"), ("first_point", "trỏ đầu"), ("first_voice", "giọng đầu")):
+            if e.get(key) is not None:
+                bits.append(f"{word} {e[key]} ms")
+        return ", ".join(bits)
+
     out = [Check("Mỗi lượt có đo thời gian phản hồi", bool(lat) and len(lat) >= len(turns),
-                 f"{len(lat)} lần đo / {len(turns)} lượt · {detail}")]
-    if limit is not None:
-        out.append(Check(f"Phản hồi đầu tiên dưới {limit} ms", worst is not None and worst <= limit,
-                         f"chậm nhất {worst} ms", blocking=bool(spec.get("blocking"))))
+                 f"{len(lat)} lần đo / {len(turns)} lượt · " + "; ".join(line(e) for e in lat[:6]))]
+    limit = spec.get("first_feedback_ms")
+    if limit is not None and code:
+        slow = [e for e in code if (e.get("first_feedback") or 0) > limit]
+        out.append(Check(f"Lượt chạy bằng code: phản hồi đầu ≤ {limit} ms mọi lượt", not slow,
+                         "; ".join(line(e) for e in slow[:4]) or
+                         f"chậm nhất {max(e.get('first_feedback') or 0 for e in code)} ms",
+                         blocking=tagged))
+    limit = spec.get("point_after_ready_ms")
+    pairs = [(e, _gap(e, "ready", "first_point")) for e in code]
+    pairs = [(e, g) for e, g in pairs if g is not None]
+    if limit is not None and pairs:
+        slow = [(e, g) for e, g in pairs if g > limit]
+        out.append(Check(f"Có kết quả rồi thì con trỏ bay tới trong ≤ {limit} ms", not slow,
+                         "; ".join(f"{e.get('label') or e.get('source')}: {g} ms" for e, g in slow[:4]) or
+                         f"chậm nhất {max(g for _, g in pairs)} ms", blocking=tagged))
+    if voice:
+        out.append(Check("Lượt nói: thả phím → chữ → trỏ/giọng (chỉ đo)", True,
+                         "; ".join(f"chữ {e.get('transcript', '—')} ms, trỏ {e.get('first_point', '—')} ms, "
+                                   f"giọng {e.get('first_voice', '—')} ms" for e in voice[:4]), blocking=False))
     return out
 
 
