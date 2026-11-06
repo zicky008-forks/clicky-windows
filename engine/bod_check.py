@@ -286,8 +286,12 @@ class Facts:
             site = hit or (line_site or None if re.search(r"\bsite\b", k) else None)
         division = next((d for d in sorted(self.divisions, key=len, reverse=True)
                          if re.search(rf"(^| ){re.escape(words(d))}( |$)", k)), None)
-        if division is None and not re.search(r"toan cong ty|ca cong ty|phap nhan|tat ca (cac )?khoi|moi khoi", k):
-            division = self.division or None
+        if division is None and not re.search(r"toan cong ty|ca cong ty|phap nhan|tat ca (cac )?khoi|moi khoi|"
+                                              r"cac khoi|ca (2|hai) khoi|khong phan biet khoi", k):
+            if re.search(r"khoi (dang soat|nay|minh)|cua khoi|rieng khoi|chinh khoi|theo khoi", k) or not self.divisions:
+                division = self.division or None
+            else:
+                division = UNSURE         # the rule does not say which divisions: ask, never guess
         channel = None
         if re.search(r"cua kenh|chinh kenh|rieng kenh|theo kenh|kenh do|ban than kenh|tung kenh", k):
             channel = line_channel or None
@@ -451,7 +455,7 @@ class Coverage:
         why = "; ".join(w for w, _ in reasons)
         need = "; ".join(sorted({n_ for _, n_ in reasons if n_}))
         gaps = [f"phần {w}" for w in self.part.get(group, [])] + ([why + (f". Cần: {need}" if need else "")] if why else [])
-        rest = "".join(f"; {NOT_RUN.lower()} {g}" for g in gaps)
+        rest = "".join(f"; {NOT_RUN} {g}" for g in gaps)
         if n:
             return "loi", f"{n} lỗi" + rest
         if self.checked.get(group):
@@ -727,6 +731,9 @@ def check_lines(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Covera
                     continue
                 pct = s.num(r, cur.pct) / pct_scale if cur.pct and s.num(r, cur.pct) is not None else None
                 want, base_label = _want_pct(f, r, value, months, default, override)
+                if base_label[1] == "unsure":
+                    cov.partly(2, f"mẫu số '{base_label[0]}' chưa nói rõ tính doanh thu của mọi khối hay chỉ khối đang "
+                                  "soát, em không đoán. Cần: dòng giải thích mẫu số này trong danh mục")
                 if pct is None:
                     w = want if want is not None else (value / rev_here if rev_here else None)
                     if w is not None:
@@ -778,14 +785,20 @@ def _rule_votes(f: Facts, s: Sheet, cur: Group, months: list, pct_scale: Decimal
         if not votes:
             continue
         name, n = votes.most_common(1)[0]
-        parsed = f.base_name(*f.base_of(rule))
+        scope = f.base_of(f.cfg.explain(rule))
+        if scope[1] == UNSURE:
+            continue                         # the pack being checked never decides what an unclear rule means
+        parsed = f.base_name(*scope)
         if name != parsed and n >= 2 and n > len(sets) / 2 and votes.get(parsed, 0) < n:
             out[rule] = name
     return out
 
 
+UNSURE = "?"
+
+
 def _want_pct(f: Facts, r: Row, value: Decimal, months: list, default: Optional[str], override: dict = None) -> tuple:
-    """(pct it should be, (base name, 'rule' | 'default'))."""
+    """(pct it should be, (base name, 'rule' | 'default' | 'unsure'))."""
     channel = f.channel(r.label, r.section)
     if channel:
         rule = f.cfg.channels.get(key(channel), ("", ""))[1]
@@ -794,7 +807,9 @@ def _want_pct(f: Facts, r: Row, value: Decimal, months: list, default: Optional[
             if base:
                 return value / base, (override[rule], "rule")
         if rule:
-            site, division, ch = f.base_of(rule, f.site_in(r.label), channel)
+            site, division, ch = f.base_of(f.cfg.explain(rule), f.site_in(r.label), channel)
+            if division == UNSURE:
+                return None, (rule, "unsure")
             base = f.revenue(months, site, division, ch)
             if base:
                 return value / base, (f.base_name(site, division, ch), "rule")
@@ -802,7 +817,9 @@ def _want_pct(f: Facts, r: Row, value: Decimal, months: list, default: Optional[
     if site:
         rule = f.cfg.rule("mau so", "site")
         if isinstance(rule, str):
-            s2, division, ch = f.base_of(rule, site)
+            s2, division, ch = f.base_of(f.cfg.explain(rule), site)
+            if division == UNSURE:
+                return None, (rule, "unsure")
             base = f.revenue(months, s2 or site, division, ch)
             if base:
                 return value / base, (f.base_name(s2 or site, division, ch), "rule")
@@ -903,15 +920,18 @@ def check_versions(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Cov
         cov.cannot(4, "chưa đọc được file kế hoạch hay file năm trước nào",
                    "file kế hoạch (AOP, AOPR) và file năm trước có phiên bản, tháng, phòng ban hoặc cost element")
     for s in pack.of("lines") + pack.of("other"):
+        years = _column_years(s, fy, f.fy_start)
         for groups in s.sections():
             cur = groups[0]
+            plain = [g for g in groups[1:] if not g.value.version]
             for g in groups[1:]:
                 col = g.value
                 if col.version == "thuc te":
                     continue
-                col_fy = col.fy if col.fy else (fy - 1 if col.previous else fy)
+                col_fy = years.get(col.index) or (fy - 1 if col.previous else fy)
                 if cur.value.fy and not col.fy and col.previous:
                     col_fy = cur.value.fy - (0 if cur.value.fy < fy else 1)
+                printed_version = col.version or (_row_version(s) if len(plain) == 1 else "")
                 months = [shift_year(m, col_fy - fy) for m in _months_for(col, period, fy, f.fy_start)]
                 available = f.versions(col_fy)
                 if not available:
@@ -937,13 +957,21 @@ def check_versions(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Cov
                     for h in hit:
                         matched[h] += 1
                     cells.append((r, v, values))
-                if not matched:
-                    if cells:
-                        cov.cannot(4, f"cột '{col.text}' không khớp phiên bản nào của FY{col_fy % 100:02d}/{(col_fy + 1) % 100:02d} "
-                                      f"({', '.join(v.upper() for v in available)})", "")
-                    continue
-                cov.ran(4, len(cells))
+                fy_name = f"FY{col_fy % 100:02d}/{(col_fy + 1) % 100:02d}"
                 found = sum(1 for r, _, _ in cells if not r.total)
+                lines_matched = Counter(h for r, v, vals in cells if not r.total
+                                        for h, x in vals.items() if x is not None and abs(x - v) <= VND_TOLERANCE)
+                if not found:
+                    cov.cannot(4, f"cột '{col.text}': không dòng nào tìm thấy số {fy_name} để so",
+                               f"file kế hoạch hoặc file năm trước ({fy_name}) có các dòng của bảng này")
+                    continue
+                if not lines_matched or lines_matched.most_common(1)[0][1] * 2 < found:
+                    cov.cannot(4, f"cột '{col.text}' không khớp phiên bản nào của {fy_name} "
+                                  f"({', '.join(v.upper() for v in available)}) ở đa số dòng, em không đoán bộ BOD dùng bản nào",
+                               f"tên phiên bản trên tiêu đề cột, hoặc file {fy_name} đúng với bộ BOD")
+                    continue
+                matched = lines_matched
+                cov.ran(4, len(cells))
                 if found < printed and col_fy < fy:
                     cov.partly(4, f"cột '{col.text}': {printed - found}/{printed} dòng không tìm thấy số "
                                   f"FY{col_fy % 100:02d}/{(col_fy + 1) % 100:02d} để so (cần file năm trước có các dòng này)")
@@ -951,9 +979,9 @@ def check_versions(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Cov
                 if used == "thuc te":
                     continue            # last year's actual: a legitimate comparison, not a plan version
                 right = None
-                if col.version and col.version != "thuc te" and not any(_same_version(col.version, a) for a in [used]):
-                    right = next((a for a in available if _same_version(a, col.version)), None)
-                    why = f"cột ghi {col.version.upper()} nhưng số lấy từ {used.upper()}"
+                if printed_version and printed_version != "thuc te" and not _same_version(printed_version, used):
+                    right = next((a for a in available if _same_version(a, printed_version)), None)
+                    why = f"bộ BOD ghi {printed_version.upper()} nhưng số lấy từ {used.upper()}"
                 if right is None and allowed and not any(_same_version(used, a) for a in allowed):
                     right = allowed[0]
                     why = (f"năm trước phải so với {right.upper()} của năm đó, bộ BOD dùng {used.upper()}"
@@ -973,6 +1001,41 @@ def check_versions(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Cov
     return out
 
 
+YEAR_MONTH_RE = re.compile(r"(?:^| )(?:t|thang|th)? ?(\d{1,2})(?: ?(?:/|-|\.|nam) ?| )(20\d\d)(?: |$)")
+
+
+def _column_years(s: Sheet, fy: int, fy_start: int) -> dict:
+    """{column: fiscal year} for value columns. A header's own year ('FY25/26', 'T10/2025') wins; a column
+    without one takes the year of the nearest value column to its left: 'T10/2025 | Kế hoạch' is last year's plan."""
+    out, last = {}, None
+    for c in s.cols:
+        if c.role not in ("value", "month"):
+            continue
+        y = c.fy
+        m = YEAR_MONTH_RE.search(c.k)
+        if y is None and m and 1 <= int(m.group(1)) <= 12:
+            y = fiscal_year(f"{m.group(2)}-{int(m.group(1)):02d}", fy_start)
+        if y is not None:
+            last = y
+        elif last is not None and not c.previous:
+            y = last
+        if y is not None:
+            out[c.index] = y
+    return out
+
+
+def _row_version(s: Sheet) -> str:
+    """The plan version a table names in a text cell of its rows ('Phiên bản: AOP'), when every row agrees."""
+    seen = set()
+    for r in s.rows:
+        for v in r.values:
+            if isinstance(v, str):
+                ver = version_of(key(v))
+                if ver and ver != "thuc te":
+                    seen.add(ver)
+    return seen.pop() if len(seen) == 1 else ""
+
+
 def check_months(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Coverage] = None) -> list:
     """A month already closed when the revised plan was approved must hold the actual. Only a cell that still
     holds the plan (AOP) is an error. A line the detail has no actual for (revenue, another division, a line
@@ -982,7 +1045,7 @@ def check_months(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Cover
     months = fy_months(fy, f.fy_start)
     approvals = {}
     for p in f.plans:
-        if p["version"].startswith("aopr") and p.get("approved"):
+        if p["version"].startswith("aopr") and p.get("approved") and p.get("fy") in (fy, None):
             approvals[p["version"]] = max(approvals.get(p["version"], ""), p["approved"])
     no_source = set()
 
@@ -1028,6 +1091,9 @@ def check_months(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Cover
     rows, other_division, unknown = [], 0, set()
     for p in f.plans:
         if not p["version"].startswith("aopr") or not (p["dept"] or p["element"] or p["dong"]):
+            continue
+        if p.get("fy") is not None and p["fy"] != fy:
+            continue                         # last year's revised plan is group 4's business, not a month to lock
             continue
         locked, how = locked_months(f.cfg, fy, f.fy_start, period, approvals.get(p["version"], ""))
         if not how:
