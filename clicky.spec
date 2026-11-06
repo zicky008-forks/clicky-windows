@@ -91,7 +91,11 @@ datas, binaries, hiddenimports = [], [], []
 datas.append(("browser_extension", "browser_extension"))
 datas.append(("RELEASE-NOTES-1.6.md", "."))
 datas.append(("assets/mau", "assets/mau"))       # the sample month (made-up company) for "Xem em làm"
+if os.path.isdir(os.path.join("voice", "asr-vi")):  # offline Vietnamese speech (tools/giong_noi/tai_model.py)
+    datas.append((os.path.join("voice", "asr-vi"), os.path.join("voice", "asr-vi")))
+    datas.append(("audio/stt/hotwords_vi.txt", "audio/stt"))
 for pkg in (
+    "sherpa_onnx",              # offline Vietnamese speech (its own onnxruntime DLL under sherpa_onnx/lib)
     "faster_whisper",
     "ctranslate2",
     "tokenizers",

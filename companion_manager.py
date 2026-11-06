@@ -697,7 +697,10 @@ class CompanionManager(QObject):
     def _get_stt(self):
         if self._stt is None:
             provider = cfg.stt_provider()
-            if provider == "deepgram":
+            if provider == "sherpa_vi":
+                from audio.stt.sherpa_vi_stt import SherpaViSTT
+                self._stt = SherpaViSTT()
+            elif provider == "deepgram":
                 from audio.stt.deepgram_stt import DeepgramSTT
                 self._stt = DeepgramSTT()
             elif provider == "openai":
@@ -739,7 +742,7 @@ class CompanionManager(QObject):
     def on_hotkey_press(self):
         if self._state in {AppState.THINKING, AppState.SPEAKING}:
             self.stop()
-        if cfg.stt_provider() == "windows":
+        if cfg.stt_provider() == "typed":
             self.sig_voice_typing.emit(not self._dictating)
             self._dictating = False
             return
@@ -2154,9 +2157,9 @@ class CompanionManager(QObject):
         to catch "Clicky". OFF (the default) leaves the mic closed until you
         press the hotkey, which is both quieter on CPU and less invasive.
         """
-        if enabled and cfg.stt_provider() == "windows":
+        if enabled and cfg.stt_provider() == "typed":
             self.sig_notice.emit("Wake word needs a speech model. Add an OpenAI or Deepgram key, "
-                                 "or press the talk shortcut to use Windows voice typing.")
+                                 "or press the talk shortcut to type your question.")
             return
         try:
             self._listener.set_ambient(enabled)
