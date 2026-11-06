@@ -24,6 +24,12 @@ Kết quả nằm trong `dien-tap\<giờ>\` cạnh file Excel:
 
 Mã thoát: 0 = ĐẠT, 1 = KHÔNG ĐẠT, 2 = không chạy được.
 
+### Chạy nhiều lượt: `--lan N`
+
+Khách chạy chốt tháng một lần là phải đúng lần đó, nên một lượt đạt may mắn chưa đủ. `--lan 5` chạy cùng case 5 lượt liền và chỉ ĐẠT khi **cả 5** lượt đều đạt. Giữa hai lượt, robot tự thoát Clicky và đóng (không lưu) các file mà lượt trước đã mở. Lượt cuối thì để nguyên cho người xem.
+Có `--out` thì mỗi lượt nằm trong `lan-1\`, `lan-2\`…, và bảng tổng hợp nằm ở `tong-hop.md`.
+Mốc trước khi người thật chạy tay: Case 01 phải đạt `--lan 3` ở mức phóng 100, và đạt một lượt ở mỗi mức 85 và 130.
+
 ## Robot bấm bằng gì
 
 - Mặc định thử **agent-desktop** (Vercel Labs, Apache-2.0): tải bản Windows x64 từ
