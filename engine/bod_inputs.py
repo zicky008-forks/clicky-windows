@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from engine.bod_review import Entry
-from engine.tables import Table, key, read_table, sheets_of
+from engine.tables import Table, find_header, header_texts, key, read_table, sheets_of
 
 ZERO = Decimal(0)
 
@@ -23,10 +23,10 @@ GL_SPEC = {
     "so_ct": ["so ct", "so chung tu", "so phieu", "document", "doc no"],
     "thang": ["thang", "ky", "period", "thang ke toan"],
     "nam": ["nam", "nam tai chinh", "year"],
-    "phap_nhan": ["phap nhan", "site", "don vi", "cong ty", "entity"],
-    "khoi": ["khoi", "division", "bo phan kinh doanh"],
-    "kenh": ["kenh", "channel", "kenh ban"],
-    "pb": ["phong ban ma", "ma phong ban", "ma pb", "cost center", "trung tam chi phi"],
+    "phap_nhan": ["phap nhan", "site", "don vi", "cong ty", "entity", "nha may", "plant", "chi nhanh"],
+    "khoi": ["khoi", "division", "bo phan kinh doanh", "khoi kinh doanh", "nganh hang"],
+    "kenh": ["kenh", "channel", "kenh ban", "kenh phan phoi"],
+    "pb": ["phong ban ma", "ma phong ban", "ma pb", "cost center", "trung tam chi phi", "ma bo phan"],
     "pb_ten": ["phong ban ten", "ten phong ban", "phong ban"],
     "ce": ["cost element ma", "ma cost element", "ma khoan muc", "cost element", "ma ce"],
     "ce_ten": ["cost element ten", "ten cost element", "ten khoan muc"],
@@ -41,15 +41,16 @@ GL_SPEC = {
 }
 
 PLAN_SPEC = {
-    "phien_ban": ["phien ban", "version", "kich ban", "scenario"],
-    "nam": ["nam", "nam tai chinh", "year", "fy"],
-    "thang": ["thang", "period", "month"],
-    "khoi": ["khoi", "division"],
-    "pb": ["phong ban ma", "ma phong ban", "ma pb"],
-    "ce": ["cost element ma", "ma cost element", "ma ce"],
+    "phien_ban": ["phien ban", "version", "kich ban", "scenario", "loai so lieu"],
+    "nam": ["nam", "nam tai chinh", "year", "fy", "nien do"],
+    "thang": ["thang", "period", "month", "ky"],
+    "site": ["site", "phap nhan", "nha may", "don vi", "plant", "chi nhanh", "entity"],
+    "khoi": ["khoi", "division", "khoi kinh doanh", "nganh hang"],
+    "pb": ["phong ban ma", "ma phong ban", "ma pb", "phong ban", "cost center", "ma bo phan"],
+    "ce": ["cost element ma", "ma cost element", "ma ce", "cost element", "ma khoan muc"],
     "dong": ["dong bod", "dong bao cao", "chi tieu", "khoan muc bod"],
-    "kenh": ["kenh", "channel"],
-    "tien": ["so tien vnd", "so tien", "gia tri", "amount"],
+    "kenh": ["kenh", "channel", "kenh phan phoi"],
+    "tien": ["so tien vnd", "so tien", "gia tri", "amount", "thanh tien"],
     "ty_gia": ["ty gia gia dinh", "ty gia"],
 }
 
@@ -62,15 +63,19 @@ FX_SPEC = {
 }
 
 SALES_SPEC = {
-    "ngay": ["ngay hd", "ngay hoa don", "ngay ct", "ngay", "date"],
-    "thang": ["thang", "ky", "period"],
-    "phap_nhan": ["phap nhan", "site", "don vi", "cong ty"],
-    "khoi": ["khoi", "division"],
-    "kenh": ["kenh", "channel", "kenh ban"],
-    "dt_thuan": ["doanh thu thuan", "dtt", "net revenue", "net sales"],
-    "dt": ["doanh thu", "thanh tien", "doanh so", "gross", "gia tri"],
-    "ck": ["chiet khau", "giam gia", "discount"],
-    "tra_lai": ["tra lai", "hang ban bi tra lai", "returns"],
+    "ngay": ["ngay hd", "ngay hoa don", "ngay ct", "ngay chung tu", "ngay", "date", "invoice date"],
+    "thang": ["thang", "ky", "period", "month"],
+    "nam": ["nam", "nam tai chinh", "year", "fy", "nien do"],
+    "phap_nhan": ["phap nhan", "site", "don vi", "cong ty", "nha may", "plant", "chi nhanh", "entity"],
+    "khoi": ["khoi", "division", "khoi kinh doanh", "nganh hang", "bu"],
+    "kenh": ["kenh", "channel", "kenh ban", "kenh phan phoi", "kenh bh", "sales channel", "nhom khach hang",
+             "loai khach hang", "customer group"],
+    "dt_thuan": ["doanh thu thuan", "dtt", "net revenue", "net sales", "dt thuan", "net amount", "doanh thu sau chiet khau",
+                 "doanh thu sau ck", "revenue net"],
+    "dt": ["doanh thu", "thanh tien", "doanh so", "gross", "gia tri", "revenue", "sales amount", "tien hang", "gross sales",
+           "doanh thu gop", "doanh thu ban hang", "amount"],
+    "ck": ["chiet khau", "giam gia", "discount", "ck thuong mai"],
+    "tra_lai": ["tra lai", "hang ban bi tra lai", "returns", "hang tra lai"],
 }
 
 
@@ -233,6 +238,16 @@ def read_config(path: Path) -> Config:
 
 # ── Detail, plans, rates, sales ─────────────────────────────────────────────────
 
+UNASSIGNED_RE = re.compile(r"^(n ?a|na|none|null|nan|0+|khong|khong co|chua gan|chua phan bo|chua xac dinh|khong xac dinh|"
+                           r"unassigned|unallocated|chua co|trong|blank|\?+|x+)$")
+
+
+def unassigned(code) -> bool:
+    """'', '-', '#N/A', 'N/A', 'Chưa gán', '0': no department."""
+    k = key(str(code or "").replace("#", " "))
+    return not k or bool(UNASSIGNED_RE.match(k))
+
+
 def _cost_account(acct: str, prefixes) -> bool:
     return any(acct.startswith(p) for p in prefixes)
 
@@ -259,7 +274,8 @@ def read_gl(t: Table, cost_prefixes=("6",), fy_start: int = 7) -> list:
         cur = str(t.get(v, "ma_tt", "") or "").strip().upper()
         out.append(Entry(period or "", amount, division=str(t.get(v, "khoi", "") or "").strip(),
                          site=str(t.get(v, "phap_nhan", "") or "").strip(), channel=str(t.get(v, "kenh", "") or "").strip(),
-                         dept=str(t.get(v, "pb", "") or "").strip(), element=str(t.get(v, "ce", "") or "").strip(),
+                         dept="" if unassigned(t.get(v, "pb")) else str(t.get(v, "pb")).strip(),
+                         element=str(t.get(v, "ce", "") or "").strip(),
                          account=acct, usd=fc if fc is not None and (cur in ("", "USD")) else None,
                          ref=str(t.get(v, "so_ct", "") or "").strip(), text=str(t.get(v, "dien_giai", "") or "").strip(),
                          where=f"{t.sheet}!{n}"))
@@ -278,21 +294,81 @@ class PlanRow:
     channel: str = ""
     rate: Optional[Decimal] = None
     where: str = ""
+    site: str = ""
+    month_no: Optional[int] = None      # month without a year yet: resolved by load() from the file's fiscal year
+    fy: Optional[int] = None            # first year of the fiscal year, when the file or header says it
 
 
-def read_plan(t: Table, default_version: str = "", fy_start: int = 7) -> list:
+def _dims(t: Table, v) -> dict:
+    return {f: str(t.get(v, c, "") or "").strip() for f, c in (("division", "khoi"), ("dept", "pb"), ("element", "ce"),
+                                                               ("line", "dong"), ("channel", "kenh"), ("site", "site"))}
+
+
+def _plan_month(thang, nam, fy_start: int) -> tuple:
+    """('YYYY-MM' or '', month number when only the month is known, fiscal year when a year is given)."""
+    m = month_key(thang, None, nam, fy_start)
+    years = fiscal_years(nam)
+    fy = years[0] if years and years[1] else None
+    if m:
+        return m, None, fy
+    mk = month_key(thang, None, "2000/01", fy_start)
+    return "", (int(mk[5:]) if mk else None), fy
+
+
+def read_plan(t: Table, default_version: str = "", fy_start: int = 7, rows: Optional[list] = None,
+              file_fy: Optional[int] = None) -> list:
+    """Long tables (one amount column) and wide ones: one column per version ('Thực tế', 'AOP', 'AOPR1') or per
+    month ('T7' .. 'T6', '07/2026'), each column read into its own rows."""
+    if "tien" in t.columns:
+        out = []
+        for n, v in t.rows:
+            amount = num(t.get(v, "tien"))
+            if amount is None:
+                t.skipped.append((n, "không có số tiền"))
+                continue
+            month, month_no, fy = _plan_month(t.get(v, "thang"), t.get(v, "nam"), fy_start)
+            out.append(PlanRow(str(t.get(v, "phien_ban", default_version) or default_version).strip(), month, amount,
+                               rate=num(t.get(v, "ty_gia")), where=f"{t.sheet}!{n}", month_no=month_no,
+                               fy=fy or file_fy, **_dims(t, v)))
+        return out
+    from engine.bod_pack import fy_of, month_of, version_of
+    from openpyxl.utils import get_column_letter
+    headers = header_texts(rows, t.header_row - 1) if rows is not None else t.headers
+    value_cols = []
+    used = set(t.columns.values())
+    for c, h in enumerate(headers):
+        k = key(h)
+        if c in used or not k:
+            continue
+        ver, mon = version_of(k), month_of(k)
+        if not ver and mon is None:
+            continue
+        value_cols.append((c, ver, mon, fy_of(k)))
     out = []
     for n, v in t.rows:
-        amount = num(t.get(v, "tien"))
-        if amount is None:
+        dims, hit = _dims(t, v), False
+        for c, ver, mon, col_fy in value_cols:
+            amount = num(v[c] if c < len(v) else None)
+            if amount is None:
+                continue
+            hit = True
+            version = ver or str(t.get(v, "phien_ban", default_version) or default_version).strip()
+            thang = mon if mon is not None else t.get(v, "thang")
+            month, month_no, fy = _plan_month(thang, t.get(v, "nam"), fy_start)
+            out.append(PlanRow(version, month, amount, rate=num(t.get(v, "ty_gia")),
+                               where=f"{t.sheet}!{get_column_letter(c + 1)}{n}", month_no=month_no,
+                               fy=fy or col_fy or file_fy, **dims))
+        if not hit:
             t.skipped.append((n, "không có số tiền"))
-            continue
-        out.append(PlanRow(str(t.get(v, "phien_ban", default_version) or default_version).strip(),
-                           month_key(t.get(v, "thang"), None, t.get(v, "nam"), fy_start) or "", amount,
-                           str(t.get(v, "khoi", "") or "").strip(), str(t.get(v, "pb", "") or "").strip(),
-                           str(t.get(v, "ce", "") or "").strip(), str(t.get(v, "dong", "") or "").strip(),
-                           str(t.get(v, "kenh", "") or "").strip(), num(t.get(v, "ty_gia")), f"{t.sheet}!{n}"))
     return out
+
+
+def plan_value_columns(t: Table, rows: list) -> int:
+    """How many columns of a plan-like table carry a version or a month in their header."""
+    from engine.bod_pack import month_of, version_of
+    used = set(t.columns.values())
+    return sum(1 for c, h in enumerate(header_texts(rows, t.header_row - 1))
+               if c not in used and key(h) and (version_of(key(h)) or month_of(key(h)) is not None))
 
 
 def rate_type(text) -> str:
@@ -345,7 +421,7 @@ def read_sales(t: Table, fy_start: int = 7) -> list:
                 t.skipped.append((n, "không có doanh thu"))
                 continue
             net = gross - abs(num(t.get(v, "ck")) or ZERO) - abs(num(t.get(v, "tra_lai")) or ZERO)
-        out.append(Sale(month_key(t.get(v, "thang"), t.get(v, "ngay"), None, fy_start) or "", net,
+        out.append(Sale(month_key(t.get(v, "thang"), t.get(v, "ngay"), t.get(v, "nam"), fy_start) or "", net,
                         str(t.get(v, "phap_nhan", "") or "").strip(), str(t.get(v, "khoi", "") or "").strip(),
                         str(t.get(v, "kenh", "") or "").strip()))
     return out
@@ -369,16 +445,99 @@ class Bundle:
 
 PACK_WORDS = ("pack", "bod", "ban nhap", "bao cao hdqt", "trinh")
 
+# What a file name says it holds. A hint only orders the readers and words the reason when nothing fits.
+HINTS = (("tb", r"\btb\b|can doi|trial balance|cdps|cdtk|bang cdtk"),
+         ("sales", r"mastersale|master sale|ban hang|doanh thu|doanh so|\bsales?\b|\bdt\b|hoa don|don hang"),
+         ("prior", r"nam truoc|\bly\b|prior|last year|cung ky"),
+         ("plan", r"ke hoach|\baopr? ?\d*\b|\bmuf\b|budget|ngan sach|\bplan\b|forecast"),
+         ("fx", r"ty gia|\bfx\b|exchange"),
+         ("cut", r"cat giam|\bcut\b"),
+         ("gl", r"\bgl\b|so chi tiet|chi tiet chi phi|so cai|ledger|chi phi"))
+NEED = {"sales": "nhóm 2 (mẫu số %DTT theo kênh) cần doanh thu theo site, khối, kênh",
+        "prior": "nhóm 4 (phiên bản kế hoạch khi so năm trước) cần số năm trước",
+        "plan": "nhóm 4 và 5 cần số kế hoạch theo tháng",
+        "fx": "nhóm 7 (ảnh hưởng tỷ giá) cần bảng tỷ giá theo tháng và loại",
+        "gl": "nhóm 1 (tổng chi phí) cần sổ chi tiết có tài khoản và phòng ban hoặc cost element"}
+WHAT = {"sales": ("doanh thu (thành tiền, doanh thu thuần)", "kênh, site hoặc khối", "tháng hoặc ngày"),
+        "prior": ("số tiền, hoặc cột theo phiên bản (Thực tế, AOP, AOPR)", "tháng", "phòng ban, cost element hoặc dòng BOD"),
+        "plan": ("số tiền, hoặc cột theo phiên bản hay theo tháng", "tháng", "phòng ban, cost element hoặc dòng BOD"),
+        "fx": ("tỷ giá", "tháng", "loại tỷ giá"),
+        "gl": ("số tiền", "tài khoản", "phòng ban hoặc cost element")}
+
+
+def hint_of(stem: str) -> str:
+    k = name_key(stem)
+    for name, rx in HINTS:
+        if re.search(rx, k):
+            return name
+    return ""
+
 
 def name_key(stem: str) -> str:
     """'DanhMuc_CauHinh' -> 'danh muc cau hinh': file names are often written in CamelCase."""
     return key(re.sub(r"(?<=[a-zà-ỹđ])(?=[A-ZÀ-ỸĐ])", " ", str(stem)))
 
 
+def _try_fx(rows, sheet, hint, fy_start):
+    t = read_table(rows, sheet, FX_SPEC, 2, required=("ty_gia",))
+    if t is None:
+        return None
+    named = "loai" in t.columns and "ty gia" in key(t.headers[t.columns["loai"]])
+    if hint != "fx" and not named:
+        return None
+    rates = read_fx(t, fy_start)
+    return (t, rates) if rates else None
+
+
+def _try_gl(rows, sheet, fy_start):
+    t = read_table(rows, sheet, GL_SPEC, 4, required=("tien",))
+    if t is not None and ({"tk", "tk_no", "tk_co"} & set(t.columns)) and ({"pb", "ce"} & set(t.columns)):
+        return t, read_gl(t, fy_start=fy_start)
+    return None
+
+
+def _try_plan(rows, sheet, version, fy_start, file_fy):
+    t = read_table(rows, sheet, PLAN_SPEC, 2)
+    if t is None or not ({"phien_ban", "dong", "pb", "ce"} & set(t.columns)):
+        return None
+    wide = 0 if "tien" in t.columns else plan_value_columns(t, rows)
+    if "tien" not in t.columns and not wide:
+        return None
+    if "thang" not in t.columns and not wide:
+        return None
+    out = read_plan(t, version, fy_start, rows, file_fy)
+    return (t, out) if out else None
+
+
+def _try_sales(rows, sheet, fy_start):
+    t = read_table(rows, sheet, SALES_SPEC, 3)
+    if t is None or not ({"dt_thuan", "dt"} & set(t.columns)) or not ({"kenh", "phap_nhan", "khoi"} & set(t.columns)):
+        return None
+    if not ({"thang", "ngay"} & set(t.columns)):
+        return None
+    out = read_sales(t, fy_start)
+    return (t, out) if out else None
+
+
+def _missing(rows, spec_name: str) -> str:
+    """Which columns a file lacked for what its name says it is, in the user's words."""
+    spec = {"sales": SALES_SPEC, "prior": PLAN_SPEC, "plan": PLAN_SPEC, "fx": FX_SPEC, "gl": GL_SPEC}[spec_name]
+    found = find_header(rows, spec, 1)
+    have = set(found[1]) if found else set()
+    groups = {"sales": [{"dt_thuan", "dt"}, {"kenh", "phap_nhan", "khoi"}, {"thang", "ngay"}],
+              "prior": [{"tien"}, {"thang"}, {"pb", "ce", "dong", "phien_ban"}],
+              "plan": [{"tien"}, {"thang"}, {"pb", "ce", "dong", "phien_ban"}],
+              "fx": [{"ty_gia"}, {"thang"}, {"loai"}],
+              "gl": [{"tien"}, {"tk", "tk_no", "tk_co"}, {"pb", "ce"}]}[spec_name]
+    lacking = [WHAT[spec_name][i] for i, g in enumerate(groups) if not (g & have)]
+    return ", ".join(lacking)
+
+
 def load(folder: Path, fy_start: int = 7) -> Bundle:
     folder = Path(folder)
     b = Bundle(folder)
-    files = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in (".csv", ".xlsx", ".xlsm"))
+    files = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in (".csv", ".xlsx", ".xlsm")
+                   and not p.name.startswith("~$"))
     rest = []
     for p in files:                                            # configuration first: its rules shape the rest
         if any(w in name_key(p.stem) for w in ("danh muc", "cau hinh", "config")):
@@ -388,8 +547,10 @@ def load(folder: Path, fy_start: int = 7) -> Bundle:
             rest.append(p)
     fy = b.config.rule("thang bat dau") or b.config.rule("nien do")
     fy_start = int(num(fy)) if num(fy) is not None and 1 <= int(num(fy)) <= 12 else fy_start
+    pending = []                                                # (plan rows, prior?) whose year comes from the detail
     for p in rest:
         k = name_key(p.stem)
+        hint = hint_of(p.stem)
         if any(w in k for w in PACK_WORDS) and p.suffix.lower() != ".csv":
             b.packs.append(p)
             b.receipt.append((p.name, "Bộ BOD cần soát", 0, []))
@@ -399,43 +560,93 @@ def load(folder: Path, fy_start: int = 7) -> Bundle:
         except Exception as exc:                               # noqa: BLE001 - say it, never skip in silence
             b.unused.append((p.name, f"không đọc được: {exc}"))
             continue
+        file_years = fiscal_years(p.stem) or fiscal_years(k)
+        file_fy = file_years[0] if file_years and file_years[1] else None
+        prior = hint == "prior"
+        version = _version_from_name(p.stem)
+        if prior and version not in ("AOP", "AOPR", "AOPR1", "AOPR2", "MUF"):
+            version = ""                        # a last-year file that names no version: its rows are last year's actual
         used = False
-        for sheet, rows in sheets.items():
-            if "cat giam" in k or "cut" in k:
+        if hint == "cut":
+            for sheet, rows in sheets.items():
                 b.cut.append((sheet, rows))
-                b.receipt.append((p.name, "Tham số cắt giảm", len(rows), []))
-                used = True
-                break
-            t = read_table(rows, sheet, FX_SPEC, 2, required=("ty_gia",))
-            if t is not None and ("ty gia" in k or "loai" in t.columns or "fx" in k):
-                rates = read_fx(t, fy_start)
-                if rates:
-                    b.fx.update(rates)
-                    b.receipt.append((p.name, "Tỷ giá", len(t.rows), t.skipped))
+            b.receipt.append((p.name, "Tham số cắt giảm", sum(len(r) for r in sheets.values()), []))
+            continue
+        order = {"sales": ("sales", "gl", "plan", "fx"), "prior": ("plan", "gl", "sales", "fx"),
+                 "plan": ("plan", "gl", "sales", "fx"), "fx": ("fx", "plan", "gl", "sales"),
+                 "gl": ("gl", "plan", "sales", "fx")}.get(hint, ("fx", "gl", "plan", "sales"))
+        for sheet, rows in sheets.items():
+            for kind in order:
+                if kind == "fx":
+                    got = _try_fx(rows, sheet, hint, fy_start)
+                    if got:
+                        b.fx.update(got[1])
+                        b.receipt.append((p.name, "Tỷ giá", len(got[0].rows), got[0].skipped))
+                elif kind == "gl":
+                    got = _try_gl(rows, sheet, fy_start)
+                    if got:
+                        b.gl += got[1]
+                        b.receipt.append((p.name, "Sổ chi tiết chi phí", len(got[0].rows), got[0].skipped))
+                elif kind == "plan":
+                    got = _try_plan(rows, sheet, "LY" if prior and version == "" else version, fy_start, file_fy)
+                    if got:
+                        t, plan_rows = got
+                        if prior:
+                            for r in plan_rows:
+                                r.version = r.version if r.version and r.version != "LY" else "thuc te"
+                        pending.append((plan_rows, prior))
+                        b.plans += plan_rows
+                        b.receipt.append((p.name, "Năm trước" if prior else "Kế hoạch", len(t.rows), t.skipped))
+                else:
+                    got = _try_sales(rows, sheet, fy_start)
+                    if got:
+                        b.sales += got[1]
+                        b.receipt.append((p.name, "Bán hàng", len(got[0].rows), got[0].skipped))
+                if got:
                     used = True
-                    continue
-            t = read_table(rows, sheet, GL_SPEC, 4, required=("tien",))
-            if t is not None and ({"tk", "tk_no", "tk_co"} & set(t.columns)) and ({"pb", "ce"} & set(t.columns)):
-                b.gl += read_gl(t, fy_start=fy_start)
-                b.receipt.append((p.name, "Sổ chi tiết chi phí", len(t.rows), t.skipped))
-                used = True
-                continue
-            t = read_table(rows, sheet, PLAN_SPEC, 3, required=("tien",))
-            if t is not None and ({"phien_ban", "dong", "pb", "ce"} & set(t.columns)) and "thang" in t.columns:
-                version = "" if "phien_ban" in t.columns else _version_from_name(p.stem)
-                b.plans += read_plan(t, version, fy_start)
-                b.receipt.append((p.name, "Kế hoạch" if "nam truoc" not in k else "Năm trước", len(t.rows), t.skipped))
-                used = True
-                continue
-            t = read_table(rows, sheet, SALES_SPEC, 3)
-            if t is not None and ({"dt_thuan", "dt"} & set(t.columns)) and "kenh" in t.columns:
-                b.sales += read_sales(t, fy_start)
-                b.receipt.append((p.name, "Bán hàng", len(t.rows), t.skipped))
-                used = True
-                continue
+                    break
         if not used:
-            b.unused.append((p.name, "không thuộc phần soát bộ BOD (vd. bảng cân đối dùng cho lớp chốt số)"))
+            b.unused.append((p.name, _unused_reason(hint, sheets)))
+    _resolve_years(b, pending, fy_start)
     return b
+
+
+def _unused_reason(hint: str, sheets: dict) -> str:
+    if hint == "tb":
+        return "bảng cân đối tài khoản: dùng cho phần chốt số, phần soát bộ BOD không cần"
+    if hint in NEED:
+        rows = max(sheets.values(), key=len) if sheets else []
+        lacking = _missing(rows, hint)
+        return (f"tên file cho thấy đây là file {'năm trước' if hint == 'prior' else hint} nhưng em không đọc được"
+                + (f": không thấy cột {lacking}" if lacking else ": không có dòng số liệu nào dùng được")
+                + f". Vì vậy {NEED[hint]}").replace("file sales", "file doanh thu").replace("file plan", "file kế hoạch") \
+            .replace("file fx", "file tỷ giá").replace("file gl", "file sổ chi tiết")
+    cols = []
+    for rows in sheets.values():
+        for r in rows[:5]:
+            cols += [str(v) for v in r or [] if isinstance(v, str) and v.strip()]
+    return "em không nhận ra bảng nào cần cho soát bộ BOD trong file này" + (
+        f" (các cột đầu: {', '.join(cols[:6])})" if cols else "")
+
+
+def _resolve_years(b: Bundle, pending: list, fy_start: int) -> None:
+    """Plan rows that name only a month get the year from the file, else from the detail's current year
+    (a last-year file: one year before)."""
+    from collections import Counter
+    counts = Counter(e.period for e in b.gl if e.period) or Counter(s.month for s in b.sales if s.month)
+    current = None
+    if counts:
+        busy = [p for p, n in counts.items() if n >= max(counts.values()) / 4]
+        last = max(busy)
+        current = int(last[:4]) if int(last[5:]) >= fy_start else int(last[:4]) - 1
+    for rows, prior in pending:
+        for r in rows:
+            if r.month or r.month_no is None:
+                continue
+            fy = r.fy if r.fy else (current - 1 if prior else current) if current else None
+            if fy is None:
+                continue
+            r.month = f"{fy if r.month_no >= fy_start else fy + 1:04d}-{r.month_no:02d}"
 
 
 def _version_from_name(stem: str) -> str:

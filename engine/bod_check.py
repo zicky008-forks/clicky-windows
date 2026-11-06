@@ -74,6 +74,10 @@ def words(text) -> str:
     return re.sub(r"[^0-9a-z%]+", " ", key(text)).strip()
 
 
+def is_distributor_discount(r: dict) -> bool:
+    return bool(DISCOUNT_RE.search(key(r.get("text", ""))) and DISTRIBUTOR_RE.search(key(r.get("text", ""))))
+
+
 class Facts:
     """The folder as records the pack's labels can be matched to."""
 
@@ -81,12 +85,24 @@ class Facts:
         self.b, self.cfg, self.division, self.fy_start = b, b.config, division, fy_start
         prefixes = sorted({t for e in self.cfg.elements.values() for t in accounts(e.get("tk"))}, key=len, reverse=True)
         self.cost_prefixes = tuple(p for p in prefixes if p) or ("6",)
+        self.canon = {}                      # every division: 'tm' and 'thuong mai' -> one name
+        for e in b.gl:
+            d = self.cfg.depts.get(e.dept) or {}
+            if e.division and d.get("khoi"):
+                a, c = key(e.division), key(d["khoi"])
+                root = self.canon.get(a) or self.canon.get(c) or c
+                self.canon[a] = self.canon[c] = root
         self.aliases = {key(division)} if division else set()
         for _ in range(2):                   # 'TM' in the detail, 'Thương mại' in sales and titles: one division
             for e in b.gl:
                 d = self.cfg.depts.get(e.dept) or {}
                 if e.division and d.get("khoi") and ({key(e.division), key(d["khoi"])} & self.aliases):
                     self.aliases |= {key(e.division), key(d["khoi"])}
+        known = {key(c) for c in self.cfg.depts} | {key(d.get("ten", "")) for d in self.cfg.depts.values()}
+        codes = [e.dept for e in b.gl if e.dept]
+        # a code the department list does not know is unassigned, unless the detail uses another coding altogether
+        self.strict_depts = bool(known) and bool(codes) and sum(key(c) in known for c in codes) >= 0.8 * len(codes)
+        self.known_depts = known
         self.gl = [self._rec(e) for e in b.gl]
         self.plans = [self._plan(p) for p in b.plans]
         names = defaultdict(dict)
@@ -107,7 +123,8 @@ class Facts:
         for k, (name, _) in self.cfg.channels.items():
             names["channel"].setdefault(k, name)
         self.names = names
-        self.sites = sorted({s.site for s in b.sales if s.site} | {r["site"] for r in self.gl if r["site"]})
+        self.sites = sorted({s.site for s in b.sales if s.site} | {r["site"] for r in self.gl if r["site"]}
+                            | {r["site"] for r in self.plans if r["site"]})
         self.divisions = sorted({s.division for s in b.sales if s.division} | {r["division"] for r in self.gl if r["division"]})
 
     def is_cost(self, account: str) -> bool:
@@ -125,15 +142,16 @@ class Facts:
 
     def _rec(self, e) -> dict:
         dong, nhom = self._line_of(e.element, e.account)
+        dept = e.dept if not self.strict_depts or key(e.dept) in self.known_depts else ""
         return {"period": e.period, "amount": e.amount, "division": e.division, "site": e.site, "channel": e.channel,
-                "dept": e.dept, "element": e.element, "account": e.account, "dong": dong, "nhom": nhom, "usd": e.usd,
-                "text": e.text, "ref": e.ref, "where": e.where, "cost": self.is_cost(e.account)}
+                "dept": dept, "dept_raw": e.dept, "element": e.element, "account": e.account, "dong": dong, "nhom": nhom,
+                "usd": e.usd, "text": e.text, "ref": e.ref, "where": e.where, "cost": self.is_cost(e.account)}
 
     def _plan(self, p) -> dict:
         dong, nhom = self._line_of(p.element, "")
         v = version_of(key(p.version)) or key(p.version)
         return {"version": v, "period": p.month, "fy": fiscal_year(p.month, self.fy_start) if p.month else None,
-                "amount": p.amount, "division": p.division, "dept": p.dept, "element": p.element,
+                "amount": p.amount, "division": p.division, "dept": p.dept, "element": p.element, "site": p.site,
                 "dong": p.line or dong, "nhom": nhom, "channel": p.channel, "rate": p.rate, "where": p.where}
 
     # matching a printed label to records
@@ -158,6 +176,19 @@ class Facts:
                         return lambda r, d=dim, v=v: r.get(d) == v
         return None
 
+    def row_filter(self, label: str, section: str = "") -> Optional[Callable]:
+        """The matcher, narrowed to the site and the division a row names in its text columns ('S2', 'Thương mại')."""
+        match = self.matcher(label, section)
+        if match is None:
+            return None
+        site = self.site_in(label)
+        division = next((d for d in sorted(self.divisions, key=len, reverse=True)
+                         if re.search(rf"(^| ){re.escape(words(d))}( |$)", words(label))), "")
+        if not site and not division:
+            return match
+        return lambda r: match(r) and (not site or key(r.get("site", "")) == key(site)) and \
+            (not division or not r.get("division") or self.same_division(r["division"], division))
+
     def dim_of(self, label: str, section: str = "") -> str:
         for text in (label, f"{section} {label}"):
             k = key(text)
@@ -166,13 +197,19 @@ class Facts:
                     return dim
         return ""
 
-    def in_division(self, r: dict) -> bool:
-        return not self.division or not r.get("division") or key(r["division"]) in self.aliases
+    def same_division(self, a: str, b: str) -> bool:
+        a, b = key(a), key(b)
+        return a == b or self.canon.get(a, a) == self.canon.get(b, b) or (a in self.aliases and b in self.aliases)
 
-    def actual(self, match: Callable, periods) -> Decimal:
+    def in_division(self, r: dict) -> bool:
+        return not self.division or not r.get("division") or self.same_division(r["division"], self.division)
+
+    def actual(self, match: Callable, periods, clean: bool = False) -> Decimal:
+        """Cost in the detail. clean=True leaves out what the detail itself gets wrong (a distributor discount
+        posted as cost), so a plan that already corrected it is not called wrong."""
         periods = set(periods)
         return sum((r["amount"] for r in self.gl if r["cost"] and r["period"] in periods and self.in_division(r)
-                    and match(r)), ZERO)
+                    and match(r) and not (clean and is_distributor_discount(r))), ZERO)
 
     def plan(self, version: str, match: Callable, periods) -> Optional[Decimal]:
         periods = set(periods)
@@ -319,6 +356,57 @@ def fx_convention(cfg: Config) -> Optional[str]:
 
 # ── the review ──────────────────────────────────────────────────────────────────
 
+NOT_RUN = "CHƯA KIỂM ĐƯỢC"
+DEFAULT_WHY = {
+    1: ("không thấy dòng tổng chi phí nào trên bộ BOD", "dòng tổng chi phí của khối trong kỳ (dòng 'Tổng' hoặc dòng cha có các dòng con)"),
+    2: ("không thấy dòng nào trên bộ BOD có cả chi phí, %DTT và quy tắc mẫu số", "cột %DTT trên bộ BOD và quy tắc mẫu số theo kênh trong danh mục"),
+    3: ("không thấy bảng nào trên bộ BOD có cột %DTT hoặc cột chênh lệch", "bảng có giá trị, %DTT và chênh lệch"),
+    4: ("không thấy cột so sánh với kế hoạch nào khớp được với file kế hoạch", "cột so sánh trên bộ BOD và file kế hoạch của năm đó"),
+    5: ("không thấy bảng AOPR theo tháng trên bộ BOD, cũng không có file AOPR có tháng đã khoá", "bảng AOPR theo tháng hoặc file AOPR"),
+    6: ("không thấy bảng cắt giảm có cột bước 2 hoặc bước 3", "bảng cắt giảm 3 bước"),
+    7: ("không thấy bảng ảnh hưởng tỷ giá có cột USD và cột ảnh hưởng", "bảng ảnh hưởng tỷ giá trên bộ BOD"),
+}
+
+
+@dataclass
+class Coverage:
+    """What each group really looked at. A group that looked at nothing says why, never 'không thấy lỗi'."""
+    checked: dict = field(default_factory=lambda: defaultdict(int))
+    why: dict = field(default_factory=dict)            # group -> [(reason, what is needed)]
+    part: dict = field(default_factory=dict)           # group -> [part of the group that could not be checked]
+
+    def partly(self, group: int, what: str) -> None:
+        if what not in self.part.setdefault(group, []):
+            self.part[group].append(what)
+
+    def ran(self, group: int, n: int = 1) -> None:
+        self.checked[group] += n
+
+    def cannot(self, group: int, why: str, need: str = "") -> None:
+        if (why, need) not in self.why.setdefault(group, []):
+            self.why[group].append((why, need))
+
+    def status(self, group: int, findings: list) -> tuple:
+        """(state, sentence): 'loi' errors found, 'ok' all checked and clean, 'mot_phan' clean where it could look
+        but part of the group could not be checked, 'chua' nothing could be checked."""
+        n = sum(1 for x in findings if x.group == group)
+        reasons = self.why.get(group) or []
+        why = "; ".join(w for w, _ in reasons)
+        need = "; ".join(sorted({n_ for _, n_ in reasons if n_}))
+        gaps = [f"phần {w}" for w in self.part.get(group, [])] + ([why + (f". Cần: {need}" if need else "")] if why else [])
+        rest = "".join(f"; {NOT_RUN.lower()} {g}" for g in gaps)
+        if n:
+            return "loi", f"{n} lỗi" + rest
+        if self.checked.get(group):
+            if gaps:
+                return "mot_phan", f"không thấy lỗi ở {self.checked[group]} ô/dòng đã soát; {NOT_RUN} phần còn lại: " + "; ".join(gaps)
+            return "ok", f"không thấy lỗi (đã soát {self.checked[group]} ô/dòng)"
+        reasons = reasons or [DEFAULT_WHY[group]]
+        why = "; ".join(w for w, _ in reasons)
+        need = "; ".join(sorted({n_ for _, n_ in reasons if n_}))
+        return "chua", f"{NOT_RUN}: {why}" + (f". Cần: {need}" if need else "")
+
+
 @dataclass
 class Review:
     folder: Path
@@ -330,6 +418,12 @@ class Review:
     assumptions: list = field(default_factory=list)    # what Clicky had to decide, said out loud
     receipt: list = field(default_factory=list)
     unused: list = field(default_factory=list)
+    coverage: Coverage = field(default_factory=Coverage)
+    read: str = ""                                      # how much of the pack was read
+
+    def groups(self) -> list:
+        """[(group, title, state, sentence)] for all seven groups."""
+        return [(g, GROUP_TITLES[g], *self.coverage.status(g, self.findings)) for g in sorted(GROUP_TITLES)]
 
 
 def _months_for(col: Col, period: str, fy: int, fy_start: int) -> list:
@@ -343,8 +437,75 @@ def _cell(sheet: Sheet, row: Row, col: Optional[Col]) -> str:
     return sheet.addr(row.n, col.index) if col is not None else sheet.addr(row.n, 0)
 
 
-def check_totals(f: Facts, pack: Pack, period: str, fy: int) -> list:
-    out = []
+PROFIT_RE = re.compile(r"loi nhuan|\blai\b|\blo\b|ebit|ebitda|gross profit|bien loi|\blnst\b|\blntt\b")
+
+
+def _spans(values: list) -> dict:
+    """{parent row: (first child, last child)} for rows whose value is the sum of the rows right below them, or
+    right above them, at least two. Found bottom-up, so a parent of parents adds its children's totals only."""
+    spans: dict = {}
+    n = len(values)
+    changed = True
+    while changed:
+        changed = False
+        for i in range(n):
+            v = values[i]
+            if i in spans or v is None or not v:
+                continue
+            for step in (1, -1):
+                acc, count, j = ZERO, 0, i + step
+                while 0 <= j < n and values[j] is not None and not (step == -1 and any(a <= i <= b for a, b in spans.values())):
+                    acc += values[j]
+                    count += 1
+                    lo, hi = spans.get(j, (j, j))
+                    edge = hi if step == 1 else lo
+                    if count >= 2 and abs(acc - v) <= VND_TOLERANCE:
+                        spans[i] = (i + 1, edge) if step == 1 else (edge, i - 1)
+                        changed = True
+                        break
+                    if abs(acc) > abs(v) * 3:
+                        break
+                    j = (hi + 1) if step == 1 else (lo - 1)
+                if i in spans:
+                    break
+    return spans
+
+
+def _parent_total(f: Facts, s: Sheet, col: Col) -> Optional[Row]:
+    """The cost total of a sheet that prints no 'Tổng' row: the top parent row ('Chi phí hoạt động') with its
+    children right below (or right above) it, found by the sum of the children or, when the parent itself is
+    wrong, by a cost label that names no department or element next to rows that do."""
+    rows = [r for r in s.rows if not _is_revenue(r.label) and not PROFIT_RE.search(key(r.label))]
+    values = [s.num(r, col) for r in rows]
+    spans = _spans(values)
+    top = [i for i in spans if not any(a <= i <= b for j, (a, b) in spans.items() if j != i)]
+    if not top:
+        for i, r in enumerate(rows):
+            k = key(r.label)
+            if not re.search(r"chi phi|\bcp\b|opex|expense", k) or values[i] is None:
+                continue
+            if f.dim_of(r.label, r.section) in ("dept", "element", "channel"):
+                continue
+            below = [f.dim_of(x.label, x.section) for x in rows[i + 1:i + 6]]
+            above = [f.dim_of(x.label, x.section) for x in rows[max(0, i - 5):i]]
+            if sum(1 for d in below if d in ("dept", "element")) >= 2:
+                spans[i] = (i + 1, len(rows) - 1)
+                top.append(i)
+            elif i == len(rows) - 1 and sum(1 for d in above if d in ("dept", "element")) >= 2:
+                spans[i] = (0, i - 1)
+                top.append(i)
+    if not top:
+        return None
+    best = max(top, key=lambda i: abs(values[i] or ZERO))
+    a, b = spans[best]
+    if len(top) > 1 and b - a + 1 < (len(rows) - 1) / 2:
+        return None                         # several groups side by side and no grand total: nothing to compare
+    return rows[best]
+
+
+def check_totals(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Coverage] = None) -> list:
+    cov = cov or Coverage()
+    out, all_cands = [], []
     for s in pack.sheets:
         if s.kind not in ("lines", "other"):
             continue
@@ -352,16 +513,17 @@ def check_totals(f: Facts, pack: Pack, period: str, fy: int) -> list:
         if s.kind == "lines":
             dims = Counter(f.dim_of(r.label, r.section) for r in s.rows if not r.total)
             rows_are = dims.most_common(1)[0][0] if dims else ""
-            for r in s.rows:
-                label = key(r.label)
-                if not r.total or rows_are not in ("dept", "element", "dong", "nhom", ""):
+            if rows_are not in ("dept", "element", "dong", "nhom", ""):
+                continue
+            for i, groups in enumerate(s.sections()):
+                g = groups[0]
+                if g.value.version not in ("", "thuc te") or g.value.previous:
                     continue
-                if "doanh thu" in label or "dtt" in label:
-                    continue
-                for i, groups in enumerate(s.sections()):
-                    g = groups[0]
-                    if g.value.version not in ("", "thuc te") or g.value.previous:
-                        continue
+                totals = [r for r in s.rows if r.total and not _is_revenue(r.label)]
+                if not totals:
+                    parent = _parent_total(f, s, g.value)
+                    totals = [parent] if parent is not None else []
+                for r in totals:
                     v = s.num(r, g.value)
                     if v is not None:
                         cands.append((_cell(s, r, g.value), v, _months_for(g.value, period, fy, f.fy_start), i))
@@ -374,8 +536,18 @@ def check_totals(f: Facts, pack: Pack, period: str, fy: int) -> list:
             if re.search(r"tong chi phi", key(label)) and not any(c[0] == where for c in cands):
                 cands.append((where, v, [period] if not re.search(r"luy ke|ytd", key(label)) else
                               _months_for(Col(0, "", "", "value", ytd=True), period, fy, f.fy_start)))
-        for where, value, months in cands:
-            out += _total_finding(f, where, value, months)
+        all_cands += cands
+    if not f.gl:
+        cov.cannot(1, "chưa đọc được sổ chi tiết chi phí",
+                   "file sổ chi tiết có số tiền, tài khoản và phòng ban hoặc cost element")
+        return out
+    if not [r for r in f.gl if f.in_division(r) and r["cost"]]:
+        cov.cannot(1, f"sổ chi tiết không có dòng chi phí nào của khối {f.division or '(chưa rõ)'}",
+                   "sổ chi tiết có cột khối và tài khoản chi phí khớp danh mục")
+        return out
+    for where, value, months in all_cands:
+        cov.ran(1)
+        out += _total_finding(f, where, value, months)
     return out
 
 
@@ -435,9 +607,19 @@ def _pct_scale(values: list) -> Decimal:
     return Decimal(100) if values and max(values) > Decimal("1.5") else Decimal(1)
 
 
-def check_lines(f: Facts, pack: Pack, period: str, fy: int) -> list:
+def check_lines(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Coverage] = None) -> list:
+    cov = cov or Coverage()
     out = []
-    for s in pack.of("lines"):
+    lines = pack.of("lines")
+    if not f.b.sales:
+        cov.cannot(2, "chưa đọc được file doanh thu chi tiết, nên chưa tính được mẫu số %DTT",
+                   "file doanh thu (kiểu Mastersale) có site, khối, kênh và doanh thu thuần hoặc thành tiền")
+    if not f.cfg.channels:
+        cov.cannot(2, "danh mục cấu hình chưa có quy tắc mẫu số %DTT theo kênh",
+                   "sheet quy tắc mẫu số %DTT theo kênh trong danh mục cấu hình")
+    if not any(g[0].pct for s in lines for g in s.sections()):
+        cov.cannot(2, "bộ BOD không có cột %DTT", "cột %DTT trên bộ BOD")
+    for s in lines:
         for groups in s.sections():
             cur = groups[0]
             months = _months_for(cur.value, period, fy, f.fy_start)
@@ -461,22 +643,24 @@ def check_lines(f: Facts, pack: Pack, period: str, fy: int) -> list:
                     continue
                 pct = s.num(r, cur.pct) / pct_scale if cur.pct and s.num(r, cur.pct) is not None else None
                 want, base_label = _want_pct(f, r, value, months, default, override)
-                if cur.pct is not None and pct is not None and want is not None and base_label[1] == "rule" \
-                        and abs(want - pct) > PCT_TOLERANCE:
-                    used = next((n for n, b in f.candidate_bases(months, f.channel(r.label, r.section))
-                                 if abs(value / b - pct) <= PCT_TOLERANCE), "")
-                    if not used:
-                        continue        # the printed % fits no known revenue: not sure enough to call it wrong
-                    out.append(Finding(2, "wrong_base", _cell(s, r, cur.pct),
-                                       f"{r.label}: %DTT phải là {fmt_pct(want)} (chia cho {base_label[0]} theo quy tắc kênh), "
-                                       f"bộ BOD ghi {fmt_pct(pct)}, đang chia cho {used}", want, pct))
-                if cur.pct is not None and pct is None and value and not _is_revenue(r.label):
-                    out.append(Finding(3, "missing_pct", _cell(s, r, cur.pct),
-                                       f"{r.label}: có giá trị {fmt_vnd(value)} đ nhưng thiếu %DTT"
-                                       + (f", phải là {fmt_pct(want)}" if want is not None else ""), want, None))
+                if cur.pct is not None and pct is not None and want is not None and base_label[1] == "rule":
+                    cov.ran(2)
+                    if abs(want - pct) > PCT_TOLERANCE:
+                        used = next((n for n, b in f.candidate_bases(months, f.channel(r.label, r.section))
+                                     if abs(value / b - pct) <= PCT_TOLERANCE), "")
+                        if used:            # a printed % that fits no known revenue is not called wrong
+                            out.append(Finding(2, "wrong_base", _cell(s, r, cur.pct),
+                                               f"{r.label}: %DTT phải là {fmt_pct(want)} (chia cho {base_label[0]} theo quy tắc "
+                                               f"kênh), bộ BOD ghi {fmt_pct(pct)}, đang chia cho {used}", want, pct))
+                if cur.pct is not None and not _is_revenue(r.label):
+                    cov.ran(3)
+                    if pct is None and value:
+                        out.append(Finding(3, "missing_pct", _cell(s, r, cur.pct),
+                                           f"{r.label}: có giá trị {fmt_vnd(value)} đ nhưng thiếu %DTT"
+                                           + (f", phải là {fmt_pct(want)}" if want is not None else ""), want, None))
             # 3. comparisons: gap in money and in points
             for g in groups[1:]:
-                out += _check_compare(s, cur, g, pct_scale)
+                out += _check_compare(s, cur, g, pct_scale, cov)
     return out
 
 
@@ -538,40 +722,78 @@ def _want_pct(f: Facts, r: Row, value: Decimal, months: list, default: Optional[
     return None, ("", "")
 
 
-def _check_compare(s: Sheet, cur: Group, g: Group, pct_scale: Decimal) -> list:
+def _compare_base(s: Sheet, cur: Group, g: Group, pct_scale: Decimal, cur_pct: dict) -> Optional[Decimal]:
+    """Revenue of the compared scenario when its %DTT is not printed: the sheet's revenue row in that column,
+    else the one revenue every printed point gap agrees on."""
+    rev = next((s.num(r, g.value) for r in s.rows if _is_revenue(r.label) and s.num(r, g.value)), None)
+    if rev:
+        return rev
+    if g.pp is None:
+        return None
+    best = None
+    for scale in (Decimal(1), Decimal(100)):
+        for sign in (1, -1):
+            bases = []
+            for r in s.rows:
+                a, pp, v = cur_pct.get(r.n), s.num(r, g.pp), s.num(r, g.value)
+                if a is None or pp is None or not v or _is_revenue(r.label):
+                    continue
+                b = a - sign * pp / scale
+                if b > 0:
+                    bases.append(v / b)
+            if len(bases) < 2:
+                continue
+            bases.sort()
+            mid = bases[len(bases) // 2]
+            spread = (bases[-1] - bases[0]) / mid if mid else Decimal(1)
+            if spread < Decimal("0.002") and (best is None or spread < best[0]):
+                best = (spread, mid)
+    return best[1] if best else None
+
+
+def _check_compare(s: Sheet, cur: Group, g: Group, pct_scale: Decimal, cov: Optional[Coverage] = None) -> list:
+    cov = cov or Coverage()
     out = []
     rows = [r for r in s.rows if s.num(r, cur.value) is not None and s.num(r, g.value) is not None]
     if g.diff is not None:
         pairs = [(s.num(r, cur.value) - s.num(r, g.value), s.num(r, g.diff)) for r in rows if s.num(r, g.diff) is not None]
         sign = _sign(pairs)
         for r in rows:
+            cov.ran(3)
             want = sign * (s.num(r, cur.value) - s.num(r, g.value))
             got = s.num(r, g.diff)
             if got is None:
                 out.append(Finding(3, "missing_diff", _cell(s, r, g.diff),
                                    f"{r.label}: thiếu chênh lệch bằng tiền so với {g.value.text}, phải là {fmt_vnd(want)} đ",
                                    want, None))
-    if cur.pct is None or g.pct is None:
+    if cur.pct is None:
         return out
-    pcts = [(r, s.num(r, cur.pct), s.num(r, g.pct)) for r in rows]
+    cur_pct = {r.n: s.num(r, cur.pct) / pct_scale for r in rows if s.num(r, cur.pct) is not None}
     if g.pp is None:
-        if any(a is not None and b is not None for _, a, b in pcts):
+        if g.pct is not None and any(r.n in cur_pct and s.num(r, g.pct) is not None for r in rows):
             head = g.diff or g.pct
             out.append(Finding(3, "missing_pp_column", s.addr(s.header_row, head.index),
                                f"So với {g.value.text}: có %DTT hai bên nhưng không có cột chênh lệch điểm %"))
         return out
-    pairs = [((a - b) / pct_scale, s.num(r, g.pp)) for r, a, b in pcts
-             if a is not None and b is not None and s.num(r, g.pp) is not None]
+    if g.pct is not None:
+        cmp_pct = {r.n: s.num(r, g.pct) / pct_scale for r in rows if s.num(r, g.pct) is not None}
+    else:
+        base = _compare_base(s, cur, g, pct_scale, cur_pct)
+        cmp_pct = {r.n: s.num(r, g.value) / base for r in rows} if base else {}
+    pairs = [(cur_pct[r.n] - cmp_pct[r.n], s.num(r, g.pp)) for r in rows
+             if r.n in cur_pct and r.n in cmp_pct and s.num(r, g.pp) is not None and not _is_revenue(r.label)]
     scale = _pp_scale(pairs)
     sign = _sign([(w * scale, got) for w, got in pairs]) if pairs else 1
-    for r, a, b in pcts:
-        if a is None or b is None or _is_revenue(r.label):
+    for r in rows:
+        if r.n not in cur_pct or r.n not in cmp_pct or _is_revenue(r.label):
             continue
-        want = sign * (a - b) / pct_scale
+        cov.ran(3)
+        want = sign * (cur_pct[r.n] - cmp_pct[r.n])
         got = s.num(r, g.pp)
         if got is None:
             out.append(Finding(3, "missing_pp", _cell(s, r, g.pp),
-                               f"{r.label}: thiếu chênh lệch điểm %, phải là {fmt_pct(want)} điểm", want, None))
+                               f"{r.label}: có chênh lệch bằng tiền nhưng thiếu chênh lệch điểm %, phải là {fmt_pct(want)} điểm",
+                               want, None))
         elif abs(want - got / scale) > PCT_TOLERANCE:
             out.append(Finding(3, "wrong_pp", _cell(s, r, g.pp),
                                f"{r.label}: chênh lệch phải là {fmt_pct(want)} điểm (%DTT {cur.value.text} − %DTT {g.value.text}), "
@@ -579,8 +801,12 @@ def _check_compare(s: Sheet, cur: Group, g: Group, pct_scale: Decimal) -> list:
     return out
 
 
-def check_versions(f: Facts, pack: Pack, period: str, fy: int) -> list:
+def check_versions(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Coverage] = None) -> list:
+    cov = cov or Coverage()
     out = []
+    if not f.plans:
+        cov.cannot(4, "chưa đọc được file kế hoạch hay file năm trước nào",
+                   "file kế hoạch (AOP, AOPR) và file năm trước có phiên bản, tháng, phòng ban hoặc cost element")
     for s in pack.of("lines") + pack.of("other"):
         for groups in s.sections():
             cur = groups[0]
@@ -594,6 +820,11 @@ def check_versions(f: Facts, pack: Pack, period: str, fy: int) -> list:
                 months = [shift_year(m, col_fy - fy) for m in _months_for(col, period, fy, f.fy_start)]
                 available = f.versions(col_fy)
                 if not available:
+                    if f.plans:
+                        cov.cannot(4, f"cột '{col.text}' so với FY{col_fy % 100:02d}/{(col_fy + 1) % 100:02d} nhưng em không có "
+                                      "số kế hoạch hay thực tế của năm đó",
+                                   f"file năm trước (FY{col_fy % 100:02d}/{(col_fy + 1) % 100:02d}) có phiên bản, tháng, "
+                                   "phòng ban hoặc cost element")
                     continue
                 allowed = convention_previous(f.cfg, available) if col_fy < fy else []
                 matched, cells = Counter(), []
@@ -608,7 +839,11 @@ def check_versions(f: Facts, pack: Pack, period: str, fy: int) -> list:
                         matched[h] += 1
                     cells.append((r, v, values))
                 if not matched:
+                    if cells:
+                        cov.cannot(4, f"cột '{col.text}' không khớp phiên bản nào của FY{col_fy % 100:02d}/{(col_fy + 1) % 100:02d} "
+                                      f"({', '.join(v.upper() for v in available)})", "")
                     continue
+                cov.ran(4, len(cells))
                 used = matched.most_common(1)[0][0]
                 if used == "thuc te":
                     continue            # last year's actual: a legitimate comparison, not a plan version
@@ -635,7 +870,10 @@ def check_versions(f: Facts, pack: Pack, period: str, fy: int) -> list:
     return out
 
 
-def check_months(f: Facts, pack: Pack, period: str, fy: int) -> list:
+def check_months(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Coverage] = None) -> list:
+    """A month already closed must hold the actual in the revised plan. A cell that still holds the plan is an
+    error; a cell that differs from the actual only counts when the rest of the closed months do hold actuals."""
+    cov = cov or Coverage()
     out = []
     locked = locked_months(f.cfg, fy, f.fy_start, period)
     months = fy_months(fy, f.fy_start)
@@ -643,9 +881,10 @@ def check_months(f: Facts, pack: Pack, period: str, fy: int) -> list:
         text = key(" ".join([s.name, s.title] + [c.text for c in s.cols]))
         if version_of(text) not in ("aopr",) and not re.search(r"aopr ?\d", text):
             continue
+        cells = []
         for r in s.rows:
-            match = f.matcher(r.label, r.section)
-            if match is None:
+            match = f.row_filter(r.label, r.section)
+            if match is None or r.total:
                 continue
             for c in s.col("month"):
                 m = next((x for x in months if int(x[5:]) == c.month), None)
@@ -654,49 +893,103 @@ def check_months(f: Facts, pack: Pack, period: str, fy: int) -> list:
                 v = s.num(r, c)
                 if v is None:
                     continue
-                act = f.actual(match, [m])
-                if abs(v - act) <= VND_TOLERANCE:
-                    continue
-                plan = f.plan("aop", match, [m])
-                if plan is not None and abs(plan - v) <= VND_TOLERANCE:
-                    out.append(Finding(5, "locked_month_plan", _cell(s, r, c),
-                                       f"{r.label}, tháng {m[5:]}/{m[:4]} đã khoá sổ: AOPR phải là số thực tế {fmt_vnd(act)} đ, "
-                                       f"đang là số kế hoạch AOP {fmt_vnd(v)} đ", act, v))
-    # the revised plan file itself
-    revised = [p for p in f.plans if p["version"].startswith("aopr") and p["period"] in locked]
-    for p in revised:
-        match = lambda r, p=p: r.get("dept") == p["dept"] and r.get("element") == p["element"] and (
-            not p["channel"] or r.get("channel") == p["channel"])
-        if not p["dept"] and not p["element"]:
+                cells.append((r, c, m, v, (f.actual(match, [m]), f.actual(match, [m], clean=True)), f.plan("aop", match, [m])))
+        cov.ran(5, len(cells))
+        out += _locked_findings(cells, lambda r, c: _cell(s, r, c), lambda r: r.label)
+    # the revised plan file itself, row by row: site, division, department, element and channel all match
+    rows = []
+    for p in f.plans:
+        if not p["version"].startswith("aopr") or p["period"] not in locked or not (p["dept"] or p["element"] or p["dong"]):
             continue
+        match = (lambda r, p=p: (not p["dept"] or r.get("dept") == p["dept"]) and (not p["element"] or r.get("element") == p["element"])
+                 and (p["dept"] or p["element"] or r.get("dong") == p["dong"])
+                 and (not p["channel"] or r.get("channel") == p["channel"]) and (not p["site"] or key(r.get("site", "")) == key(p["site"]))
+                 and (not p["division"] or not r.get("division") or f.same_division(r["division"], p["division"])))
         aop = [q for q in f.plans if q["version"] == "aop" and q["period"] == p["period"] and match(q)]
-        act = f.actual(match, [p["period"]])
-        if aop and abs(sum(q["amount"] for q in aop) - p["amount"]) <= VND_TOLERANCE and abs(act - p["amount"]) > VND_TOLERANCE:
-            out.append(Finding(5, "locked_month_plan_file", p["where"],
-                               f"File AOPR, {p['dept']} {p['element']} tháng {p['period'][5:]}/{p['period'][:4]} đã khoá: "
-                               f"phải là thực tế {fmt_vnd(act)} đ, đang là kế hoạch {fmt_vnd(p['amount'])} đ", act, p["amount"]))
+        mine = [r for r in f.gl if r["cost"] and r["period"] == p["period"] and match(r)]
+        act = (sum((r["amount"] for r in mine), ZERO), sum((r["amount"] for r in mine if not is_distributor_discount(r)), ZERO))
+        rows.append((p, None, p["period"], p["amount"], act, sum((q["amount"] for q in aop), ZERO) if aop else None))
+    cov.ran(5, len(rows))
+    out += _locked_findings(rows, lambda p, c: p["where"],
+                            lambda p: f"File AOPR, {' '.join(x for x in (p['site'], p['dept'], p['element'], p['dong']) if x)}",
+                            code="locked_month_plan_file")
+    if not pack.of("months") and not rows:
+        cov.cannot(5, "không thấy bảng AOPR theo tháng trên bộ BOD, cũng không có dòng AOPR nào của tháng đã khoá",
+                   "bảng AOPR theo tháng trên bộ BOD hoặc file AOPR có tháng, phòng ban/cost element")
+    return out
+
+
+def _locked_findings(cells: list, where, label, code: str = "locked_month_plan") -> list:
+    """cells: [(row, col, month, printed, (actual, actual without the detail's own traps), AOP or None)]."""
+    out = []
+    fits = lambda v, acts: any(abs(v - a) <= VND_TOLERANCE for a in acts)
+    closed = [x for x in cells if fits(x[3], x[4])]
+    actual_habit = len(cells) >= 5 and len(closed) >= 0.8 * len(cells)
+    for r, c, m, v, acts, plan in cells:
+        act = acts[0]
+        if fits(v, acts):
+            continue
+        is_plan = plan is not None and abs(plan - v) <= VND_TOLERANCE
+        if not is_plan and not actual_habit:
+            continue
+        what = f"đang là số kế hoạch AOP {fmt_vnd(v)} đ" if is_plan else f"đang là {fmt_vnd(v)} đ"
+        out.append(Finding(5, code, where(r, c), f"{label(r)}, tháng {m[5:]}/{m[:4]} đã khoá sổ: AOPR phải là số thực tế "
+                           f"{fmt_vnd(act)} đ, {what}", act, v))
     return out
 
 
 CUT_ROLES = (("cut2", r"buoc ?2|cat phan (xin )?tang|phan xin tang|cat tang"), ("cut3", r"buoc ?3|cat deu|cat dong deu"),
              ("after", r"sau cat|con lai|duoc duyet|ngan sach duyet|final"),
-             ("request", r"de xuat|xin|yeu cau|request|de nghi"), ("base", r"co so|nam truoc|tham chieu|base|goc"))
+             ("request", r"de xuat|xin|yeu cau|request|de nghi|du kien|nhu cau|dang ky|proposed|ke hoach phong"),
+             ("base", r"co so|nam truoc|tham chieu|base|goc"))
+TARGET_RE = re.compile(r"muc tieu cat|can cat|so cat can|tong cat giam can|target|chenh (lech )?can cat|phai cat|"
+                       r"khoang cach (den|toi) tran|vuot tran")
+
+
+def _rule_texts(b: Bundle, pack: Pack) -> list:
+    """Every sentence of the cut parameters and the configuration rules, folded."""
+    from engine.bod_pack import read_sheet
+    out = [f"{k} {key(v)}" for k, v in b.config.rules.items() if isinstance(v, str)]
+    for s in [read_sheet(n, rows) for n, rows in b.cut] + pack.of("cut"):
+        for x in s.grid:
+            line = " ".join(key(v) for v in (x or []) if isinstance(v, str) and v.strip())
+            if line:
+                out.append(line)
+    return out
+
+
+def no_cut_steps(texts: list) -> set:
+    """Which steps the no-cut list is spared from, by the client's rule sentence. Without one: both."""
+    steps = {"cut2", "cut3"}
+    for t in texts:
+        if not re.search(r"khong cat|mien cat|bao ve", t):
+            continue
+        only3 = re.search(r"(chi|only).{0,30}(buoc ?3|cat deu)|mien.{0,20}(buoc ?3|cat deu)|"
+                          r"khong (ap dung|tham gia|bi|chiu).{0,20}(buoc ?3|cat deu)", t)
+        all2 = re.search(r"(buoc ?2|phan xin tang|cat tang).{0,60}(moi phong|tat ca|toan bo|ca phong|ap dung cho moi)", t)
+        if only3 or all2:
+            steps = {"cut3"}
+    return steps
 
 
 def cut_params(b: Bundle, pack: Pack) -> tuple:
-    """(ceiling, where it was read, extra no-cut names)."""
+    """(ceiling, where it was read, extra no-cut names, target to cut or None)."""
     from engine.bod_pack import read_sheet
-    ceiling, where, names = None, "", set()
+    ceiling, where, names, target = None, "", set(), None
     sheets = [read_sheet(n, rows) for n, rows in b.cut] + pack.of("cut")
     for s in sheets:
         for addr, label, v in s.loose:
-            if CEILING_RE.search(key(label)) and ceiling is None:
+            k = key(label)
+            if CEILING_RE.search(k) and ceiling is None and not TARGET_RE.search(k):
                 ceiling, where = v, addr
+            elif TARGET_RE.search(k) and target is None and s.kind != "cut":
+                target = v
         for x in s.grid:
             cells = [str(v) for v in (x or []) if isinstance(v, str)]
             for i, t in enumerate(cells):
                 if re.search(r"khong cat|mien cat", key(t)) and i + 1 < len(cells):
-                    names |= {p.strip() for p in re.split(r"[;,\n]", cells[i + 1]) if p.strip()}
+                    listed = re.sub(r"\(.*?\)", " ", cells[i + 1])
+                    names |= {p.strip() for p in re.split(r"[;,\n]", listed) if p.strip()}
         if s.kind != "cut":
             from engine.bod_inputs import CONFIG_SPECS, _truthy
             from engine.tables import read_table
@@ -705,17 +998,19 @@ def cut_params(b: Bundle, pack: Pack) -> tuple:
                 for _, v in t.rows:
                     if _truthy(t.get(v, "khong_cat", "")):
                         names.add(str(t.get(v, "ma", "") or t.get(v, "ten", "")).strip())
-    return ceiling, where, {n for n in names if n}
+    return ceiling, where, {n for n in names if n}, target
 
 
-def check_cuts(f: Facts, b: Bundle, pack: Pack) -> list:
+def check_cuts(f: Facts, b: Bundle, pack: Pack, cov: Optional[Coverage] = None) -> list:
+    cov = cov or Coverage()
     out = []
-    ceiling, _, extra = cut_params(b, pack)
+    ceiling, _, extra, target = cut_params(b, pack)
     no_cut = f.cfg.no_cut() | extra
+    spared = no_cut_steps(_rule_texts(b, pack))
     for s in pack.of("cut"):
         roles = {}
         for c in s.cols:
-            if c.role in ("label", "text"):
+            if c.role in ("label",):
                 continue
             for name, rx in CUT_ROLES:
                 if name not in roles and re.search(rx, c.k):
@@ -729,29 +1024,35 @@ def check_cuts(f: Facts, b: Bundle, pack: Pack) -> list:
                 total_row = r
                 continue
             c2, c3 = s.num(r, roles.get("cut2")) or ZERO, s.num(r, roles.get("cut3")) or ZERO
-            cut_col = roles.get("cut2") if c2 else roles.get("cut3") or roles.get("cut2")
-            lines.append(rv.CutLine(r.label, _cell(s, r, cut_col), s.num(r, roles.get("request")) or ZERO,
-                                    s.num(r, roles.get("base")) or ZERO, abs(c2), abs(c3), s.num(r, roles.get("after"))))
-        protected = set()
-        for l in lines:
-            k = key(l.dept)
-            tokens = {key(t) for t in re.split(r"[\s\-–:|/]+", l.dept)}
-            if any(key(n) == k or key(n) in tokens or (len(key(n)) > 3 and key(n) in k) for n in no_cut):
-                protected.add(l.dept)
-        where_total = ""
-        for addr, label, _ in s.loose:
-            if LEVERS_RE.search(key(label)):
-                where_total = addr
+            lines.append((r, s.num(r, roles.get("request")), abs(c2), abs(c3)))
+        cov.ran(6, len(lines))
+        for r, _, c2, c3 in lines:
+            k = key(r.label)
+            tokens = {key(t) for t in re.split(r"[\s\-–:|/]+", r.label)}
+            if not any(key(n) == k or key(n) in tokens or (len(key(n)) > 3 and key(n) in k) for n in no_cut):
+                continue
+            for step, amount in (("cut2", c2), ("cut3", c3)):
+                if step in spared and amount:
+                    name = "bước 3 (cắt đều)" if step == "cut3" else "bước 2 (cắt phần xin tăng)"
+                    out.append(Finding(6, "no_cut_touched", _cell(s, r, roles[step]),
+                                       f"{r.label} thuộc danh sách không cắt nên không bị cắt ở {name}, "
+                                       f"nhưng bộ BOD cắt {fmt_vnd(amount)}", ZERO, amount))
+        levers = sum((c2 + c3 for _, _, c2, c3 in lines), ZERO)
+        requests = [q for _, q, _, _ in lines if q is not None]
+        gap = target if target is not None else (sum(requests, ZERO) - ceiling
+                                                 if ceiling is not None and requests else None)
+        where_total = next((addr for addr, label, _ in s.loose if LEVERS_RE.search(key(label))), "")
         if not where_total and total_row is not None:
             where_total = _cell(s, total_row, roles.get("cut3") or roles.get("cut2"))
-        if ceiling is None:
-            for addr, label, v in s.loose:
-                if CEILING_RE.search(key(label)):
-                    ceiling = v
-        found = rv.check_cut(lines, ceiling if ceiling is not None else ZERO, protected, where_total or s.addr(s.header_row, 0))
-        if ceiling is None or "request" not in roles:
-            found = [x for x in found if x.code != "levers_vs_gap"]
-        out += found
+        if gap is None:
+            cov.partly(6, "tổng đòn bẩy (không thấy mục tiêu cắt, hoặc trần và cột đề xuất)")
+        elif abs(levers - abs(gap)) > VND_TOLERANCE:
+            out.append(Finding(6, "levers_vs_gap", where_total or s.addr(s.header_row, 0),
+                               f"Tổng đòn bẩy cắt {fmt_vnd(levers)} không bằng tổng chênh cần cắt {fmt_vnd(abs(gap))}"
+                               + (" (mục tiêu trong file tham số)" if target is not None else " (đề xuất trừ trần)"),
+                               abs(gap), levers))
+    if not pack.of("cut"):
+        cov.cannot(6, "không thấy bảng cắt giảm có cột bước 2 hoặc bước 3 trên bộ BOD", "bảng cắt giảm 3 bước trên bộ BOD")
     if not any(x.code == "levers_vs_gap" for x in out):
         out += _loose_levers(pack)
     return out
@@ -773,9 +1074,12 @@ def _loose_levers(pack: Pack) -> list:
     return []
 
 
-def check_fx_sheets(f: Facts, b: Bundle, pack: Pack, period: str, fy: int) -> tuple:
+def check_fx_sheets(f: Facts, b: Bundle, pack: Pack, period: str, fy: int, cov: Optional[Coverage] = None) -> tuple:
     from engine.bod_inputs import month_key
+    cov = cov or Coverage()
     out, notes = [], []
+    if not b.fx:
+        cov.cannot(7, "chưa đọc được bảng tỷ giá", "file tỷ giá có tháng, loại tỷ giá (bình quân, cuối kỳ, AOP) và tỷ giá")
     convention = fx_convention(f.cfg)
     rates = dict(b.fx)
     aop_rates = [p["rate"] for p in f.plans if p["rate"] is not None and p["version"] == "aop"]
@@ -793,6 +1097,8 @@ def check_fx_sheets(f: Facts, b: Bundle, pack: Pack, period: str, fy: int) -> tu
         if convention is None:
             notes.append(("Chưa có quy ước loại tỷ giá", "Danh mục cấu hình chưa ghi ảnh hưởng tỷ giá dùng tỷ giá bình quân "
                           "hay cuối kỳ, nên em chưa soát bảng tỷ giá.", s.addr(s.header_row, impact.index)))
+            cov.cannot(7, "danh mục cấu hình chưa ghi quy ước loại tỷ giá (bình quân hay cuối kỳ), em không đoán",
+                       "dòng quy ước tỷ giá trong danh mục cấu hình")
             continue
         rows = []
         for r in s.rows:
@@ -802,6 +1108,11 @@ def check_fx_sheets(f: Facts, b: Bundle, pack: Pack, period: str, fy: int) -> tu
             m = m or month_key(r.label, None, f"{fy}/{(fy + 1) % 100:02d}", f.fy_start) or period
             rows.append((_cell(s, r, impact), r.label, m, s.num(r, usd), s.num(r, impact)))
         rows = [x for x in rows if x[3] is not None]
+        checkable = [x for x in rows if (x[2], convention) in rates and (x[2], "aop") in rates and x[4] is not None]
+        cov.ran(7, len(checkable))
+        if rows and not checkable:
+            cov.cannot(7, f"bảng tỷ giá không có tỷ giá {convention} và AOP của các tháng trên bảng ảnh hưởng tỷ giá",
+                       "tỷ giá theo tháng và loại trong file tỷ giá")
         plus = minus = 0
         for _, _, m, u, imp in rows:
             ra, rp = rates.get((m, convention)), rates.get((m, "aop"))
@@ -818,6 +1129,8 @@ def check_fx_sheets(f: Facts, b: Bundle, pack: Pack, period: str, fy: int) -> tu
             out += found
         else:
             out += rv.check_fx(rows, rates, (convention, "aop"))
+    if not pack.of("fx"):
+        cov.cannot(7, "không thấy bảng ảnh hưởng tỷ giá trên bộ BOD", "bảng có cột USD (nguyên tệ) và cột ảnh hưởng tỷ giá")
     return out, notes
 
 
@@ -828,9 +1141,11 @@ def data_notes(f: Facts, period: str, fy: int) -> list:
     mine = [r for r in f.gl if f.in_division(r) and r["cost"]]
     no_dept = [r for r in mine if not r["dept"] and r["period"] in months]
     if no_dept:
+        codes = sorted({r["dept_raw"] for r in no_dept if r.get("dept_raw")})
         notes.append(("Chi phí chưa gán phòng ban",
-                      f"{len(no_dept)} dòng, {fmt_vnd(sum((r['amount'] for r in no_dept), ZERO))} đ: cần hỏi kế toán gán phòng.",
-                      ", ".join(r["where"] for r in no_dept[:5])))
+                      f"{len(no_dept)} dòng, {fmt_vnd(sum((r['amount'] for r in no_dept), ZERO))} đ"
+                      + (f" (mã phòng ghi '{', '.join(codes[:4])}', không có trong danh mục phòng ban)" if codes else "")
+                      + ": cần hỏi kế toán gán phòng.", ", ".join(r["where"] for r in no_dept[:5])))
     later = [r for r in mine if r["period"] > period]
     if later:
         notes.append(("Bút toán của kỳ sau trong file xuất",
@@ -885,7 +1200,12 @@ def review(folder: Path, fy_start: int = 7) -> list:
     out = []
     for path in b.packs:
         pack = read_pack(path)
-        rv_ = Review(folder, path.name, receipt=b.receipt, unused=b.unused)
+        rows = sum(len(s.rows) for s in pack.sheets)
+        cells = sum(1 for s in pack.sheets for r in s.rows for c in s.cols
+                    if c.role in ("value", "pct", "diff", "pp", "month") and s.num(r, c) is not None)
+        receipt = [(n, role, rows if n == path.name else used, sk) for n, role, used, sk in b.receipt]
+        rv_ = Review(folder, path.name, receipt=receipt, unused=b.unused)
+        rv_.read = f"{len(pack.sheets)} sheet, {rows} dòng số liệu, {cells} ô có số"
         period = pack_period(pack, fy_start)
         if not period:
             counts = Counter(e.period for e in b.gl if e.period)
@@ -894,25 +1214,30 @@ def review(folder: Path, fy_start: int = 7) -> list:
             # the latest month with real volume: a few next-period reversals in the export do not make a month
             busy = [p for p in pool if counts[p] >= max(counts.values()) / 4] or pool
             period = max(busy) if busy else ""
-            rv_.assumptions.append(f"Bộ BOD không ghi năm của kỳ; em lấy theo sổ chi tiết: {period[5:]}/{period[:4]}")
+            if period:
+                rv_.assumptions.append(f"Bộ BOD không ghi năm của kỳ; em lấy theo sổ chi tiết: {period[5:]}/{period[:4]}")
         division, how = find_division(pack, b)
         rv_.period, rv_.division = period, division
         rv_.assumptions.append(f"Khối: {division or 'tất cả'} (theo {how})")
+        cov = rv_.coverage
         if not period:
             rv_.notes.append(("Không xác định được kỳ", "Không soát được bộ BOD khi không biết kỳ.", path.name))
-            out.append(rv_)
-            continue
-        fy = fiscal_year(period, fy_start)
-        f = Facts(b, division, fy_start)
-        found = check_totals(f, pack, period, fy) + check_lines(f, pack, period, fy) + check_versions(f, pack, period, fy) \
-            + check_months(f, pack, period, fy) + check_cuts(f, b, pack)
-        fx, fx_notes = check_fx_sheets(f, b, pack, period, fy)
-        rv_.findings = _merge(found + fx)
-        rv_.notes = data_notes(f, period, fy) + fx_notes
+            for g in GROUP_TITLES:
+                cov.cannot(g, "không xác định được kỳ của bộ BOD", "tiêu đề có tháng và năm, hoặc sổ chi tiết có kỳ")
+        else:
+            fy = fiscal_year(period, fy_start)
+            f = Facts(b, division, fy_start)
+            found = check_totals(f, pack, period, fy, cov) + check_lines(f, pack, period, fy, cov) \
+                + check_versions(f, pack, period, fy, cov) + check_months(f, pack, period, fy, cov) + check_cuts(f, b, pack, cov)
+            fx, fx_notes = check_fx_sheets(f, b, pack, period, fy, cov)
+            rv_.findings = _merge(found + fx)
+            rv_.notes = data_notes(f, period, fy) + fx_notes
         for x in rv_.findings:
             scene_log.record("bod_finding", pack=path.name, group=x.group, code=x.code, where=x.where,
                              expected=None if x.expected is None else str(x.expected),
                              actual=None if x.actual is None else str(x.actual), message=x.message)
+        for g, title, state, text in rv_.groups():
+            scene_log.record("bod_group", pack=path.name, group=g, title=title, state=state, text=text)
         out.append(rv_)
     return out
 
@@ -932,12 +1257,23 @@ def markdown(reviews: list) -> str:
     for r in reviews:
         lines += [f"## {r.pack}", "", f"Kỳ: {r.period[5:]}/{r.period[:4]}" if r.period else "Kỳ: chưa rõ",
                   f"Số lỗi tìm thấy: {len(r.findings)}", ""]
+        if r.read:
+            lines.append(f"- Đã đọc bộ BOD: {r.read}")
         for a in r.assumptions:
             lines.append(f"- Giả định: {a}")
         lines.append("")
-        for g in sorted(GROUP_TITLES):
+        not_run = [g for g, _, state, _ in r.groups() if state == "chua"]
+        partly = [g for g, _, state, text in r.groups() if state == "mot_phan" or (state == "loi" and NOT_RUN.lower() in text)]
+        if not_run or partly:
+            lines += [f"**{NOT_RUN}" + (f" {len(not_run)} nhóm ({', '.join(str(g) for g in not_run)})" if not_run else "")
+                      + (f"{', ' if not_run else ' '}một phần của nhóm {', '.join(str(g) for g in partly)}" if partly else "")
+                      + "**: kết quả dưới đây chưa đủ để trình. Lý do và file cần thêm ghi ở từng nhóm.", ""]
+        lines += ["| Nhóm | Kết quả |", "| --- | --- |"]
+        lines += [f"| {g}. {title} | {text} |" for g, title, _, text in r.groups()]
+        lines.append("")
+        for g, title, state, text in r.groups():
             xs = [x for x in r.findings if x.group == g]
-            lines.append(f"### Nhóm {g}. {GROUP_TITLES[g]}: " + ("không thấy lỗi" if not xs else f"{len(xs)} lỗi"))
+            lines.append(f"### Nhóm {g}. {title}: {text}")
             for i, x in enumerate(xs, 1):
                 lines.append(f"{i}. Ô `{x.where}`: {x.message}.")
                 lines.append(f"   - Số đúng: {_num_text(x.expected, x.code)}; bộ BOD ghi: {_num_text(x.actual, x.code)}")
@@ -1007,6 +1343,18 @@ def write_outputs(reviews: list, out_dir: Path) -> dict:
         log.dropped += [[t, w, None, d] for t, d, w in r.notes]
         log.add("Ket qua soat!A5", f"Soát {r.pack}", "", f"{len(r.findings)} lỗi", "Soát bộ BOD trước khi trình",
                 source=r.pack)
+    gs = wb.create_sheet("Cac nhom kiem")
+    gs.append(["Kết quả từng nhóm kiểm"])
+    gs.append([])
+    gs.append(["Bộ BOD", "Nhóm", "Nội dung", "Kết quả"])
+    for r in reviews:
+        for g, title, state, text in r.groups():
+            gs.append([r.pack, g, title, text])
+            if state in ("chua", "mot_phan") or NOT_RUN in text:
+                log.dropped.append([f"Nhóm {g}: {title}", r.pack, None, text])
+    gs["A1"].font = Font(bold=True, size=14)
+    for col, width in zip("ABCD", (28, 7, 44, 120)):
+        gs.column_dimensions[col].width = width
     bb = wb.create_sheet(audit.SHEET)
     rows_, _ = audit.grid(log)
     for line in rows_:
@@ -1022,7 +1370,10 @@ def write_outputs(reviews: list, out_dir: Path) -> dict:
     verified = verified and rows == n
     wb2.close()
     scene_log.record("bod_done", findings=n, md=str(md), xlsx=str(xlsx), verified=verified,
-                     notes=sum(len(r.notes) for r in reviews))
+                     notes=sum(len(r.notes) for r in reviews),
+                     not_checked=[g for r in reviews for g, _, state, _ in r.groups() if state == "chua"],
+                     partly=[g for r in reviews for g, _, state, text in r.groups()
+                             if state == "mot_phan" or (state == "loi" and NOT_RUN in text)])
     return {"md": md, "xlsx": xlsx, "verified": verified, "findings": n}
 
 
@@ -1037,8 +1388,10 @@ def main(argv=None) -> int:
         print("Không thấy bộ BOD nào trong thư mục (tên file có chữ BOD, pack hoặc bản nháp).")
         return 2
     res = write_outputs(reviews, Path(args.out) if args.out else folder / "Clicky_soat_BOD")
+    gaps = [f"nhóm {g}" for r in reviews for g, _, state, text in r.groups() if state in ("chua", "mot_phan") or NOT_RUN in text]
     print(f"Đã soát {len(reviews)} bộ BOD: {res['findings']} lỗi. Kết quả: {res['md']} và {res['xlsx']}"
-          + ("" if res["verified"] else " (CHƯA khớp khi mở lại file)"))
+          + ("" if res["verified"] else " (CHƯA khớp khi mở lại file)")
+          + (f". {NOT_RUN}: {', '.join(gaps)} (xem lý do trong ket-qua.md)" if gaps else ""))
     return 0 if res["verified"] else 1
 
 

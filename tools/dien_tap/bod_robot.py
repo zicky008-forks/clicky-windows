@@ -14,7 +14,8 @@ What it does:
  7. writes ket-qua-robot.md + ket-qua-robot.json; Clicky's own ket-qua.md, results workbook (with the
     Bien ban Clicky sheet) and scene.jsonl are in the same folder for the grader.
 
-Pass gate (ĐẠT): the review finished, the results file was reopened and matched, one card per finding and
+Pass gate (ĐẠT): the review finished, the results file was reopened and matched, all 7 groups could be checked
+(none "CHƯA KIỂM ĐƯỢC"), one card per finding and
 every card landed on its cell, the pack unchanged. With --tu-tao also: all 9 planted mistakes found at their
 cell with the right number, at most 1 extra. Exit code 0 = ĐẠT, 1 = KHÔNG ĐẠT, 2 = could not run.
 """
@@ -53,6 +54,8 @@ def grade(events: list, pack_unchanged: bool, answers: list | None = None) -> Re
         res.add("Bộ BOD không bị sửa", pack_unchanged)
         return res
     res.add("Mở lại file kết quả thấy khớp", bool(done.get("verified")))
+    gaps = sorted(set(done.get("not_checked") or []) | set(done.get("partly") or []))
+    res.add("Đủ 7 nhóm đều kiểm được", not gaps, f"chưa kiểm được nhóm {', '.join(str(g) for g in gaps)}" if gaps else "")
     findings = [e for e in events if e.get("event") == "bod_finding"]
     refs = [e.get("ref") for e in events if e.get("event") == "beat" and e.get("ref")]
     res.add("Mỗi lỗi một thẻ chỉ vào ô", sorted(refs) == sorted(f.get("where") for f in findings),

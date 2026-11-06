@@ -177,6 +177,24 @@ def test_run_writes_results_and_plays(tmp_path):
 
 
 @pytest.mark.parametrize("plant", [True, False])
+def test_third_layout_parent_total_wide_last_year_sites_and_cut_rule(tmp_path, plant):
+    """Style 'c': a sales export with fiscal year + month and 'Kênh phân phối'; last year as one wide table (a
+    column per version, months without a year); plans per site; 'N/A' for no department; the cost total is a
+    parent row 'Chi phí hoạt động'; AOPR1 has no %DTT column; month headers are real dates; the cut rule
+    spares the no-cut list only the flat cut and the target to cut sits in the parameters file."""
+    answers = make_case(tmp_path, plant=plant, style="c")
+    review = bod_check.review(tmp_path)[0]
+    found = review.findings
+    assert len(found) == len(answers), [(x.group, x.where, x.message) for x in found]
+    for a in answers:
+        hit = [x for x in found if x.where == a["where"] and x.group == a["group"]]
+        assert hit and close(a["code"], a["expected"], hit[0].expected), (a, [(x.where, x.expected) for x in found])
+    assert review.unused == []
+    assert all(state in ("loi", "ok") and "CHƯA" not in text.upper() for _, _, state, text in review.groups()), review.groups()
+    assert "Chi phí chưa gán phòng ban" in [t for t, _, _ in review.notes]
+
+
+@pytest.mark.parametrize("plant", [True, False])
 def test_other_layout_row_numbers_percent_as_numbers_ytd_and_fx_sign(tmp_path, plant):
     """Layout 'b': STT column, a revenue row, % printed as 1.42, 'Chênh lệch %DTT' for points, a year-to-date
     part, FX impact printed as plan − actual, 'Tháng 10 năm 2026' as the period."""
@@ -205,3 +223,72 @@ def test_division_codes_in_the_detail_and_account_lists_in_the_mapping(tmp_path)
     assert review.division in ("TM", "Thương mại")
     found = {(x.group, x.where) for x in review.findings}
     assert found == {(a["group"], a["where"]) for a in answers}
+
+
+# ── never silent: a group that could not run says why ───────────────────────────
+
+def _group(review, g):
+    return next(x for x in review.groups() if x[0] == g)
+
+
+@pytest.mark.parametrize("missing, group, words", [
+    ("Mastersale_T07-T10.csv", 2, "doanh thu"),
+    ("NamTruoc_FY2526.xlsx", 4, "năm trước"),
+    ("TyGia_FY2627.xlsx", 7, "tỷ giá"),
+    ("GL_ChiTiet_ChiPhi_T07-T10.csv", 1, "sổ chi tiết"),
+])
+def test_a_group_without_its_file_says_not_checked_and_what_it_needs(tmp_path, missing, group, words):
+    make_case(tmp_path, plant=True)
+    (tmp_path / missing).unlink()
+    review = bod_check.review(tmp_path)[0]
+    _, _, state, text = _group(review, group)
+    assert state in ("chua", "mot_phan") and "CHƯA KIỂM ĐƯỢC" in text and words in text.lower() and "Cần:" in text, text
+    md = bod_check.markdown([review])
+    assert f"Nhóm {group}. " in md and "CHƯA KIỂM ĐƯỢC" in md
+    line = next(l for l in md.splitlines() if l.startswith(f"### Nhóm {group}."))
+    assert "CHƯA KIỂM ĐƯỢC" in line, line
+
+
+def test_no_fx_convention_is_not_checked_not_clean(tmp_path):
+    make_case(tmp_path, plant=True)
+    from openpyxl import load_workbook
+    cfg = tmp_path / "DanhMuc_CauHinh.xlsx"
+    wb = load_workbook(cfg)
+    ws = wb["Quy tac"]
+    for row in ws.iter_rows():
+        if row[0].value and "Tỷ giá" in str(row[0].value):
+            row[0].value, row[1].value = "Ghi chú", "trống"
+    wb.save(cfg)
+    review = bod_check.review(tmp_path)[0]
+    _, _, state, text = _group(review, 7)
+    assert state == "chua" and "quy ước" in text and not [x for x in review.findings if x.group == 7]
+
+
+def test_a_sales_file_clicky_cannot_read_names_the_missing_columns_and_the_group(tmp_path):
+    make_case(tmp_path, plant=True)
+    (tmp_path / "Mastersale_T07-T10.csv").write_text("Ma_hang,So_luong\nA,1\n", encoding="utf-8")
+    review = bod_check.review(tmp_path)[0]
+    why = dict(review.unused)["Mastersale_T07-T10.csv"]
+    assert "doanh thu" in why and "nhóm 2" in why and "không thuộc phần soát" not in why
+
+
+def test_receipt_counts_the_pack_rows_read_and_the_log_has_every_group(tmp_path, monkeypatch):
+    import json
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    make_case(tmp_path / "case", plant=True)
+    review = bod_check.review(tmp_path / "case")[0]
+    pack = next(r for r in review.receipt if r[0].startswith("Pack_BOD"))
+    assert pack[2] > 20
+    groups = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if '"bod_group"' in l]
+    assert sorted(e["group"] for e in groups) == [1, 2, 3, 4, 5, 6, 7] and all(e["state"] == "loi" for e in groups)
+
+
+def test_parent_rows_are_found_by_their_children_nested_or_below():
+    from engine.bod_check import _spans
+    D = Decimal
+    # Chi phí hoạt động = (BH = a + b) + (QL = c + d); then a block whose total sits under its children
+    values = [D(100), D(60), D(25), D(35), D(40), D(10), D(30), D(7), D(9), D(16)]
+    spans = _spans(values)
+    assert spans[0] == (1, 6) and spans[1] == (2, 3) and spans[4] == (5, 6)
+    assert spans[9] == (7, 8)

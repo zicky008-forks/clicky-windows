@@ -47,7 +47,7 @@ def version_of(k: str) -> str:
     m = re.search(r"\baopr ?(\d+)\b|\baopr\b|\brevised\b|\bdieu chinh\b", k)
     if m:
         return f"aopr{m.group(1)}" if m.lastindex and m.group(1) else "aopr"
-    if re.search(r"\baop\b|\bbudget\b|\bngan sach goc\b", k):
+    if re.search(r"\baop\b|\bbudget\b|\bngan sach goc\b|\bke hoach goc\b|\bkh goc\b|\boriginal\b", k):
         return "aop"
     if re.search(r"\bmuf\b|\bdu bao\b|\bforecast\b|\bfc\b", k):
         return "muf"
@@ -68,7 +68,14 @@ def fy_of(k: str) -> Optional[int]:
     return None
 
 
+EN_MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+EN_MONTH_RE = re.compile(r"(?:^| )(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?: (?:20)?\d\d)?$")
+
+
 def month_of(k: str) -> Optional[int]:
+    m = EN_MONTH_RE.search(k)
+    if m:
+        return EN_MONTHS[m.group(1)]
     for rx in MONTH_RE:
         m = rx.search(k)
         if m:
@@ -237,7 +244,19 @@ def _numeric_below(rows: list, r: int, c: int) -> bool:
     return False
 
 
+def _dated_headers(rows: list) -> list:
+    """Month headers typed as real dates (Excel shows 'Jul-26') read as '07/2026'; body cells stay as they are."""
+    import datetime as dt
+    out = list(rows)
+    for r, values in enumerate(rows[:HEADER_SCAN]):
+        dates = [v for v in values or [] if isinstance(v, (dt.date, dt.datetime))]
+        if len(dates) >= 2:
+            out[r] = [f"{v.month:02d}/{v.year}" if isinstance(v, (dt.date, dt.datetime)) else v for v in values]
+    return out
+
+
 def read_sheet(name: str, rows: list) -> Sheet:
+    rows = _dated_headers(rows)
     best, best_r = 0, -1
     for r, values in enumerate(rows[:HEADER_SCAN]):
         s = _score(values or [])
