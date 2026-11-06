@@ -348,7 +348,9 @@ class CursorOverlay(QWidget):
         start = max(now, self._draw_queue_end)
         shape = dict(shape)
         # Draw at hand speed — long strokes take visibly longer
-        if shape.get("kind") in ("spotlight", "card"):
+        if shape.get("kind") in ("leaders", "notes", "bridge"):
+            dur = 0.35            # pieces arrive one by one inside the shape (graphics_paint.STEP_S)
+        elif shape.get("kind") in ("spotlight", "card"):
             dur = 0.35            # these fade in rather than being drawn stroke by stroke
         else:
             dur = _shape_length(shape) / STROKE_SPEED_PX_S
@@ -357,7 +359,7 @@ class CursorOverlay(QWidget):
         shape["dur"] = dur
         shape.setdefault("color", "blue")
         shape.setdefault("ttl", None)
-        if shape.get("kind") == "card" and (shape.get("avoid") or shape.get("soft")):
+        if shape.get("kind") in ("card", "leaders", "notes", "bridge") and (shape.get("avoid") or shape.get("soft")):
             BOARD.show_sheet(shape.get("avoid"), shape.get("soft"))     # the button card keeps off them too
         self._draw_queue_end = start + dur + SHAPE_GAP_SECONDS
         self._annotations.append(shape)
@@ -632,6 +634,9 @@ class CursorOverlay(QWidget):
                     self._paint_spotlight(p, ann, u * alpha)
                 elif kind == "card":
                     self._paint_card(p, ann, u * alpha)
+                elif kind in ("leaders", "notes", "bridge"):
+                    from ui import graphics_paint
+                    getattr(graphics_paint, f"paint_{kind}")(self, p, ann, u * alpha)
             except Exception:
                 continue   # a malformed shape must never break the paint loop
         self._annotations = keep

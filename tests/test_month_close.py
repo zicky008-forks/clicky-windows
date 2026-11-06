@@ -502,7 +502,9 @@ def test_fix_runs_behind_a_still_screen_and_ends_on_the_profit_card(folder):
     _begin(bridge, pq, sources.DAY_FIRST)
     beats = month_close.approve(bridge, pq)
     assert bridge.screen == [False, True]                    # frozen while sheets are added, released after
-    assert beats[-2].text.startswith("Lợi nhuận thực là")    # the warning is the last scene before the save line
+    # The warning, then how 556 becomes 436, then what to check before the boss sees it, then the save line.
+    assert beats[-4].text.startswith("Lợi nhuận thực là")
+    assert beats[-3].graphic["kind"] == "bridge" and beats[-2].graphic["kind"] == "notes"
     assert any(name == "BC thang" and widths["A"] >= 30 for name, widths, _ in bridge.layouts)
     assert ("'BC thang'!A4:I4", ) == tuple(r for r, o in bridge.styles if r == "'BC thang'!A4:I4")[:1]
 

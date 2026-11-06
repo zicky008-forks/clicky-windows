@@ -24,7 +24,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
-from engine import audit, intake as intake_mod, m_code, sources
+from engine import audit, intake as intake_mod, m_code, sources, visuals
 from engine.monthly_report import spoken
 from engine.trial_balance import ZERO
 from office.power_query import ReadFailed
@@ -73,6 +73,7 @@ class Beat:
     was: str = ""                   # the figure it replaces, shown struck through above the new one
     roll: tuple = ()                # (from, to) in đồng: the big figure counts from one to the other
     intake: Optional[dict] = None   # the receipt card ({"card": ..., "log": ...}) shown with this beat's buttons
+    graphic: Optional[dict] = None  # leader tags, sticky notes or a profit bridge (engine.visuals), drawn beside the range
 
 
 def stage() -> Optional[str]:
@@ -917,9 +918,16 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
     beats.append(Beat(f"Báo cáo trong Excel đang {_gap_vi(gap)} so với sổ cái.", ref, "Excel lệch sổ cái", "bad",
                       _signed(gap), f"Query chỉ giữ {len(rows)}/{truth.unique_rows} chứng từ. Chưa được dùng số này."))
     beats += cause_beats
+    offer = _fix_offer()
+    if cause_rows:
+        # The question stays up with one note per cause, each beside its own row in the detail table.
+        notes = visuals.cause_notes(cause_rows)
+        for n in notes:
+            n["ref"] = _detail_ref(n["row"])
+        offer.graphic = {"kind": "notes", "notes": notes, "plain": True}
     _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder), "gap": int(gap),
                 "before": int(loaded.amount), "before_rows": len(rows)}
-    return beats + [_fix_offer()]
+    return beats + [offer]
 
 
 # ── Stage 2 ───────────────────────────────────────────────────────────────────
@@ -1177,6 +1185,14 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
     _LAST.clear()
     _LAST.update(pat=pat, overstated=overstated, real=pat - overstated, report=names["report"])
     beats = [Beat(f"Em đã lập báo cáo tháng{asks}.", f"{sheet}!A4:G{row}", "Báo cáo tháng đã lập", "", "", note)]
+    line_row = {f.key: FIRST_LINE_ROW + i for i, f in enumerate(report.figures)}
+    opened = visuals.figure_to_explain(report.figures, report.variances)
+    if opened is not None:
+        # Wires from the figure to the accounts it is made of: where a number comes from, seen at once.
+        tags = visuals.leader_tags(opened)
+        at = line_row[opened.key]
+        beats.append(Beat(visuals.leader_sentence(tags), f"{sheet}!A{at}:C{at}",
+                          graphic={"kind": "leaders", "figure_ref": f"{sheet}!C{at}", **tags}))
     if overstated > 0:
         real = pat - overstated
         change = f" Giảm {spoken(prev_pat - real)} so với kỳ trước." if prev_pat is not None and prev_pat > real else ""
@@ -1185,9 +1201,20 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
                           f"{spoken(overstated)} hàng bán bị trả lại đang ghi thẳng vào Nợ TK 511. "
                           f"Cần chuyển sang TK 521 trước khi gửi sếp.{change}",
                           was=spoken(pat), roll=(int(pat), int(real))))
+        bridge = visuals.profit_bridge(pat, [("Hàng trả lại ghi Nợ 511", -overstated)], real)
+        beats.append(Beat(visuals.bridge_sentence(bridge), pat_ref, graphic={"kind": "bridge", **bridge}))
     else:
         beats.append(Beat(summary, pat_ref, "Lợi nhuận sau thuế", "", spoken(pat)))
-    return beats            # the profit card is the last scene: it is what goes to the boss
+    # Every trap the engine found gets a note beside the line it touches; they stay up while the save is asked.
+    notes = visuals.report_notes(report.issues, report.current, overstated,
+                                 {**line_row, "returns": row + 1 if overstated > 0 else line_row.get("net_rev")})
+    if notes:
+        end = row + EXTRA_ROWS if overstated > 0 else row
+        for n in notes:
+            n["ref"] = f"{sheet}!A{n['line']}:G{n['line']}" if n.get("line") else f"{sheet}!A1:G2"
+        beats.append(Beat(visuals.notes_sentence(notes), f"{sheet}!A1:G{end}",
+                          graphic={"kind": "notes", "notes": notes, "plain": True}))
+    return beats            # the profit story, then what to check before it goes to the boss
 
 
 _REPORT_COLUMNS = {"A": 40, "B": 12, "C": 17, "D": 17, "E": 17, "F": 9, "G": 15, "H": 34, "I": 14}
@@ -1300,6 +1327,62 @@ async def _figures(manager):
     return ([filled] if filled else []), []
 
 
+def graphic_seconds(graphic: dict) -> float:
+    """Extra time on screen for a graphic beyond its sentence: each piece is read, and a bridge column
+    stays readable for at least six seconds."""
+    kind = graphic.get("kind")
+    if kind == "leaders":
+        return 1.5 + 1.0 * len(graphic.get("tags") or [])
+    if kind == "notes":
+        return 1.0 + 2.0 * len(graphic.get("notes") or [])
+    if kind == "bridge":
+        return max(6.0, 2.0 * len(graphic.get("bars") or []))
+    return 0.0
+
+
+def graphic_log(graphic: dict) -> dict:
+    """What the robot needs to check a graphic: its figures and words, without screen positions."""
+    keep = ("kind", "title", "figure", "sum", "ok", "check", "tags", "bars")
+    out = {k: graphic[k] for k in keep if k in graphic}
+    if graphic.get("notes") is not None:
+        out["notes"] = [{k: n.get(k) for k in ("codes", "warn", "action", "ref")} for n in graphic["notes"]]
+    return out
+
+
+async def _box_of(manager, ref: str):
+    """Logical box of a range already on screen, without scrolling (the beat's own range is shown first)."""
+    try:
+        rect = await asyncio.to_thread(manager._excel.screen_rect, ref, False)
+        return manager._physical_to_logical_bbox(rect) if rect else None
+    except Exception as exc:
+        log.debug("graphic piece %s not on screen: %s", ref, exc)
+        return None
+
+
+async def _graphic_shape(manager, graphic: dict, box):
+    """The overlay shape for a beat's graphic, every piece tied to a box on screen, or None if none is."""
+    shape = {k: v for k, v in graphic.items() if k not in ("figure_ref", "plain")}
+    if graphic["kind"] == "notes":
+        notes, first = [], None
+        for n in graphic.get("notes") or []:
+            ref = n.get("ref")
+            if ref and first is None and box is None:
+                at = first = await _locate(manager, ref)          # shows the sheet the notes are on
+            else:
+                at = await _box_of(manager, ref) if ref else None
+            # A note whose cells are off screen still shows, beside the beat's range: no trap goes unseen.
+            notes.append({**n, "anchor": list(at or box or first or ()) or None})
+        if not any(n["anchor"] for n in notes):
+            return None
+        shape["notes"] = notes
+        return shape
+    anchor = (await _box_of(manager, graphic["figure_ref"]) if graphic.get("figure_ref") else None) or box
+    if not anchor:
+        return None
+    shape["anchor"] = list(anchor)
+    return shape
+
+
 async def play(manager, beats: list) -> None:
     """One idea at a time: light up the beat's range, show its card, say its one sentence, pause, next.
 
@@ -1323,14 +1406,20 @@ async def play(manager, beats: list) -> None:
             if BEAT_GAP_S:
                 await asyncio.sleep(BEAT_GAP_S)
         box = await _locate(manager, beat.ref) if beat.ref else None
+        graphic = await _graphic_shape(manager, beat.graphic, box) if beat.graphic else None
         scene_log.record("beat", i=i, ref=beat.ref, box=box, title=beat.label, value=beat.value, was=beat.was,
-                         note=beat.note, mark=beat.mark, text=beat.text, choices=list(beat.choices or []))
-        if box:
+                         note=beat.note, mark=beat.mark, text=beat.text, choices=list(beat.choices or []),
+                         **({"graphic": graphic_log(beat.graphic)} if beat.graphic else {}))
+        if box or graphic:
             manager.sig_clear_drawings.emit()
             figures, words = await _figures(manager)
-            for shape in shapes_for(box, beat, figures, words):
-                manager.sig_draw.emit(shape)
-            l, t, r, b = box
+            if box and not (graphic and beat.graphic.get("plain")):
+                for shape in shapes_for(box, beat, figures, words):
+                    manager.sig_draw.emit(shape)
+            if graphic:
+                graphic.update(avoid=_as_boxes(figures) or None, soft=_as_boxes(words) or None)
+                manager.sig_draw.emit(graphic)
+        if box:
             manager.sig_point_hold.emit(True)
             # The pointer stops beside the range, never on it: it must not hide the figure being explained.
             manager.sig_point_at.emit(*pointer_spot(box), NO_BUBBLE)
@@ -1349,7 +1438,11 @@ async def play(manager, beats: list) -> None:
         if spoke is False and BEAT_GAP_S:
             # Not read aloud: leave time to read the sentence, and with a card, to look at the figure and its note.
             await asyncio.sleep(reading_seconds(beat.text)
-                                + ((1.0 + 0.6 * reading_seconds(beat.note) if beat.note else 1.0) if box else 0))
+                                + ((1.0 + 0.6 * reading_seconds(beat.note) if beat.note else 1.0) if box else 0)
+                                + (graphic_seconds(beat.graphic) if graphic else 0))
+        elif graphic and BEAT_GAP_S:
+            # Read aloud, the sentence is shorter than the graphic: leave time to look at every piece.
+            await asyncio.sleep(max(0.0, graphic_seconds(beat.graphic) - reading_seconds(beat.text) / 2))
         if box:
             manager.sig_point_release.emit()
             last_card = beat

@@ -242,3 +242,101 @@ def pointer_spot(box, screen=None) -> tuple:
     if screen is not None and y + 14 > screen[3]:
         y = t - 6
     return x, y
+
+
+# ── The three graphics: leader tags, sticky notes, profit bridge ─────────────
+
+TAG_W, TAG_H, TAG_GAP, CHECK_H, FAN = 250, 54, 8, 30, 44
+NOTE_W = 250
+BAR_W, BAR_GAP, CHART_PAD, CHART_TOP, CHART_PLOT, CHART_LABEL = 88, 34, 22, 70, 150, 46
+
+
+def edge_point(box, toward) -> tuple:
+    """The point on box's edge facing toward (x, y): where a wire leaves or reaches it."""
+    l, t, r, b = box
+    x, y = toward
+    if x >= r:
+        return r, min(max(y, t), b)
+    if x <= l:
+        return l, min(max(y, t), b)
+    return min(max(x, l), r), (b if y >= b else t)
+
+
+def leaders_layout(anchor, n_tags: int, screen, avoid=None, soft=None) -> dict:
+    """Tags stacked in one column beside the figure, a check line under them, and one wire per tag.
+
+    The column is placed like a card (beside the figure, never over figures when anything is free), so the
+    tags cover no number; each wire runs from the figure's edge to the middle of its tag's near edge.
+    """
+    h = n_tags * TAG_H + (n_tags - 1) * TAG_GAP + TAG_GAP + CHECK_H
+    x, y = place_card(anchor, (TAG_W, h), screen, avoid, soft)
+    hard = _boxes(avoid)
+    if x >= anchor[2]:
+        # Room for the wires to fan out past the last column of figures, not over it.
+        moved = min(x + FAN - GAP, screen[2] - MARGIN - TAG_W)
+        if moved > x and not overlap((moved, y, moved + TAG_W, y + h), hard):
+            x = moved
+    tags = [(x, y + i * (TAG_H + TAG_GAP), x + TAG_W, y + i * (TAG_H + TAG_GAP) + TAG_H) for i in range(n_tags)]
+    check = (x, tags[-1][3] + TAG_GAP, x + TAG_W, tags[-1][3] + TAG_GAP + CHECK_H) if tags else (x, y, x + TAG_W, y + CHECK_H)
+    wires = []
+    if x >= anchor[2]:
+        # Tags to the right, past other columns of figures: every wire leaves along the figure's bottom
+        # gridline (between two rows of text, so it strikes through no number) and fans out near the tags.
+        past = [bx[2] for bx in hard if bx[1] <= anchor[3] <= bx[3] and anchor[2] <= bx[2] <= x]
+        fan = max([anchor[2]] + [p + 6 for p in past]) if past else max(anchor[2], x - FAN)
+        fan = min(fan, x - 8)
+        for tag in tags:
+            wires.append([(anchor[2], anchor[3]), (fan, anchor[3]), (x, (tag[1] + tag[3]) / 2)])
+    else:
+        for tag in tags:
+            mid = ((tag[0] + tag[2]) / 2, (tag[1] + tag[3]) / 2)
+            start = edge_point(anchor, mid)
+            wires.append([start, start, edge_point(tag, start)])
+    return {"group": (x, y, x + TAG_W, y + h), "tags": tags, "check": check, "wires": wires}
+
+
+def notes_layout(anchors, heights, screen, avoid=None, soft=None) -> list:
+    """One rect per note, each beside its own anchor, never over figures, the ranges, or another note."""
+    placed, taken = [], _boxes(avoid)
+    ranges = [tuple(a) for a in anchors if a]
+    for anchor, h in zip(anchors, heights):
+        others = taken + [r for r in ranges if r != tuple(anchor)] + placed
+        x, y = place_card(anchor, (NOTE_W, h), screen, others, soft)
+        placed.append((x, y, x + NOTE_W, y + h))
+    return placed
+
+
+def bridge_size(n_bars: int) -> tuple:
+    return (2 * CHART_PAD + n_bars * BAR_W + (n_bars - 1) * BAR_GAP,
+            CHART_TOP + CHART_PLOT + CHART_LABEL + CHART_PAD)
+
+
+def bridge_bars(amounts, totals, plot) -> list:
+    """Bar rects for a waterfall inside plot (l, t, r, b): totals stand on zero, steps float from the running sum.
+
+    Returns [(l, t, r, b, top_y)] where top_y is where the value label sits (above the bar's upper end).
+    """
+    l, t, r, b = plot
+    level, spans = 0, []
+    for amount, total in zip(amounts, totals):
+        if total:
+            lo, hi = sorted((0, amount))
+            level = amount
+        else:
+            lo, hi = sorted((level, level + amount))
+            level += amount
+        spans.append((lo, hi))
+    low = min(0, *(s[0] for s in spans))
+    high = max(0, *(s[1] for s in spans)) or 1
+    scale = (b - t) / (high - low)
+
+    def y_of(v):
+        return b - (v - low) * scale
+    out = []
+    for i, (lo, hi) in enumerate(spans):
+        x = l + i * (BAR_W + BAR_GAP)
+        top, bottom = y_of(hi), y_of(lo)
+        if bottom - top < 3:
+            top = bottom - 3
+        out.append((x, top, x + BAR_W, bottom, top))
+    return out
