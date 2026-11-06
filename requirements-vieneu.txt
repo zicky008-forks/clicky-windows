@@ -2,9 +2,10 @@
 # Install in two steps (the vieneu package itself must come without its declared extras):
 #   pip install -r requirements-vieneu.txt
 #   pip install --no-deps vieneu==3.8.3
-# onnxruntime is pinned to the version sherpa-onnx 2.0.1 bundles (1.28.2): on Windows both load
-# "onnxruntime.dll" into one process, and two different versions there can crash.
-onnxruntime==1.28.2
+# onnxruntime is pinned to the release line sherpa-onnx 2.0.1 bundles (its onnxruntime.dll is 1.28.2, which is
+# not on PyPI; 1.28.0 has the same C API): on Windows both load "onnxruntime.dll" into one process, and two
+# different API versions there can crash. tools/giong_noi/kiem_tra_giong.py checks this on Windows CI.
+onnxruntime==1.28.0
 sea-g2p>=0.9.1
 soxr
 kaldi-native-fbank>=1.20

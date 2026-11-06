@@ -126,5 +126,5 @@ def test_int8_only_on_vnni(monkeypatch, have, vnni, want):
 def test_vieneu_deps_pin_the_same_onnxruntime_as_sherpa():
     root = Path(__file__).resolve().parents[1]
     reqs = (root / "requirements-vieneu.txt").read_text(encoding="utf-8")
-    assert "onnxruntime==1.28.2" in reqs
+    assert "onnxruntime==1.28.0" in reqs   # same API line as sherpa's bundled 1.28.2
     assert "gradio" not in reqs.replace("without gradio", "") and "librosa" not in reqs.replace("librosa or", "")
