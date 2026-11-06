@@ -28,6 +28,7 @@ from engine.tables import HEADER_SCAN, header_texts, is_total, key, sheets_of
 PCT_RE = re.compile(r"%|\bty le\b|\btren dtt\b|\bty trong\b")
 PCT_DTT_RE = re.compile(r"% ?dtt|% ?doanh thu|ty le .*(dtt|doanh thu)|tren dtt|% ?net|% ?ns\b|% ?dt\b")
 PP_RE = re.compile(r"\bdiem\b|\bpp\b|\bd %|percentage point|\bbps?\b")
+REVENUE_COL_RE = re.compile(r"\bdoanh thu\b|\bdtt\b|\bdoanh so\b|\brevenue\b|\bnet sales\b|\bsales\b")
 DIFF_RE = re.compile(r"chenh lech|\bchenh\b|bien dong|variance|\bvar\b|tang giam|\+ ?/ ?-|\bdelta\b")
 YTD_RE = re.compile(r"\bluy ke\b|\bly ke\b|\bytd\b|tu dau nam|\bluy\b")
 LABEL_RE = re.compile(r"^(chi tieu|khoan muc|hang muc|noi dung|dien giai|kenh|kenh ban|phong ban|bo phan|dong|ten|"
@@ -45,11 +46,11 @@ FY_RE = [re.compile(r"\bfy ?(\d\d) ?(\d\d)\b"), re.compile(r"\bnd ?(\d\d) ?(\d\d
 def version_of(k: str) -> str:
     """The scenario a header names, folded: 'aopr1', 'aopr', 'aop', 'muf', 'thuc te', or ''."""
     m = re.search(r"\baopr ?(\d+)\b|\baopr\b|\brevised\b|\bdieu chinh\b|\b(?:ke hoach|kh|ngan sach|ban) (?:da )?sua\b|"
-                  r"^sua\b|\bsua doi\b|\bcap nhat\b|\breforecast\b", k)
+                  r"\bsua\b|\bsua doi\b|\bcap nhat\b|\breforecast\b", k)
     if m:
         return f"aopr{m.group(1)}" if m.lastindex and m.group(1) else "aopr"
     if re.search(r"\baop\b|\bbudget\b|\bngan sach goc\b|\bke hoach goc\b|\bkh goc\b|\boriginal\b|"
-                 r"^(ban |so )?goc\b|\bban goc\b", k):
+                 r"\bgoc\b", k) and not re.search(r"\bco so\b|\bnam goc\b", k):
         return "aop"
     if re.search(r"\bmuf\b|\bdu bao\b|\bforecast\b|\bfc\b", k):
         return "muf"
@@ -302,6 +303,12 @@ def read_sheet(name: str, rows: list) -> Sheet:
     text_cols = [c.index for c in sheet.cols if c.role in ("label",)] + \
                 [c.index for c in sheet.cols if c.role == "text" and c.index < min((x.index for x in sheet.cols
                                                                                    if x.role in ("value", "month")), default=0)]
+    # 'Doanh thu kênh | Chi phí kênh | %DTT': a revenue column beside the cost is a denominator, not a scenario
+    values = [c for c in sheet.cols if c.role == "value"]
+    rev = [c for c in values if REVENUE_COL_RE.search(c.k) and not DIFF_RE.search(c.k)]
+    if rev and len(rev) < len(values):
+        for c in rev:
+            c.role = "revenue"
     code_cols = {c.index for c in sheet.cols if c.role == "text" and _code_column(rows, best_r, c.index, c.k)}
     section = ""
     for i in range(best_r + 1, len(rows)):

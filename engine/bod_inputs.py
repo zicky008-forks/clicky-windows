@@ -186,6 +186,12 @@ class Config:
     elements: dict = field(default_factory=dict)     # code -> {"ten", "tk", "nhom", "dong"}
     channels: dict = field(default_factory=dict)     # folded code or name -> (name as printed, base text)
     channel_aliases: dict = field(default_factory=dict)  # folded name -> {folded code, folded name}
+    meanings: dict = field(default_factory=dict)     # folded term -> texts printed beside it anywhere in the catalogue
+
+    def explain(self, term: str) -> str:
+        """A rule name with what the catalogue says it means: 'DTT của site' -> '... (DTT của chính site, mọi khối)'."""
+        said = [m for m in self.meanings.get(key(term), []) if key(m) != key(term)]
+        return f"{term} ({'; '.join(said)})" if said else term
     bod: list = field(default_factory=list)          # [{"dong", "tk", "ce", "nhom"}]
     rules: dict = field(default_factory=dict)        # folded key -> value
     rule_text: dict = field(default_factory=dict)    # folded key -> key as printed
@@ -212,6 +218,10 @@ def _truthy(v) -> bool:
 def read_config(path: Path) -> Config:
     cfg = Config()
     for sheet, rows in sheets_of(path).items():
+        for r in rows:                       # every 'term | what it means' pair, for rules named elsewhere
+            texts = [str(v).strip() for v in (r or []) if isinstance(v, str) and str(v).strip()]
+            for a, b in zip(texts, texts[1:]):
+                cfg.meanings.setdefault(key(a), []).append(b)
         for kind, spec in CONFIG_SPECS.items():
             need = 2
             t = read_table(rows, sheet, spec, need)

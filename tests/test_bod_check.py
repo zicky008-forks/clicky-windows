@@ -667,3 +667,180 @@ def test_a_total_that_nets_an_accrual_with_its_next_period_reversal_is_explained
     total_finding = next(x for x in review.findings if x.group == 1)
     labels = [label for label, _ in total_finding.causes]
     assert any("cấn trừ" in l for l in labels) and not any("chưa giải thích" in l for l in labels), total_finding.causes
+
+
+@pytest.mark.parametrize("own_base", [False, True])
+def test_a_channel_table_with_its_revenue_column_before_the_cost_and_percent(tmp_path, own_base):
+    """'Kênh | Doanh thu kênh | Chi phí | %DTT': the current figure is the money column the %DTT stands beside;
+    the channel's own revenue is a denominator the pack may have used by mistake."""
+    from tests.bod_case import CHANNELS, PERIOD, revenue
+    answers = make_case(tmp_path, plant=True)
+    want = next(a for a in answers if a["group"] == 2)
+
+    def with_revenue(ws):
+        rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        ws.delete_rows(1, ws.max_row)
+        for i, r in enumerate(rows, 1):
+            if r[0] == "Kênh":
+                ws.append([r[0], "Doanh thu kênh"] + r[1:])
+            elif r[0] in CHANNELS:
+                own = revenue([PERIOD], channel=r[0])
+                pct = r[2]
+                if own_base and i == int(want["where"][-1]):
+                    pct = float(Decimal(str(r[1])) / own)          # cost / the channel's own revenue
+                ws.append([r[0], int(own), r[1], pct])
+            elif r[0] and str(r[0]).startswith("Tổng"):
+                ws.append([r[0], None] + r[1:])
+            else:
+                ws.append(r)
+    _edit_xlsx(tmp_path / "Pack_BOD_T10_ban_nhap.xlsx", "Theo kenh", with_revenue)
+    review = bod_check.review(tmp_path)[0]
+    g2 = [x for x in review.findings if x.group == 2]
+    assert [x.where for x in g2] == [want["where"].replace("!C", "!D")], [(x.where, x.message) for x in g2]
+    assert close(want["code"], want["expected"], g2[0].expected)
+
+
+@pytest.mark.parametrize("heads", [
+    ["Chỉ tiêu (khối Thương mại)", "Kỳ", "Thực tế FY25/26", "Kế hoạch FY25/26 gốc", "Kế hoạch FY25/26 sửa (revised)"],
+    ["Chỉ tiêu (khối Thương mại)", "Kỳ", "Thực tế FY25/26", "Gốc FY25/26", "Sửa (revised) FY25/26"],
+])
+def test_last_year_version_words_before_or_after_the_fiscal_year_and_a_bracketed_label(tmp_path, heads):
+    from openpyxl import Workbook
+    from tests.bod_case import COSTS, DEPTS, FY_MONTHS, TM, plan_amount
+    answers = make_case(tmp_path, plant=True)
+    (tmp_path / "NamTruoc_FY2526.xlsx").unlink()
+    wb = Workbook()
+    ws = wb.active
+    ws.append(heads)
+    keys = list(COSTS) + [(TM, "P06", "CE06")]
+    for d in [d for d in DEPTS if d.startswith("P")]:
+        for m in FY_MONTHS:
+            mine = [k for k in keys if k[0] == TM and k[1] == d]
+            ws.append([f"{d} - {DEPTS[d]}", f"{m[5:]}/{int(m[:4]) - 1}"]
+                      + [int(sum(plan_amount(v, *k, m) for k in mine)) for v in ("Thực tế", "AOP", "AOPR")])
+    wb.save(tmp_path / "SoLieu_NamTruoc.xlsx")
+    review = bod_check.review(tmp_path)[0]
+    want = next(a for a in answers if a["group"] == 4)
+    got = [x for x in review.findings if x.group == 4]
+    assert [x.where for x in got] == [want["where"]] and close(want["code"], want["expected"], got[0].expected), \
+        (_group(review, 4), review.unused)
+
+
+@pytest.mark.parametrize("explained", [True, False])
+def test_a_site_denominator_takes_its_division_scope_from_the_catalogue_never_a_guess(tmp_path, explained):
+    """'DTT của site', explained in the catalogue as 'DTT của chính site (mọi khối)': every division of that site.
+    Without the explanation Clicky does not guess the division: those rows are said as not checked."""
+    from tests.bod_case import CHANNELS
+    answers = make_case(tmp_path, plant=True)
+    site_rule = [n for n, rule in CHANNELS.items() if "site S1" in rule]
+
+    def catalogue(ws):
+        for row in ws.iter_rows():
+            if row[0].value in site_rule:
+                row[1].value = "DTT của site"
+        if explained:
+            ws.append([])
+            ws.append(["Giải thích mẫu số", None])
+            ws.append(["DTT của site", "DTT của chính site (mọi khối)"])
+    _edit_xlsx(tmp_path / "DanhMuc_CauHinh.xlsx", "Kenh", catalogue)
+
+    def site_column(ws):
+        rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        ws.delete_rows(1, ws.max_row)
+        for r in rows:
+            if r[0] == "Kênh":
+                ws.append(["Site", "Kênh"] + r[1:])
+            elif r[0] in CHANNELS:
+                ws.append(["S1" if r[0] in site_rule else "Toàn khối", r[0]] + r[1:])
+            elif r[0] and str(r[0]).startswith("Tổng"):
+                ws.append([r[0], None] + r[1:])
+            else:
+                ws.append(r)
+    _edit_xlsx(tmp_path / "Pack_BOD_T10_ban_nhap.xlsx", "Theo kenh", site_column)
+    review = bod_check.review(tmp_path)[0]
+    want = next(a for a in answers if a["group"] == 2)
+    g2 = [x for x in review.findings if x.group == 2]
+    assert [x.where for x in g2] == [want["where"].replace("!C", "!D")], [(x.where, x.message) for x in g2]
+    _, _, state, text = _group(review, 2)
+    if explained:
+        assert "CHƯA KIỂM ĐƯỢC" not in text, text
+    else:
+        assert "CHƯA KIỂM ĐƯỢC" in text and "DTT của site" in text, text
+
+
+def _last_year_month_table(tmp_path, version_used, version_said="AOPR"):
+    """'So nam truoc' as Phòng ban | Phiên bản | Thực tế T10/2025 | Kế hoạch: last year's October, the version
+    the pack used written in a text cell of each row."""
+    from tests.bod_case import COSTS, DEPTS, TM, plan_amount
+    keys = list(COSTS) + [(TM, "P06", "CE06")]
+    depts = [d for d in DEPTS if d.startswith("P")]
+    ly = lambda v, d: sum(plan_amount(v, *k, "2026-10") for k in keys if k[0] == TM and k[1] == d)
+
+    def table(ws):
+        ws.delete_rows(1, ws.max_row)
+        ws.append(["SO SÁNH CÙNG KỲ – KHỐI THƯƠNG MẠI"])
+        ws.append([])
+        ws.append(["Phòng ban", "Phiên bản", "Thực tế T10/2025", "Kế hoạch"])
+        for d in depts:
+            ws.append([f"{d} - {DEPTS[d]}", version_said, int(ly("Thực tế", d)), int(ly(version_used, d))])
+    _edit_xlsx(tmp_path / "Pack_BOD_T10_ban_nhap.xlsx", "So nam truoc", table)
+    return ly("AOPR", "P01")
+
+
+@pytest.mark.parametrize("used", ["AOP", "AOPR"])
+def test_last_year_month_columns_and_the_version_written_in_the_rows(tmp_path, used):
+    make_case(tmp_path, plant=False)
+    right = _last_year_month_table(tmp_path, used)
+    review = bod_check.review(tmp_path)[0]
+    g4 = [x for x in review.findings if x.group == 4]
+    if used == "AOP":
+        assert len(g4) == 1 and g4[0].where == "'So nam truoc'!D3" and close("wrong_version", right, g4[0].expected), \
+            [(x.where, x.message) for x in g4]
+    else:
+        assert not g4 and _group(review, 4)[2] == "ok", (_group(review, 4), [x.message for x in g4])
+
+
+def test_a_last_year_column_that_matches_no_version_is_not_checked_not_clean(tmp_path):
+    make_case(tmp_path, plant=False)
+    _last_year_month_table(tmp_path, "AOP")
+    (tmp_path / "NamTruoc_FY2526.xlsx").unlink()
+    review = bod_check.review(tmp_path)[0]
+    _, _, state, text = _group(review, 4)
+    assert state != "ok" and "CHƯA KIỂM ĐƯỢC" in text and "không thấy lỗi (đã soát" not in text, text
+
+    make_case(tmp_path / "b", plant=False)
+    _last_year_month_table(tmp_path / "b", "AOP")
+    _edit_xlsx(tmp_path / "b" / "Pack_BOD_T10_ban_nhap.xlsx", "So nam truoc",
+               lambda ws: [setattr(r[3], "value", 123_456_789) for r in ws.iter_rows(min_row=4)])
+    review = bod_check.review(tmp_path / "b")[0]
+    _, _, state, text = _group(review, 4)
+    assert state != "ok" and "CHƯA KIỂM ĐƯỢC" in text, text
+
+
+def test_last_years_revised_plan_rows_do_not_enter_the_locked_month_check(tmp_path):
+    """The last-year file carries AOPR rows with no approval date: this year's AOPR file has one, so group 5
+    knows its locked months and says nothing about last year."""
+    make_case(tmp_path, plant=True)
+
+    def approval_only(ws):                    # no 'closed up to' rule: only the approval date says
+        for row in ws.iter_rows():
+            if row[0].value and "Khóa sổ" in str(row[0].value):
+                row[0].value, row[1].value = "Ghi chú", "trống"
+    _edit_xlsx(tmp_path / "DanhMuc_CauHinh.xlsx", "Quy tac", approval_only)
+    review = bod_check.review(tmp_path)[0]
+    _, _, state, text = _group(review, 5)
+    assert state == "loi" and "CHƯA KIỂM ĐƯỢC" not in text, text
+
+
+def test_no_group_with_an_unchecked_part_ever_reads_as_clean():
+    """The lock: whatever the counts, a group with a part not run never says 'không thấy lỗi' alone, and the
+    summary lists it."""
+    for state_maker in (lambda c: c.cannot(4, "x", "y"), lambda c: c.partly(4, "z")):
+        cov = bod_check.Coverage()
+        cov.ran(4, 12)
+        state_maker(cov)
+        state, text = cov.status(4, [])
+        assert state != "ok" and "CHƯA KIỂM ĐƯỢC" in text, text
+        from engine.bod_review import Finding
+        state, text = cov.status(4, [Finding(4, "wrong_version", "'A'!B1", "m", Decimal(1), Decimal(2))])
+        assert state == "loi" and "CHƯA KIỂM ĐƯỢC" in text, text

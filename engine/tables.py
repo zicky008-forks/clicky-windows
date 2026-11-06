@@ -34,7 +34,9 @@ def matches(cell, synonyms) -> int:
     """Strength of a header cell against a field's synonyms: 3 exact, 2 all synonym words present, 0 none.
     Headers an accounting program exports run together ('NgayHoaDon', 'THANHTIEN'): CamelCase is split into
     words and a header equal to a synonym once spaces are removed is exact too."""
-    k = key(_split_camel(str(cell))) if cell is not None else ""
+    text = _split_camel(str(cell)) if cell is not None else ""
+    bare = re.sub(r"\(.*?\)", " ", text)       # 'Chỉ tiêu (khối Thương mại)': the words in brackets only qualify
+    k = key(bare) or key(text)
     if not k:
         return 0
     words = set(k.split())
