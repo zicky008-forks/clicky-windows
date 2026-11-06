@@ -1,0 +1,16 @@
+# VieNeu-TTS v3 Turbo on the CPU, without gradio, librosa or torch.
+# Install in two steps (the vieneu package itself must come without its declared extras):
+#   pip install -r requirements-vieneu.txt
+#   pip install --no-deps vieneu==3.8.3
+# onnxruntime is pinned to the version sherpa-onnx 2.0.1 bundles (1.28.2): on Windows both load
+# "onnxruntime.dll" into one process, and two different versions there can crash.
+onnxruntime==1.28.2
+sea-g2p>=0.9.1
+soxr
+kaldi-native-fbank>=1.20
+tokenizers>=0.20
+huggingface_hub
+PyYAML
+soundfile
+numpy
+py-cpuinfo

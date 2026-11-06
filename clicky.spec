@@ -24,7 +24,10 @@ from PyInstaller.utils.hooks import collect_all
 # Whisper speech models, which make up much of the installer and are not used
 # there. Vietnamese speech and voice run offline through sherpa-onnx (voice/).
 EDITION = os.environ.get("CLICKY_EDITION", "full").strip().lower()
-BI_LEAVES_OUT = ["rapidocr_onnxruntime", "onnxruntime", "cv2", "imageio", "imageio_ffmpeg",
+import importlib.util as _iu
+# VieNeu (offline Vietnamese voice) runs on onnxruntime, so keep it when VieNeu is installed.
+_VIENEU = _iu.find_spec("vieneu") is not None and os.path.isdir(os.path.join("voice", "vieneu"))
+BI_LEAVES_OUT = ["rapidocr_onnxruntime"] + ([] if _VIENEU else ["onnxruntime"]) + ["cv2", "imageio", "imageio_ffmpeg",
                  "pywhispercpp", "faster_whisper", "ctranslate2"]
 
 # ── Modules that are lazy-imported by CompanionManager — PyInstaller's
@@ -97,8 +100,11 @@ if os.path.isdir(os.path.join("voice", "asr-vi")):  # offline Vietnamese speech 
 if os.path.isdir(os.path.join("voice", "tts-piper-vi")):  # offline Vietnamese voice + its phoneme table
     datas.append((os.path.join("voice", "tts-piper-vi"), os.path.join("voice", "tts-piper-vi")))
     datas.append(("audio/tts/vi_phonemes.tsv", "audio/tts"))
+if _VIENEU:                                       # tools/giong_noi/tai_vieneu.py; Apache-2.0 weights
+    datas.append((os.path.join("voice", "vieneu"), os.path.join("voice", "vieneu")))
 for pkg in (
     "sherpa_onnx",              # offline Vietnamese speech (its own onnxruntime DLL under sherpa_onnx/lib)
+    "vieneu", "vieneu_utils", "sea_g2p", "kaldi_native_fbank", "soxr", "cpuinfo",   # VieNeu, when installed
     "faster_whisper",
     "ctranslate2",
     "tokenizers",

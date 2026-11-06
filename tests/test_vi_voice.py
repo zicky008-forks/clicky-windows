@@ -95,3 +95,36 @@ def test_wav_header_and_rate():
     data = vi_offline_tts.to_wav([0.0, 0.5, -0.5], 22050)
     with wave.open(io.BytesIO(data)) as w:
         assert w.getframerate() == 22050 and w.getnframes() == 3
+
+
+def _fake_vieneu(root: Path, subs):
+    snap = root / "vieneu" / "hub" / vi_offline_tts.VIENEU_REPO_DIR / "snapshots" / "abc"
+    for sub in subs:
+        (snap / sub).mkdir(parents=True)
+        (snap / sub / "vieneu_prefill.onnx").write_bytes(b"x")
+
+
+def test_vieneu_bundle_is_found_with_its_precisions(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLICKY_VOICE_DIR", str(tmp_path))
+    assert vi_offline_tts.find_vieneu() is None
+    _fake_vieneu(tmp_path, ["onnx_int8", "onnx_update"])
+    found = vi_offline_tts.find_vieneu()
+    assert sorted(found["precisions"]) == ["fp32", "int8"]
+
+
+@pytest.mark.parametrize("have, vnni, want", [
+    (["int8", "fp32"], True, "int8"),
+    (["int8", "fp32"], False, "fp32"),
+    (["int8"], False, ""),            # int8 without VNNI garbles audio: no VieNeu, Piper reads instead
+    (["fp32"], True, "fp32"),
+])
+def test_int8_only_on_vnni(monkeypatch, have, vnni, want):
+    monkeypatch.setattr(vi_offline_tts, "cpu_has_vnni", lambda: vnni)
+    assert vi_offline_tts.vieneu_precision(have) == want
+
+
+def test_vieneu_deps_pin_the_same_onnxruntime_as_sherpa():
+    root = Path(__file__).resolve().parents[1]
+    reqs = (root / "requirements-vieneu.txt").read_text(encoding="utf-8")
+    assert "onnxruntime==1.28.2" in reqs
+    assert "gradio" not in reqs.replace("without gradio", "") and "librosa" not in reqs.replace("librosa or", "")
