@@ -420,8 +420,13 @@ def test_a_sales_export_with_run_together_headers_is_read(tmp_path):
     assert _group(review, 2)[2] == "ok" and not review.findings, (_group(review, 2), review.findings)
 
 
-@pytest.mark.parametrize("plant", [True, False])
-def test_last_year_as_an_indicator_table_one_column_per_version(tmp_path, plant):
+@pytest.mark.parametrize("plant, heads, period", [
+    (True, ["Chỉ tiêu", "Kỳ", "Thực tế", "Kế hoạch gốc", "Kế hoạch sửa"], "{m}/{y}"),
+    (False, ["Chỉ tiêu", "Kỳ", "Thực tế", "Kế hoạch gốc", "Kế hoạch sửa"], "{m}/{y}"),
+    (True, ["Khoản mục", "Kỳ", "Thực tế FY25/26", "Gốc FY25/26", "Sửa (revised) FY25/26"], "Tháng {n}/{y}"),
+    (False, ["Khoản mục", "Kỳ", "Thực tế FY25/26", "Gốc FY25/26", "Sửa (revised) FY25/26"], "Tháng {n}/{y}"),
+])
+def test_last_year_as_an_indicator_table_one_column_per_version(tmp_path, plant, heads, period):
     """Last year as 'Chỉ tiêu | Kỳ | Thực tế | Kế hoạch gốc | Kế hoạch sửa': the label column names the
     department, the period column the month, each version has its own column."""
     from openpyxl import Workbook
@@ -433,12 +438,12 @@ def test_last_year_as_an_indicator_table_one_column_per_version(tmp_path, plant)
     ws.title = "Chi tieu"
     ws.append(["BẢNG CHỈ TIÊU NĂM TRƯỚC (giả lập)"])
     ws.append([])
-    ws.append(["Chỉ tiêu", "Kỳ", "Thực tế", "Kế hoạch gốc", "Kế hoạch sửa"])
+    ws.append(heads)
     keys = list(COSTS) + [(TM, "P06", "CE06")]
     for d in [d for d in DEPTS if d.startswith("P")]:
         for m in FY_MONTHS:
             mine = [k for k in keys if k[0] == TM and k[1] == d]
-            ws.append([f"{d} - {DEPTS[d]}", f"{m[5:]}/{int(m[:4]) - 1}"]
+            ws.append([f"{d} - {DEPTS[d]}", period.format(m=m[5:], n=int(m[5:]), y=int(m[:4]) - 1)]
                       + [int(sum(plan_amount(v, *k, m) for k in mine)) for v in ("Thực tế", "AOP", "AOPR")])
     wb.save(tmp_path / "NamTruoc_FY2526.xlsx")
     review = bod_check.review(tmp_path)[0]
@@ -577,13 +582,88 @@ def test_cost_with_no_department_is_a_data_note_however_the_detail_writes_it(tmp
     assert not [x for x in review.findings if x.group == 1], [x.message for x in review.findings]
 
 
-def test_more_than_ten_errors_in_one_group_are_doubted_not_reported():
-    from engine.bod_review import Finding
-    cov = bod_check.Coverage()
-    cov.ran(5, 40)
-    many = [Finding(5, "locked_month_plan", f"'AOPR'!E{i}", "x", Decimal(1), Decimal(2)) for i in range(11)]
-    one = [Finding(7, "fx_rate_type", "'Ty gia'!F7", "y", Decimal(1), Decimal(2))]
-    keep, notes = bod_check._too_many(many + one, cov)
-    assert keep == one and notes and "11" in notes[0][0]
-    state, text = cov.status(5, keep)
-    assert state != "ok" and "CHƯA KIỂM ĐƯỢC" in text and "khớp sai" in text, text
+def test_a_whole_closed_month_left_on_plan_is_one_error_listing_every_row(tmp_path):
+    """The revised plan forgot to move all of September to actuals: one error, every row listed, never '0 lỗi'."""
+    from openpyxl import load_workbook
+    make_case(tmp_path, plant=False)
+    aop = load_workbook(tmp_path / "KeHoach_AOP_FY2627.xlsx")["Data"]
+    head = [c.value for c in aop[1]]
+    col = {h: i for i, h in enumerate(head)}
+    plan = {(r[col["Khoi"]], r[col["Phong_ban_ma"]], r[col["Cost_element_ma"]]): r[col["So_tien_VND"]]
+            for r in aop.iter_rows(min_row=2, values_only=True) if r[col["Thang"]] == 9}
+    moved = []
+
+    def september_on_plan(ws):
+        for row in ws.iter_rows(min_row=2):
+            if row[col["Thang"]].value == 9:
+                k = (row[col["Khoi"]].value, row[col["Phong_ban_ma"]].value, row[col["Cost_element_ma"]].value)
+                row[col["So_tien_VND"]].value = plan[k]
+                if k[0] == "Thương mại":
+                    moved.append(row[0].row)
+    _edit_xlsx(tmp_path / "KeHoach_AOPR1_FY2627.xlsx", "Data", september_on_plan)
+    review = bod_check.review(tmp_path)[0]
+    g5 = [x for x in review.findings if x.group == 5]
+    assert len(g5) == 1 and "09/2026" in g5[0].message and len(g5[0].causes) == len(moved), \
+        [(x.where, x.message[:80]) for x in g5]
+    assert _group(review, 5)[2] == "loi"
+    assert "0 lỗi" not in bod_check.markdown([review]).splitlines()[0:6]
+
+
+@pytest.mark.parametrize("codes", [["K01", "K02", "K03", "K04"], ["01", "02", "03", "04"]])
+def test_channel_code_in_a_second_text_column_with_site_as_the_label(tmp_path, codes):
+    """'Theo kênh' printed as Site | Mã kênh | Chi phí | %DTT, the catalogue keeps code and name apart, the
+    sales file says the name: the channel's denominator rule still applies."""
+    from tests.bod_case import CHANNELS
+    answers = make_case(tmp_path, plant=True)
+    names = list(CHANNELS)
+    code_of = dict(zip(names, codes))
+
+    def catalogue(ws):
+        ws.delete_rows(1, ws.max_row)
+        ws.append(["QUY TẮC MẪU SỐ %DTT THEO KÊNH"])
+        ws.append(["Mã kênh", "Tên kênh", "Mẫu số %DTT"])
+        for n, rule in CHANNELS.items():
+            ws.append([code_of[n], n, rule])
+    _edit_xlsx(tmp_path / "DanhMuc_CauHinh.xlsx", "Kenh", catalogue)
+
+    def by_site_and_code(ws):
+        rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        ws.delete_rows(1, ws.max_row)
+        for r in rows:
+            if r[0] == "Kênh":
+                ws.append(["Site", "Mã kênh"] + list(r[1:]))
+            elif r[0] in code_of:
+                ws.append(["Toàn khối", code_of[r[0]]] + list(r[1:]))
+            elif r[0] and str(r[0]).startswith("Tổng"):
+                ws.append([r[0], None] + list(r[1:]))
+            else:
+                ws.append(list(r))
+    _edit_xlsx(tmp_path / "Pack_BOD_T10_ban_nhap.xlsx", "Theo kenh", by_site_and_code)
+    review = bod_check.review(tmp_path)[0]
+    g2 = [x for x in review.findings if x.group == 2]
+    want = next(a for a in answers if a["group"] == 2)
+    assert [x.where for x in g2] == [want["where"].replace("!C", "!D")], [(x.where, x.message) for x in g2]
+    assert close(want["code"], want["expected"], g2[0].expected)
+
+
+def test_a_total_that_nets_an_accrual_with_its_next_period_reversal_is_explained(tmp_path):
+    """October accrues 9m, November's export reverses it; the pack netted the two and left both out."""
+    import csv
+    make_case(tmp_path, plant=False)
+    gl = next(tmp_path.glob("GL_*.csv"))
+    with open(gl, encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.reader(fh))
+    h = {name: i for i, name in enumerate(rows[0])}
+    base = next(r for r in rows[1:] if r[h["Thang"]] == "10" and r[h["Phong_ban_ma"]] == "P03")
+    accrual, reversal = list(base), list(base)
+    accrual[h["So_CT"]], accrual[h["So_tien_VND"]], accrual[h["Dien_giai"]] = "PK1099", "9000000", "Trích trước quảng cáo T10"
+    reversal[h["So_CT"]], reversal[h["Ngay_CT"]], reversal[h["Thang"]] = "PK1199", "2026-11-01", "11"
+    reversal[h["So_tien_VND"]], reversal[h["Dien_giai"]] = "-9000000", "Đảo trích trước quảng cáo T10"
+    total = next(i for i, r in enumerate(rows) if r[0].startswith("Tổng"))
+    rows[total:total] = [accrual, reversal]
+    with open(gl, "w", encoding="utf-8-sig", newline="") as fh:
+        csv.writer(fh).writerows(rows)
+    review = bod_check.review(tmp_path)[0]
+    total_finding = next(x for x in review.findings if x.group == 1)
+    labels = [label for label, _ in total_finding.causes]
+    assert any("cấn trừ" in l for l in labels) and not any("chưa giải thích" in l for l in labels), total_finding.causes

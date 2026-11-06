@@ -252,8 +252,9 @@ class Facts:
             k = key(text)
             if k in self.cfg.channels:
                 return self.cfg.channels[k][0]
+        w = words(label)                     # the channel may sit in any text column: 'S1  KB2B'
         for k, (name, _) in sorted(self.cfg.channels.items(), key=lambda x: -len(x[0])):
-            if re.search(rf"(^| ){re.escape(words(k))}$", words(label)):
+            if words(k) and re.search(rf"(^| ){re.escape(words(k))}( |$)", w):
                 return name
         return ""
 
@@ -272,7 +273,7 @@ class Facts:
                 and (site is None or key(s.site) == key(site))
                 and (division is None or key(s.division) == key(division)
                      or key(division) in self.aliases and key(s.division) in self.aliases)
-                and (channel is None or key(s.channel) == key(channel))]
+                and (channel is None or key(s.channel) in self.cfg.channel_aliases.get(key(channel), {key(channel)}))]
         return sum((s.net for s in rows), ZERO) if rows else None
 
     def base_of(self, text: str, line_site: str = "", line_channel: str = "") -> tuple:
@@ -645,6 +646,14 @@ def _total_finding(f: Facts, where: str, value: Decimal, months: list, label: st
         ("Dòng không thuộc tài khoản chi phí (bộ BOD cộng vào)",
          sum((r["amount"] for r in f.gl if not in_scope(r) and r["period"] in months and f.in_division(r)), ZERO)),
     ]
+    # an accrual of this period whose reversal sits in a later period: a pack that nets the two drops the accrual
+    after = [r for r in mine if r["period"] > last]
+    reversed_later = [r for r in inside if r["amount"] and any(
+        abs(x["amount"] + r["amount"]) <= VND_TOLERANCE and (x["account"] == r["account"] or x["element"] == r["element"])
+        and x["dept"] == r["dept"] for x in after)]
+    if reversed_later:
+        groups.append(("Trích trước trong kỳ đã cấn trừ với bút toán đảo của kỳ sau (bộ BOD bỏ ra)",
+                       -sum((r["amount"] for r in reversed_later), ZERO)))
     later = sorted({r["period"] for r in mine if r["period"] > last})
     for p in later:
         groups.append((f"Bút toán tháng {p[5:]}/{p[:4]} trong file xuất (bộ BOD cộng vào)",
@@ -1318,28 +1327,6 @@ def data_notes(f: Facts, period: str, fy: int) -> list:
     return notes
 
 
-MANY = 10
-
-
-def _too_many(findings: list, cov: Coverage) -> tuple:
-    """A group that finds more than MANY errors has most likely matched the wrong lines, not met a pack that is
-    wrong everywhere. Those are not reported as errors: the group says it could not check, and every place is
-    listed in the notes so nothing is dropped in silence."""
-    counts = Counter(x.group for x in findings)
-    keep, notes = [], []
-    for g, n in counts.items():
-        if n <= MANY:
-            continue
-        mine = [x for x in findings if x.group == g]
-        cov.cannot(g, f"{n} chỗ lệch cùng lúc: nhiều khả năng em khớp sai dòng hoặc cột, không phải bộ BOD sai hàng loạt, "
-                      "nên em chưa báo là lỗi", "chị xác nhận cách đọc bảng (dòng, cột, phiên bản) trong ghi chú")
-        notes.append((f"Nhóm {g}: {n} chỗ lệch em chưa dám báo lỗi",
-                      "; ".join(x.message for x in mine[:3]) + (" …" if n > 3 else ""),
-                      ", ".join(x.where for x in mine[:8])))
-    keep = [x for x in findings if counts[x.group] <= MANY]
-    return keep, notes
-
-
 def _merge(findings: list) -> list:
     """One planted mistake often touches a run of cells (a column, a row). Same check, same column: one finding."""
     from engine.saved_check import split
@@ -1350,9 +1337,12 @@ def _merge(findings: list) -> list:
             try:
                 sheet, cell = split(x.where)
             except ValueError:
-                out.append(x)
-                continue
+                sheet, _, cell = x.where.rpartition("!")      # a file row ('Data!24'), not a cell
             col = re.match(r"[A-Z]+", cell).group(0) if re.match(r"[A-Z]+", cell) else cell
+            if x.code.startswith("locked_month"):
+                # one cause: a closed month still holding the AOP plan, however many rows or cells it covers
+                m = re.search(r"tháng (\d\d/\d{4})", x.message)
+                col = m.group(1) if m else col
             by[(x.code, sheet, col)].append(x)
         else:
             out.append(x)
@@ -1360,8 +1350,11 @@ def _merge(findings: list) -> list:
         if len(xs) == 1 or code not in ("locked_month_plan", "locked_month_plan_file"):
             out += xs
             continue
+        xs.sort(key=lambda x: x.where)
         head = xs[0]
-        head.message += f" (và {len(xs) - 1} ô khác cùng cột)"
+        what = "dòng" if code == "locked_month_plan_file" else "ô"
+        head.message = (f"{len(xs)} {what} của tháng {col} đã khoá sổ vẫn là số kế hoạch AOP, chưa chuyển sang thực tế "
+                        f"(một lỗi chung). Ví dụ: {head.message}")
         head.causes = [(x.where, x.diff) for x in xs]
         out.append(head)
     return sorted(out, key=lambda x: (x.group, x.where))
@@ -1413,8 +1406,8 @@ def review(folder: Path, fy_start: int = 7) -> list:
                     cov.cannot(4, f"phần so năm trước: chưa đọc được file {name} ({why})",
                                "file năm trước có phiên bản (hoặc một cột mỗi phiên bản), tháng hoặc kỳ, và dòng chỉ tiêu")
             fx, fx_notes = check_fx_sheets(f, b, pack, period, fy, cov)
-            rv_.findings, doubtful = _too_many(_merge(found + fx), cov)
-            rv_.notes = data_notes(f, period, fy) + fx_notes + doubtful
+            rv_.findings = _merge(found + fx)
+            rv_.notes = data_notes(f, period, fy) + fx_notes
         for x in rv_.findings:
             scene_log.record("bod_finding", pack=path.name, group=x.group, code=x.code, where=x.where,
                              expected=None if x.expected is None else str(x.expected),

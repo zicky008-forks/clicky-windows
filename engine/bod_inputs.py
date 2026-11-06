@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from engine.bod_review import Entry
+from engine.trial_balance import fold
 from engine.tables import Table, find_header, header_texts, key, read_table, sheets_of
 
 ZERO = Decimal(0)
@@ -48,7 +49,7 @@ PLAN_SPEC = {
     "khoi": ["khoi", "division", "khoi kinh doanh", "nganh hang"],
     "pb": ["phong ban ma", "ma phong ban", "ma pb", "phong ban", "cost center", "ma bo phan"],
     "ce": ["cost element ma", "ma cost element", "ma ce", "cost element", "ma khoan muc"],
-    "dong": ["dong bod", "dong bao cao", "chi tieu", "khoan muc bod"],
+    "dong": ["dong bod", "dong bao cao", "chi tieu", "khoan muc bod", "khoan muc", "hang muc", "noi dung", "line item"],
     "kenh": ["kenh", "channel", "kenh phan phoi"],
     "tien": ["so tien vnd", "so tien", "gia tri", "amount", "thanh tien"],
     "ty_gia": ["ty gia gia dinh", "ty gia"],
@@ -120,6 +121,17 @@ def month_key(thang, ngay=None, nam=None, fy_start: int = 7) -> Optional[str]:
             return f"{v.year:04d}-{v.month:02d}"
     s = str(thang or "").strip()
     m = re.fullmatch(r"(20\d\d)[-/.](\d{1,2})(?:[-/.]\d{1,2})?(?:[ T].*)?", s)
+    if not m:
+        f_ = re.sub(r"\s+", " ", fold(s).lower()).strip()
+        en = re.fullmatch(r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[ \-/.']*(20\d\d|\d\d)", f_)
+        if en:
+            y = int(en.group(2)) + (2000 if len(en.group(2)) == 2 else 0)
+            mo = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec").index(en.group(1)) + 1
+            return f"{y:04d}-{mo:02d}"
+        vi = re.fullmatch(r"(?:thang|th|t|ky)\s*(\d{1,2})\s*(?:[-/.]|nam|,)?\s*(20\d\d)", f_)
+        if vi and 1 <= int(vi.group(1)) <= 12:
+            return f"{int(vi.group(2)):04d}-{int(vi.group(1)):02d}"
+        s = f_ if re.fullmatch(r"(?:thang|th|t)\s*\d{1,2}(?:\.0)?", f_) else s
     if m:
         return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}"
     m = re.fullmatch(r"(?:T|th|thang\s*)?(\d{1,2})[-/.](20\d\d)", s, re.I)
@@ -157,7 +169,8 @@ CONFIG_SPECS = {
                  "ten": ["cost element ten", "ten cost element", "ten khoan muc", "ten"],
                  "tk": ["tai khoan", "tk", "so hieu tk", "account"], "nhom": ["nhom", "group cost", "nhom chi phi"],
                  "dong": ["dong bod", "dong bao cao"]},
-    "channels": {"kenh": ["kenh", "channel", "ma kenh", "ten kenh"],
+    "channels": {"kenh": ["kenh", "channel", "ma kenh", "channel code", "kenh ma"],
+                 "ten_kenh": ["ten kenh", "channel name", "kenh ten", "dien giai kenh"],
                  "mau_so": ["mau so", "mau so dtt", "mau so %dtt", "co so tinh", "pham vi mau so", "dtt dung de chia"]},
     "bod": {"dong": ["dong bod", "dong bao cao", "chi tieu bod", "chi tieu"],
             "tk": ["tai khoan", "tk", "dau tk"], "ce": ["cost element", "ma ce", "ma cost element"],
@@ -171,7 +184,8 @@ CONFIG_SPECS = {
 class Config:
     depts: dict = field(default_factory=dict)        # code -> {"ten", "khoi", "cha", "khong_cat": bool}
     elements: dict = field(default_factory=dict)     # code -> {"ten", "tk", "nhom", "dong"}
-    channels: dict = field(default_factory=dict)     # folded channel -> (name as printed, base text)
+    channels: dict = field(default_factory=dict)     # folded code or name -> (name as printed, base text)
+    channel_aliases: dict = field(default_factory=dict)  # folded name -> {folded code, folded name}
     bod: list = field(default_factory=list)          # [{"dong", "tk", "ce", "nhom"}]
     rules: dict = field(default_factory=dict)        # folded key -> value
     rule_text: dict = field(default_factory=dict)    # folded key -> key as printed
@@ -222,9 +236,14 @@ def read_config(path: Path) -> Config:
                                               "nhom": str(t.get(v, "nhom", "")).strip(), "dong": str(t.get(v, "dong", "")).strip()}
             elif kind == "channels" and {"kenh", "mau_so"} <= set(t.columns):
                 for _, v in t.rows:
-                    name = str(t.get(v, "kenh", "")).strip()
-                    if name:
-                        cfg.channels[key(name)] = (name, str(t.get(v, "mau_so", "")).strip())
+                    code, name = str(t.get(v, "kenh", "") or "").strip(), str(t.get(v, "ten_kenh", "") or "").strip()
+                    canonical = name or code
+                    if canonical:
+                        rule = str(t.get(v, "mau_so", "")).strip()
+                        aliases = {key(x) for x in (code, name) if x}
+                        for a in aliases:                 # a channel is known by its code and by its name
+                            cfg.channels[a] = (canonical, rule)
+                        cfg.channel_aliases[key(canonical)] = aliases
             elif kind == "bod" and "dong" in t.columns and ({"tk", "ce", "nhom"} & set(t.columns)):
                 for _, v in t.rows:
                     cfg.bod.append({f: str(t.get(v, f, "")).strip() for f in ("dong", "tk", "ce", "nhom")})
