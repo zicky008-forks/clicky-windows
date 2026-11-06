@@ -46,7 +46,7 @@ def by_name(rows):
 def test_good_story_passes_every_layout_check():
     out = layout_checks.evaluate(story(), SPEC)
     assert all(c.ok for c in out), [c for c in out if not c.ok]
-    assert len(out) == 8
+    assert len(out) == 9
 
 
 def test_card_over_a_figure_fails_and_names_the_rect():
@@ -84,3 +84,40 @@ def test_older_build_without_layout_events_is_not_graded_unless_asked():
     assert layout_checks.evaluate(story(), {}) == []
     out = layout_checks.evaluate([{"t": 1, "event": "turn"}], SPEC)
     assert out and not any(c.ok for c in out if c.blocking)
+
+
+def lat(**kw):
+    return [{"t": 1, "event": "turn"}, {"t": 2, "event": "latency", "source": "chat", **kw}]
+
+
+def test_code_turn_too_slow_fails_only_on_a_build_that_tags_the_mode():
+    spec = {"layout": {"latency": SPEC["layout"]["latency"]}}
+    rows = by_name(layout_checks.evaluate(lat(mode="code", first_feedback=1800, ready=900, first_point=1200), spec))
+    c = rows["Lượt chạy bằng code: phản hồi đầu ≤ 1500 ms mọi lượt"]
+    assert not c.ok and c.blocking
+    old = by_name(layout_checks.evaluate(lat(first_feedback=1800), spec))
+    assert not old["Lượt chạy bằng code: phản hồi đầu ≤ 1500 ms mọi lượt"].blocking
+
+
+def test_pointer_must_fly_within_1500_ms_of_the_answer():
+    spec = {"layout": {"latency": SPEC["layout"]["latency"]}}
+    rows = by_name(layout_checks.evaluate(lat(mode="code", first_feedback=300, ready=4000, first_point=6000), spec))
+    c = rows["Có kết quả rồi thì con trỏ bay tới trong ≤ 1500 ms"]
+    assert not c.ok and "2000 ms" in c.detail
+    rows = by_name(layout_checks.evaluate(lat(mode="code", first_feedback=300, ready=4000, first_point=4900), spec))
+    assert rows["Có kết quả rồi thì con trỏ bay tới trong ≤ 1500 ms"].ok
+
+
+def test_voice_and_ai_turns_are_measured_but_never_fail():
+    spec = {"layout": {"latency": SPEC["layout"]["latency"]}}
+    ev = [{"t": 1, "event": "turn"}, {"t": 2, "event": "latency", "source": "voice", "mode": "code",
+                                      "first_feedback": 5000, "transcript": 2500, "first_point": 7000},
+          {"t": 3, "event": "turn"}, {"t": 4, "event": "latency", "source": "chat", "mode": "ai", "first_feedback": 9000}]
+    rows = layout_checks.latency_checks(ev, spec["layout"]["latency"])
+    assert all(c.ok or not c.blocking for c in rows), rows
+
+
+def test_widget_over_a_figure_fails():
+    ev = story() + [{"t": 9, "event": "widget", "rect": [5, 5, 50, 50], "covers_figures": 1, "covers_range": False}]
+    rows = by_name(layout_checks.evaluate(ev, SPEC))
+    assert not rows["Thẻ, nút chọn và hình không che con số (Clicky tự đo)"].ok
