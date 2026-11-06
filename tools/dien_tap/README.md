@@ -54,6 +54,26 @@ Người dùng bình thường không bao giờ có file này.
 
 Ảnh từng cảnh nằm trong `anh\`, cảnh lỗi được lưu thêm `loi-canh-NN.png` có đánh dấu: xanh lá là ô đúng, đỏ là thẻ, xanh dương là con trỏ, cam là các ô bị che. Nên chạy ở 3 mức phóng: `--zoom 85`, `--zoom 100`, `--zoom 130`. `--no-visual` tắt phần này. Ảnh chụp có thể lộ cửa sổ khác trên màn hình, nên chỉ chạy khi đã đóng file công ty.
 
+## Diễn tập 4 chặng (bhc_e2e)
+
+Một lệnh chạy trọn một tháng trên case giả lập kiểu công ty đường (không phải số thật của công ty nào):
+
+```powershell
+python tools\dien_tap\bhc_e2e.py                 # tự tạo case có lỗi cài sẵn
+python tools\dien_tap\bhc_e2e.py --sach          # bản sạch: bộ BOD không có lỗi
+python tools\dien_tap\bhc_e2e.py --chang 3,4     # chỉ chạy vài chặng
+```
+
+| Chặng | Robot làm | ĐẠT khi |
+| --- | --- | --- |
+| 1. Thả thư mục | Mở `Clicky.exe --drop <thư mục>`, như khi chị thả cả thư mục vào ô thả file | Phiếu nhận file hiện trước khi sửa gì; mỗi file có dòng dùng + dòng bỏ = tổng; mở đúng `BaoCao_QuanTri_T10.xlsx` giữa nhiều file |
+| 2. Chốt số | Bấm "Đúng rồi, làm tiếp", "Sửa giúp tôi" nếu có, "Lưu và kiểm tra" | Lợi nhuận sau thuế đúng `dap_an.json`; mở lại file đã lưu thấy khớp; còn bản `_ban-goc`; file nguồn không đổi; không có lỗi |
+| 3. Soát bộ BOD | Chạy `bod_robot.py --dap-an` trên cùng thư mục | Bắt đủ lỗi cài sẵn đúng ô đúng số, báo động sai không quá 1, đủ 7 nhóm |
+| 4. Thuyết trình + hỏi đáp | Chạy `present_robot.py` trên `trinh_bay/` | Kiểm tra trước đạt, chỉ đúng hình, trả lời đúng câu |
+
+Kết quả: `dien-tap-4-chang-<giờ>\ket-qua-4-chang.md` và một thư mục con cho mỗi chặng. Không cần Excel,
+có thể tự kiểm phần tính của cả 4 chặng: `python tools\dien_tap\bhc_case.py --tao <thư mục> --kiem`.
+
 ## File đáp án
 
 `numbers`: `{"name", "label", "value", "tolerance", "sheet"}`. Robot tìm ô có nhãn rồi lấy số đầu tiên bên phải; một tiêu đề chỉ nhắc nhãn mà không có số thì bỏ qua và tìm tiếp.

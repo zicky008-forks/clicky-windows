@@ -95,6 +95,15 @@ def report_workbook(folder: Path) -> Optional[Path]:
     return named[0] if len(named) == 1 else None
 
 
+def args(argv: list) -> Optional[str]:
+    """The folder after --drop, when given: the rehearsal robot drops a folder the way a person would."""
+    if "--drop" in argv:
+        i = argv.index("--drop")
+        if i + 1 < len(argv):
+            return argv[i + 1]
+    return None
+
+
 def _same(a: Optional[str], b: Path) -> bool:
     try:
         return bool(a) and Path(a).resolve() == b.resolve()

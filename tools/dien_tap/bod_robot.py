@@ -102,6 +102,7 @@ def main(argv=None) -> int:
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--thu-muc", help="thư mục case GIẢ LẬP có bộ BOD bản nháp")
     src.add_argument("--tu-tao", action="store_true", help="tự tạo case giả lập có 9 lỗi biết trước")
+    ap.add_argument("--dap-an", default="", help="dap_an.json của case (khoá 'bod'): chấm cả lỗi cài sẵn")
     ap.add_argument("--clicky", default="", help="đường dẫn Clicky.exe (mặc định: bản cài mới nhất)")
     ap.add_argument("--out", default="", help="thư mục kết quả (mặc định: dien-tap-soat-bod-<giờ> trong thư mục hiện tại)")
     ap.add_argument("--timeout", type=float, default=600, help="giây chờ tối đa cho cả lượt soát")
@@ -125,6 +126,9 @@ def main(argv=None) -> int:
         answers = make_case(case, plant=True)
     else:
         shutil.copytree(a.thu_muc, case, ignore=shutil.ignore_patterns(OUT_DIR, "~$*"))
+    if a.dap_an:
+        key = json.loads(Path(a.dap_an).read_text(encoding="utf-8"))
+        answers = key.get("bod", key) if isinstance(key, dict) else key
     packs = [p for p in case.iterdir() if p.suffix.lower() in (".xlsx", ".xlsm") and
              any(w in p.stem.lower() for w in ("bod", "pack", "nhap", "nháp"))]
     hashes = {p: file_hash(p) for p in packs}

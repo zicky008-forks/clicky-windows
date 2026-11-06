@@ -753,6 +753,7 @@ def main():
     tray.on_present.connect(_pick_present)
     _present_cli = present_args(sys.argv)
     from office.bod_skill import args as bod_args
+    from office.drop import args as drop_args
 
     # ── Global hotkey ─────────────────────────────────────────────────────────
     _shortcuts = []
@@ -814,6 +815,9 @@ def main():
         welcome.started.connect(lambda: start_after_welcome(manager))
         QTimer.singleShot(400, welcome.present)
         _setup_keepalive[0] = welcome           # keep a reference so it isn't GC'd
+    elif drop_args(sys.argv):
+        # Clicky.exe --drop <folder>: the same path as a folder dropped on the drop zone (rehearsal robot)
+        QTimer.singleShot(800, lambda: manager.submit_drop([drop_args(sys.argv)]))
     elif bod_args(sys.argv):
         QTimer.singleShot(800, lambda: manager.submit_bod_review(bod_args(sys.argv)))
     elif _present_cli:
