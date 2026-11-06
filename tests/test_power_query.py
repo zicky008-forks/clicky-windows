@@ -1,5 +1,8 @@
 import json
 import re
+import sys
+
+import pytest
 
 from engine.m_code import add_culture, lint, steps
 from office.power_query import PowerQuery, format_for_prompt
@@ -202,3 +205,16 @@ def test_load_returns_the_timeout_and_puts_excel_alerts_back(monkeypatch):
     bridge = Bridge()
     out = PowerQuery(bridge).load("DonHang", timeout=0.2, step=lambda *a, **k: None)
     assert isinstance(out, LoadTimeout) and bridge.app.DisplayAlerts is True
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="COM marshalling exists on Windows only")
+def test_a_real_com_object_is_marshalled_to_the_worker_thread():
+    """Runs on the Windows CI runner, which has no Excel: a COM object every Windows has proves the
+    CoMarshalInterThreadInterfaceInStream path the Power Query refresh takes."""
+    import pythoncom
+    import win32com.client
+    from office.power_query import call_with_timeout
+    pythoncom.CoInitialize()
+    fso = win32com.client.Dispatch("Scripting.FileSystemObject")
+    late, name = call_with_timeout(fso, "GetTempName", (), timeout=20, poll=0.1, dialogs=list)
+    assert late is None and str(name).lower().endswith(".tmp")

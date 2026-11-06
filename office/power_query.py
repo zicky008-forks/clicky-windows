@@ -68,10 +68,18 @@ def refresh_with_timeout(table, timeout: float = None, poll: float = 1.0,
     """table.Refresh(False) on a worker thread, waited for at most `timeout` seconds. None when it finished;
     a LoadTimeout when it did not (the refresh is left to finish or fail inside Excel). An error raised by the
     refresh is raised here, as before. step(event, **data) is told when a dialog shows up while waiting."""
+    late, _ = call_with_timeout(table, "Refresh", (False,), timeout, poll, dialogs, step)
+    return late
+
+
+def call_with_timeout(obj, method: str, args: tuple = (), timeout: float = None, poll: float = 1.0,
+                      dialogs: Optional[Callable[[], list]] = None, step=None) -> tuple:
+    """(LoadTimeout or None, return value): obj.method(*args) on a worker thread. A COM object is marshalled to
+    that thread (CoMarshalInterThreadInterfaceInStream), as COM requires; a plain Python object is called as is."""
     timeout = LOAD_TIMEOUT if timeout is None else timeout
     dialogs = dialogs or excel_dialogs
     result, stream = {}, None
-    oleobj = getattr(table, "_oleobj_", None)
+    oleobj = getattr(obj, "_oleobj_", None)
     if oleobj is not None:                    # a COM object belongs to its thread: hand it over marshalled
         import pythoncom
         stream = pythoncom.CoMarshalInterThreadInterfaceInStream(pythoncom.IID_IDispatch, oleobj)
@@ -79,7 +87,7 @@ def refresh_with_timeout(table, timeout: float = None, poll: float = 1.0,
     def work():
         com = False
         try:
-            target = table
+            target = obj
             if stream is not None:
                 import pythoncom
                 import win32com.client
@@ -87,7 +95,7 @@ def refresh_with_timeout(table, timeout: float = None, poll: float = 1.0,
                 com = True
                 target = win32com.client.Dispatch(
                     pythoncom.CoGetInterfaceAndReleaseStream(stream, pythoncom.IID_IDispatch))
-            target.Refresh(False)
+            result["value"] = getattr(target, method)(*args)
             result["ok"] = True
         except Exception as exc:              # noqa: BLE001 - handed back to the caller
             result["error"] = exc
@@ -101,7 +109,17 @@ def refresh_with_timeout(table, timeout: float = None, poll: float = 1.0,
     worker.start()
     seen = ""
     while True:
-        worker.join(max(0.01, min(poll, timeout - (time.monotonic() - start))))
+        wait = max(0.01, min(poll, timeout - (time.monotonic() - start)))
+        if stream is None:
+            worker.join(wait)
+        else:
+            # An in-process object of this thread's apartment answers the worker through this thread's message
+            # queue: keep pumping while waiting, or the two threads wait on each other until the timeout.
+            import pythoncom
+            end = time.monotonic() + wait
+            while worker.is_alive() and time.monotonic() < end:
+                pythoncom.PumpWaitingMessages()
+                worker.join(0.02)
         if not worker.is_alive():
             break
         if not seen:
@@ -114,10 +132,10 @@ def refresh_with_timeout(table, timeout: float = None, poll: float = 1.0,
             out = LoadTimeout(f"Power Query refresh did not finish in {timeout:.0f}s"
                               + (f" (Excel dialog: {seen})" if seen else ""))
             out.seconds, out.dialog = timeout, seen
-            return out
+            return out, None
     if "error" in result:
         raise result["error"]
-    return None
+    return None, result.get("value")
 
 
 class PowerQuery:

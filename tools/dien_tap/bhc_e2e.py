@@ -5,6 +5,9 @@ then grades each stage ĐẠT/KHÔNG ĐẠT. Practice (synthetic) data only, on 
     python tools\\dien_tap\\bhc_e2e.py --thu-muc <case>    (a case folder that has dap_an.json)
     python tools\\dien_tap\\bhc_e2e.py --chang 3,4         (only some stages; 1 and 2 always run together)
 
+First (stage 0, about 30 s): tools/dien_tap/pq_smoke.py checks that Clicky's Power Query refresh path (worker
+thread, marshalled COM object, timeout) works on this PC's Excel, so a stage 2 failure is not a mystery.
+
 The four stages, each on the installed Clicky with the scene log on and CLICKY_LOCAL_ONLY=1:
  1. Thả thư mục: Clicky.exe --drop <case>, as if the folder were dropped on the drop zone. Clicky must
     show the receipt (files read, rows used and left out) before it changes anything, and open the right
@@ -177,6 +180,17 @@ def run_close(exe: str, case: Path, key: dict, out: Path, timeout: float) -> Res
     return res
 
 
+def _sub_json(main, argv: list, path: Path):
+    """Run a check's main() and read the result file it wrote (None when it could not run)."""
+    code = main(argv)
+    if not path.exists():
+        return None if code == 2 else Result()
+    res = Result()
+    for line in json.loads(path.read_text(encoding="utf-8")).get("lines", []):
+        res.add(line["name"], bool(line["ok"]), line.get("detail", ""))
+    return res
+
+
 def _sub(main, argv: list, out: Path):
     """Run another robot's main() and read the result it wrote (None when it could not run)."""
     code = main(argv)
@@ -195,7 +209,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--thu-muc", default="", help="thư mục case GIẢ LẬP có dap_an.json (mặc định: tự tạo bằng bhc_case.py)")
     ap.add_argument("--sach", action="store_true", help="tự tạo bản sạch: bộ BOD không có lỗi cài sẵn")
-    ap.add_argument("--chang", default="1,2,3,4", help="các chặng chạy, ví dụ 3,4 (1 và 2 luôn chạy cùng nhau)")
+    ap.add_argument("--chang", default="0,1,2,3,4",
+                    help="các chặng chạy, ví dụ 3,4 (1 và 2 luôn chạy cùng nhau; 0 = thử nhanh Power Query trên máy)")
     ap.add_argument("--clicky", default="", help="đường dẫn Clicky.exe (mặc định: bản cài mới nhất)")
     ap.add_argument("--out", default="", help="thư mục kết quả (mặc định: dien-tap-4-chang-<giờ> trong thư mục hiện tại)")
     ap.add_argument("--timeout", type=float, default=600, help="giây chờ tối đa cho mỗi chặng")
@@ -226,6 +241,12 @@ def main(argv=None) -> int:
     stages = []
     try:
         stop_clicky()
+        if "0" in stages_wanted:
+            import pq_smoke
+            sub = out / "0-thu-power-query"
+            say("Chặng 0: thử nhanh Power Query trên máy này (khoảng 30 giây)")
+            r0 = _sub_json(pq_smoke.main, ["--out", str(sub)], sub / "ket-qua-pq-smoke.json")
+            stages.append(("Chặng 0: Power Query chạy trên máy này", r0, ""))
         if stages_wanted & {"1", "2"}:
             stages.append(("Chặng 1–2: thả thư mục, chốt số", run_close(exe, case, key, out / "1-2-chot-so", a.timeout), ""))
             stop_clicky()

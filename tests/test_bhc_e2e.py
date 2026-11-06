@@ -69,3 +69,13 @@ def test_a_close_stuck_on_a_query_says_where_it_stopped():
     line = next(l for l in res.lines if l.name.startswith("2b."))
     assert not line.ok and "query_load (timeout, Excel hỏi: Privacy levels)" in line.detail
     assert not bhc_e2e.stopped(events[:3])
+
+
+def test_the_power_query_smoke_check_queries_are_plain_m():
+    import pq_smoke
+    from engine.m_code import steps
+    m = pq_smoke.csv_query(Path("C:/tam/DonHang \"gia\" lap.csv"))
+    assert [s.name for s in steps(m)] == ["Source", "Headers"] and '""gia""' in m
+    assert "Function.InvokeAfter" in pq_smoke.slow_query(20) and "#duration(0, 0, 0, 20)" in pq_smoke.slow_query(20)
+    assert pq_smoke.amounts([["PX001", "x", "1200000"], ["PX002", "x", 3400000.0]]) == 4_600_000
+    assert pq_smoke.main([]) == 2 or sys.platform == "win32"      # off Windows it says it cannot run

@@ -71,6 +71,10 @@ python tools\dien_tap\bhc_e2e.py --chang 3,4     # chỉ chạy vài chặng
 | 3. Soát bộ BOD | Chạy `bod_robot.py --dap-an` trên cùng thư mục | Bắt đủ lỗi cài sẵn đúng ô đúng số, báo động sai không quá 1, đủ 7 nhóm |
 | 4. Thuyết trình + hỏi đáp | Chạy `present_robot.py` trên `trinh_bay/` | Kiểm tra trước đạt, chỉ đúng hình, trả lời đúng câu |
 
+Trước 4 chặng, robot chạy chặng 0 (khoảng 30 giây): `pq_smoke.py` mở một Excel riêng, tải một query nhỏ qua
+đúng đường làm mới của Clicky, rồi thử một query chậm để chắc Clicky dừng chờ đúng hạn. Chạy riêng được:
+`python tools\dien_tap\pq_smoke.py`.
+
 Kết quả: `dien-tap-4-chang-<giờ>\ket-qua-4-chang.md` và một thư mục con cho mỗi chặng. Không cần Excel,
 có thể tự kiểm phần tính của cả 4 chặng: `python tools\dien_tap\bhc_case.py --tao <thư mục> --kiem`.
 
