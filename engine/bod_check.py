@@ -152,6 +152,7 @@ class Facts:
         v = version_of(key(p.version)) or key(p.version)
         return {"version": v, "period": p.month, "fy": fiscal_year(p.month, self.fy_start) if p.month else None,
                 "amount": p.amount, "division": p.division, "dept": p.dept, "element": p.element, "site": p.site,
+                "approved": p.approved,
                 "dong": p.line or dong, "nhom": nhom, "channel": p.channel, "rate": p.rate, "where": p.where}
 
     # matching a printed label to records
@@ -322,17 +323,32 @@ def find_division(pack: Pack, b: Bundle) -> tuple:
     return "", "không xác định"
 
 
-def locked_months(cfg: Config, fy: int, fy_start: int, period: str) -> list:
-    months = fy_months(fy, fy_start)
+def locked_months(cfg: Config, fy: int, fy_start: int, period: str, approved: str = "") -> tuple:
+    """(months closed when the revised plan was made, how it is known). A month is locked only when a file says
+    so: its books were closed before the version's approval date, or the configuration names the last closed
+    month (both given: both must hold). The month under review is never locked. ([], "") when nothing says."""
+    import calendar
+    from engine.bod_inputs import month_key
+    months = [m for m in fy_months(fy, fy_start) if m < period]
+    upto, how = None, []
     for words in (("khoa", "den"), ("khoa so",), ("lock",), ("da khoa",)):
         v = cfg.rule(*words)
-        if v is None:
-            continue
-        from engine.bod_inputs import month_key
-        m = month_key(v, None, f"{fy}/{(fy + 1) % 100:02d}", fy_start)
-        if m and m in months:
-            return months[:months.index(m) + 1]
-    return months[:months.index(period) + 1] if period in months else []
+        m = month_key(v, None, f"{fy}/{(fy + 1) % 100:02d}", fy_start) if v is not None else None
+        if m:
+            upto = m
+            break
+    if approved:
+        def closed(m):
+            y, mm = int(m[:4]), int(m[5:])
+            return f"{m}-{calendar.monthrange(y, mm)[1]:02d}" < approved
+        months = [m for m in months if closed(m)]
+        how.append(f"tháng chốt trước ngày duyệt {approved[8:]}/{approved[5:7]}/{approved[:4]}")
+    if upto:
+        months = [m for m in months if m <= upto]
+        how.append(f"danh mục: khoá sổ đến {upto[5:]}/{upto[:4]}")
+    if not how:
+        return [], ""
+    return months, "; ".join(how)
 
 
 def convention_previous(cfg: Config, available: list) -> list:
@@ -871,51 +887,100 @@ def check_versions(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Cov
 
 
 def check_months(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Coverage] = None) -> list:
-    """A month already closed must hold the actual in the revised plan. A cell that still holds the plan is an
-    error; a cell that differs from the actual only counts when the rest of the closed months do hold actuals."""
+    """A month already closed when the revised plan was approved must hold the actual. Only a cell that still
+    holds the plan (AOP) is an error. A line the detail has no actual for (revenue, another division, a line
+    the cost detail never carries) is not compared: it is said as not checked, never taken as 0."""
     cov = cov or Coverage()
     out = []
-    locked = locked_months(f.cfg, fy, f.fy_start, period)
     months = fy_months(fy, f.fy_start)
+    approvals = {}
+    for p in f.plans:
+        if p["version"].startswith("aopr") and p.get("approved"):
+            approvals[p["version"]] = max(approvals.get(p["version"], ""), p["approved"])
+    no_source = set()
+
+    def has_actual(match) -> bool:
+        return any(r["cost"] and f.in_division(r) and match(r) for r in f.gl)
+
     for s in pack.of("months"):
         text = key(" ".join([s.name, s.title] + [c.text for c in s.cols]))
-        if version_of(text) not in ("aopr",) and not re.search(r"aopr ?\d", text):
+        version = version_of(text)
+        if version != "aopr" and not re.search(r"aopr ?\d", text):
+            continue
+        m_ = re.search(r"aopr ?(\d+)", text)
+        version = f"aopr{m_.group(1)}" if m_ else "aopr"
+        approved = approvals.get(version) or (max(approvals.values()) if approvals and version == "aopr" else "")
+        locked, how = locked_months(f.cfg, fy, f.fy_start, period, approved)
+        if not locked:
+            cov.cannot(5, f"không biết tháng nào đã khoá khi lập {version.upper()}" if not how else
+                       f"không có tháng nào khoá trước kỳ đang soát ({how})",
+                       "ngày duyệt của bản AOPR (cột Ngày duyệt) hoặc dòng 'khoá sổ đến tháng' trong danh mục")
             continue
         cells = []
         for r in s.rows:
+            if r.total or _is_revenue(r.label):
+                if not r.total:
+                    no_source.add(r.label)
+                continue
             match = f.row_filter(r.label, r.section)
-            if match is None or r.total:
+            if match is None:
+                continue
+            if not has_actual(match):
+                no_source.add(r.label)
                 continue
             for c in s.col("month"):
                 m = next((x for x in months if int(x[5:]) == c.month), None)
                 if m not in locked:
                     continue
                 v = s.num(r, c)
-                if v is None:
-                    continue
-                cells.append((r, c, m, v, (f.actual(match, [m]), f.actual(match, [m], clean=True)), f.plan("aop", match, [m])))
+                if v is not None:
+                    cells.append((r, c, m, v, (f.actual(match, [m]), f.actual(match, [m], clean=True)), f.plan("aop", match, [m])))
         cov.ran(5, len(cells))
-        out += _locked_findings(cells, lambda r, c: _cell(s, r, c), lambda r: r.label)
-    # the revised plan file itself, row by row: site, division, department, element and channel all match
-    rows = []
+        out += _locked_findings(cells, lambda r, c, s=s: _cell(s, r, c), lambda r: r.label)
+    # the revised plan file itself, row by row, in the division under review
+    rows, other_division, unknown = [], 0, set()
     for p in f.plans:
-        if not p["version"].startswith("aopr") or p["period"] not in locked or not (p["dept"] or p["element"] or p["dong"]):
+        if not p["version"].startswith("aopr") or not (p["dept"] or p["element"] or p["dong"]):
+            continue
+        locked, how = locked_months(f.cfg, fy, f.fy_start, period, approvals.get(p["version"], ""))
+        if not how:
+            unknown.add(p["version"].upper())
+            continue
+        if p["period"] not in locked:
+            continue
+        if not f.in_division(p):
+            other_division += 1
+            continue
+        if _is_revenue(p["dong"]):
+            no_source.add(p["dong"])
             continue
         match = (lambda r, p=p: (not p["dept"] or r.get("dept") == p["dept"]) and (not p["element"] or r.get("element") == p["element"])
-                 and (p["dept"] or p["element"] or r.get("dong") == p["dong"])
+                 and (p["element"] or not p["dong"] or key(r.get("dong", "")) == key(p["dong"]))
                  and (not p["channel"] or r.get("channel") == p["channel"]) and (not p["site"] or key(r.get("site", "")) == key(p["site"]))
                  and (not p["division"] or not r.get("division") or f.same_division(r["division"], p["division"])))
+        if not has_actual(match):
+            no_source.add(" ".join(x for x in (p["dept"], p["element"], p["dong"]) if x))
+            continue
         aop = [q for q in f.plans if q["version"] == "aop" and q["period"] == p["period"] and match(q)]
-        mine = [r for r in f.gl if r["cost"] and r["period"] == p["period"] and match(r)]
+        mine = [r for r in f.gl if r["cost"] and r["period"] == p["period"] and f.in_division(r) and match(r)]
         act = (sum((r["amount"] for r in mine), ZERO), sum((r["amount"] for r in mine if not is_distributor_discount(r)), ZERO))
         rows.append((p, None, p["period"], p["amount"], act, sum((q["amount"] for q in aop), ZERO) if aop else None))
     cov.ran(5, len(rows))
     out += _locked_findings(rows, lambda p, c: p["where"],
                             lambda p: f"File AOPR, {' '.join(x for x in (p['site'], p['dept'], p['element'], p['dong']) if x)}",
                             code="locked_month_plan_file")
-    if not pack.of("months") and not rows:
+    if no_source:
+        revenue = sorted(x for x in no_source if _is_revenue(x))
+        need = ("file doanh thu theo tháng (bán hàng hoặc sổ cái 511) cho các dòng doanh thu" if revenue else
+                "sổ chi tiết có các dòng này")
+        cov.partly(5, f"{len(no_source)} dòng kế hoạch không có số thực tế cùng loại trong sổ chi tiết "
+                      f"(vd. {(revenue or sorted(no_source))[0]}), nên chưa so. Cần: {need}")
+    if unknown:
+        cov.cannot(5, f"file {', '.join(sorted(unknown))} không cho biết tháng nào đã khoá khi lập",
+                   "ngày duyệt của bản AOPR (cột Ngày duyệt) hoặc dòng 'khoá sổ đến tháng' trong danh mục")
+    if not pack.of("months") and not rows and not unknown:
         cov.cannot(5, "không thấy bảng AOPR theo tháng trên bộ BOD, cũng không có dòng AOPR nào của tháng đã khoá",
-                   "bảng AOPR theo tháng trên bộ BOD hoặc file AOPR có tháng, phòng ban/cost element")
+                   "bảng AOPR theo tháng trên bộ BOD hoặc file AOPR có tháng, phòng ban/cost element, ngày duyệt")
     return out
 
 
@@ -923,16 +988,13 @@ def _locked_findings(cells: list, where, label, code: str = "locked_month_plan")
     """cells: [(row, col, month, printed, (actual, actual without the detail's own traps), AOP or None)]."""
     out = []
     fits = lambda v, acts: any(abs(v - a) <= VND_TOLERANCE for a in acts)
-    closed = [x for x in cells if fits(x[3], x[4])]
-    actual_habit = len(cells) >= 5 and len(closed) >= 0.8 * len(cells)
     for r, c, m, v, acts, plan in cells:
         act = acts[0]
         if fits(v, acts):
             continue
-        is_plan = plan is not None and abs(plan - v) <= VND_TOLERANCE
-        if not is_plan and not actual_habit:
-            continue
-        what = f"đang là số kế hoạch AOP {fmt_vnd(v)} đ" if is_plan else f"đang là {fmt_vnd(v)} đ"
+        if plan is None or abs(plan - v) > VND_TOLERANCE:
+            continue                       # not the plan: a different actual (late entries) is not called wrong here
+        what = f"đang là số kế hoạch AOP {fmt_vnd(v)} đ"
         out.append(Finding(5, code, where(r, c), f"{label(r)}, tháng {m[5:]}/{m[:4]} đã khoá sổ: AOPR phải là số thực tế "
                            f"{fmt_vnd(act)} đ, {what}", act, v))
     return out

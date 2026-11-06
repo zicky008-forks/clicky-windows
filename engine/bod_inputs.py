@@ -52,6 +52,7 @@ PLAN_SPEC = {
     "kenh": ["kenh", "channel", "kenh phan phoi"],
     "tien": ["so tien vnd", "so tien", "gia tri", "amount", "thanh tien"],
     "ty_gia": ["ty gia gia dinh", "ty gia"],
+    "ngay_duyet": ["ngay duyet", "ngay phe duyet", "approved", "approval date", "ngay ban hanh", "duyet ngay"],
 }
 
 FX_SPEC = {
@@ -297,11 +298,31 @@ class PlanRow:
     site: str = ""
     month_no: Optional[int] = None      # month without a year yet: resolved by load() from the file's fiscal year
     fy: Optional[int] = None            # first year of the fiscal year, when the file or header says it
+    approved: str = ""                  # 'YYYY-MM-DD' the version was approved, when the file says it
+
+
+def day_of(value) -> str:
+    """'YYYY-MM-DD' from a date cell or text ('2026-11-03', '03/11/2026'), else ''."""
+    import datetime as dt
+    if isinstance(value, (dt.date, dt.datetime)):
+        return f"{value.year:04d}-{value.month:02d}-{value.day:02d}"
+    s = str(value or "").strip()
+    m = re.match(r"(20\d\d)[-/.](\d{1,2})[-/.](\d{1,2})", s)
+    if m:
+        return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    m = re.match(r"(\d{1,2})[-/.](\d{1,2})[-/.](20\d\d)", s)
+    if m:
+        return f"{int(m.group(3)):04d}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
+    return ""
 
 
 def _dims(t: Table, v) -> dict:
-    return {f: str(t.get(v, c, "") or "").strip() for f, c in (("division", "khoi"), ("dept", "pb"), ("element", "ce"),
-                                                               ("line", "dong"), ("channel", "kenh"), ("site", "site"))}
+    out = {f: str(t.get(v, c, "") or "").strip() for f, c in (("division", "khoi"), ("dept", "pb"), ("element", "ce"),
+                                                              ("line", "dong"), ("channel", "kenh"), ("site", "site"))}
+    out["approved"] = day_of(t.get(v, "ngay_duyet"))
+    if unassigned(out["dept"]):
+        out["dept"] = ""
+    return out
 
 
 def _plan_month(thang, nam, fy_start: int) -> tuple:

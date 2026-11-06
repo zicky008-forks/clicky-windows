@@ -401,9 +401,10 @@ def write_pack(folder: Path, plant: bool, style: str = "a") -> list:
     for d in depts:
         vals = [plan("AOPR1", d, [m]) for m in FY_MONTHS]
         if plant and d == "P02":
-            answers.append({"group": 5, "code": "locked_month_plan", "where": f"'AOPR theo thang'!E{len(ap) + 1}",
-                            "expected": vals[3]})
-            vals[3] = plan("AOP", d, [FY_MONTHS[3]])
+            # September: closed before AOPR1 was approved; October is the month under review, never locked
+            answers.append({"group": 5, "code": "locked_month_plan", "where": f"'AOPR theo thang'!D{len(ap) + 1}",
+                            "expected": vals[2]})
+            vals[2] = plan("AOP", d, [FY_MONTHS[2]])
         ap.append([f"{d} - {DEPTS[d]}"] + vals + [sum(vals)])
 
     # Cat giam
@@ -484,10 +485,10 @@ def _pack_c(sheets: dict, plant: bool) -> list:
         for site in (["S1", "S2"] if d == "P01" else ["S1"]):
             vals = [sum((a for k in keys for st, a in site_plan("AOPR1", *k, m) if st == site), Decimal(0)) for m in FY_MONTHS]
             if plant and d == "P01" and site == "S2":
-                i = FY_MONTHS.index(PERIOD)
+                i = FY_MONTHS.index(PERIOD) - 1
                 answers.append({"group": 5, "code": "locked_month_plan", "where": f"'AOPR theo thang'!{chr(ord('D') + i)}{len(ap) + 1}",
                                 "expected": vals[i]})
-                vals[i] = sum((a for k in keys for st, a in site_plan("AOP", *k, PERIOD) if st == site), Decimal(0))
+                vals[i] = sum((a for k in keys for st, a in site_plan("AOP", *k, FY_MONTHS[i]) if st == site), Decimal(0))
             ap.append([site, TM, f"{d} - {DEPTS[d]}"] + vals + [sum(vals)])
     sheets["AOPR theo thang"] = ap
 

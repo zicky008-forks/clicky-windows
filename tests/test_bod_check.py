@@ -292,3 +292,77 @@ def test_parent_rows_are_found_by_their_children_nested_or_below():
     spans = _spans(values)
     assert spans[0] == (1, 6) and spans[1] == (2, 3) and spans[4] == (5, 6)
     assert spans[9] == (7, 8)
+
+
+# ── round 2 roots: locked months only when a file says so; plan lines only against a source of their kind ──
+
+def _edit_xlsx(path, sheet, fn):
+    from openpyxl import load_workbook
+    wb = load_workbook(path)
+    fn(wb[sheet])
+    wb.save(path)
+
+
+def test_the_month_under_review_is_never_locked_and_nothing_is_locked_unless_a_file_says_so(tmp_path):
+    """Any layout: the review month (and later ones) of a revised plan may hold plan numbers; with no approval
+    date and no 'closed up to' rule, group 5 is not checked rather than guessed."""
+    from tests.bod_case import plan, DEPTS
+    make_case(tmp_path, plant=False)
+    pack = tmp_path / "Pack_BOD_T10_ban_nhap.xlsx"
+
+    def plan_in_review_month(ws):
+        for row in ws.iter_rows(min_row=4):
+            code = str(row[0].value or "")[:3]
+            if code in DEPTS:
+                row[4].value = int(plan("AOP", code, ["2026-10"]))       # October holds the plan, as it should
+    _edit_xlsx(pack, "AOPR theo thang", plan_in_review_month)
+    _edit_xlsx(tmp_path / "KeHoach_AOPR1_FY2627.xlsx", "Data",
+               lambda ws: [setattr(r[1], "value", "2026-12-20") for r in ws.iter_rows(min_row=2)])
+    review = bod_check.review(tmp_path)[0]
+    assert not [x for x in review.findings if x.group == 5], [x.message for x in review.findings if x.group == 5]
+    assert _group(review, 5)[2] in ("ok", "mot_phan")
+
+    _edit_xlsx(tmp_path / "KeHoach_AOPR1_FY2627.xlsx", "Data",
+               lambda ws: [setattr(r[1], "value", None) for r in ws.iter_rows(min_row=2)])
+
+    def no_lock_rule(ws):
+        for row in ws.iter_rows():
+            if row[0].value and "Khóa sổ" in str(row[0].value):
+                row[0].value, row[1].value = "Ghi chú", "trống"
+    _edit_xlsx(tmp_path / "DanhMuc_CauHinh.xlsx", "Quy tac", no_lock_rule)
+    review = bod_check.review(tmp_path)[0]
+    _, _, state, text = _group(review, 5)
+    assert not [x for x in review.findings if x.group == 5]
+    assert state == "chua" and "CHƯA KIỂM ĐƯỢC" in text and "ngày duyệt" in text.lower(), text
+
+
+def test_plan_lines_are_only_compared_with_a_ledger_that_carries_their_kind(tmp_path):
+    """Revenue lines and other divisions' lines in the revised plan, with a cost-only detail filtered to the
+    division under review: none is compared against a 0 actual; group 5 says which lines and what file it needs."""
+    from openpyxl import load_workbook
+    make_case(tmp_path, plant=False)
+    extra = []
+    for m in (7, 8, 9):
+        extra.append(["Doanh thu thuần", "", "", "Doanh thu thuần", 9_000_000_000, m])            # revenue line
+        extra.append(["", "Q01", "CE01", "Chi phí bán hàng", 55_000_000, m, "Sản xuất"])         # other division
+    for name, version, approved in (("KeHoach_AOP_FY2627.xlsx", "AOP", "2026-06-20"),
+                                    ("KeHoach_AOPR1_FY2627.xlsx", "AOPR1", "2026-11-03")):
+        path = tmp_path / name
+        wb = load_workbook(path)
+        ws = wb["Data"]
+        head = [c.value for c in ws[1]]
+        for dong_or_blank, dept, ce, dong, amount, m, *div in extra:
+            row = dict(zip(head, [None] * len(head)))
+            row.update({"Phien_ban": version, "Ngay_duyet": approved, "Nam": "FY26/27", "Thang": m,
+                        "Khoi": div[0] if div else "Thương mại", "Phong_ban_ma": dept, "Cost_element_ma": ce,
+                        "Dong_BOD": dong, "So_tien_VND": amount})
+            ws.append([row[h] for h in head])
+        wb.save(path)
+
+    def revenue_row(ws):
+        ws.append(["Doanh thu thuần"] + [9_000_000_000] * 12 + [108_000_000_000])
+    _edit_xlsx(tmp_path / "Pack_BOD_T10_ban_nhap.xlsx", "AOPR theo thang", revenue_row)
+    review = bod_check.review(tmp_path)[0]
+    assert not [x for x in review.findings if x.group == 5], [x.message for x in review.findings if x.group == 5]
+    _, _, state, text = _group(review, 5)
+    assert state == "mot_phan" and "CHƯA KIỂM ĐƯỢC" in text and "doanh thu" in text.lower() and "Cần:" in text, text
