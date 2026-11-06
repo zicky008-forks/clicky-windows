@@ -5,11 +5,14 @@
 
 Weights: Apache-2.0 (pnnbao-ump/VieNeu-TTS-v3-Turbo, codec OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX).
 The layout is a normal Hugging Face cache; Clicky points HF_HUB_CACHE at it and sets HF_HUB_OFFLINE=1.
+Snapshot files are made real files (no symlinks into blobs/): onnxruntime refuses external weight data
+(.data) that resolves outside the model folder, and an installer cannot keep symlinks anyway.
 Needs network to huggingface.co (the build runner has it; the cloud dev box does not).
 """
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
@@ -52,10 +55,25 @@ def fetch(out: Path, precisions: list) -> int:
             get(V3_REPO, name, SUBFOLDER[p], optional=name.endswith(".json") and name != "config.json")
     for name in CODEC_FILES:
         get(CODEC_REPO, name, optional=name.endswith(".json"))
+    flatten(cache)
     (out / "NGUON.txt").write_text(
         f"{V3_REPO} ({', '.join(precisions)})\n{CODEC_REPO}\nApache-2.0\n", encoding="utf-8")
     print(f"Tổng {total / 1e6:.0f} MB -> {out}")
     return total
+
+
+def flatten(cache: Path) -> int:
+    """Replace each snapshot symlink with a copy of its blob, then drop blobs/. Returns files replaced."""
+    done = 0
+    for repo in cache.glob("models--*"):
+        for link in sorted((repo / "snapshots").rglob("*")):
+            if link.is_symlink():
+                target = link.resolve(strict=True)
+                link.unlink()
+                shutil.copy2(target, link)
+                done += 1
+        shutil.rmtree(repo / "blobs", ignore_errors=True)
+    return done
 
 
 def main(argv=None) -> int:

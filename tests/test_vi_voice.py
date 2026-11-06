@@ -128,3 +128,25 @@ def test_vieneu_deps_pin_the_same_onnxruntime_as_sherpa():
     reqs = (root / "requirements-vieneu.txt").read_text(encoding="utf-8")
     assert "onnxruntime==1.28.0" in reqs   # same API line as sherpa's bundled 1.28.2
     assert "gradio" not in reqs.replace("without gradio", "") and "librosa" not in reqs.replace("librosa or", "")
+
+
+def test_tai_vieneu_flatten_makes_snapshot_files_real(tmp_path):
+    # onnxruntime 1.28 rejects .data weights whose symlink resolves into blobs/ (outside the model folder).
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "tai_vieneu", Path(__file__).resolve().parents[1] / "tools" / "giong_noi" / "tai_vieneu.py")
+    tai = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tai)
+    repo = tmp_path / "models--pnnbao-ump--VieNeu-TTS-v3-Turbo"
+    (repo / "blobs").mkdir(parents=True)
+    (repo / "blobs" / "abc").write_bytes(b"weights")
+    snap = repo / "snapshots" / "rev" / "onnx_int8"
+    snap.mkdir(parents=True)
+    try:
+        (snap / "vieneu_backbone_shared.data").symlink_to(repo / "blobs" / "abc")
+    except OSError:
+        pytest.skip("no symlink permission")
+    assert tai.flatten(tmp_path) == 1
+    f = snap / "vieneu_backbone_shared.data"
+    assert not f.is_symlink() and f.read_bytes() == b"weights"
+    assert not (repo / "blobs").exists()
