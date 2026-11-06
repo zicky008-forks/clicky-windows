@@ -722,7 +722,10 @@ class CompanionManager(QObject):
     def _get_tts(self):
         if self._tts is None:
             provider = cfg.tts_provider()
-            if provider == "elevenlabs":
+            if provider == "vi_offline":
+                from audio.tts.vi_offline_tts import OfflineViTTS
+                self._tts = OfflineViTTS(on_fallback=self.sig_notice.emit)
+            elif provider == "elevenlabs":
                 from audio.tts.elevenlabs_provider import ElevenLabsProvider
                 self._tts = ElevenLabsProvider()
             elif provider == "openai":
@@ -1970,7 +1973,7 @@ class CompanionManager(QObject):
         """An online voice sends each sentence to its server, so the names put back into the answer
         are masked again before it is read; the offline Windows voice reads them as they are."""
         gate = getattr(self, "_outgoing", None)
-        if gate is not None and cfg.tts_provider() != "sapi":
+        if gate is not None and cfg.tts_provider() not in ("sapi", "vi_offline"):
             text = gate.mask(text)
         return _speakable(text)
 

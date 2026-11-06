@@ -1,0 +1,9 @@
+{
+  "layout": {
+    "leaders": {"figure": 1380000000, "accounts": ["6411", "6417", "6418"]},
+    "bridge": {"bars_millions": [556, -120, 436]},
+    "notes": {"codes": ["wrong_side", "closing_mismatch", "profit_tie", "returns_in_revenue"],
+              "fix_sheet": "Doi chieu", "fix_causes": 2},
+    "latency": {"first_feedback_ms": 1500, "point_after_ready_ms": 1500}
+  }
+}
