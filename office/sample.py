@@ -74,6 +74,8 @@ async def _press(manager) -> None:
 async def run(manager) -> str:
     """Play the whole sample with no clicks. Only practice data is ever touched."""
     started = time.monotonic()
+    if getattr(manager, "sig_caption", None) is not None:
+        manager.sig_caption.emit("Em đang mở file mẫu…")
     bridge, pq = manager._excel, mc._pq(manager)
     try:
         workbook = await asyncio.to_thread(prepare)

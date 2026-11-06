@@ -1280,6 +1280,9 @@ async def play(manager, beats: list) -> None:
     if guided is not None:
         guided.emit(True)
     manager.sig_clear_drawings.emit()
+    caption = getattr(manager, "sig_caption", None)
+    if caption is not None:
+        caption.emit("")                               # the "Em đang …" line gives way to the first card
     last_card = None
     for i, beat in enumerate(beats):
         if i:
@@ -1340,11 +1343,31 @@ async def handle_start(manager, transcript: str) -> str:
     return ""
 
 
+# Said the moment a button is pressed, before the slow part (reading files, writing, saving), so the
+# screen never sits still while Clicky works. Replaced by the first card as soon as it is ready.
+WORKING = {
+    "read": "Em đang đọc các file trong thư mục…",
+    "confirm": "Em đang đối chiếu và sửa trong file…",
+    "approve": "Em đang sửa query và tải lại…",
+    "save": "Em đang lưu rồi mở lại file để kiểm…",
+    "verify": "Em đang mở lại file đã lưu để kiểm…",
+    "pick": "Em đang đọc lại với sổ chị chọn…",
+    "final": "Em đang chuyển sang Chính thức…",
+}
+
+
+def _working(manager, step: str) -> None:
+    sig = getattr(manager, "sig_caption", None)
+    if sig is not None:
+        sig.emit(WORKING[step])
+
+
 async def run_from(manager, folder: Optional[Path]) -> None:
     """Start a fresh month close on a folder (the dropped one) or on the open workbook's folder."""
     use_folder(folder)
     _CHOSEN.clear()                 # a new run asks again: the folder may have changed since
     _PICKS.clear()
+    _working(manager, "read")
     order = machine_date_order()
     beats = await asyncio.to_thread(lambda: start(manager._excel, _pq(manager), order))
     await play(manager, beats)
@@ -1353,6 +1376,7 @@ async def run_from(manager, folder: Optional[Path]) -> None:
 async def handle_approve(manager, transcript: str) -> str:
     # The question's frame must not stay frozen on screen while Excel reloads the query.
     manager.sig_clear_drawings.emit()
+    _working(manager, "approve")
     beats = await asyncio.to_thread(lambda: approve(manager._excel, _pq(manager)))
     await play(manager, beats)
     return ""
@@ -1373,6 +1397,7 @@ def _open_chat(manager) -> None:
 
 
 async def handle_confirm(manager, transcript: str) -> str:
+    _working(manager, "confirm")
     beats = await asyncio.to_thread(lambda: confirm(manager._excel, _pq(manager)))
     await play(manager, beats)
     return ""
@@ -1386,12 +1411,14 @@ async def handle_wrong(manager, transcript: str) -> str:
 
 async def handle_save(manager, transcript: str) -> str:
     manager.sig_clear_drawings.emit()
+    _working(manager, "save")
     beats = await asyncio.to_thread(lambda: save_and_verify(manager._excel))
     await play(manager, beats)
     return ""
 
 
 async def handle_verify(manager, transcript: str) -> str:
+    _working(manager, "verify")
     beats = await asyncio.to_thread(lambda: verify_saved(manager._excel))
     await play(manager, beats)
     return ""
@@ -1409,12 +1436,14 @@ def save_pending() -> bool:
 
 
 async def handle_pick(manager, transcript: str) -> str:
+    _working(manager, "pick")
     beats = await asyncio.to_thread(lambda: pick(manager._excel, _pq(manager), transcript))
     await play(manager, beats)
     return ""
 
 
 async def handle_final(manager, transcript: str) -> str:
+    _working(manager, "final")
     beats = await asyncio.to_thread(lambda: make_final(manager._excel))
     await play(manager, beats)
     return ""
