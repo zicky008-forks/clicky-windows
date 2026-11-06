@@ -34,6 +34,7 @@ import checks          # noqa: E402
 import drivers         # noqa: E402
 import visual          # noqa: E402
 import beta_checks     # noqa: E402
+import layout_checks   # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 COMPOSER = "Tin nhắn cho Clicky"
@@ -233,6 +234,8 @@ def main(argv=None) -> int:
     ap.add_argument("--sample", action="store_true",
                     help="Việc 10: gõ \"xem em làm\", Clicky tự chạy file mẫu có sẵn; robot đọc workbook Clicky mở")
     ap.add_argument("--expected", default=str(HERE / "case01_expected.json"), help="Đáp án cần đạt (JSON)")
+    ap.add_argument("--also", action="append", default=[], metavar="JSON",
+                    help="Thêm phần chấm từ file đáp án khác (ví dụ case01_layout_expected.json)")
     ap.add_argument("--clicky", default=None, help="Đường dẫn Clicky.exe (mặc định: bản cài trong LOCALAPPDATA)")
     ap.add_argument("--driver", choices=("auto", "agent-desktop", "uia"), default="auto")
     ap.add_argument("--agent-desktop", default="agent-desktop", help="Đường dẫn agent-desktop.exe")
@@ -263,6 +266,8 @@ def main(argv=None) -> int:
     elif not args.workbook:
         ap.error("cần --workbook (hoặc --sample để chạy file mẫu)")
     expected = json.loads(Path(args.expected).read_text(encoding="utf-8"))
+    for extra in args.also:
+        expected = {**expected, **json.loads(Path(extra).read_text(encoding="utf-8"))}
     workbook = Path(args.workbook).resolve() if args.workbook else None
     base = workbook.parent if workbook else Path(args.expected).resolve().parent
     out = Path(args.out) if args.out else base / "dien-tap" / time.strftime("%Y%m%d_%H%M%S")
@@ -413,6 +418,7 @@ def main(argv=None) -> int:
         egress_text = ""
     result.checks += beta_checks.evaluate(events, sheets, expected, untouched_before_confirm=untouched,
                                           workbook=copy, egress_text=egress_text, network=network)
+    result.checks += layout_checks.evaluate(events, expected)
     if watcher is not None:
         watcher.stop()
         watcher.join(timeout=10)
