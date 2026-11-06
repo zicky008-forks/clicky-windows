@@ -722,6 +722,40 @@ def main():
 
     tray.on_quit.connect(lambda: (tray.hide_icon(), manager.shutdown(), app.quit()))
 
+    # ── Trợ lý bên cạnh: follow the presenter's slide show ─────────────────────
+    from ui.present_mode import PresentMode, present_args
+    _present = [None]
+    def _start_present(spec, xlsx, deck):
+        if _present[0] is not None:
+            _present[0].stop()
+        panel.hide()                     # the chat never shows during a talk
+        mode = PresentMode(manager, spec, xlsx, deck)
+        mode.finished.connect(lambda path: path and tray.show_notification("Đã lưu biên bản buổi trình bày", path))
+        _present[0] = mode
+        try:
+            exclude_window(mode.panel, not _allow_recording())
+        except OSError:
+            pass
+        try:
+            mode.start()
+        except Exception as exc:         # noqa: BLE001 - say it plainly, never crash the app
+            import logging
+            logging.getLogger(__name__).exception("present mode failed")
+            manager.sig_error.emit(f"Không mở được phần trình bày: {exc}")
+    def _pick_present():
+        from PyQt6.QtWidgets import QFileDialog
+        spec = QFileDialog.getExistingDirectory(None, "Thư mục kịch bản (kich_ban.yaml, hoi_dap.yaml)")
+        if not spec:
+            return
+        xlsx, _ = QFileDialog.getOpenFileName(None, "File số liệu Excel", spec, "Excel (*.xlsx *.xlsm)")
+        if not xlsx:
+            return
+        deck, _ = QFileDialog.getOpenFileName(None, "File PowerPoint", spec, "PowerPoint (*.pptx)")
+        if deck:
+            _start_present(spec, xlsx, deck)
+    tray.on_present.connect(_pick_present)
+    _present_cli = present_args(sys.argv)
+
     # ── Global hotkey ─────────────────────────────────────────────────────────
     _shortcuts = []
     _text_shortcut = [None]
@@ -782,6 +816,8 @@ def main():
         welcome.started.connect(lambda: start_after_welcome(manager))
         QTimer.singleShot(400, welcome.present)
         _setup_keepalive[0] = welcome           # keep a reference so it isn't GC'd
+    elif _present_cli:
+        QTimer.singleShot(600, lambda: _start_present(_present_cli["spec"], _present_cli["xlsx"], _present_cli["deck"]))
     elif not _setting("start_hidden", False):
         QTimer.singleShot(400, panel.show)       # the open chat says what to type; no toast on top of it
     else:

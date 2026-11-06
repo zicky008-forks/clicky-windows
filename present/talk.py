@@ -77,10 +77,10 @@ class Talk:
         self.say(r.text, speakable(r.text))       # screen text, voice text
         return r.text
 
-    def show_slide(self, item: dict) -> None:
-        start = time.time()
-        self.slide = self.deck.goto(int(item["so"]))
-        shapes = self.deck.slide_shapes(self.slide)
+    def targets(self, item: dict, shapes: Optional[list] = None) -> list:
+        """[(screen rect, label)] for the shapes a script item points at, in order. Misses go to the minutes."""
+        shapes = self.deck.slide_shapes(int(item["so"])) if shapes is None else shapes
+        found = []
         for target in item.get("chi_vao") or []:
             if "excel" in target:
                 continue
@@ -93,8 +93,15 @@ class Talk:
                 shape = deck_mod.find(shapes, contains=bare) if bare != contains else None
             if shape is None:
                 self.minutes.stops.append(f"slide {item['so']}: không thấy hình '{contains or target.get('shape')}' để chỉ")
-            if shape is not None:
-                self.point(self.deck.screen_rect(shape), contains or target.get("shape", ""))
+                continue
+            found.append((self.deck.screen_rect(shape), contains or target.get("shape", "")))
+        return found
+
+    def show_slide(self, item: dict) -> None:
+        start = time.time()
+        self.slide = self.deck.goto(int(item["so"]))
+        for rect, label in self.targets(item):
+            self.point(rect, label)
         text = self._speak(item.get("loi_noi", ""), f"slide {item['so']}")
         self.wait(float(item.get("dung_giay", 2)) if not item.get("cho_phim") else -1)
         self.minutes.slides.append((item["so"], time.time() - start, text))
