@@ -176,6 +176,9 @@ def _order_lines(files: list, truth, period: Optional[tuple]) -> tuple:
     return lines, items
 
 
+_LEDGER_AMOUNT = ("sotien", "giatri", "psno", "psco", "phatsinh", "debit", "credit", "amount", "thanhtien")
+
+
 def _csv_why(p: Path) -> str:
     """Why a CSV was not read, true to what its header holds (never 'no date column' when it has one)."""
     import csv as _csv
@@ -185,11 +188,16 @@ def _csv_why(p: Path) -> str:
     except (OSError, UnicodeDecodeError):
         return "em chưa mở được file CSV này"
     cols = sources.find_columns(header)
-    if "date" not in cols or "amount" not in cols:
+    keys = {sources._key(h) for h in header}
+    has_date = "date" in cols or any(k.startswith(("ngay", "date")) for k in keys)
+    # Wider than the order-file amount names on purpose: only used to say what the file is,
+    # never to read a ledger detail as sales.
+    has_amount = "amount" in cols or any(k.startswith(_LEDGER_AMOUNT) for k in keys)
+    if not (has_date and has_amount):
         return "không có cột ngày và cột số tiền, không phải file đơn hàng"
     from engine.trial_balance import fold
     text = re.sub(r"[^a-z0-9]", "", fold(p.stem + " " + " ".join(str(h) for h in header)))
-    kind = "sổ chi tiết chi phí" if any(w in text for w in ("chiphi", "cost", "expense")) \
+    kind = "sổ chi tiết chi phí" if any(w in text for w in ("chiphi", "cost", "expense", "tkno", "tkco", "sochitiet")) \
         else "file có cột ngày và số tiền nhưng không phải đơn bán hàng"
     return f"{kind}; bản này chưa đọc loại file này, em không lấy số từ file này"
 

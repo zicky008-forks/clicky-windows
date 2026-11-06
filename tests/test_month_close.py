@@ -826,6 +826,9 @@ def test_unread_cost_ledger_csv_is_named_truthfully(tmp_path):
     p.write_text("SoCT,Ngay,TK,ThanhTien\nPC1,05/10/2026,6421,1000\n", encoding="utf-8")
     why = intake._csv_why(p)
     assert "sổ chi tiết chi phí" in why and "không có cột ngày" not in why
+    r = tmp_path / "SCT_T10.csv"
+    r.write_text("Ngay_CT,So_CT,TK_No,TK_Co,So_tien_VND\n05/10/2026,PC1,6421,1111,1000\n", encoding="utf-8")
+    assert "sổ chi tiết chi phí" in intake._csv_why(r)
     q = tmp_path / "ghi_chu.csv"
     q.write_text("a,b\n1,2\n", encoding="utf-8")
     assert "không có cột ngày" in intake._csv_why(q)
