@@ -12,6 +12,11 @@ from typing import Optional
 
 from office.cellref import CellRef, col_letters, parse_ref
 
+try:                                # the rehearsal robot checks that nothing is written before the user confirms
+    import scene_log
+except ImportError:                 # pragma: no cover
+    scene_log = None
+
 log = logging.getLogger(__name__)
 
 MAX_CONTEXT_ROWS = 30
@@ -30,6 +35,57 @@ def _as_grid(value):
     if isinstance(value, tuple):
         return [list(row) if isinstance(row, tuple) else [row] for row in value]
     return [[value]]
+
+
+def _cell_kind(v):
+    """'n' for a figure, 't' for words, else None.
+
+    A figure is a number, or text that is mostly digits or short with a digit: "436tr", "5,42 tỷ",
+    "TK 6411", "T10". A title that only mentions a month ("Báo cáo tháng 10") is words.
+    """
+    if v is None or isinstance(v, bool):
+        return None if v is None else "t"
+    if isinstance(v, (int, float, Decimal)):
+        return "n"
+    text = str(v).strip()
+    if not text:
+        return None
+    digits = sum(c.isdigit() for c in text)
+    if not digits:
+        return "t"
+    solid = sum(not c.isspace() for c in text)
+    return "n" if len(text) <= 10 or digits >= 0.3 * solid else "t"
+
+
+def figure_blocks(grid) -> list:
+    """Rectangles of same-kind cells in a value grid: [(kind, row0, row1, col0, col1)], ends inclusive, 0-based.
+
+    Each row is cut into runs of figures ('n') or words ('t'); a run that repeats on the next row grows down,
+    so a column of numbers becomes one block and an empty gap between blocks stays free for a card.
+    """
+    done, open_ = [], {}
+    for i, row in enumerate(grid):
+        runs, j = [], 0
+        while j < len(row):
+            kind = _cell_kind(row[j])
+            if kind is None:
+                j += 1
+                continue
+            k = j
+            while k + 1 < len(row) and _cell_kind(row[k + 1]) == kind:
+                k += 1
+            runs.append((kind, j, k))
+            j = k + 1
+        still = {}
+        for run in runs:
+            r0 = open_.pop(run, i)
+            still[run] = r0
+        for (kind, c0, c1), r0 in open_.items():
+            done.append((kind, r0, i - 1, c0, c1))
+        open_ = still
+    for (kind, c0, c1), r0 in open_.items():
+        done.append((kind, r0, len(grid) - 1, c0, c1))
+    return sorted(done, key=lambda b: (b[1], b[3]))
 
 
 def _block_address(row: int, col: int, rows: int, cols: int) -> str:
@@ -150,6 +206,8 @@ class ExcelBridge:
         height, width = len(rows), max(len(r) for r in rows)
         if height * width > MAX_WRITE_CELLS:
             return False
+        if scene_log is not None:
+            scene_log.record("write", ref=text, rows=height, cols=width)
         def cell(v):
             return float(v) if isinstance(v, Decimal) else v
         grid = tuple(tuple(cell(r[i]) if i < len(r) else "" for i in range(width)) for r in rows)
@@ -175,6 +233,8 @@ class ExcelBridge:
                 final, n = f"{base} {n}", n + 1
             ws = wb.Worksheets.Add(After=wb.Worksheets(wb.Worksheets.Count))
             ws.Name = final
+            if scene_log is not None:
+                scene_log.record("write", ref=f"{final}!", add_sheet=True)
             return final
         except Exception:
             return None
@@ -206,6 +266,54 @@ class ExcelBridge:
         except Exception:
             return None
 
+    def workbook_path(self) -> Optional[str]:
+        """Full path of the saved active workbook, or None for a new, unsaved one."""
+        app = self._excel()
+        try:
+            wb = app.ActiveWorkbook
+            return str(wb.FullName) if str(wb.Path or "") else None
+        except Exception:
+            return None
+
+    def open_workbook(self, path: str) -> bool:
+        """Open a workbook in Excel (starting Excel when it is not running), maximised and in front."""
+        if self._app is None and sys.platform != "win32":
+            return False
+        try:
+            app = self._excel()
+            if app is None:
+                import pythoncom
+                import win32com.client
+                pythoncom.CoInitialize()
+                app = win32com.client.Dispatch("Excel.Application")
+            app.Visible = True
+            app.Workbooks.Open(path)
+            app.WindowState = -4137            # xlMaximized
+            return True
+        except Exception as exc:
+            log.warning("Opening %s in Excel failed: %s", path, exc)
+            return False
+
+    def save(self) -> bool:
+        """Save the active workbook in place (only when the user asked Clicky to)."""
+        app = self._excel()
+        try:
+            app.ActiveWorkbook.Save()
+            return True
+        except Exception as exc:
+            log.warning("Saving the workbook failed: %s", exc)
+            return False
+
+    def save_copy(self, path: str) -> bool:
+        """Save a copy of the workbook as it is now under another name; the open workbook is not renamed or saved."""
+        app = self._excel()
+        try:
+            app.ActiveWorkbook.SaveCopyAs(path)
+            return True
+        except Exception as exc:
+            log.warning("Saving a copy to %s failed: %s", path, exc)
+            return False
+
     def sheet_names(self) -> list:
         app = self._excel()
         try:
@@ -233,6 +341,51 @@ class ExcelBridge:
             return self.screen_rect(f"'{name}'!{filled.Address.replace('$', '')}")
         except Exception as exc:
             log.debug("content_rect failed: %s", exc)
+            return None
+
+    def figure_boxes(self):
+        """Physical screen boxes of the visible cells holding figures and of those holding words, or None.
+
+        {"numbers": [(l, t, r, b), ...], "text": [...]}. One read of the visible values per pane, then each
+        block is mapped with that pane's own geometry, so a card can sit in a gap between blocks of figures
+        instead of over them (one box for the whole used range left no room on a full sheet).
+        """
+        app = self._excel()
+        if app is None:
+            return None
+        try:
+            ws, win = app.ActiveSheet, app.ActiveWindow
+            dpi = self._dpi or _window_dpi(app.Hwnd)
+            out = {"numbers": [], "text": []}
+            for p in range(1, win.Panes.Count + 1):
+                pane = win.Panes(p)
+                filled = app.Intersect(ws.UsedRange, pane.VisibleRange)
+                if filled is None:
+                    continue
+                grid = _as_grid(filled.Value2)
+                rows, cols = len(grid), len(grid[0]) if grid else 0
+                if not rows or not cols or rows * cols > MAX_WRITE_CELLS:
+                    continue
+                x0, y0 = float(filled.Left), float(filled.Top)
+                xs = [float(filled.Columns(j + 1).Left) for j in range(cols)] + [x0 + float(filled.Width)]
+                ys = [float(filled.Rows(i + 1).Top) for i in range(rows)] + [y0 + float(filled.Height)]
+                left, top = pane.PointsToScreenPixelsX(x0), pane.PointsToScreenPixelsY(y0)
+                right, bottom = pane.PointsToScreenPixelsX(xs[-1]), pane.PointsToScreenPixelsY(ys[-1])
+                # Same guard as screen_rect: some builds ignore zoom in PointsToScreenPixels.
+                expect_w = (xs[-1] - x0) * (win.Zoom / 100.0) * dpi / 72.0
+                sx = (right - left) / max(xs[-1] - x0, 1e-6)
+                sy = (bottom - top) / max(ys[-1] - y0, 1e-6)
+                if expect_w > 4 and not 0.7 <= (right - left) / expect_w <= 1.3:
+                    scale = expect_w / max(right - left, 1)
+                    sx, sy = sx * scale, sy * scale
+                for kind, r0, r1, c0, c1 in figure_blocks(grid):
+                    box = (left + (xs[c0] - x0) * sx, top + (ys[r0] - y0) * sy,
+                           left + (xs[c1 + 1] - x0) * sx, top + (ys[r1 + 1] - y0) * sy)
+                    if box[2] > box[0] and box[3] > box[1]:
+                        out["numbers" if kind == "n" else "text"].append(tuple(float(v) for v in box))
+            return out
+        except Exception as exc:
+            log.debug("figure_boxes failed: %s", exc)
             return None
 
     def scroll_home(self, name: str) -> None:
@@ -296,6 +449,8 @@ class ExcelBridge:
         app = self._excel()
         if ref is None or app is None:
             return
+        if scene_log is not None:
+            scene_log.record("write", ref=text, clear=True)
         self._sheet(app, ref).Range(ref.address).Clear()
 
     def style(self, text: str, bold=None, italic=None, size=None, color=None, fill=None, wrap=None,

@@ -2,6 +2,10 @@
 
 The drawing overlay is click-through, so the buttons live in their own window. A
 click sends the button's words to Clicky exactly as if the user had typed them.
+
+The same card shows the receipt before anything is computed ("Em đọc được những gì"):
+set_details() is called just before ask(), and the card then lists each file read and
+what was left out above the two buttons.
 """
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QCursor, QFont
@@ -9,10 +13,16 @@ from PyQt6.QtWidgets import (
     QApplication, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
+from ui.card_layout import BOARD, free_spot, overlap
+
 _CARD = ("QFrame#card { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 14px; }"
          "QLabel#question { color: #0F172A; }"
          "QPushButton#close { background: transparent; border: none; color: #94A3B8; font-size: 16px; }"
-         "QPushButton#close:hover { color: #0F172A; }")
+         "QPushButton#close:hover { color: #0F172A; }"
+         "QLabel#eyebrow { color: #2563EB; letter-spacing: 1px; }"
+         "QLabel#title { color: #0F172A; }"
+         "QLabel#rowTitle { color: #0F172A; } QLabel#rowCount { color: #0F172A; } QLabel#rowDetail { color: #475569; }"
+         "QFrame#line { background: #E2E8F0; }")
 _PRIMARY = ("QPushButton { background: #2F6FEB; color: white; border: none; border-radius: 9px; padding: 9px 18px;"
             " font-weight: 600; } QPushButton:hover { background: #1E5AD6; }")
 _SECONDARY = ("QPushButton { background: white; color: #1E3A5F; border: 1px solid #CBD5E1; border-radius: 9px;"
@@ -58,6 +68,10 @@ class ChoiceCard(QWidget):
         close.clicked.connect(self._dismiss)
         top.addWidget(close, alignment=Qt.AlignmentFlag.AlignTop)
         body.addLayout(top)
+        self._details = QVBoxLayout()
+        self._details.setSpacing(0)
+        body.addLayout(self._details)
+        self._next_details = None
 
         row = QHBoxLayout()
         row.setSpacing(10)
@@ -74,7 +88,96 @@ class ChoiceCard(QWidget):
         body.addLayout(row)
         self.setFixedWidth(440)
 
+    def set_details(self, card: dict) -> None:
+        """The receipt to show with the next question (engine.intake.card)."""
+        self._next_details = dict(card or {})
+
+    def _clear_details(self) -> None:
+        while self._details.count():
+            item = self._details.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def _line(self) -> QFrame:
+        line = QFrame()
+        line.setObjectName("line")
+        line.setFixedHeight(1)
+        return line
+
+    def _icon(self, ok: bool) -> QLabel:
+        icon = QLabel("✓" if ok else "!")
+        icon.setFixedSize(26, 26)
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        icon.setStyleSheet(f"background: {'#16A34A' if ok else '#D97706'}; color: white; border-radius: 13px;")
+        return icon
+
+    _ROLE_STYLE = {"Số chính thức": ("#DBEAFE", "#1D4ED8"), "Chi tiết để giải thích": ("#DCFCE7", "#15803D"),
+                   "Kế hoạch": ("#EDE9FE", "#6D28D9"), "Lý do": ("#FEF3C7", "#B45309"), "Ghi chú": ("#F1F5F9", "#475569")}
+
+    def _pill(self, role: str) -> QLabel:
+        fill, ink = self._ROLE_STYLE.get(role, ("#F1F5F9", "#475569"))
+        pill = QLabel(role)
+        pill.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
+        pill.setStyleSheet(f"background: {fill}; color: {ink}; border-radius: 9px; padding: 2px 8px;")
+        return pill
+
+    def _entry(self, ok: bool, title: str, count: str, detail: str, role: str = "") -> QWidget:
+        box = QWidget()
+        grid = QHBoxLayout(box)
+        grid.setContentsMargins(0, 12, 0, 12)
+        grid.setSpacing(12)
+        grid.addWidget(self._icon(ok), alignment=Qt.AlignmentFlag.AlignTop)
+        text = QVBoxLayout()
+        text.setSpacing(3)
+        head = QHBoxLayout()
+        name = QLabel(title)
+        name.setObjectName("rowTitle")
+        name.setWordWrap(True)
+        name.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        head.addWidget(name, stretch=1)
+        if count:
+            n = QLabel(count)
+            n.setObjectName("rowCount")
+            n.setFont(QFont("Segoe UI", 10))
+            head.addWidget(n, alignment=Qt.AlignmentFlag.AlignTop)
+        if role:
+            head.addWidget(self._pill(role), alignment=Qt.AlignmentFlag.AlignTop)
+        text.addLayout(head)
+        if detail:
+            d = QLabel(detail)
+            d.setObjectName("rowDetail")
+            d.setWordWrap(True)
+            d.setFont(QFont("Segoe UI", 9))
+            text.addWidget(d)
+        grid.addLayout(text, stretch=1)
+        return box
+
+    def _show_details(self, card: dict) -> None:
+        self._clear_details()
+        eyebrow = QLabel(card.get("eyebrow", ""))
+        eyebrow.setObjectName("eyebrow")
+        eyebrow.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        title = QLabel(card.get("title", ""))
+        title.setObjectName("title")
+        title.setFont(QFont("Segoe UI", 15, QFont.Weight.Bold))
+        self._details.addWidget(eyebrow)
+        self._details.addWidget(title)
+        for r in card.get("rows", []):
+            self._details.addWidget(self._line())
+            self._details.addWidget(self._entry(bool(r.get("ok", True)), r.get("title", ""), r.get("count", ""),
+                                                r.get("detail", ""), r.get("role", "")))
+        left = card.get("left_out") or []
+        self._details.addWidget(self._line())
+        self._details.addWidget(self._entry(not left, card.get("left_out_title", ""), "", " · ".join(left)))
+
     def ask(self, question: str, options: list) -> None:
+        card, self._next_details = self._next_details, None
+        self._clear_details()
+        if card:
+            self._show_details(card)
+        self._question.setVisible(not card)
+        self.setFixedWidth(600 if card else 440)
         self._question.setText(question)
         for button, label in zip(self._buttons, list(options) + [None, None]):
             button.setVisible(bool(label))
@@ -83,10 +186,32 @@ class ChoiceCard(QWidget):
         self.adjustSize()
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         area = screen.availableGeometry()
-        # Bottom-right, above Excel's sheet tabs and status bar: the corner least likely to hold figures.
-        self.move(area.right() - self.width() - 28, area.bottom() - self.height() - 72)
+        if card:
+            # The receipt stands on the right, under the ribbon, where a sheet's figures rarely are.
+            spot = (area.right() - self.width() - 96, area.top() + max(160, int(area.height() * 0.18)))
+        else:
+            # Bottom-right, above Excel's sheet tabs and status bar: the corner least likely to hold figures.
+            spot = (area.right() - self.width() - 28, area.bottom() - self.height() - 72)
+        # ...unless figures or Clicky's explanation card are there: then the nearest free place instead.
+        bounds = (area.left(), area.top(), area.right(), area.bottom())
+        size = (self.width(), self.height())
+        x, y = free_spot(spot, size, bounds, BOARD.figures + BOARD.others("choice"), BOARD.words)
+        rect = (x, y, x + size[0], y + size[1])
+        BOARD.take("choice", rect)
+        self.move(int(x), int(y))
+        try:
+            import scene_log
+            scene_log.record("choice_card", rect=list(rect), screen=list(bounds), moved=(x, y) != spot,
+                             covers_figures=sum(1 for f in BOARD.figures if overlap(rect, [f]) > 0),
+                             covers_cards=sum(1 for f in BOARD.others("choice") if overlap(rect, [f]) > 0))
+        except Exception:
+            pass
         self.show()
         self.raise_()
+
+    def hideEvent(self, event):
+        BOARD.release("choice")
+        super().hideEvent(event)
 
     def _pick(self, label: str) -> None:
         self.hide()

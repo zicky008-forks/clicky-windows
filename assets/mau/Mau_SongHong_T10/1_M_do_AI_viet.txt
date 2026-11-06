@@ -1,0 +1,11 @@
+let
+    Nguon = Folder.Files("C:\ThucChien\Case01_SongHong_T10\DonHang\"),
+    LocCsv = Table.SelectRows(Nguon, each [Extension] = ".csv"),
+    DocFile = Table.AddColumn(LocCsv, "Bang", each Table.PromoteHeaders(Csv.Document([Content], [Delimiter = ",", Encoding = 65001]), [PromoteAllScalars = true])),
+    GopFile = Table.Combine(DocFile[Bang]),
+    DoiKieu = Table.TransformColumnTypes(GopFile, {{"Ngay", type date}, {"SL", Int64.Type}, {"DonGia", type number}, {"ThanhTien", type number}, {"GiaVon", type number}}),
+    BoDongLoi = Table.RemoveRowsWithErrors(DoiKieu, {"Ngay"}),
+    LocThang10 = Table.SelectRows(BoDongLoi, each Date.Month([Ngay]) = 10),
+    XoaDonTrung = Table.Distinct(LocThang10, {"Ngay", "MaKH"})
+in
+    XoaDonTrung

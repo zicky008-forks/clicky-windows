@@ -49,10 +49,17 @@ hidden = [
     # lazily inside functions, so they need to be named explicitly)
     "ui.setup_wizard",
     "ui.api_keys_dialog",
+    # First run: welcome card, plain-words error card and bug-report preview
+    "first_run", "ui.plain_card", "ui.welcome", "ui.error_card", "engine.errors_vi", "engine.bug_report",
+    # Sample month, the drop zone for the first real month, the receipt, audit and saved-file check
+    "office.sample", "office.drop", "ui.drop_zone", "engine.intake", "engine.audit", "engine.saved_check", "engine.roles",
+    # Latency clock, and the three graphics drawn from engine figures (leader tags, sticky notes, profit bridge)
+    "turn_clock", "engine.visuals", "ui.graphics_paint",
     "ui.settings_window",
     "ui.connections_window",
     "ui.jobs_window",
     "ui.drawing_board",
+    "ui.outgoing_card", "office.outgoing", "engine.redact",
     "storage", "session_store", "drawing", "drive", "jobs", "desktop",
     "response_blocks", "browser_bridge", "connectors", "screen.privacy", "updates",
     "audio.narration", "audio.devices", "audio.tts.sapi_tts_provider",
@@ -83,7 +90,12 @@ hidden = [
 datas, binaries, hiddenimports = [], [], []
 datas.append(("browser_extension", "browser_extension"))
 datas.append(("RELEASE-NOTES-1.6.md", "."))
+datas.append(("assets/mau", "assets/mau"))       # the sample month (made-up company) for "Xem em làm"
+if os.path.isdir(os.path.join("voice", "asr-vi")):  # offline Vietnamese speech (tools/giong_noi/tai_model.py)
+    datas.append((os.path.join("voice", "asr-vi"), os.path.join("voice", "asr-vi")))
+    datas.append(("audio/stt/hotwords_vi.txt", "audio/stt"))
 for pkg in (
+    "sherpa_onnx",              # offline Vietnamese speech (its own onnxruntime DLL under sherpa_onnx/lib)
     "faster_whisper",
     "ctranslate2",
     "tokenizers",

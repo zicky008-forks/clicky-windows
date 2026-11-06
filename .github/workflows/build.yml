@@ -15,6 +15,7 @@ on:
       - updates.py
       - installer.iss
       - requirements.txt
+      - tools/giong_noi/tai_model.py
 permissions:
   contents: write        # a v* tag publishes the Velopack release for in-app updates
 jobs:
@@ -32,7 +33,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install -r requirements.txt pyinstaller
+      - run: python -m pip install -r requirements.txt pyinstaller sentencepiece
+      # Offline Vietnamese speech (~75 MB, Apache-2.0 weights), checked by SHA-256, bundled as voice/asr-vi.
+      - run: python tools/giong_noi/tai_model.py --model 70k --out voice/asr-vi
       - run: choco install innosetup --no-progress -y
       - run: .\build.bat installer
         shell: cmd

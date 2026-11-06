@@ -24,6 +24,12 @@ Kết quả nằm trong `dien-tap\<giờ>\` cạnh file Excel:
 
 Mã thoát: 0 = ĐẠT, 1 = KHÔNG ĐẠT, 2 = không chạy được.
 
+### Chạy nhiều lượt: `--lan N`
+
+Khách chạy chốt tháng một lần là phải đúng lần đó, nên một lượt đạt may mắn chưa đủ. `--lan 5` chạy cùng case 5 lượt liền và chỉ ĐẠT khi **cả 5** lượt đều đạt. Giữa hai lượt, robot tự thoát Clicky và đóng (không lưu) các file mà lượt trước đã mở. Lượt cuối thì để nguyên cho người xem.
+Có `--out` thì mỗi lượt nằm trong `lan-1\`, `lan-2\`…, và bảng tổng hợp nằm ở `tong-hop.md`.
+Mốc trước khi người thật chạy tay: Case 01 phải đạt `--lan 3` ở mức phóng 100, và đạt một lượt ở mỗi mức 85 và 130.
+
 ## Robot bấm bằng gì
 
 - Mặc định thử **agent-desktop** (Vercel Labs, Apache-2.0): tải bản Windows x64 từ
@@ -75,3 +81,36 @@ Clicky cần ghi vào nhật ký cảnh các sự kiện `intake`, `verify`, `st
 `python rehearse.py --sample` gõ "xem em làm" (Excel phải trống), không bấm gì, rồi đọc workbook Clicky tự mở. Đáp án `mau_expected.json`: đối chiếu lại khớp, hàng trả lại 120 triệu, lợi nhuận sau thuế thực 436 triệu, còn `_ban-goc`, thẻ cuối "Xong trong N giây" lệch thời gian robot đo không quá 5 giây (hoặc 15%).
 
 Lượt có việc 6: robot tự bấm "Gửi đi" trên thẻ xem trước lần gửi đầu. Nhật ký gửi đi mặc định ở `CLICKY_DATA_DIR` hoặc `%LOCALAPPDATA%\Clicky\gui-di.jsonl`. Với `--local-only`, `ai_call` dừng tại máy (`local_only=true`, chưa duyệt) được chấp nhận; có lần gửi thật hoặc nhật ký thêm dòng thì KHÔNG ĐẠT.
+
+### Diễn tập trình bày (Trợ lý bên cạnh, PowerPoint thật)
+
+Chỉ dùng **bộ giả lập** (`dien_tap/tao_gia_lap.py` trong repo riêng của khách sinh ra file Excel và deck 20 slide có chữ "SỐ GIẢ LẬP"). Kịch bản `kich_ban.yaml`, `hoi_dap.yaml`, `kiem_tra_truoc.yaml` nằm trong thư mục riêng của khách, không nằm trong repo này.
+
+```bat
+python tools\dien_tap\present_robot.py --spec <thu_muc_kich_ban> --xlsx <gia_lap.xlsx> --deck <gia_lap.pptx>
+```
+
+Robot làm như người trình bày:
+
+1. Từ chối chạy khi PowerPoint hoặc Excel đang mở file khác.
+2. Chép file Excel và deck vào thư mục kết quả. File gốc không bị đụng.
+3. Bật "Cho phép quay màn hình Clicky" trong lúc chạy để ảnh chụp thấy khung, chạy xong trả về như cũ.
+4. Mở Clicky với `--present-*`, `CLICKY_SCENE_LOG` và `CLICKY_LOCAL_ONLY=1`.
+5. Bấm PageDown qua từng slide. Sau mỗi slide, robot chụp mọi màn hình và tìm khung xanh quanh từng hình kịch bản chỉ vào.
+6. Với từng câu mẫu trong ngân hàng câu hỏi: bấm Ctrl+Alt+H, gõ vào ô "Câu hỏi", bấm "Hỏi", đọc câu Clicky chọn, rồi bấm Ctrl+Alt+B.
+7. Thoát trình chiếu, kiểm tra biên bản và mã băm của bản sao Excel.
+
+**Cổng ĐẠT:**
+
+- Kiểm tra trước đạt.
+- Theo đủ mọi slide và chỉ đúng mọi hình: khung có trong nhật ký cảnh và thấy được trên ảnh chụp.
+- Mỗi câu mẫu vào đúng câu của nó.
+- Ctrl+Alt+B về đúng slide trước khi hỏi.
+- Với 2 màn hình: ô hỏi không bao giờ nằm trên màn chiếu.
+- File Excel không đổi.
+
+Máy chỉ có 1 màn hình thì robot bật `CLICKY_PRESENT_FORCE_PANEL=1` để vẫn tập được hỏi đáp. Buổi thật thì cần 2 màn hình ở chế độ Mở rộng (Extend).
+
+Kết quả: `ket-qua.md`, `ket-qua.json`, `scene.jsonl`, `anh/slide-NN.png`. Mã thoát: 0 = ĐẠT, 1 = KHÔNG ĐẠT, 2 = không chạy được.
+
+Clicky ghi các sự kiện sau vào nhật ký cảnh: `present_preflight`, `present_start`, `present_slide` (gồm `targets`, `rects` theo pixel thật, `missed`, `missing`), `present_frames`, `present_key`, `present_answer`, `present_back`, `present_end`.

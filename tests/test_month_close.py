@@ -5,6 +5,7 @@ Query would (machine date format when no culture is given, keyed Table.Distinct)
 so the test proves Clicky finds the gap, names the cause and verifies the fix.
 """
 import csv
+from pathlib import Path
 import re
 from datetime import date
 from decimal import Decimal
@@ -97,11 +98,21 @@ class FakeBridge:
         return final
 
     def write(self, ref, grid):
-        m = re.match(r"^'?(.*?)'?!A(\d+)$", ref)
-        name, start = m.group(1).replace("''", "'"), int(m.group(2))
-        rows = self.sheets.get(name, []) if start > 1 else []
-        rows = rows + [[] for _ in range(start - 1 - len(rows))]
-        self.sheets[name] = rows[:start - 1] + [list(r) for r in grid]
+        m = re.match(r"^'?(.*?)'?!([A-Z]+)(\d+)$", ref)
+        name, col, start = m.group(1).replace("''", "'"), m.group(2), int(m.group(3))
+        if col == "A":                              # a block from column A replaces the sheet from that row down
+            rows = self.sheets.get(name, []) if start > 1 else []
+            rows = rows + [[] for _ in range(start - 1 - len(rows))]
+            self.sheets[name] = rows[:start - 1] + [list(r) for r in grid]
+            return True
+        c0 = sum((ord(ch) - 64) * 26 ** i for i, ch in enumerate(reversed(col))) - 1
+        rows = self.sheets.setdefault(name, [])
+        for i, r in enumerate(grid):
+            while len(rows) <= start - 1 + i:
+                rows.append([])
+            row = rows[start - 1 + i]
+            row += [""] * (c0 + len(r) - len(row))
+            row[c0:c0 + len(r)] = list(r)
         return True
 
     def format_numbers(self, ref, number_format=None):
@@ -148,6 +159,15 @@ class FakePQ:
         sheet = name
         self.bridge.sheets[sheet] = [HEADER] + rows
         return sheet, HEADER, rows
+
+
+def _begin(bridge, pq, order):
+    """The run as the user drives it: the receipt first, then "Đúng rồi, làm tiếp"."""
+    receipt = month_close.start(bridge, pq, order)
+    if not month_close.intake_pending():
+        return receipt
+    assert receipt[-1].choices == month_close.INTAKE_CHOICES and receipt[-1].intake
+    return month_close.confirm(bridge, pq)
 
 
 def _text(beats):
@@ -209,7 +229,7 @@ def test_folder_query_reads_each_file_in_its_own_format_and_lints_clean():
 def test_start_finds_the_gap_and_names_both_causes(folder):
     bridge = FakeBridge(folder)
     pq = FakePQ(bridge, folder)
-    beats = month_close.start(bridge, pq, sources.DAY_FIRST)
+    beats = _begin(bridge, pq, sources.DAY_FIRST)
     said = _text(beats)
     # One short idea per sentence, no step or file names spoken.
     assert all(len(b.text.split()) <= 16 for b in beats), [b.text for b in beats]
@@ -247,10 +267,10 @@ def test_start_finds_the_gap_and_names_both_causes(folder):
 def test_approve_fixes_verifies_then_builds_the_report(folder):
     bridge = FakeBridge(folder)
     pq = FakePQ(bridge, folder)
-    month_close.start(bridge, pq, sources.DAY_FIRST)
+    _begin(bridge, pq, sources.DAY_FIRST)
     beats = month_close.approve(bridge, pq)
     said = _text(beats)
-    assert not month_close.pending()
+    assert month_close.stage() == "save"                      # only the save question is left
     done = beats[0]
     assert done.text == "Đã sửa xong. Excel khớp sổ cái đến từng đồng." and done.mark == "ok" and done.value == "0 đ"
     assert done.note == "6 chứng từ · doanh thu 8,4 tỷ · giá vốn khớp TK 632"
@@ -264,12 +284,14 @@ def test_approve_fixes_verifies_then_builds_the_report(folder):
     assert profit.was == "556 triệu" and profit.roll == (556_000_000, 436_000_000)
     real = bridge.sheets["BC thang"][-1]
     assert real[0] == "Lợi nhuận sau thuế thực" and real[2].startswith("=C20+C21")
-    assert bridge.sheets["BC thang"][-2][2].startswith("=-MAX(0,SUMIFS(")
-    assert profit.ref == "'BC thang'!A20:G22"
+    assert bridge.sheets["BC thang"][-3][2].startswith("=-MAX(0,SUMIFS(")
+    assert bridge.sheets["BC thang"][-2][:3] == ["Doanh thu thuần thực", "", "=C7+C21"]
+    assert profit.ref == "'BC thang'!A20:G23"
     report_beat = next(b for b in beats if b.text.startswith("Em đã lập báo cáo tháng"))
     assert report_beat.ref.startswith("'BC thang'!A4:G") and "công thức trỏ về sổ cái" in report_beat.note
     assert "Lợi nhuận thực" in said
-    assert beats[-1] is month_close.SAVE_REMINDER             # the file is never saved behind the user's back
+    assert beats[-1].choices == month_close.SAVE_CHOICES      # the file is never saved behind the user's back
+    assert "Ctrl + S" in _text(month_close.reject()) and not month_close.pending()
     assert month_close.approve(bridge, pq) == []              # nothing left to approve
 
 
@@ -282,7 +304,7 @@ def test_report_is_built_from_the_files_even_when_excel_cannot_read_the_sheets_b
 
     bridge = BlindBridge(folder)
     pq = FakePQ(bridge, folder)
-    month_close.start(bridge, pq, sources.DAY_FIRST)
+    _begin(bridge, pq, sources.DAY_FIRST)
     beats = month_close.approve(bridge, pq)
     said = _text(beats)
     assert "sheet đọc được" not in said
@@ -297,7 +319,7 @@ def test_closed_gap_reads_zero_not_a_dash(folder):
 
     bridge = Recording(folder)
     pq = FakePQ(bridge, folder)
-    month_close.start(bridge, pq, sources.DAY_FIRST)
+    _begin(bridge, pq, sources.DAY_FIRST)
     fmt = dict(f for f in bridge.formats if isinstance(f, tuple))
     assert fmt["'Doi chieu'!B4:D7"].endswith(";0")
 
@@ -305,7 +327,7 @@ def test_closed_gap_reads_zero_not_a_dash(folder):
 def test_reject_keeps_the_query_and_warns(folder):
     bridge = FakeBridge(folder)
     pq = FakePQ(bridge, folder)
-    month_close.start(bridge, pq, sources.DAY_FIRST)
+    _begin(bridge, pq, sources.DAY_FIRST)
     before = pq.queries["DonHang"]
     assert "đừng dùng" in _text(month_close.reject())
     assert pq.queries["DonHang"] == before and not month_close.pending()
@@ -315,10 +337,10 @@ def test_clean_query_goes_straight_to_the_report(folder):
     (folder / "M_do_AI_viet.txt").unlink()
     bridge = FakeBridge(folder)
     pq = FakePQ(bridge, folder)
-    said = _text(month_close.start(bridge, pq, sources.DAY_FIRST))
+    said = _text(_begin(bridge, pq, sources.DAY_FIRST))
     assert "Excel khớp sổ cái đến từng đồng: doanh thu 8,4 tỷ." in said
     assert any("Clicky tạo query mới" in r[4] for r in bridge.sheets["Doi chieu"][9:])
-    assert "Lợi nhuận thực là 436 triệu" in said and not month_close.pending()
+    assert "Lợi nhuận thực là 436 triệu" in said and month_close.stage() == "save"
 
 
 def test_query_that_excel_cannot_load_still_gets_the_fix_offered(folder):
@@ -329,7 +351,7 @@ def test_query_that_excel_cannot_load_still_gets_the_fix_offered(folder):
             return super().load(name)
     bridge = FakeBridge(folder)
     pq = BrokenPQ(bridge, folder)
-    said = _text(month_close.start(bridge, pq, sources.DAY_FIRST))
+    said = _text(_begin(bridge, pq, sources.DAY_FIRST))
     assert "Excel chưa tải được query DonHang" in said and month_close.pending()
     assert "DataSource.Error" not in said and "không mở được thư mục" in bridge.sheets["Doi chieu"][9][4]
     assert bridge.sheets["Doi chieu"][3][4] == "Chưa đọc được bảng query"
@@ -344,7 +366,7 @@ def test_table_clicky_cannot_read_back_shows_no_gap_and_offers_no_fix(folder):
             return ReadFailed("No module named 'win32timezone'")
     bridge = FakeBridge(folder)
     pq = UnreadablePQ(bridge, folder)
-    said = _text(month_close.start(bridge, pq, sources.DAY_FIRST))
+    said = _text(_begin(bridge, pq, sources.DAY_FIRST))
     assert "lỗi của Clicky" in said and "Excel chưa tải được" not in said
     assert not month_close.pending()
     gap_row = bridge.sheets["Doi chieu"][6]
@@ -389,8 +411,14 @@ def test_voice_triggers_and_pending_gate(folder):
     gated = [s for s in month_close.SKILLS if s.get("when")]
     assert gated and all(not s["when"]() for s in gated)
     month_close._PENDING = {"stage": "fix_query"}
-    assert all(s["when"]() for s in gated)
+    assert all(s["when"]() for s in gated if s["when"] is month_close.pending)
     assert skills.match("đồng ý")["handler"] is month_close.handle_approve
+    month_close._PENDING = {"stage": "intake"}
+    assert skills.match("Đúng rồi, làm tiếp")["handler"] is month_close.handle_confirm
+    assert skills.match("Có chỗ sai")["handler"] is month_close.handle_wrong
+    assert skills.match("chốt chính thức")["handler"] is month_close.handle_final
+    month_close._PENDING = None
+    assert skills.match("Đúng rồi, làm tiếp") is None
 
 
 def test_machine_order_follows_the_region_culture_not_a_custom_short_date():
@@ -471,10 +499,12 @@ def test_fix_runs_behind_a_still_screen_and_ends_on_the_profit_card(folder):
 
     bridge = Recording(folder)
     pq = FakePQ(bridge, folder)
-    month_close.start(bridge, pq, sources.DAY_FIRST)
+    _begin(bridge, pq, sources.DAY_FIRST)
     beats = month_close.approve(bridge, pq)
     assert bridge.screen == [False, True]                    # frozen while sheets are added, released after
-    assert beats[-2].text.startswith("Lợi nhuận thực là")    # the warning is the last scene before the save line
+    # The warning, then how 556 becomes 436, then what to check before the boss sees it, then the save line.
+    assert beats[-4].text.startswith("Lợi nhuận thực là")
+    assert beats[-3].graphic["kind"] == "bridge" and beats[-2].graphic["kind"] == "notes"
     assert any(name == "BC thang" and widths["A"] >= 30 for name, widths, _ in bridge.layouts)
     assert ("'BC thang'!A4:I4", ) == tuple(r for r, o in bridge.styles if r == "'BC thang'!A4:I4")[:1]
 
@@ -508,7 +538,7 @@ def test_fixed_query_reads_each_file_with_its_own_separator(folder):
     assert files["DonHang_HCM_T10.csv"].delimiter == ";" and files["DonHang_HN_T10.csv"].delimiter == ","
     bridge = FakeBridge(folder)
     pq = FakePQ(bridge, folder)
-    month_close.start(bridge, pq, sources.DAY_FIRST)
+    _begin(bridge, pq, sources.DAY_FIRST)
     fixed = month_close._PENDING["formula"]
     assert 'if [Name] = "DonHang_HCM_T10.csv" then ";"' in fixed and "[Delimiter = [PhanCach]" in fixed
     assert "khớp sổ cái đến từng đồng" in _text(month_close.approve(bridge, pq))
@@ -530,7 +560,7 @@ def test_failed_reload_puts_the_old_query_back_and_says_so_in_vietnamese(folder)
             return super().load(name)
     bridge = FakeBridge(folder)
     pq = ReloadFails(bridge, folder)
-    month_close.start(bridge, pq, sources.DAY_FIRST)
+    _begin(bridge, pq, sources.DAY_FIRST)
     before = pq.queries["DonHang"]
     beats = month_close.approve(bridge, pq)
     shown = " ".join(f"{b.text} {b.label} {b.value} {b.note}" for b in beats)
@@ -547,3 +577,290 @@ def test_load_errors_become_one_plain_sentence():
     assert vi("DataFormat.Error: We couldn't convert to Number.") == "Excel gặp một giá trị không đổi được sang số hoặc ngày."
     assert vi("Formula.Firewall: Query 'X' references other queries") .startswith("Excel chặn query")
     assert vi("something else entirely") == "Excel báo lỗi khi tải query."
+
+
+# ── Beta jobs 1, 2, 4: the receipt, nothing left out silently, the Biên bản ──
+
+class CopyingBridge(FakeBridge):
+    """Knows where the workbook is saved, and SaveCopyAs writes a file there."""
+    def __init__(self, folder, name="BaoCao_T10.xlsx"):
+        super().__init__(folder)
+        self.path, self.copies, self.writes = folder / name, [], []
+        self.path.write_bytes(b"workbook")
+
+    def workbook_path(self):
+        return str(self.path)
+
+    def save_copy(self, path):
+        self.copies.append(path)
+        Path(path).write_bytes(self.path.read_bytes())
+        return True
+
+    def write(self, ref, grid):
+        self.writes.append(ref)
+        return super().write(ref, grid)
+
+
+def _with_footer_and_stray_files(folder):
+    with open(folder / "DonHang" / "DonHang_HN_T10.csv", "a", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerow(["", "", "", "Tổng cộng", "", "", 2_800_000_000, "", ""])
+    (folder / "anh_chup_so.png").write_bytes(b"png")
+    (folder / "so_cu.xls").write_bytes(b"xls")
+
+
+def test_receipt_comes_first_and_nothing_is_written_before_it_is_confirmed(folder):
+    _with_footer_and_stray_files(folder)
+    bridge = CopyingBridge(folder)
+    pq = FakePQ(bridge, folder)
+    beats = month_close.start(bridge, pq, sources.DAY_FIRST)
+    assert len(beats) == 1 and beats[0].choices == ("Đúng rồi, làm tiếp", "Có chỗ sai")
+    assert bridge.writes == [] and bridge.copies == [] and pq.queries == {}          # not one cell touched
+    card = beats[0].intake["card"]
+    titles = [r["title"] for r in card["rows"]]
+    assert titles[0] == "TB_T10.xlsx · Sổ cân đối T10" and titles[1] == "TB_T09.xlsx · Sổ cân đối T09"
+    assert titles[2].startswith("Bán hàng") and card["rows"][2]["count"] == "6 đơn"
+    assert "khớp Nợ = Có" in card["rows"][0]["detail"] and "Kỳ 01/10/2026–31/10/2026" in card["rows"][0]["detail"]
+    assert "khớp Có TK 511" in card["rows"][2]["detail"]
+    left = " ".join(card["left_out"])
+    assert "Tổng cộng" in left and "trùng" in left and "file không dùng" in left
+    log = beats[0].intake["log"]
+    assert len(log["files"]) == 5                       # 2 trial balances, 2 sales files, the query written by an AI
+    for f in log["files"]:
+        assert abs(f["total"] - f["used"] - f["dropped"]) <= 1, f     # used + left out = what the file holds
+    listed = sum(d["amount"] for d in log["dropped"] if d["amount"] is not None)
+    assert listed == sum(f["dropped"] for f in log["files"]) == 1_400_000_000
+    assert {d["file"] for d in log["dropped"] if d["amount"] is None} >= {"DonHang_HN_T10.csv", "anh_chup_so.png", "so_cu.xls"}
+
+
+def test_wrong_stops_before_any_change_and_opens_the_chat(folder):
+    bridge = CopyingBridge(folder)
+    pq = FakePQ(bridge, folder)
+    month_close.start(bridge, pq, sources.DAY_FIRST)
+    assert "chưa sửa gì" in _text(month_close.reject())
+    assert not month_close.pending() and bridge.writes == [] and bridge.copies == []
+
+
+def test_confirm_keeps_the_original_and_writes_the_bien_ban(folder):
+    _with_footer_and_stray_files(folder)
+    bridge = CopyingBridge(folder)
+    pq = FakePQ(bridge, folder)
+    month_close.start(bridge, pq, sources.DAY_FIRST)
+    month_close.confirm(bridge, pq)
+    assert (folder / "BaoCao_T10_ban-goc.xlsx").read_bytes() == b"workbook"
+    month_close.approve(bridge, pq)
+    rows = bridge.sheets["Bien ban Clicky"]
+    lines = [" ".join(str(c) for c in r if c not in (None, "")) for r in rows]
+    assert rows[0][0] == "BIÊN BẢN CLICKY · BÁO CÁO THÁNG 10/2026" and "BaoCao_T10_ban-goc.xlsx" in rows[1][0]
+    assert rows[3] == ["#", "Lúc", "Ô", "Chỉ tiêu", "Trước", "Sau", "Lý do", "Ai đồng ý", "Nguồn"]
+    assert any("5111" in ln and "521" in ln and "120" in ln for ln in lines)
+    assert any("Doanh thu thuần thực 8640000000 8520000000" in ln for ln in lines)
+    assert any("Lợi nhuận sau thuế thực 556000000 436000000" in ln for ln in lines)
+    query = next(r for r in rows if len(r) > 2 and r[2] == "Query DonHang")
+    assert query[4] != query[5] and query[7] != "Tự động"                   # the user agreed to this one
+    status = next(r for r in rows if r and r[0] == "Trạng thái")
+    assert status[1] == "SƠ BỘ" and bridge.sheets["BC thang"][0][8] == "SƠ BỘ"
+    assert any(r and r[0] == "Những gì em bỏ ra ngoài" for r in rows)
+    assert any(r and r[0] == "Dòng \"Tổng cộng\" cuối file" for r in rows)
+    cover = [r for r in rows if r and str(r[-1]).startswith("✓")]
+    assert len(cover) == 5
+
+
+def test_only_the_user_makes_it_official(folder):
+    bridge = CopyingBridge(folder)
+    pq = FakePQ(bridge, folder)
+    _begin(bridge, pq, sources.DAY_FIRST)
+    month_close.approve(bridge, pq)
+    assert next(r for r in bridge.sheets["Bien ban Clicky"] if r and r[0] == "Trạng thái")[1] == "SƠ BỘ"
+    said = _text(month_close.make_final(bridge))
+    assert "Chính thức" in said
+    rows = bridge.sheets["Bien ban Clicky"]
+    assert next(r for r in rows if r and r[0] == "Trạng thái")[1] == "CHÍNH THỨC"
+    assert any(r[3] == "Trạng thái báo cáo" and r[5] == "CHÍNH THỨC" for r in rows if len(r) > 5)
+    assert bridge.sheets["BC thang"][0][8] == "CHÍNH THỨC"
+
+
+def test_making_it_official_after_a_restart_only_changes_the_status_line(folder):
+    bridge = CopyingBridge(folder)
+    pq = FakePQ(bridge, folder)
+    _begin(bridge, pq, sources.DAY_FIRST)
+    month_close.approve(bridge, pq)
+    month_close._AUDIT = None                                   # Clicky was closed and opened again
+    month_close.make_final(bridge)
+    status = next(r for r in bridge.sheets["Bien ban Clicky"] if r and r[0] == "Trạng thái")
+    assert status[1] == "CHÍNH THỨC" and "Chính thức" in status[3]
+
+
+# ── Beta job 3: open the saved file again and compare before handing it over ──
+
+def _saved_workbook(path, bridge, expect, tweak=None):
+    """Write what the fake workbook holds to a real xlsx, as Excel would save it (values cached)."""
+    from openpyxl import Workbook
+    from engine import saved_check
+    wb = Workbook()
+    wb.remove(wb.active)
+    for ref, value in expect.items():
+        sheet, cell = saved_check.split(ref)
+        ws = wb[sheet] if sheet in wb.sheetnames else wb.create_sheet(sheet)
+        ws[cell] = value + (tweak.get(ref, 0) if tweak else 0)
+    wb.save(path)
+
+
+class SavingBridge(CopyingBridge):
+    def __init__(self, folder, tweak=None):
+        super().__init__(folder)
+        self.tweak, self.saved = tweak, 0
+
+    def save(self):
+        self.saved += 1
+        _saved_workbook(self.path, self, month_close._EXPECT, self.tweak)
+        return True
+
+
+def _to_the_save_question(bridge, folder):
+    pq = FakePQ(bridge, folder)
+    _begin(bridge, pq, sources.DAY_FIRST)
+    month_close.approve(bridge, pq)
+    assert month_close.stage() == "save"
+    return pq
+
+
+def test_saved_file_is_read_back_and_only_then_called_matching(folder):
+    bridge = SavingBridge(folder)
+    pq = _to_the_save_question(bridge, folder)
+    assert {"'Doi chieu'!C7", "'BC thang'!C23"} <= set(month_close._EXPECT)
+    assert month_close._EXPECT["'BC thang'!C23"] == 436_000_000
+    beats = month_close.approve(bridge, pq)                       # "Lưu và kiểm tra"
+    assert bridge.saved == 1
+    assert beats[0].label == "Khớp sổ cái" and beats[0].value == "0 đ" and beats[0].mark == "ok"
+
+
+def test_a_cell_changed_in_the_saved_file_is_caught_and_the_file_is_not_handed_over(folder):
+    bridge = SavingBridge(folder, tweak={"'BC thang'!C23": 5_000_000})
+    pq = _to_the_save_question(bridge, folder)
+    beats = month_close.approve(bridge, pq)
+    said = " ".join(f"{b.text} {b.label} {b.note}" for b in beats)
+    assert "Khớp sổ cái" not in said and beats[0].mark == "bad"
+    assert beats[0].ref == "'BC thang'!C23" and "cần 436 triệu, file ghi 441 triệu" in beats[0].note
+    assert "chưa giao" in beats[0].text
+
+
+def test_tamper_hook_changes_the_saved_cell_only_when_asked(folder, monkeypatch):
+    bridge = SavingBridge(folder)
+    pq = _to_the_save_question(bridge, folder)
+    monkeypatch.setenv("CLICKY_TEST_TAMPER", "'Doi chieu'!C7=1000")
+    beats = month_close.approve(bridge, pq)
+    assert beats[0].mark == "bad" and beats[0].ref == "'Doi chieu'!C7"
+
+
+# ── Beta job 5: each input has a role; two of the same kind → ask, never pick ──
+
+def test_two_trial_balances_of_one_month_are_asked_about_not_picked(folder):
+    import os, shutil, time as _time
+    from engine import roles
+    old = folder / "TB_T10_cu.xlsx"
+    shutil.copy(folder / "TB_T10.xlsx", old)
+    os.utime(old, (_time.time() - 86400 * 6, _time.time() - 86400 * 6))
+    (folder / "anh_so_lieu.png").write_bytes(b"png")
+    (folder / "Email chi nhanh DN.eml").write_text("Doanh thu tháng 11 dự kiến 9.999.999.999", encoding="utf-8")
+    bridge = CopyingBridge(folder)
+    pq = FakePQ(bridge, folder)
+    month_close._CHOSEN.clear(); month_close._PICKS.clear()
+    beats = month_close.start(bridge, pq, sources.DAY_FIRST)
+    assert month_close.stage() == "pick_source" and bridge.writes == []
+    ask = beats[0]
+    assert ask.text.startswith("Có 2 sổ cân đối T10: TB_T10.xlsx sửa ngày") and "TB_T10_cu.xlsx sửa ngày" in ask.text
+    assert ask.choices == ("Dùng TB_T10", "Dùng TB_T10_cu")
+    receipt = month_close.pick(bridge, pq, "Dùng TB_T10_cu")          # the user's choice, even the older one
+    assert month_close.intake_pending()
+    log = receipt[0].intake["log"]
+    assert any(d["file"] == "TB_T10" and "anh đã chọn dùng TB_T10_cu" in d["reason"] for d in log["dropped"])
+    reasons = {d["file"]: d["reason"] for d in log["dropped"]}
+    assert "không bao giờ lấy số từ ảnh" in reasons["anh_so_lieu.png"]
+    assert "Lý do" in reasons["Email chi nhanh DN.eml"]
+    assert roles.of_file("KeHoach_2026_v3.xlsx") == roles.PLAN
+    month_close.confirm(bridge, pq)
+    month_close.approve(bridge, pq)
+    rows = bridge.sheets["Bien ban Clicky"]
+    pickrow = next(r for r in rows if len(r) > 3 and str(r[3]).startswith("Chọn nguồn"))
+    assert pickrow[5].startswith("TB_T10_cu") and pickrow[4] == "TB_T10" and pickrow[7] != "Tự động"
+    every = [c for r in bridge.sheets["BC thang"] for c in r]
+    assert 9_999_999_999 not in every
+
+
+def test_receipt_rows_carry_their_role(folder):
+    bridge = CopyingBridge(folder)
+    month_close._CHOSEN.clear()
+    beats = month_close.start(bridge, FakePQ(bridge, folder), sources.DAY_FIRST)
+    roles_shown = [r.get("role") for r in beats[0].intake["card"]["rows"]]
+    assert roles_shown[:3] == ["Số chính thức", "Số chính thức", "Chi tiết để giải thích"]
+
+
+def test_revenue_scope_follows_what_the_order_files_cover():
+    """Case 07 class: a sales file with goods and finished products must be compared with all of 511,
+    not 5111 alone (that reported a false gap equal to 5112); goods-only files still use 5111."""
+    from types import SimpleNamespace as L
+    ledger = L(leaves=[L(account="5111", cr=Decimal(700), dr=0), L(account="5112", cr=Decimal(300), dr=0)])
+    assert sources.revenue_scope(ledger, Decimal(1000)) == "511"
+    assert sources.revenue_scope(ledger, Decimal(700)) == "5111"
+    # Neither matches: the closer scope, so a real 100 gap is not reported as 300 + 100.
+    assert sources.revenue_scope(ledger, Decimal(900)) == "511"
+    assert sources.revenue_scope(ledger, Decimal(650)) == "5111"
+
+
+def test_plan_versions_are_not_duplicates_and_never_official(tmp_path):
+    """AOP and AOPR1 side by side are versions used together: no 'which one?' question, and a plan
+    laid out like a trial balance is never read as Số chính thức. Only the same scenario twice is a copy."""
+    from engine import roles
+    assert roles.plan_scenario("AOP_FY2627_v6.xlsx") == "AOP"
+    assert roles.plan_scenario("AOPR1 FY26-27.xlsx") == "AOPR1"
+    assert roles.plan_scenario("TB_T10.xlsx") == ""
+    assert roles.is_plan("AOPR1 FY26-27.xlsx") and roles.is_plan("MUF_T10.xlsx")
+    assert not roles.is_plan("TB_T10.xlsx") and not roles.is_plan("DonHang_HN_T10.csv")
+    _write_tb(tmp_path / "AOP_FY2627.xlsx", [["Bảng cân đối số phát sinh tháng 10 năm 2026"], ["511", "Doanh thu", 0, 0, 0, 9]])
+    from engine.cli import read_rows
+    names = [n for n, _, _ in sources.find_trial_balances(tmp_path, read_rows)]
+    assert "AOP_FY2627" not in names
+
+
+def test_unread_cost_ledger_csv_is_named_truthfully(tmp_path):
+    from engine import intake
+    p = tmp_path / "SoChiTiet_ChiPhi_T10.csv"
+    p.write_text("SoCT,Ngay,TK,ThanhTien\nPC1,05/10/2026,6421,1000\n", encoding="utf-8")
+    why = intake._csv_why(p)
+    assert "sổ chi tiết chi phí" in why and "không có cột ngày" not in why
+    r = tmp_path / "SCT_T10.csv"
+    r.write_text("Ngay_CT,So_CT,TK_No,TK_Co,So_tien_VND\n05/10/2026,PC1,6421,1111,1000\n", encoding="utf-8")
+    assert "sổ chi tiết chi phí" in intake._csv_why(r)
+    q = tmp_path / "ghi_chu.csv"
+    q.write_text("a,b\n1,2\n", encoding="utf-8")
+    assert "không có cột ngày" in intake._csv_why(q)
+def test_cards_keep_off_each_block_of_figures_not_just_the_used_range():
+    """The card is told where every block of figures is; without that read it keeps off the whole filled area."""
+    import asyncio
+    from office import month_close
+
+    class Excel:
+        def __init__(self, boxes):
+            self.boxes = boxes
+
+        def figure_boxes(self):
+            return self.boxes
+
+        def content_rect(self):
+            return (0, 0, 800, 600)
+
+    class M:
+        def __init__(self, boxes):
+            self._excel = Excel(boxes)
+
+        def _physical_to_logical_bbox(self, rect):
+            return tuple(v / 2 for v in rect)
+
+    figures, words = asyncio.run(month_close._figures(M({"numbers": [(200, 100, 800, 600)],
+                                                          "text": [(0, 100, 200, 600)]})))
+    assert figures == [(100, 50, 400, 300)] and words == [(0, 50, 100, 300)]
+    figures, words = asyncio.run(month_close._figures(M(None)))
+    assert figures == [(0, 0, 400, 300)] and words == []
+    beat = month_close.Beat("Lợi nhuận thật", "C9", label="LNST thực", value="436tr")
+    card = month_close.shapes_for((10, 10, 100, 30), beat, figures, words)[1]
+    assert card["avoid"] == [[0, 0, 400, 300]] and card["soft"] is None

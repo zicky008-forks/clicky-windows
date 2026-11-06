@@ -1,8 +1,9 @@
 """
-First-run setup wizard.
+Advanced AI setup wizard (power users only).
 
-Shown once on the first launch (or whenever the user clicks
-"Tray → Run setup again…"). Walks the user through:
+No longer part of the first run: a new user sees the welcome card (ui/welcome.py) and is
+never asked for an Ollama install, an AI provider or an API key. This wizard opens only from
+"Tray → Setup & Diagnostics → Run setup wizard again…". Walks the user through:
 
   0. What Clicky is and how to use it
   1. Pick an engine — free local Ollama, or a cloud API key
@@ -24,9 +25,7 @@ them wrong:
 
 from __future__ import annotations
 
-import os
 import threading
-from pathlib import Path
 
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
@@ -37,23 +36,15 @@ from ai import ollama_bootstrap as ob
 from config import cfg
 
 
-# Marker file: the wizard skips itself if this exists.
-def _flag_path() -> Path:
-    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-    d = Path(base) / "Clicky"
-    d.mkdir(parents=True, exist_ok=True)
-    return d / "setup_complete.flag"
-
-
+# The first-run flag now belongs to the welcome card; these names stay for older callers.
 def setup_already_ran() -> bool:
-    return _flag_path().exists()
+    import first_run
+    return not first_run.welcome_needed()
 
 
 def mark_setup_complete() -> None:
-    try:
-        _flag_path().write_text("ok")
-    except Exception:
-        pass
+    import first_run
+    first_run.mark_welcome_done()
 
 
 def _shared_model() -> bool:
@@ -512,15 +503,6 @@ class SetupWizard(QDialog):
 
 
 def maybe_show_setup_wizard(parent=None) -> SetupWizard | None:
-    """Open the wizard on first run.
-
-    Unlike 1.2.0 this shows even when Ollama is already healthy — a silent
-    first launch left new users with no idea what Clicky was or how to talk to
-    it. The Ollama steps still skip themselves when there's nothing to do.
-    """
-    if setup_already_ran():
-        return None
-
-    w = SetupWizard(parent)
-    w.show()
-    return w
+    """Kept for older callers. The first run shows the welcome card instead (ui/welcome.py);
+    the Ollama / API-key wizard never opens by itself any more."""
+    return None
