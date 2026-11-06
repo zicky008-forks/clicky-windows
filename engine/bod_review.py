@@ -266,6 +266,9 @@ def check_cut(lines: list, ceiling: Decimal, no_cut: Iterable[str], where_total:
 
 # ── 7. FX impact ────────────────────────────────────────────────────────────────
 
+RATE_NAMES = {"binh quan": "bình quân", "cuoi ky": "cuối kỳ", "dau ky": "đầu kỳ", "aop": "AOP", "binh_quan": "bình quân"}
+
+
 def check_fx(rows: Iterable[tuple], rates: dict, convention: tuple) -> list:
     """rows: [(where, label, month, usd, printed impact)]. rates: {(month, type): rate}.
     convention: (actual rate type, plan rate type), e.g. ('binh_quan', 'aop').
@@ -283,7 +286,10 @@ def check_fx(rows: Iterable[tuple], rates: dict, convention: tuple) -> list:
         for (m, t), r in rates.items():
             if m == month and t not in (a_type, p_type) and abs(D(usd) * (D(r) - D(rp)) - D(impact)) <= VND_TOLERANCE:
                 used = t
+        name = lambda t: RATE_NAMES.get(t, t)
+        when = f"{month[5:]}/{month[:4]}" if len(month) == 7 and month[4] == "-" else month
+        text = label if when in label else f"{label} tháng {when}"
         out.append(Finding(7, "fx_rate_type", where,
-                           f"{label} tháng {month}: ảnh hưởng tỷ giá phải dùng tỷ giá {a_type} ({fmt_vnd(want)} đ)"
-                           + (f", bộ BOD dùng tỷ giá {used}" if used else "") + f" ({fmt_vnd(D(impact))} đ)", want, D(impact)))
+                           f"{text}: ảnh hưởng tỷ giá phải dùng tỷ giá {name(a_type)} ({fmt_vnd(want)} đ)"
+                           + (f", bộ BOD dùng tỷ giá {name(used)}" if used else "") + f" ({fmt_vnd(D(impact))} đ)", want, D(impact)))
     return out
