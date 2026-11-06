@@ -130,6 +130,61 @@ class PowerPointBridge:
         self.show = settings.Run()
         return self.show
 
+    def attach(self, path: str) -> bool:
+        """Follow the presenter's own slide show of this deck when one is running (True); else open the deck
+        read-only without starting a show (False), so pre-checks can read it before anything is shown."""
+        want = fold(str(path)).replace("/", "\\")
+        app = self.app()
+        try:
+            for i in range(1, int(app.SlideShowWindows.Count) + 1):
+                window = app.SlideShowWindows(i)
+                if fold(str(window.Presentation.FullName)).replace("/", "\\") == want:
+                    self.pres, self.show = window.Presentation, window
+                    return True
+        except Exception:                   # noqa: BLE001 - no show running is the normal case
+            pass
+        self.open(path)
+        return False
+
+    def count(self) -> int:
+        return int(self.pres.Slides.Count)
+
+    def running(self) -> bool:
+        try:
+            return self.show is not None and int(self.show.View.State) != 5     # ppSlideShowDone
+        except Exception:                   # noqa: BLE001 - the show window is gone
+            return False
+
+    def window_pixels(self) -> Optional[tuple]:
+        """(left, top, width, height) of the slide-show window in physical pixels, from Windows itself."""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            rect = wintypes.RECT()
+            if ctypes.windll.user32.GetWindowRect(int(self.show.HWND), ctypes.byref(rect)):
+                return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
+        except Exception:                   # noqa: BLE001 - fall back to PowerPoint's points
+            pass
+        return None
+
+    def shape_pixels(self, shape: ShapeInfo) -> tuple:
+        """Physical (left, top, right, bottom) of a shape on the show, ready for physical_to_logical."""
+        ps = self.pres.PageSetup
+        win = self.window_pixels()
+        if win is None:
+            x, y, w, h = self.screen_rect(shape)
+        else:
+            x, y, w, h = to_screen(shape, float(ps.SlideWidth), float(ps.SlideHeight), *win, dpi=72)
+        return (x, y, x + w, y + h)
+
+    def focus_show(self) -> None:
+        """Give the keyboard back to the slide show, so Space and the clicker move slides again."""
+        try:
+            import ctypes
+            ctypes.windll.user32.SetForegroundWindow(int(self.show.HWND))
+        except Exception:                   # noqa: BLE001
+            pass
+
     def goto(self, number: int) -> int:
         self.show.View.GotoSlide(number)
         return int(self.show.View.Slide.SlideIndex)
