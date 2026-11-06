@@ -174,3 +174,15 @@ def test_run_writes_results_and_plays(tmp_path):
     assert (tmp_path / "Clicky_soat_BOD" / "ket-qua.md").exists()
     assert played[0][0] == "open" and played[0][1].endswith("Pack_BOD_T10_ban_nhap.xlsx")
     assert played[-1] == ("play", 12)
+
+
+@pytest.mark.parametrize("plant", [True, False])
+def test_other_layout_row_numbers_percent_as_numbers_ytd_and_fx_sign(tmp_path, plant):
+    """Layout 'b': STT column, a revenue row, % printed as 1.42, 'Chênh lệch %DTT' for points, a year-to-date
+    part, FX impact printed as plan − actual, 'Tháng 10 năm 2026' as the period."""
+    answers = make_case(tmp_path, plant=plant, style="b")
+    found = bod_check.review(tmp_path)[0].findings
+    assert len(found) == len(answers), [(x.group, x.where, x.message) for x in found]
+    for a in answers:
+        hit = [x for x in found if x.where == a["where"] and x.group == a["group"]]
+        assert hit and close(a["code"], a["expected"], hit[0].expected), (a, [(x.where, x.expected) for x in found])

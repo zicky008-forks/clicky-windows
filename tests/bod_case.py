@@ -254,7 +254,7 @@ def cut_plan() -> dict:
     return {d: (req[d], base[d], cut2[d], cut3[d]) for d in req}
 
 
-def write_pack(folder: Path, plant: bool) -> list:
+def write_pack(folder: Path, plant: bool, style: str = "a") -> list:
     answers = []
     month = [PERIOD]
     ytd = LOCKED
@@ -262,31 +262,49 @@ def write_pack(folder: Path, plant: bool) -> list:
     plan_dtt = r0(dtt_tm * Decimal("1.03"))
     depts = ["P01", "P02", "P03", "P04", "P05", "P06"]
 
-    # Tong hop: by department, month, actual vs AOP
-    th = [["BÁO CÁO CHI PHÍ BÁN HÀNG VÀ VẬN HÀNH – KHỐI THƯƠNG MẠI"], ["Tháng 10/2026 (bản nháp)"], [],
-          [None, "Tháng 10", None, None, None, None, None],
-          ["Chỉ tiêu", "Thực tế", "%DTT", "AOP", "%DTT AOP", "Chênh lệch", "Chênh lệch (điểm %)"]]
+    # Tong hop: by department, month, actual vs AOP. Style "b": a row-number column, a revenue row,
+    # percentages printed as numbers (1.42 = 1.42 %), points headed 'Chênh lệch %DTT', a year-to-date part.
+    b = style == "b"
+    k = Decimal(100) if b else Decimal(1)
+    pre = [None] if b else []
+    th = [["BÁO CÁO CHI PHÍ BÁN HÀNG VÀ VẬN HÀNH – KHỐI THƯƠNG MẠI"],
+          ["Tháng 10 năm 2026 (bản nháp)" if b else "Tháng 10/2026 (bản nháp)"], [],
+          pre + [None, "Tháng 10", None, None, None, None, None] + (["Lũy kế T7–T10", None] if b else []),
+          (["STT"] if b else []) + ["Chỉ tiêu", "Thực tế", "%DTT", "AOP", "%DTT AOP", "Chênh lệch",
+                                    "Chênh lệch %DTT" if b else "Chênh lệch (điểm %)"] + (["Thực tế", "%DTT"] if b else [])]
+    dtt_ytd = revenue(ytd, division=TM)
+    n = 0
+    if b:
+        th.append([None, "Doanh thu thuần", dtt_tm, k, plan_dtt, k, dtt_tm - plan_dtt, Decimal(0), dtt_ytd, k])
     first = len(th) + 1
     for d in depts + [""]:
         v = act(lambda l, d=d: l[5] == d, month)
         p = plan("AOP", d, month) if d else Decimal(0)
         label = f"{d} - {DEPTS[d]}" if d else "Chưa gán phòng ban"
         pct, ppct = v / dtt_tm, p / plan_dtt
-        th.append([label, v, pct, p, ppct, v - p, pct - ppct])
+        n += 1
+        vy = act(lambda l, d=d: l[5] == d, ytd)
+        th.append(([n] if b else []) + [label, v, pct * k, p, ppct * k, v - p, (pct - ppct) * k]
+                  + ([vy, vy / dtt_ytd * k] if b else []))
     truth = act(lambda l: True, month)
     p_total = sum((plan("AOP", d, month) for d in depts), Decimal(0))
-    th.append(["Tổng chi phí", truth, truth / dtt_tm, p_total, p_total / plan_dtt, truth - p_total,
-               truth / dtt_tm - p_total / plan_dtt])
+    ty = act(lambda l: True, ytd)
+    th.append(([None] if b else []) + ["Tổng chi phí", truth, truth / dtt_tm * k, p_total, p_total / plan_dtt * k,
+                                       truth - p_total, (truth / dtt_tm - p_total / plan_dtt) * k]
+              + ([ty, ty / dtt_ytd * k] if b else []))
     total_row = len(th)
+    col = lambda letter: chr(ord(letter) + (1 if b else 0))
+    i = 1 if b else 0
     if plant:
-        th[-1][1] = truth + TRAP_REVERSAL
-        answers.append({"group": 1, "code": "total_vs_detail", "where": f"'Tong hop'!B{total_row}", "expected": truth})
+        th[-1][1 + i] = truth + TRAP_REVERSAL
+        answers.append({"group": 1, "code": "total_vs_detail", "where": f"'Tong hop'!{col('B')}{total_row}", "expected": truth})
         r = first + depts.index("P04")
-        answers.append({"group": 3, "code": "missing_pct", "where": f"'Tong hop'!C{r}", "expected": th[r - 1][2]})
-        th[r - 1][2] = None
+        answers.append({"group": 3, "code": "missing_pct", "where": f"'Tong hop'!{col('C')}{r}",
+                        "expected": th[r - 1][2 + i] / k})
+        th[r - 1][2 + i] = None
         r = first + depts.index("P02")
-        answers.append({"group": 3, "code": "wrong_pp", "where": f"'Tong hop'!G{r}", "expected": th[r - 1][6]})
-        th[r - 1][6] = th[r - 1][6] + Decimal("0.005")
+        answers.append({"group": 3, "code": "wrong_pp", "where": f"'Tong hop'!{col('G')}{r}", "expected": th[r - 1][6 + i] / k})
+        th[r - 1][6 + i] = th[r - 1][6 + i] + Decimal("0.005") * k
 
     # Theo kenh: selling cost by channel, % by the channel's own rule
     tk = [["CHI PHÍ BÁN HÀNG THEO KÊNH – KHỐI THƯƠNG MẠI – T10/2026"], [], ["Kênh", "Chi phí thực tế", "%DTT"]]
@@ -353,17 +371,17 @@ def write_pack(folder: Path, plant: bool) -> list:
           ["Khoản mục", "Tháng", "USD", "Tỷ giá dùng", "Tỷ giá AOP", "Ảnh hưởng tỷ giá"]]
     for m in ytd:
         used = "Cuối kỳ" if plant and m == PERIOD else "Bình quân"
-        impact = r0(USD[m] * (RATES[m][used] - RATES[m]["AOP"]))
+        impact = r0(USD[m] * (RATES[m][used] - RATES[m]["AOP"])) * (-1 if style == "b" else 1)   # b: plan − actual
         tg.append(["Phí dịch vụ nước ngoài", f"{m[5:]}/{m[:4]}", USD[m], RATES[m][used], RATES[m]["AOP"], impact])
         if plant and m == PERIOD:
             answers.append({"group": 7, "code": "fx_rate_type", "where": f"'Ty gia'!F{len(tg)}",
-                            "expected": USD[m] * (RATES[m]["Bình quân"] - RATES[m]["AOP"])})
+                            "expected": USD[m] * (RATES[m]["Bình quân"] - RATES[m]["AOP"]) * (-1 if style == "b" else 1)})
     _xlsx(folder / "Pack_BOD_T10_ban_nhap.xlsx", {"Tong hop": th, "Theo kenh": tk, "So nam truoc": sn,
                                                    "AOPR theo thang": ap, "Cat giam": cg, "Ty gia": tg})
     return answers
 
 
-def make_case(folder: Path, plant: bool = True) -> list:
+def make_case(folder: Path, plant: bool = True, style: str = "a") -> list:
     folder = Path(folder)
     write_data(folder)
-    return write_pack(folder, plant)
+    return write_pack(folder, plant, style)

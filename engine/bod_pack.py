@@ -192,6 +192,8 @@ def to_num(v) -> Optional[Decimal]:
 def _role(k: str, numeric: bool) -> str:
     if PP_RE.search(k) and (DIFF_RE.search(k) or PCT_RE.search(k) or "diem" in k):
         return "pp"
+    if PCT_DTT_RE.search(k) and DIFF_RE.search(k):
+        return "pp"                         # 'Chênh lệch %DTT': a gap between two % of revenue is in points
     if PCT_RE.search(k) and DIFF_RE.search(k):
         return "text"                       # a relative gap (%), not points: not checked
     if PCT_RE.search(k):
@@ -215,6 +217,16 @@ def _score(values: list) -> int:
                 or month_of(k) is not None or LABEL_RE.match(k):
             s += 1
     return s
+
+
+def _order_column(rows: list, r: int, c: int, k: str) -> bool:
+    """'STT' / 'TT' / 'No.': row numbers, not amounts."""
+    if re.fullmatch(r"stt|tt|so tt|no|#|thu tu", k):
+        return True
+    nums = [to_num((x or [None] * (c + 1))[c]) if c < len(x or []) else None for x in rows[r + 1:r + 60]]
+    nums = [n for n in nums if n is not None]
+    return c == 0 and len(nums) >= 2 and all(n == int(n) and 0 < n <= 300 for n in nums) and \
+        sum(1 for a, b in zip(nums, nums[1:]) if b == a + 1) >= len(nums) // 2
 
 
 def _numeric_below(rows: list, r: int, c: int) -> bool:
@@ -243,7 +255,7 @@ def read_sheet(name: str, rows: list) -> Sheet:
     label_col = None
     for c, t in enumerate(texts):
         k = key(t)
-        numeric = _numeric_below(rows, best_r, c)
+        numeric = _numeric_below(rows, best_r, c) and not _order_column(rows, best_r, c, k)
         if label_col is None and (LABEL_RE.match(k) or not numeric) and k and not PCT_RE.search(k):
             role = "label"
             label_col = c
@@ -264,7 +276,7 @@ def read_sheet(name: str, rows: list) -> Sheet:
         if not any(v is not None and str(v).strip() for v in values):
             continue
         label = " ".join(str(values[c]).strip() for c in sorted(text_cols) if c < len(values) and values[c] is not None
-                         and str(values[c]).strip())
+                         and str(values[c]).strip() and not re.fullmatch(r"[\d.,\s]+|[IVXivx]+\.?", str(values[c]).strip()))
         numbers = [c for c in sheet.cols if c.role in ("value", "pct", "diff", "pp", "month")
                    and c.index < len(values) and to_num(values[c.index]) is not None]
         if not numbers:
@@ -323,10 +335,16 @@ def read_pack(path: Path) -> Pack:
     return Pack(Path(path), sheets, " ".join([Path(path).stem] + [s.title for s in sheets]))
 
 
+def pack_month(pack: Pack) -> Optional[int]:
+    """The month named in the titles or the file name when no year is printed: 'T10', 'Tháng 10'."""
+    m = re.search(r"\b(?:thang|t|th) ?(\d{1,2})\b", key(pack.title).replace("_", " "))
+    return int(m.group(1)) if m and 1 <= int(m.group(1)) <= 12 else None
+
+
 def pack_period(pack: Pack, fy_start: int = 7) -> Optional[str]:
     """'YYYY-MM' of the pack from its titles and file name: 'Tháng 10/2026', 'T10/2026', 'T10' + a year."""
     k = key(pack.title)
-    m = re.search(r"\b(?:thang|t|th|ky) ?(\d{1,2}) (20\d\d)\b", k) or re.search(r"\b(\d{1,2}) (20\d\d)\b", k)
+    m = re.search(r"\b(?:thang|t|th|ky) ?(\d{1,2}) (?:nam )?(20\d\d)\b", k) or re.search(r"\b(\d{1,2}) (20\d\d)\b", k)
     if m and 1 <= int(m.group(1)) <= 12:
         return f"{int(m.group(2)):04d}-{int(m.group(1)):02d}"
     m = re.search(r"\b(20\d\d) (\d{1,2})\b", k)

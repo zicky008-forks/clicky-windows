@@ -25,7 +25,7 @@ from typing import Callable, Optional
 import scene_log
 from engine import bod_review as rv
 from engine.bod_inputs import Bundle, Config, load, num
-from engine.bod_pack import Col, Group, Pack, Row, Sheet, fy_of, pack_period, read_pack, to_num, version_of
+from engine.bod_pack import Col, Group, Pack, Row, Sheet, fy_of, pack_month, pack_period, read_pack, to_num, version_of
 from engine.bod_review import D, Finding, PCT_TOLERANCE, VND_TOLERANCE, ZERO, fmt_pct, fmt_vnd
 from engine.tables import is_total, key
 
@@ -337,13 +337,18 @@ def check_totals(f: Facts, pack: Pack, period: str, fy: int) -> list:
                     continue
                 if "doanh thu" in label or "dtt" in label:
                     continue
-                for groups in s.sections():
+                for i, groups in enumerate(s.sections()):
                     g = groups[0]
                     if g.value.version not in ("", "thuc te") or g.value.previous:
                         continue
                     v = s.num(r, g.value)
                     if v is not None:
-                        cands.append((_cell(s, r, g.value), v, _months_for(g.value, period, fy, f.fy_start)))
+                        cands.append((_cell(s, r, g.value), v, _months_for(g.value, period, fy, f.fy_start), i))
+            best = {}
+            for c in cands:                                  # subtotals ('Cộng chi phí bán hàng') are not the total
+                if c[3] not in best or abs(c[1]) > abs(best[c[3]][1]):
+                    best[c[3]] = c
+            cands = [c[:3] for c in best.values()]
         for where, label, v in (s.loose if s.kind == "other" else []):
             if re.search(r"tong chi phi", key(label)) and not any(c[0] == where for c in cands):
                 cands.append((where, v, [period] if not re.search(r"luy ke|ytd", key(label)) else
@@ -404,8 +409,9 @@ def _pp_scale(pairs: list) -> Decimal:
 
 
 def _pct_scale(values: list) -> Decimal:
-    big = sum(1 for v in values if v is not None and abs(v) > Decimal("1.5"))
-    return Decimal(100) if values and big > len([v for v in values if v is not None]) / 2 else Decimal(1)
+    """% of revenue printed as fractions (0.0142) or as numbers (1.42). A fraction column never goes past 150 %."""
+    values = [abs(v) for v in values if v is not None]
+    return Decimal(100) if values and max(values) > Decimal("1.5") else Decimal(1)
 
 
 def check_lines(f: Facts, pack: Pack, period: str, fy: int) -> list:
@@ -427,20 +433,23 @@ def check_lines(f: Facts, pack: Pack, period: str, fy: int) -> list:
                         if abs(v / base - p / pct_scale) <= PCT_TOLERANCE:
                             votes[name] += 1
                 default = votes.most_common(1)[0][0] if votes else None
+            override = _rule_votes(f, s, cur, months, pct_scale)
             for r in s.rows:
                 value = s.num(r, cur.value)
                 if value is None:
                     continue
                 pct = s.num(r, cur.pct) / pct_scale if cur.pct and s.num(r, cur.pct) is not None else None
-                want, base_label = _want_pct(f, r, value, months, default)
+                want, base_label = _want_pct(f, r, value, months, default, override)
                 if cur.pct is not None and pct is not None and want is not None and base_label[1] == "rule" \
                         and abs(want - pct) > PCT_TOLERANCE:
                     used = next((n for n, b in f.candidate_bases(months, f.channel(r.label, r.section))
                                  if abs(value / b - pct) <= PCT_TOLERANCE), "")
+                    if not used:
+                        continue        # the printed % fits no known revenue: not sure enough to call it wrong
                     out.append(Finding(2, "wrong_base", _cell(s, r, cur.pct),
                                        f"{r.label}: %DTT phải là {fmt_pct(want)} (chia cho {base_label[0]} theo quy tắc kênh), "
-                                       f"bộ BOD ghi {fmt_pct(pct)}" + (f", đang chia cho {used}" if used else ""), want, pct))
-                if cur.pct is not None and pct is None:
+                                       f"bộ BOD ghi {fmt_pct(pct)}, đang chia cho {used}", want, pct))
+                if cur.pct is not None and pct is None and value and not _is_revenue(r.label):
                     out.append(Finding(3, "missing_pct", _cell(s, r, cur.pct),
                                        f"{r.label}: có giá trị {fmt_vnd(value)} đ nhưng thiếu %DTT"
                                        + (f", phải là {fmt_pct(want)}" if want is not None else ""), want, None))
@@ -450,11 +459,44 @@ def check_lines(f: Facts, pack: Pack, period: str, fy: int) -> list:
     return out
 
 
-def _want_pct(f: Facts, r: Row, value: Decimal, months: list, default: Optional[str]) -> tuple:
+def _is_revenue(label: str) -> bool:
+    return bool(re.search(r"doanh thu|\bdtt\b|net revenue|net sales", key(label)))
+
+
+def _rule_votes(f: Facts, s: Sheet, cur: Group, months: list, pct_scale: Decimal) -> dict:
+    """{rule text: base name} when most channels under one rule use the same base and Clicky's reading of the
+    rule's words says otherwise: the client's words win over Clicky's parse, and one odd channel stays an error."""
+    if cur.pct is None:
+        return {}
+    by_rule = defaultdict(list)
+    for r in s.rows:
+        channel = f.channel(r.label, r.section)
+        v, p = s.num(r, cur.value), s.num(r, cur.pct)
+        rule = f.cfg.channels.get(key(channel), ("", ""))[1] if channel else ""
+        if not rule or not v or p is None:
+            continue
+        by_rule[rule].append({n for n, b in f.candidate_bases(months) if abs(v / b - p / pct_scale) <= PCT_TOLERANCE})
+    out = {}
+    for rule, sets in by_rule.items():
+        votes = Counter(n for names in sets for n in names)
+        if not votes:
+            continue
+        name, n = votes.most_common(1)[0]
+        parsed = f.base_name(*f.base_of(rule))
+        if name != parsed and n >= 2 and n > len(sets) / 2 and votes.get(parsed, 0) < n:
+            out[rule] = name
+    return out
+
+
+def _want_pct(f: Facts, r: Row, value: Decimal, months: list, default: Optional[str], override: dict = None) -> tuple:
     """(pct it should be, (base name, 'rule' | 'default'))."""
     channel = f.channel(r.label, r.section)
     if channel:
         rule = f.cfg.channels.get(key(channel), ("", ""))[1]
+        if rule and override and rule in override:
+            base = dict(f.candidate_bases(months)).get(override[rule])
+            if base:
+                return value / base, (override[rule], "rule")
         if rule:
             site, division, ch = f.base_of(rule, f.site_in(r.label), channel)
             base = f.revenue(months, site, division, ch)
@@ -502,7 +544,7 @@ def _check_compare(s: Sheet, cur: Group, g: Group, pct_scale: Decimal) -> list:
     scale = _pp_scale(pairs)
     sign = _sign([(w * scale, got) for w, got in pairs]) if pairs else 1
     for r, a, b in pcts:
-        if a is None or b is None:
+        if a is None or b is None or _is_revenue(r.label):
             continue
         want = sign * (a - b) / pct_scale
         got = s.num(r, g.pp)
@@ -547,6 +589,8 @@ def check_versions(f: Facts, pack: Pack, period: str, fy: int) -> list:
                 if not matched:
                     continue
                 used = matched.most_common(1)[0][0]
+                if used == "thuc te":
+                    continue            # last year's actual: a legitimate comparison, not a plan version
                 right = None
                 if col.version and col.version != "thuc te" and not any(_same_version(col.version, a) for a in [used]):
                     right = next((a for a in available if _same_version(a, col.version)), None)
@@ -684,10 +728,28 @@ def check_cuts(f: Facts, b: Bundle, pack: Pack) -> list:
                 if CEILING_RE.search(key(label)):
                     ceiling = v
         found = rv.check_cut(lines, ceiling if ceiling is not None else ZERO, protected, where_total or s.addr(s.header_row, 0))
-        if ceiling is None:
+        if ceiling is None or "request" not in roles:
             found = [x for x in found if x.code != "levers_vs_gap"]
         out += found
+    if not any(x.code == "levers_vs_gap" for x in out):
+        out += _loose_levers(pack)
     return out
+
+
+def _loose_levers(pack: Pack) -> list:
+    """A pack that prints 'Tổng đòn bẩy' and 'Tổng chênh cần cắt' as two figures: they must be equal."""
+    levers = gap = None
+    for s in pack.sheets:
+        for addr, label, v in s.loose:
+            k = key(label)
+            if LEVERS_RE.search(k) and levers is None:
+                levers = (addr, v)
+            elif re.search(r"chenh (lech )?can cat|can cat giam|khoang cach (den|toi) tran|vuot tran", k) and gap is None:
+                gap = (addr, v)
+    if levers and gap and abs(abs(levers[1]) - abs(gap[1])) > VND_TOLERANCE:
+        return [Finding(6, "levers_vs_gap", levers[0], f"Tổng đòn bẩy cắt {fmt_vnd(abs(levers[1]))} không bằng "
+                        f"tổng chênh cần cắt {fmt_vnd(abs(gap[1]))}", abs(gap[1]), abs(levers[1]))]
+    return []
 
 
 def check_fx_sheets(f: Facts, b: Bundle, pack: Pack, period: str, fy: int) -> tuple:
@@ -718,7 +780,23 @@ def check_fx_sheets(f: Facts, b: Bundle, pack: Pack, period: str, fy: int) -> tu
                 m = month_key(r.values[month_col.index], None, f"{fy}/{(fy + 1) % 100:02d}", f.fy_start)
             m = m or month_key(r.label, None, f"{fy}/{(fy + 1) % 100:02d}", f.fy_start) or period
             rows.append((_cell(s, r, impact), r.label, m, s.num(r, usd), s.num(r, impact)))
-        out += rv.check_fx([x for x in rows if x[3] is not None], rates, (convention, "aop"))
+        rows = [x for x in rows if x[3] is not None]
+        plus = minus = 0
+        for _, _, m, u, imp in rows:
+            ra, rp = rates.get((m, convention)), rates.get((m, "aop"))
+            if ra is None or rp is None or imp is None:
+                continue
+            want = u * (ra - rp)
+            plus += abs(want - imp) <= VND_TOLERANCE
+            minus += abs(want + imp) <= VND_TOLERANCE
+        if minus > plus:                    # printed as plan − actual: the column's own habit, not an error
+            found = rv.check_fx([(w, l, m, u, -imp if imp is not None else None) for w, l, m, u, imp in rows], rates,
+                                (convention, "aop"))
+            for x in found:
+                x.expected, x.actual = -x.expected, -x.actual
+            out += found
+        else:
+            out += rv.check_fx(rows, rates, (convention, "aop"))
     return out, notes
 
 
@@ -789,9 +867,13 @@ def review(folder: Path, fy_start: int = 7) -> list:
         rv_ = Review(folder, path.name, receipt=b.receipt, unused=b.unused)
         period = pack_period(pack, fy_start)
         if not period:
-            months = sorted({e.period for e in b.gl if e.period})
-            period = months[-1] if months else ""
-            rv_.assumptions.append(f"Bộ BOD không ghi kỳ; em lấy tháng cuối có trong sổ chi tiết: {period}")
+            counts = Counter(e.period for e in b.gl if e.period)
+            month = pack_month(pack)
+            pool = [p for p in counts if month is None or int(p[5:]) == month]
+            # the latest month with real volume: a few next-period reversals in the export do not make a month
+            busy = [p for p in pool if counts[p] >= max(counts.values()) / 4] or pool
+            period = max(busy) if busy else ""
+            rv_.assumptions.append(f"Bộ BOD không ghi năm của kỳ; em lấy theo sổ chi tiết: {period[5:]}/{period[:4]}")
         division, how = find_division(pack, b)
         rv_.period, rv_.division = period, division
         rv_.assumptions.append(f"Khối: {division or 'tất cả'} (theo {how})")
