@@ -629,7 +629,7 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
         truth = sources.truth(files, period)
     ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
     receipt = intake_mod.build(folder, files, tbs, truth, ledger, _workbook_name(bridge),
-                               set_aside=[(name, f"bản sổ cân đối T{p[1]:02d} khác; anh đã chọn dùng {_CHOSEN[p]}"
+                               set_aside=[(name, f"bản sổ cân đối T{p[1]:02d} khác; anh đã chọn dùng {intake_mod.file_name(folder, _CHOSEN[p])}"
                                            if p in _CHOSEN else "bản cũ hơn của cùng kỳ")
                                           for name, p in aside])
     scene_log.record("roles", files=[{"name": n, "role": r} for n, r in receipt.roles.items()])
@@ -678,7 +678,7 @@ def _ask_which(folder: Path, conflict: tuple, machine_order) -> list:
     said = ", ".join(f"{paths[name].name} sửa ngày {stamps[name]}" if stamps[name] else paths[name].name
                      for name, _, _ in group)
     _PENDING = {"stage": "pick_source", "period": (year, month), "options": [name for name, _, _ in group],
-                "stamps": stamps, "order": machine_order}
+                "stamps": stamps, "order": machine_order, "folder": str(folder)}
     return [Beat(f"Có 2 sổ cân đối T{month:02d}: {said}. Em dùng bản nào?",
                  choices=tuple(f"Dùng {name}" for name, _, _ in group))]
 
@@ -697,8 +697,10 @@ def pick(bridge, pq, answer: str) -> list:
     _PENDING = None
     _CHOSEN[job["period"]] = hit
     others = [n for n in job["options"] if n != hit]
-    _PICKS.append((f"Sổ cân đối T{job['period'][1]:02d}", f"{hit} (sửa {job['stamps'].get(hit, '')})",
-                   ", ".join(others), audit.who()))
+    folder = Path(job["folder"]) if job.get("folder") else None
+    shown = (lambda n: intake_mod.file_name(folder, n)) if folder else (lambda n: n)   # TB_T11.xlsx, not TB_T11
+    _PICKS.append((f"Sổ cân đối T{job['period'][1]:02d}", f"{shown(hit)} (sửa {job['stamps'].get(hit, '')})",
+                   ", ".join(shown(n) for n in others), audit.who()))
     return start(bridge, pq, job["order"])
 
 

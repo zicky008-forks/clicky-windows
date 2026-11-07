@@ -845,7 +845,10 @@ def test_two_trial_balances_of_one_month_are_asked_about_not_picked(folder):
     receipt = month_close.pick(bridge, pq, "Dùng TB_T10_cu")          # the user's choice, even the older one
     assert month_close.intake_pending()
     log = receipt[0].intake["log"]
-    assert any(d["file"] == "TB_T10" and "anh đã chọn dùng TB_T10_cu" in d["reason"] for d in log["dropped"])
+    # Grader G1: people see the file's own name, extension included, on the receipt and in the Biên bản.
+    assert any(d["file"] == "TB_T10.xlsx" and "anh đã chọn dùng TB_T10_cu.xlsx" in d["reason"] for d in log["dropped"])
+    assert {f["name"] for f in log["files"] if f["kind"].startswith("Sổ cân đối")} == {"TB_T10_cu.xlsx", "TB_T09.xlsx"}
+    assert not [n for n in receipt[0].intake["card"]["rows"] if n["title"].split(" · ")[0] in ("TB_T10", "TB_T10_cu")]
     reasons = {d["file"]: d["reason"] for d in log["dropped"]}
     assert "không bao giờ lấy số từ ảnh" in reasons["anh_so_lieu.png"]
     assert "Lý do" in reasons["Email chi nhanh DN.eml"]
@@ -854,7 +857,11 @@ def test_two_trial_balances_of_one_month_are_asked_about_not_picked(folder):
     month_close.approve(bridge, pq)
     rows = bridge.sheets["Bien ban Clicky"]
     pickrow = next(r for r in rows if len(r) > 3 and str(r[3]).startswith("Chọn nguồn"))
-    assert pickrow[5].startswith("TB_T10_cu") and pickrow[4] == "TB_T10" and pickrow[7] != "Tự động"
+    assert pickrow[5].startswith("TB_T10_cu.xlsx (sửa") and pickrow[4] == "TB_T10.xlsx" and pickrow[7] != "Tự động"
+    # Every row naming the file says TB_T10.xlsx; only "Thêm sheet" lists sheets, which keep the short name.
+    left_out = [r for r in rows if "TB_T10" in " ".join(str(c) for c in r) and "Thêm sheet" not in r]
+    bad = [r for r in left_out if not re.search(r"TB_T10(_cu)?\.xlsx", " ".join(str(c) for c in r))]
+    assert left_out and not bad, bad
     every = [c for r in bridge.sheets["BC thang"] for c in r]
     assert 9_999_999_999 not in every
 
