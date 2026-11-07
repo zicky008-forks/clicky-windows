@@ -30,6 +30,8 @@ Khách chạy chốt tháng một lần là phải đúng lần đó, nên một
 Có `--out` thì mỗi lượt nằm trong `lan-1\`, `lan-2\`…, và bảng tổng hợp nằm ở `tong-hop.md`.
 Mốc trước khi người thật chạy tay: Case 01 phải đạt `--lan 3` ở mức phóng 100, và đạt một lượt ở mỗi mức 85 và 130.
 
+Giữa các lượt, robot ghi tình trạng Excel vào `excel-giua-cac-luot.json` ở thư mục `--out`: số tiến trình, bộ nhớ (MB), số handle, số file đang mở, số bản sao của robot và số kết nối và query trong các bản sao đó. Robot chỉ đếm, không in tên file. Ở mỗi lượt nói, robot ghi bộ nhớ và handle của Excel vào `excel-moi-luot-noi.json` trong thư mục của lượt. Phần này không gọi COM, để không làm chậm Clicky. `--excel-moi-luot` thoát hẳn Excel giữa các lượt, như khi người dùng mở máy làm tháng mới. Robot chỉ thoát Excel khi trước lượt 1 không có file nào mở.
+
 ## Robot bấm bằng gì
 
 - Mặc định thử **agent-desktop** (Vercel Labs, Apache-2.0): tải bản Windows x64 từ
