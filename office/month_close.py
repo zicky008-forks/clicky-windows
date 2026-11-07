@@ -24,10 +24,11 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
-from engine import audit, intake as intake_mod, m_code, sources
+from engine import audit, intake as intake_mod, m_code, sources, visuals
+from engine.log_safe import scrub          # clicky.log never holds a customer's file or folder name
 from engine.monthly_report import spoken
 from engine.trial_balance import ZERO
-from office.power_query import ReadFailed
+from office.power_query import LoadTimeout, ReadFailed
 import scene_log
 
 log = logging.getLogger(__name__)
@@ -73,6 +74,9 @@ class Beat:
     was: str = ""                   # the figure it replaces, shown struck through above the new one
     roll: tuple = ()                # (from, to) in đồng: the big figure counts from one to the other
     intake: Optional[dict] = None   # the receipt card ({"card": ..., "log": ...}) shown with this beat's buttons
+    graphic: Optional[dict] = None  # leader tags, sticky notes or a profit bridge (engine.visuals), drawn beside the range
+    book: str = ""                  # the workbook the ref is in, brought to the front first (read-only when Clicky opens it)
+    book_pack: bool = False         # that workbook is the file under review itself (logged, never its name)
 
 
 def stage() -> Optional[str]:
@@ -323,7 +327,7 @@ def _try(bridge, method: str, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except Exception as exc:
-        log.debug("Excel %s failed: %s", method, exc)
+        log.debug("Excel %s failed: %s", method, scrub(exc))
         return None
 
 
@@ -456,6 +460,19 @@ def _ledger(folder: Path) -> tuple:
     return tbs, {"name": name, "rev_acct": acct, "revenue": revenue, "gross": revenue,
                  "returns": sources.ledger_movement(tb, "521", "dr"),
                  "cost": sources.ledger_movement(tb, "632", "dr")}
+
+
+def _rescope(tbs, ledger: dict, truth) -> dict:
+    """Compare against the 511 scope the order files cover (5111 alone or every 511 sub-account),
+    so a sales file holding goods and finished products is not reported short by 5112."""
+    if not ledger:
+        return ledger
+    tb = tbs[-1][2]
+    acct = sources.revenue_scope(tb, truth.gross)
+    if acct == ledger["rev_acct"]:
+        return ledger
+    revenue = sources.ledger_movement(tb, acct, "cr")
+    return dict(ledger, rev_acct=acct, revenue=revenue, gross=revenue)
 
 
 def _net_of_returns(ledger: dict, truth) -> dict:
@@ -593,6 +610,7 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     """Stage 0: read every file in the folder and say what was read. Nothing in the workbook changes yet."""
     global _PENDING, _AUDIT
     _PENDING, _AUDIT = None, None
+    _step("read_folder")
     _EXPECT.clear()
     if not bridge.available():
         return [Beat("Anh mở file Excel đã lưu trong thư mục dữ liệu tháng rồi gọi lại em.")]
@@ -605,10 +623,11 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     _tbs, aside, conflict = _tb_groups(folder)
     if conflict:
         return _ask_which(folder, conflict, machine_order)
-    tbs, ledger = _ledger(folder)
-    period = sources.period_of(tbs[-1][1]) if tbs else None
-    truth = sources.truth(files, period)
-    ledger = _net_of_returns(ledger, truth)
+    with _timed("read_files"):
+        tbs, ledger = _ledger(folder)
+        period = sources.period_of(tbs[-1][1]) if tbs else None
+        truth = sources.truth(files, period)
+    ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
     receipt = intake_mod.build(folder, files, tbs, truth, ledger, _workbook_name(bridge),
                                set_aside=[(name, f"bản sổ cân đối T{p[1]:02d} khác; anh đã chọn dùng {_CHOSEN[p]}"
                                            if p in _CHOSEN else "bản cũ hơn của cùng kỳ")
@@ -693,16 +712,23 @@ def confirm(bridge, pq) -> list:
     if not job or job.get("stage") != "intake":
         return []
     receipt = job["intake"]
-    _AUDIT = audit.AuditLog(period=job.get("period", ""), original=_keep_original(bridge),
+    _step("confirmed")
+    with _timed("keep_original"):
+        original = _keep_original(bridge)
+    _AUDIT = audit.AuditLog(period=job.get("period", ""), original=original,
                             dropped=intake_mod.dropped_rows(receipt), coverage=intake_mod.coverage_rows(receipt))
     for what, chosen, others, agreed in job.get("picked", []):
         _AUDIT.add("—", f"Chọn nguồn: {what}", others, chosen,
                    "Hai file cùng vai trò Số chính thức cho cùng kỳ; người dùng chọn bản dùng", agreed, "Thư mục dữ liệu")
     before = set(bridge.sheet_names())
-    beats = _reconcile(bridge, pq, job["order"])
-    _note_new_sheets(bridge, before)
-    _write_audit(bridge)
-    return beats
+    # As in approve: adding and styling the check sheets with the screen frozen is faster (Excel does not
+    # repaint after every call) and does not flash sheets past the user; the result shows when it is ready.
+    _try(bridge, "screen_updating", False)
+
+    def step():
+        with _timed("reconcile"):
+            return _reconcile(bridge, pq, job["order"])
+    return _guarded(bridge, before, step)
 
 
 def wrong() -> list:
@@ -710,6 +736,38 @@ def wrong() -> list:
     global _PENDING
     _PENDING = None
     return [Beat("Anh nói giúp em chỗ nào chưa đúng nhé. Em chưa sửa gì trong file.")]
+
+
+def _close_out(bridge, before: set, quiet: bool = False) -> None:
+    """Record the sheets Clicky added and rewrite the Biên bản.
+
+    After a step that failed (quiet), a failure here (Excel rejecting a call while the user clicks into a
+    cell) is only logged, so it never hides the step's own error. After a step that worked it is raised:
+    changes with no Biên bản must not be handed over as done."""
+    try:
+        _note_new_sheets(bridge, before)
+        with _timed("audit_sheet"):
+            _write_audit(bridge)
+    except Exception as exc:
+        if not quiet:
+            raise
+        # Type and code only: Excel's error text can quote the workbook's name and folder.
+        from office.excel_com import _why
+        log.warning("updating the Bien ban sheet failed after the step itself failed: %s", _why(exc))
+
+
+def _guarded(bridge, before: set, step):
+    """Run step, then the Biên bản; the screen is released last whatever happens."""
+    try:
+        try:
+            result = step()
+        except BaseException:
+            _close_out(bridge, before, quiet=True)
+            raise
+        _close_out(bridge, before)
+        return result
+    finally:
+        _try(bridge, "screen_updating", True)      # always last: a frozen screen must never stay frozen
 
 
 def _note_new_sheets(bridge, before: set) -> None:
@@ -790,6 +848,45 @@ def make_final(bridge) -> list:
                  f"{_q(audit.SHEET)}!A1:I4", "Đã chốt", "ok", audit.FINAL)]
 
 
+def _step(step: str, **data) -> None:
+    """One line per step of the month close in the scene log, so a run that stops shows where it stopped."""
+    scene_log.record("close_step", step=step, **data)
+
+
+class _timed:
+    """Logs how long one part of a step took ("close_step" step="timing"), so a slow turn on the PC shows
+    where its time went: Excel saving the original, Power Query, writing sheets, or Clicky's own code."""
+
+    def __init__(self, part: str):
+        self.part = part
+
+    def __enter__(self):
+        import time
+        self.t0 = time.monotonic()
+        return self
+
+    def __exit__(self, *exc):
+        import time
+        _step("timing", part=self.part, ms=int(round((time.monotonic() - self.t0) * 1000)))
+        return False
+
+
+def _load(pq, name: str):
+    """pq.load with its start, end and outcome in the scene log."""
+    import time
+    _step("query_load", name=name, state="start")
+    t0 = time.monotonic()
+    result = pq.load(name)
+    seconds = round(time.monotonic() - t0, 1)
+    if isinstance(result, LoadTimeout):
+        _step("query_load", name=name, state="timeout", seconds=seconds, dialog=result.dialog)
+    elif isinstance(result, str):
+        _step("query_load", name=name, state="error", seconds=seconds, why=load_error_vi(result))
+    else:
+        _step("query_load", name=name, state="ok", seconds=seconds, rows=len(result[2]))
+    return result
+
+
 def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
     global _PENDING
     _PENDING = None
@@ -801,10 +898,11 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
     files = sources.find_order_files(folder)
     if not files:
         return [Beat(f"Em không thấy file đơn hàng CSV nào trong thư mục {folder.name}.")]
-    tbs, ledger = _ledger(folder)
-    period = sources.period_of(tbs[-1][1]) if tbs else None
-    truth = sources.truth(files, period)
-    ledger = _net_of_returns(ledger, truth)
+    with _timed("read_files"):
+        tbs, ledger = _ledger(folder)
+        period = sources.period_of(tbs[-1][1]) if tbs else None
+        truth = sources.truth(files, period)
+    ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
     beats, notes = [], []
     if truth.outside:
         out_amt = sum((a for *_, a in truth.outside), ZERO)
@@ -838,7 +936,8 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
         notes.append(["Kiểu ngày trong file gốc", "", "", "",
                       "; ".join(f"{f.name}: {_order_vi(f.date_order)}" for f in files)])
 
-    name, formula, origin = _query_to_check(pq, folder)
+    with _timed("find_query"):
+        name, formula, origin = _query_to_check(pq, folder)
     keys = _dedup_key(files, truth)
     if truth.invoice_lines:
         lines = ", ".join(sorted(truth.invoice_lines)[:5])
@@ -852,10 +951,12 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
                       sum((truth.doc_amounts[d] for d in truth.collisions), ZERO), "",
                       f"{len(truth.collisions)} số chứng từ được dùng cho các đơn khác nhau ({shared}). Đây là đơn thật, "
                       + ("Clicky xoá trùng theo Chi nhánh + Số CT." if keys else "Clicky chỉ xoá dòng giống hệt nhau.")])
-    fixed_m = m_code.folder_query(str(folder), {f.name: f.culture(machine_order) for f in files},
-                                  _typed_columns(files), files[0].header[files[0].columns["doc"]] if "doc" in files[0].columns else None,
-                                  folder_parameter=PARAM_NAME, key_columns=keys, period=period if truth.outside else None,
-                                  delimiter={f.name: f.delimiter for f in files})
+    with _timed("build_query"):
+        fixed_m = m_code.folder_query(str(folder), {f.name: f.culture(machine_order) for f in files},
+                                      _typed_columns(files), files[0].header[files[0].columns["doc"]] if "doc" in files[0].columns else None,
+                                      folder_parameter=PARAM_NAME, key_columns=keys, period=period if truth.outside else None,
+                                      delimiter={f.name: f.delimiter for f in files})
+    _progress("load")                             # Excel's first Power Query work of the session takes seconds
     if name is None:
         name, formula, origin = QUERY_NAME, None, "clicky"
         if _AUDIT is not None:
@@ -865,35 +966,39 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
         notes.append(["Query đơn hàng", "", "", "", "Trong file chưa có query đơn hàng; Clicky tạo query mới đọc đúng kiểu ngày của từng file."])
     elif origin != "workbook":
         formula, moved = _point_at_this_folder(formula, files)
-        pq.add(name, formula)
+        with _timed("query_add"):                 # Excel's Queries.Add: the first one per Excel session is slow
+            pq.add(name, formula)
         notes.append(["Query đơn hàng", "", "", "", f"Lấy từ file {origin}, nạp vào Excel với tên {name} để kiểm tra."
                       + (" Thư mục trong query trỏ tới một máy khác, máy này không có, nên Clicky đổi sang thư mục "
                          "đơn hàng ở đây." if moved else "")])
 
     if formula is not None:
-        findings = m_code.lint(name, formula)
+        with _timed("lint"):
+            findings = m_code.lint(name, formula)
         worst = sorted(findings, key=lambda f: (_LINT_ORDER.index(f.code) if f.code in _LINT_ORDER else 99,
                                                 f.severity != "error"))
         notes += _lint_rows(worst)
     else:
-        pq.add(PARAM_NAME, m_code.parameter_query(str(folder)))
-        pq.add(name, fixed_m)
+        with _timed("query_add"):
+            pq.add(PARAM_NAME, m_code.parameter_query(str(folder)))
+            pq.add(name, fixed_m)
 
-    result = pq.load(name)
+    _step("query_add", name=name, origin=origin or "clicky", existing=formula is not None)
+    result = _load(pq, name)
     if isinstance(result, ReadFailed):
         _write_check_sheet(bridge, None, truth, ledger, notes)
         return beats + [Beat("Em chưa đọc lại được bảng query, nên chưa có số chênh lệch. Đây là lỗi của Clicky.",
                              _check_ref("A7:E7"), "Chưa đối chiếu được", "warn", "Chưa có số",
                              "Không phải lỗi file của anh. Anh cập nhật Clicky rồi gọi lại em.")]
     if isinstance(result, str):
-        log.warning("loading query %s failed: %s", name, result)
+        log.warning("loading query %s failed: %s", name, scrub(result))
         why_vi = load_error_vi(result)
         _write_check_sheet(bridge, None, truth, ledger,
                            [["Lỗi khi tải query", "", "", "", why_vi + " Chi tiết kỹ thuật ghi trong clicky.log."]] + notes)
         beats.append(Beat(f"Excel chưa tải được query {name}.", _check_ref("A4:E4"), "Query chưa tải được", "bad",
                           "Lỗi tải", why_vi))
-        if formula is None:
-            return beats
+        if formula is None or isinstance(result, LoadTimeout):
+            return beats                        # Excel is busy or asking: a rewritten query would not load either
         _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder)}
         return beats + [_fix_offer()]
     sheet, header, rows = result
@@ -906,7 +1011,8 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
     why = diagnose(truth, loaded, read_order) if not clean else {"date": [], "distinct": [], "other": [], "excel_dups": []}
     cause_beats, cause_rows = _cause_beats(why, read_order, 0, f"Query ghi cứng {culture}, nên đọc" if culture else "Máy này đọc",
                                            None if clean else loaded.amount - truth.amount)
-    check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, cause_rows + notes, "ok" if clean else "bad")
+    with _timed("check_sheet"):
+        check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, cause_rows + notes, "ok" if clean else "bad")
     ref = f"{_q(check_sheet)}!C7" if check_sheet and ledger else None
     if clean:
         beats.append(Beat(f"Excel khớp sổ cái đến từng đồng: doanh thu {spoken(loaded.amount)}.",
@@ -917,9 +1023,16 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
     beats.append(Beat(f"Báo cáo trong Excel đang {_gap_vi(gap)} so với sổ cái.", ref, "Excel lệch sổ cái", "bad",
                       _signed(gap), f"Query chỉ giữ {len(rows)}/{truth.unique_rows} chứng từ. Chưa được dùng số này."))
     beats += cause_beats
+    offer = _fix_offer()
+    if cause_rows:
+        # The question stays up with one note per cause, each beside its own row in the detail table.
+        notes = visuals.cause_notes(cause_rows)
+        for n in notes:
+            n["ref"] = _detail_ref(n["row"])
+        offer.graphic = {"kind": "notes", "notes": notes, "plain": True}
     _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder), "gap": int(gap),
                 "before": int(loaded.amount), "before_rows": len(rows)}
-    return beats + [_fix_offer()]
+    return beats + [offer]
 
 
 # ── Stage 2 ───────────────────────────────────────────────────────────────────
@@ -939,17 +1052,22 @@ def approve(bridge, pq) -> list:
     # Reloading the query and adding the report sheets would flash a dozen sheets past the user;
     # the screen stays still and the result is shown when it is ready.
     _try(bridge, "screen_updating", False)
-    before = set(bridge.sheet_names())
     try:
-        return _approve(bridge, pq, job)
-    finally:
-        _note_new_sheets(bridge, before)
-        _write_audit(bridge)
+        before = set(bridge.sheet_names())
+    except BaseException:
         _try(bridge, "screen_updating", True)
+        raise
+    return _guarded(bridge, before, lambda: _approve(bridge, pq, job))
 
 
 def load_error_vi(raw: str) -> str:
     """One plain Vietnamese sentence for a Power Query / COM load error; the raw text goes to the log only."""
+    if isinstance(raw, LoadTimeout):
+        if raw.dialog:
+            return (f"Excel đang chờ trả lời hộp thoại \"{raw.dialog}\", nên query chưa tải xong. Chị xem cửa sổ "
+                    "Excel, trả lời hoặc đóng hộp thoại đó, rồi gọi lại em.")
+        return (f"Excel tải query quá {int(raw.seconds)} giây vẫn chưa xong, nên em dừng chờ. Chị đợi Excel rảnh "
+                "(hoặc đóng bớt file đang mở), rồi gọi lại em.")
     text = str(raw or "")
     m = re.search(r"column '([^']+)' of the table wasn't found", text, re.I)
     if m:
@@ -971,7 +1089,7 @@ def _approve(bridge, pq, job) -> list:
     try:
         before = dict(pq.list()).get(job["name"])
     except Exception as exc:
-        log.warning("reading query %s before the fix failed: %s", job["name"], exc)
+        log.warning("reading query %s before the fix failed: %s", job["name"], scrub(exc))
         before = None
     pq.add(PARAM_NAME, m_code.parameter_query(str(folder)))
     if not pq.add(job["name"], job["formula"]):
@@ -979,15 +1097,16 @@ def _approve(bridge, pq, job) -> list:
     files = sources.find_order_files(folder)
     tbs, ledger = _ledger(folder)
     truth = sources.truth(files, sources.period_of(tbs[-1][1]) if tbs else None)
-    ledger = _net_of_returns(ledger, truth)
-    result = pq.load(job["name"])
+    ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
+    _step("query_fix", name=job["name"])
+    result = _load(pq, job["name"])
     if isinstance(result, ReadFailed):
         return [Beat("Em đã sửa query nhưng chưa đọc lại được bảng kết quả. Đây là lỗi của Clicky.",
                      label="Chưa kiểm tra được", mark="warn", note=_BACKUP_NOTE)]
     if isinstance(result, str):
         # The raw COM/Power Query text is for the log, never the screen. Put the user's query back as it was,
         # so a failed fix leaves the workbook as Clicky found it, and end the turn in one clear sentence.
-        log.warning("reloading the fixed query %s failed: %s", job["name"], result)
+        log.warning("reloading the fixed query %s failed: %s", job["name"], scrub(result))
         restored = before is not None and pq.add(job["name"], before)
         kept = "Query cũ vẫn giữ nguyên." if restored else _BACKUP_NOTE
         why_vi = load_error_vi(result)
@@ -1043,14 +1162,18 @@ def _save_offer() -> Beat:
     return Beat("Em lưu file rồi mở lại bản đã lưu để đối chiếu với sổ cái nhé?", choices=SAVE_CHOICES)
 
 
-def save_and_verify(bridge) -> list:
-    """Save the workbook, re-read the saved xlsx from disk and compare its key cells with the code's figures."""
+def save_and_verify(bridge, target=None) -> list:
+    """Save the workbook, re-read the saved xlsx from disk and compare its key cells with the code's figures.
+
+    target is the exact file to save to when Clicky made the workbook itself (the sample, in Clicky's
+    own folder); the user's own file is only ever saved where it already is."""
     global _PENDING
     if stage() == "save":
         _PENDING = None
+    _step("save")
     if not bridge.available():
         return [Beat("Em không thấy file Excel đang mở, nên chưa lưu được.")]
-    if not _try(bridge, "save"):
+    if not _try(bridge, "save", *([str(target)] if target else [])):
         return [Beat("Em chưa lưu được file. Anh bấm Ctrl + S rồi gọi \"kiểm tra file đã lưu\" nhé.",
                      label="Chưa lưu được", mark="warn")]
     return verify_saved(bridge)
@@ -1062,10 +1185,11 @@ def verify_saved(bridge) -> list:
     if not path or not _EXPECT:
         return [Beat("Em chưa có số nào để đối chiếu với file đã lưu. Anh chạy báo cáo tháng trước nhé.")]
     try:
-        saved_check.tamper_from_env(Path(path))
-        ok, diffs = saved_check.check(Path(path), _EXPECT)
+        # The robot's tamper hook hands back a changed copy; without it this is the saved file itself.
+        ok, diffs = saved_check.check(saved_check.tamper_from_env(Path(path)), _EXPECT)
     except Exception as exc:
-        log.warning("re-reading the saved workbook failed: %s", exc)
+        from office.excel_com import _why
+        log.warning("re-reading the saved workbook failed: %s", _why(exc))    # an OS error quotes the path
         ok, diffs = False, [{"cell": "", "want": None, "got": None}]
     scene_log.record("verify", ok=ok, path=path, diffs=diffs)
     if ok:
@@ -1133,6 +1257,7 @@ def _audit_returns(report, names: dict, pat_row: int, overstated) -> None:
 def build_report(bridge, folder: Path, tbs: list) -> list:
     from engine.report_sheet import quote
     from office import report_skill
+    _step("build_report", trial_balances=len(tbs))
     if len(tbs) < 2:
         return [Beat("Em chưa thấy đủ hai file cân đối tài khoản, kỳ này và kỳ trước, nên chưa lập báo cáo.")]
     existing = set(bridge.sheet_names())
@@ -1177,6 +1302,14 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
     _LAST.clear()
     _LAST.update(pat=pat, overstated=overstated, real=pat - overstated, report=names["report"])
     beats = [Beat(f"Em đã lập báo cáo tháng{asks}.", f"{sheet}!A4:G{row}", "Báo cáo tháng đã lập", "", "", note)]
+    line_row = {f.key: FIRST_LINE_ROW + i for i, f in enumerate(report.figures)}
+    opened = visuals.figure_to_explain(report.figures, report.variances)
+    if opened is not None:
+        # Wires from the figure to the accounts it is made of: where a number comes from, seen at once.
+        tags = visuals.leader_tags(opened)
+        at = line_row[opened.key]
+        beats.append(Beat(visuals.leader_sentence(tags), f"{sheet}!A{at}:C{at}",
+                          graphic={"kind": "leaders", "figure_ref": f"{sheet}!C{at}", **tags}))
     if overstated > 0:
         real = pat - overstated
         change = f" Giảm {spoken(prev_pat - real)} so với kỳ trước." if prev_pat is not None and prev_pat > real else ""
@@ -1185,9 +1318,20 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
                           f"{spoken(overstated)} hàng bán bị trả lại đang ghi thẳng vào Nợ TK 511. "
                           f"Cần chuyển sang TK 521 trước khi gửi sếp.{change}",
                           was=spoken(pat), roll=(int(pat), int(real))))
+        chart = visuals.profit_bridge(pat, [("Hàng trả lại ghi Nợ 511", -overstated)], real)
+        beats.append(Beat(visuals.bridge_sentence(chart), pat_ref, graphic={"kind": "bridge", **chart}))
     else:
         beats.append(Beat(summary, pat_ref, "Lợi nhuận sau thuế", "", spoken(pat)))
-    return beats            # the profit card is the last scene: it is what goes to the boss
+    # Every trap the engine found gets a note beside the line it touches; they stay up while the save is asked.
+    notes = visuals.report_notes(report.issues, report.current, overstated,
+                                 {**line_row, "returns": row + 1 if overstated > 0 else line_row.get("net_rev")})
+    if notes:
+        end = row + EXTRA_ROWS if overstated > 0 else row
+        for n in notes:
+            n["ref"] = f"{sheet}!A{n['line']}:G{n['line']}" if n.get("line") else f"{sheet}!A1:G2"
+        beats.append(Beat(visuals.notes_sentence(notes), f"{sheet}!A1:G{end}",
+                          graphic={"kind": "notes", "notes": notes, "plain": True}))
+    return beats            # the profit story, then what to check before it goes to the boss
 
 
 _REPORT_COLUMNS = {"A": 40, "B": 12, "C": 17, "D": 17, "E": 17, "F": 9, "G": 15, "H": 34, "I": 14}
@@ -1225,9 +1369,10 @@ CLEAR_AFTER_S = 8.0       # the last card fades this long after Clicky stops tal
 FINAL_HOLD_S = 25.0       # ...unless it is a warning: that one stays up long enough to read, screenshot, act on
 
 
-def shapes_for(box: tuple, beat: Beat, avoid: tuple = None) -> list:
+def shapes_for(box: tuple, beat: Beat, avoid=None, soft=None) -> list:
     """Overlay shapes for one beat: the range lit with the rest of the screen dimmed, and one card beside it.
-    avoid: the filled part of the sheet on screen, which the card keeps off when it can."""
+    avoid: the figures on screen (one box or a list of boxes), which the card never covers when anything
+    else fits; soft: the cells holding words, which it keeps off when it can."""
     from ui.card_layout import tone_of
     l, t, r, b = box
     tone = tone_of(beat.mark)
@@ -1235,8 +1380,16 @@ def shapes_for(box: tuple, beat: Beat, avoid: tuple = None) -> list:
     if beat.label or beat.value or beat.note:
         shapes.append({"kind": "card", "anchor": [l, t, r, b], "title": beat.label, "was": beat.was,
                        "value": beat.value, "note": beat.note, "tone": tone, "roll": list(beat.roll),
-                       "avoid": list(avoid) if avoid else None})
+                       "avoid": _as_boxes(avoid) or None, "soft": _as_boxes(soft) or None})
     return shapes
+
+
+def _as_boxes(boxes) -> list:
+    if not boxes:
+        return []
+    if len(boxes) == 4 and all(isinstance(v, (int, float)) for v in boxes):
+        return [list(boxes)]
+    return [list(b) for b in boxes if b]
 
 
 async def _locate(manager, ref_text: str):
@@ -1252,7 +1405,7 @@ async def _locate(manager, ref_text: str):
             log.warning("cannot place %s on screen (Excel rect %s)", ref_text, rect)
         return box
     except Exception as exc:
-        log.warning("pointing at %s failed: %s", ref_text, exc)
+        log.warning("pointing at %s failed: %s", ref_text, scrub(exc))
         scene_log.record("locate", ref=ref_text, excel_rect=None, box=None, error=str(exc)[:200])
         return None
 
@@ -1263,41 +1416,172 @@ async def _filled_area(manager):
         rect = await asyncio.to_thread(manager._excel.content_rect)
         return manager._physical_to_logical_bbox(rect) if rect else None
     except Exception as exc:
-        log.debug("filled area unknown: %s", exc)
+        log.debug("filled area unknown: %s", scrub(exc))
         return None
 
 
-async def play(manager, beats: list) -> None:
+async def _figures(manager):
+    """(figures, words) on screen as lists of logical boxes, so a card keeps off every figure.
+
+    Each block of figures is its own box, so a card can use a gap inside a full sheet. Without the
+    detailed read, the whole filled area counts as figures: the card then goes past it, as before.
+    """
+    read = getattr(manager._excel, "figure_boxes", None)
+    found = None
+    if read is not None:
+        try:
+            found = await asyncio.to_thread(read)
+        except Exception as exc:
+            log.debug("figures on screen unknown: %s", scrub(exc))
+    if found and (found.get("numbers") or found.get("text")):
+        many = getattr(manager, "_physical_to_logical_boxes", None)
+        convert = many or (lambda rects: [manager._physical_to_logical_bbox(r) for r in rects])
+        numbers = [b for b in convert(found.get("numbers", [])) if b]
+        words = [b for b in convert(found.get("text", [])) if b]
+        if numbers or words:
+            return numbers, words
+    filled = await _filled_area(manager)
+    return ([filled] if filled else []), []
+
+
+def graphic_seconds(graphic: dict) -> float:
+    """Extra time on screen for a graphic beyond its sentence: each piece is read, and a bridge column
+    stays readable for at least six seconds."""
+    kind = graphic.get("kind")
+    if kind == "leaders":
+        return 1.5 + 1.0 * len(graphic.get("tags") or [])
+    if kind == "notes":
+        return 1.0 + 2.0 * len(graphic.get("notes") or [])
+    if kind == "bridge":
+        return max(6.0, 2.0 * len(graphic.get("bars") or []))
+    return 0.0
+
+
+def graphic_log(graphic: dict) -> dict:
+    """What the robot needs to check a graphic: its figures and words, without screen positions."""
+    keep = ("kind", "title", "figure", "sum", "ok", "check", "tags", "bars")
+    out = {k: graphic[k] for k in keep if k in graphic}
+    if graphic.get("notes") is not None:
+        out["notes"] = [{k: n.get(k) for k in ("codes", "warn", "action", "ref")} for n in graphic["notes"]]
+    return out
+
+
+async def _box_of(manager, ref: str):
+    """Logical box of a range already on screen, without scrolling (the beat's own range is shown first)."""
+    try:
+        rect = await asyncio.to_thread(manager._excel.screen_rect, ref, False)
+        return manager._physical_to_logical_bbox(rect) if rect else None
+    except Exception as exc:
+        log.debug("graphic piece %s not on screen: %s", ref, scrub(exc))
+        return None
+
+
+async def _graphic_shape(manager, graphic: dict, box):
+    """The overlay shape for a beat's graphic, every piece tied to a box on screen, or None if none is."""
+    shape = {k: v for k, v in graphic.items() if k not in ("figure_ref", "plain")}
+    if graphic["kind"] == "notes":
+        notes, first = [], None
+        for n in graphic.get("notes") or []:
+            ref = n.get("ref")
+            if ref and first is None and box is None:
+                at = first = await _locate(manager, ref)          # shows the sheet the notes are on
+            else:
+                at = await _box_of(manager, ref) if ref else None
+            # A note whose cells are off screen still shows, beside the beat's range: no trap goes unseen.
+            notes.append({**n, "anchor": list(at or box or first or ()) or None})
+        if not any(n["anchor"] for n in notes):
+            return None
+        shape["notes"] = notes
+        return shape
+    anchor = (await _box_of(manager, graphic["figure_ref"]) if graphic.get("figure_ref") else None) or box
+    if not anchor:
+        return None
+    shape["anchor"] = list(anchor)
+    return shape
+
+
+def free_card(beat: Beat, screen: tuple) -> dict:
+    """A card with no range to point at (the cell could not be shown): top right of the screen, no stem, no
+    spotlight. Its note says where the cell is, so the figure is never tied to the wrong cells."""
+    from ui.card_layout import tone_of
+    sl, st, sr, sb = screen
+    return {"kind": "card", "anchor": [sr - 24, st + 96, sr - 20, st + 100], "free": True, "title": beat.label,
+            "was": beat.was, "value": beat.value, "note": beat.note, "tone": tone_of(beat.mark), "roll": []}
+
+
+def _screen() -> tuple:
+    try:
+        from PyQt6.QtWidgets import QApplication
+        g = QApplication.primaryScreen().availableGeometry()
+        return g.left(), g.top(), g.right(), g.bottom()
+    except Exception:
+        return 0, 0, 1920, 1040
+
+
+async def play(manager, beats: list, keep_card: bool = True) -> None:
     """One idea at a time: light up the beat's range, show its card, say its one sentence, pause, next.
 
-    A beat without a range keeps the previous card up, so the screen never goes blank mid-story.
-    When the sentence cannot be read aloud (no Vietnamese voice), it stays up long enough to read.
+    With keep_card, a beat without a range keeps the previous card up, so the screen never goes blank
+    mid-story. A beat whose range cannot be shown never keeps another beat's card: the old card goes, and its
+    own card shows without pointing (free_card). keep_card=False (a list of separate mistakes): every beat
+    clears the card before it. When the sentence cannot be read aloud (no Vietnamese voice), it stays up long
+    enough to read.
     """
     from ui.card_layout import NO_BUBBLE, pointer_spot, reading_seconds
     run = object()
     manager._month_close_run = run
+    import turn_clock
+    turn_clock.of(manager).mark("ready")
     guided = getattr(manager, "sig_guided", None)     # the chat panel steps aside while Clicky guides
     if guided is not None:
         guided.emit(True)
     manager.sig_clear_drawings.emit()
+    caption = getattr(manager, "sig_caption", None)
+    if caption is not None:
+        caption.emit("")                               # the "Em đang …" line gives way to the first card
     last_card = None
     for i, beat in enumerate(beats):
         if i:
             manager.sig_response_chunk.emit("\n\n")
             if BEAT_GAP_S:
                 await asyncio.sleep(BEAT_GAP_S)
+        if beat.book and beat.ref:
+            shown = await asyncio.to_thread(getattr(manager._excel, "show_workbook", lambda p: False), beat.book)
+            from office.excel_com import book_id
+            scene_log.record("show_book", i=i, ref=beat.ref, book=book_id(beat.book), pack=beat.book_pack, ok=bool(shown))
         box = await _locate(manager, beat.ref) if beat.ref else None
-        scene_log.record("beat", i=i, ref=beat.ref, box=box, title=beat.label, value=beat.value, was=beat.was,
-                         note=beat.note, mark=beat.mark, text=beat.text, choices=list(beat.choices or []))
         if box:
-            manager.sig_clear_drawings.emit()
-            avoid = await _filled_area(manager)
-            for shape in shapes_for(box, beat, avoid):
-                manager.sig_draw.emit(shape)
-            l, t, r, b = box
             manager.sig_point_hold.emit(True)
-            # The pointer stops beside the range, never on it: it must not hide the figure being explained.
+            # The pointer flies the moment the range is known; the frame and the card land while it travels.
+            # It stops beside the range, never on it: it must not hide the figure being explained.
             manager.sig_point_at.emit(*pointer_spot(box), NO_BUBBLE)
+        graphic = await _graphic_shape(manager, beat.graphic, box) if beat.graphic else None
+        # the card names a source file for the user; the log carries its id instead
+        hide = (lambda t: t.replace(Path(beat.book).name, f"[file {scene_log.book_id(beat.book)}]")) if beat.book else (lambda t: t)
+        scene_log.record("beat", i=i, ref=beat.ref, box=box, title=beat.label, value=beat.value, was=beat.was,
+                         note=hide(beat.note), mark=beat.mark, text=hide(beat.text), choices=list(beat.choices or []),
+                         **({"graphic": graphic_log(beat.graphic)} if beat.graphic else {}))
+        loose = None
+        if not box and not graphic and (beat.ref or not keep_card):
+            # Never leave another mistake's card up while this one is read out (grading round 8).
+            manager.sig_clear_drawings.emit()
+            if beat.ref and (beat.label or beat.value or beat.note):
+                loose = free_card(beat, _screen())
+                manager.sig_draw.emit(loose)
+            scene_log.record("clear", i=i, ref=beat.ref, free_card=loose is not None)
+        if box or graphic:
+            manager.sig_clear_drawings.emit()
+            figures, words = await _figures(manager)
+            if box and not (graphic and beat.graphic.get("plain")):
+                for shape in shapes_for(box, beat, figures, words):
+                    manager.sig_draw.emit(shape)
+            if graphic:
+                graphic.update(avoid=_as_boxes(figures) or None, soft=_as_boxes(words) or None)
+                manager.sig_draw.emit(graphic)
+        since = turn_clock.of(manager).elapsed() if i == 0 else None
+        if since is not None:
+            # From the turn's start to the first card on screen (after locating it and reading the figures).
+            _step("timing", part="first_card", ms=since)
         log.info("beat: %s", beat.text)
         if beat.intake:
             # The receipt: what was read and what was left out, logged before anything is drawn or changed.
@@ -1313,10 +1597,18 @@ async def play(manager, beats: list) -> None:
         if spoke is False and BEAT_GAP_S:
             # Not read aloud: leave time to read the sentence, and with a card, to look at the figure and its note.
             await asyncio.sleep(reading_seconds(beat.text)
-                                + ((1.0 + 0.6 * reading_seconds(beat.note) if beat.note else 1.0) if box else 0))
+                                + ((1.0 + 0.6 * reading_seconds(beat.note) if beat.note else 1.0) if box else 0)
+                                + (graphic_seconds(beat.graphic) if graphic else 0))
+        elif graphic and BEAT_GAP_S:
+            # Read aloud, the sentence is shorter than the graphic: leave time to look at every piece.
+            await asyncio.sleep(max(0.0, graphic_seconds(beat.graphic) - reading_seconds(beat.text) / 2))
         if box:
             manager.sig_point_release.emit()
             last_card = beat
+    # The story is over: the rehearsal robot waits for this, not for a quiet spell (a card read without
+    # a voice can sit still for ten seconds while scenes are still to come).
+    scene_log.record("story_end", beats=len(beats), last=beats[-1].text[:80] if beats else "",
+                     choices=list(beats[-1].choices or []) if beats else [])
     if beats and not beats[-1].choices:
         def fade():
             if getattr(manager, "_month_close_run", None) is run:
@@ -1340,11 +1632,45 @@ async def handle_start(manager, transcript: str) -> str:
     return ""
 
 
+# Said the moment a button is pressed, before the slow part (reading files, writing, saving), so the
+# screen never sits still while Clicky works. Replaced by the first card as soon as it is ready.
+WORKING = {
+    "read": "Em đang đọc các file trong thư mục…",
+    "confirm": "Em đang đối chiếu và sửa trong file…",
+    "approve": "Em đang sửa query và tải lại…",
+    "load": "Em đang nạp đơn hàng vào Excel…",
+    "save": "Em đang lưu rồi mở lại file để kiểm…",
+    "verify": "Em đang mở lại file đã lưu để kiểm…",
+    "pick": "Em đang đọc lại với sổ chị chọn…",
+    "final": "Em đang chuyển sang Chính thức…",
+}
+
+
+_PROGRESS = None          # set while a step runs in a worker thread: shows how far it got (caption only)
+
+
+def _progress(step: str) -> None:
+    """Say what the long step is doing now. Excel's first Power Query use takes seconds, and the line under
+    the cursor should say so rather than stand still."""
+    if _PROGRESS is not None:
+        try:
+            _PROGRESS(step)
+        except Exception:
+            log.debug("progress caption failed", exc_info=False)
+
+
+def _working(manager, step: str) -> None:
+    sig = getattr(manager, "sig_caption", None)
+    if sig is not None:
+        sig.emit(WORKING[step])
+
+
 async def run_from(manager, folder: Optional[Path]) -> None:
     """Start a fresh month close on a folder (the dropped one) or on the open workbook's folder."""
     use_folder(folder)
     _CHOSEN.clear()                 # a new run asks again: the folder may have changed since
     _PICKS.clear()
+    _working(manager, "read")
     order = machine_date_order()
     beats = await asyncio.to_thread(lambda: start(manager._excel, _pq(manager), order))
     await play(manager, beats)
@@ -1353,6 +1679,7 @@ async def run_from(manager, folder: Optional[Path]) -> None:
 async def handle_approve(manager, transcript: str) -> str:
     # The question's frame must not stay frozen on screen while Excel reloads the query.
     manager.sig_clear_drawings.emit()
+    _working(manager, "approve")
     beats = await asyncio.to_thread(lambda: approve(manager._excel, _pq(manager)))
     await play(manager, beats)
     return ""
@@ -1373,7 +1700,17 @@ def _open_chat(manager) -> None:
 
 
 async def handle_confirm(manager, transcript: str) -> str:
-    beats = await asyncio.to_thread(lambda: confirm(manager._excel, _pq(manager)))
+    import turn_clock
+    _working(manager, "confirm")
+    clock = turn_clock.of(manager)
+    _step("timing", part="to_confirm", ms=clock.elapsed())      # the press → confirm() starting
+    global _PROGRESS
+    _PROGRESS = lambda step: _working(manager, step)
+    try:
+        beats = await asyncio.to_thread(lambda: confirm(manager._excel, _pq(manager)))
+    finally:
+        _PROGRESS = None
+    _step("timing", part="confirm_done", ms=clock.elapsed())    # since the press; play() logs the first card
     await play(manager, beats)
     return ""
 
@@ -1386,12 +1723,14 @@ async def handle_wrong(manager, transcript: str) -> str:
 
 async def handle_save(manager, transcript: str) -> str:
     manager.sig_clear_drawings.emit()
+    _working(manager, "save")
     beats = await asyncio.to_thread(lambda: save_and_verify(manager._excel))
     await play(manager, beats)
     return ""
 
 
 async def handle_verify(manager, transcript: str) -> str:
+    _working(manager, "verify")
     beats = await asyncio.to_thread(lambda: verify_saved(manager._excel))
     await play(manager, beats)
     return ""
@@ -1409,12 +1748,14 @@ def save_pending() -> bool:
 
 
 async def handle_pick(manager, transcript: str) -> str:
+    _working(manager, "pick")
     beats = await asyncio.to_thread(lambda: pick(manager._excel, _pq(manager), transcript))
     await play(manager, beats)
     return ""
 
 
 async def handle_final(manager, transcript: str) -> str:
+    _working(manager, "final")
     beats = await asyncio.to_thread(lambda: make_final(manager._excel))
     await play(manager, beats)
     return ""

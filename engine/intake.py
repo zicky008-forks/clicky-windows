@@ -40,6 +40,9 @@ class FileLine:
     used: Decimal = ZERO
     dropped: Decimal = ZERO
     shown: str = ""                  # the file's name on disk when `name` is a sheet-style stem (TB_T10 → TB_T10.xlsx)
+    rows_total: int = 0              # data rows Clicky looked at: rows_used + rows_dropped (rule 4, in rows)
+    rows_used: int = 0
+    rows_dropped: int = 0
 
 
 @dataclass
@@ -136,6 +139,7 @@ def _tb_line(name: str, rows, tb, previous=None) -> tuple:
         items.append(Dropped(f"Dòng \"{label}\" cuối sổ (dòng {i + 1})", name, None,
                              f"không phải tài khoản, ghi phát sinh Nợ {spoken(t_dr)} / Có {spoken(t_cr)}; dùng làm mốc kiểm: "
                              + ("khớp tổng các tài khoản chi tiết" if same else "lệch tổng các tài khoản chi tiết")))
+    total_lines = sum(1 for it in items if it.what.startswith("Dòng \""))
     new = []
     if previous is not None:
         before = {l.account for l in previous.leaves}
@@ -145,7 +149,9 @@ def _tb_line(name: str, rows, tb, previous=None) -> tuple:
         checks += f" · {len(new)} tài khoản mới so với kỳ trước"
     line = FileLine(name=name, kind=f"Sổ cân đối{month}", period=_period_text(period), unit=_unit(rows),
                     rows=len(tb.lines), rows_label=f"{len(tb.lines)} tài khoản", checks=checks, ok=balanced,
-                    total=dr + dropped, used=dr, dropped=dropped)
+                    total=dr + dropped, used=dr, dropped=dropped,
+                    rows_total=len(tb.lines) + len(tb.skipped) + total_lines, rows_used=len(tb.lines),
+                    rows_dropped=len(tb.skipped) + total_lines)
     return line, items
 
 
@@ -166,14 +172,44 @@ def _order_lines(files: list, truth, period: Optional[tuple]) -> tuple:
         for r in f.footers:
             label = next((str(c).strip() for c in r if str(c or "").strip() and not re.fullmatch(r"[\d.,\s-]+", str(c))),
                          "Dòng không có ngày")
+            blank = not str(_cell(r, a) or "").strip()
             value = _amount(_cell(r, a))
             check = ("khớp tổng các dòng" if abs(value - total) <= TOLERANCE else f"lệch tổng các dòng {spoken(value - total)}")
             items.append(Dropped(f"Dòng \"{label}\" cuối file", f.name, None,
-                                 f"không phải đơn hàng, ghi {spoken(value)}, dùng làm mốc kiểm: {check}"))
+                                 "dòng tổng cuối file, không phải đơn hàng" +
+                                 ("" if blank else f", ghi {spoken(value)}, dùng làm mốc kiểm: {check}")))
         lines.append(FileLine(name=f.name, kind="Bán hàng", period=_period_text(period), unit="đồng",
                               rows=used_rows, rows_label=f"{used_rows} đơn",
-                              checks=f"tổng {spoken(used)}", total=total, used=used, dropped=dropped))
+                              checks=f"tổng {spoken(used)}", total=total, used=used, dropped=dropped,
+                              rows_total=len(f.rows) + len(f.footers), rows_used=used_rows,
+                              rows_dropped=len(dups) + len(outside) + len(f.footers)))
     return lines, items
+
+
+_LEDGER_AMOUNT = ("sotien", "giatri", "psno", "psco", "phatsinh", "debit", "credit", "amount", "thanhtien")
+
+
+def _csv_why(p: Path) -> str:
+    """Why a CSV was not read, true to what its header holds (never 'no date column' when it has one)."""
+    import csv as _csv
+    try:
+        with open(p, newline="", encoding="utf-8-sig") as f:
+            header = next(_csv.reader(f), [])
+    except (OSError, UnicodeDecodeError):
+        return "em chưa mở được file CSV này"
+    cols = sources.find_columns(header)
+    keys = {sources._key(h) for h in header}
+    has_date = "date" in cols or any(k.startswith(("ngay", "date")) for k in keys)
+    # Wider than the order-file amount names on purpose: only used to say what the file is,
+    # never to read a ledger detail as sales.
+    has_amount = "amount" in cols or any(k.startswith(_LEDGER_AMOUNT) for k in keys)
+    if not (has_date and has_amount):
+        return "không có cột ngày và cột số tiền, không phải file đơn hàng"
+    from engine.trial_balance import fold
+    text = re.sub(r"[^a-z0-9]", "", fold(p.stem + " " + " ".join(str(h) for h in header)))
+    kind = "sổ chi tiết chi phí" if any(w in text for w in ("chiphi", "cost", "expense", "tkno", "tkco", "sochitiet")) \
+        else "file có cột ngày và số tiền nhưng không phải đơn bán hàng"
+    return f"{kind}; bản này chưa đọc loại file này, em không lấy số từ file này"
 
 
 def _unused_files(folder: Path, used: set, workbook: Optional[str], roles: dict) -> list:
@@ -196,7 +232,7 @@ def _unused_files(folder: Path, used: set, workbook: Optional[str], roles: dict)
         elif suffix == ".xls":
             why = "định dạng .xls cũ, em chưa đọc được; anh mở và lưu lại thành .xlsx"
         elif suffix == ".csv":
-            why = "không có cột ngày và cột số tiền, không phải file đơn hàng"
+            why = _csv_why(p)
         elif suffix in (".xlsx", ".xlsm"):
             why = "không phải sổ cân đối tài khoản"
         elif suffix not in DATA_SUFFIXES:
@@ -326,7 +362,8 @@ def summarize_dropped(items: list, limit: int = 4) -> list:
 def log_fields(intake: Intake, text: str) -> dict:
     """The scene-log record the rehearsal robot checks (tools/dien_tap/beta_checks.py)."""
     return {"files": [{"name": f.name, "kind": f.kind, "period": f.period, "unit": f.unit, "rows": f.rows,
-                       "checks": f.checks, "total": int(f.total), "used": int(f.used), "dropped": int(f.dropped)}
+                       "checks": f.checks, "total": int(f.total), "used": int(f.used), "dropped": int(f.dropped),
+                       "rows_total": f.rows_total, "rows_used": f.rows_used, "rows_dropped": f.rows_dropped}
                       for f in intake.files],
             "dropped": [{"what": d.what, "amount": None if d.amount is None else int(d.amount), "reason": d.reason,
                          "file": d.file} for d in intake.dropped],

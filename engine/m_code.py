@@ -239,18 +239,35 @@ def folder_query(folder: str, file_cultures: dict, typed: list, doc_column: Opti
         lines.append(f"    PhanCach = Table.AddColumn(DinhDang, \"PhanCach\", each {sep_expr}),")
         previous = "PhanCach"
     sep = "[PhanCach]" if sep_expr else _m_sep(common)
+    # Folder.Files sees every CSV under the folder, a cost ledger export too. Only files that carry the
+    # order columns are combined; typing another file's columns fails the whole load ("column not found").
+    needed = [col for col, _ in typed] + ([doc_column] if doc_column and doc_column not in [c for c, _ in typed] else [])
     lines += [
-        f"    DocFile = Table.AddColumn({previous}, \"Bang\", each Table.TransformColumnTypes(",
-        f"        Table.PromoteHeaders(Csv.Document([Content], [Delimiter = {sep}, Encoding = 65001]), [PromoteAllScalars = true]),",
-        f"        {{{types}}}, [DinhDang])),",
-        "    GopFile = Table.Combine(DocFile[Bang]),",
+        f"    DocFile = Table.AddColumn({previous}, \"Tho\", each "
+        f"Table.PromoteHeaders(Csv.Document([Content], [Delimiter = {sep}, Encoding = 65001]), [PromoteAllScalars = true])),",
+    ]
+    previous = "DocFile"
+    if needed:
+        cols = ", ".join(_m_text(c) for c in needed)
+        lines.append(f"    FileDonHang = Table.SelectRows(DocFile, each Table.HasColumns([Tho], {{{cols}}})),")
+        previous = "FileDonHang"
+    date_column = next((col for col, t in typed if t.strip() == "type date"), None)
+    raw = "[Tho]"
+    if date_column:
+        # A footer ("Tổng", "Tổng cộng", a blank date) is not an order: drop it on the raw text, before the
+        # date is typed, or typing "Tổng" as a date fails the whole load (robot run 07/11). Clicky's receipt
+        # counts the same rows as dropped (sources.load_order_file: a date cell with no digit).
+        raw = (f"Table.SelectRows([Tho], each Text.Select(Text.From(Record.FieldOrDefault(_, {_m_text(date_column)}, \"\") ?? \"\"), "
+               f"{{\"0\"..\"9\"}}) <> \"\")")
+    lines += [
+        f"    DoiKieu = Table.AddColumn({previous}, \"Bang\", each Table.TransformColumnTypes({raw}, {{{types}}}, [DinhDang])),",
+        "    GopFile = Table.Combine(DoiKieu[Bang]),",
     ]
     last = "GopFile"
-    date_column = next((col for col, t in typed if t.strip() == "type date"), None)
     if date_column:
-        # Rows with no date (a "Tổng cộng" footer) are not orders. A date that fails to convert
-        # is an error, not null, so it is still kept and counted.
-        lines.append(f"    BoDongKhongNgay = Table.SelectRows({last}, each [{date_column}] <> null),")
+        # A date with digits that still fails to convert is an error, not null: it is kept and counted, and
+        # comparing it must not fail the load either.
+        lines.append(f"    BoDongKhongNgay = Table.SelectRows({last}, each try [{date_column}] <> null otherwise true),")
         last = "BoDongKhongNgay"
         if period:
             # Keep only the ledger's month; a date that failed to convert stays in, visible as an error.

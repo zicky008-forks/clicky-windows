@@ -57,9 +57,11 @@ def test_audit_sheet_status_and_original_copy(tmp_path):
     wb.write_bytes(b"x")
     (tmp_path / "BaoCao_T10_dientap_ban-goc.xlsx").write_bytes(b"x")
     sheets = {"Bien ban Clicky": [["STT", "Lúc", "Ô", "Chỉ tiêu", "Trước", "Sau", "Lý do"],
-                                  [1, "09:00", "C12", "Nợ 5111 → 521", 120000000, 0, "chiết khấu ghi sai TK"],
-                                  [2, "09:00", "C20", "Doanh thu thuần", 8400000000, 8280000000, "Tự động"],
-                                  [3, "09:00", "C30", "Lợi nhuận sau thuế", 556000000, 436120000, "Tự động"]],
+                                  # the rows Clicky writes on Case 01 (read back from a real run, 07/11)
+                                  [1, "09:00", "C21", "Trừ: hàng bán bị trả lại (5111 → 521)", 0, -120000000,
+                                   "hàng trả lại ghi vào doanh thu"],
+                                  [2, "09:00", "C22", "Doanh thu thuần thực", 8640000000, 8520000000, "Tự động"],
+                                  [3, "09:00", "C23", "Lợi nhuận sau thuế thực", 556000000, 436000000, "Tự động"]],
               "BC": [["BÁO CÁO THÁNG 10 · SƠ BỘ"]]}
     out = beta_checks.evaluate([], sheets, {"audit": BETA["audit"]}, workbook=wb)
     assert all(c.ok for c in out), [c for c in out if not c.ok]
@@ -180,3 +182,11 @@ def test_sample_card_must_state_the_real_time(tmp_path):
     assert not out["Thẻ cuối nói đúng thời gian thật"].ok
     ev[-1]["title"] = "Xong trong 1 phút 14 giây"
     assert names(beta_checks.evaluate(ev, {}, spec, workbook=wb))["Thẻ cuối nói đúng thời gian thật"].ok
+
+
+def test_no_ai_call_and_no_egress_log_is_fine_but_a_call_without_log_is_not():
+    spec = {"egress": {"names": [], "ids": []}}
+    assert all(c.ok for c in beta_checks.evaluate(run(), {}, spec, egress_text=None))
+    out = beta_checks.evaluate(run({"t": 4, "event": "ai_call", "preview_shown": True, "approved": True}), {}, spec,
+                               egress_text=None)
+    assert not [c for c in out if c.name == "Có nhật ký gửi đi"][0].ok

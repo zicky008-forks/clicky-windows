@@ -218,7 +218,7 @@ def test_folder_query_reads_each_file_in_its_own_format_and_lints_clean():
     m = m_code.folder_query("C:\\T10", {"a.csv": "en-US", "b.csv": "vi-VN", "c.csv": "vi-VN"},
                             [("Ngay", "type date"), ("ThanhTien", "type number")], "SoCT", folder_parameter="ThuMuc")
     assert 'if [Name] = "a.csv" then "en-US"' in m and 'else "vi-VN"' in m
-    assert 'Table.SelectRows(GopFile, each [Ngay] <> null)' in m          # a "Tổng cộng" footer has no date
+    assert 'Table.SelectRows(GopFile, each try [Ngay] <> null otherwise true)' in m     # an unconvertible date stays, counted
     assert 'Table.Distinct(BoDongKhongNgay, {"SoCT"})' in m and "Folder.Files(ThuMuc)" in m
     assert m_code.lint("DonHang", m) == []
     assert "IsParameterQuery = true" in m_code.parameter_query("C:\\T10")
@@ -431,8 +431,10 @@ def test_machine_order_follows_the_region_culture_not_a_custom_short_date():
     assert month_close.machine_date_order() in (None, sources.DAY_FIRST, sources.MONTH_FIRST)
 
 
-def test_play_shows_one_idea_at_a_time_then_offers_the_buttons(monkeypatch):
-    import asyncio
+def test_play_shows_one_idea_at_a_time_then_offers_the_buttons(monkeypatch, tmp_path):
+    import asyncio, json
+    scene = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(scene))
     from ui.card_layout import NO_BUBBLE
     monkeypatch.setattr(month_close, "BEAT_GAP_S", 0)
 
@@ -477,7 +479,8 @@ def test_play_shows_one_idea_at_a_time_then_offers_the_buttons(monkeypatch):
     between = names[first_say:second_say]
     assert between.count("sig_clear_drawings") == 1 and between.count("sig_draw") == 2
     assert all(a[2] == NO_BUBBLE for n, a in m.log if n == "sig_point_at")
-    assert names.index("sig_draw") < names.index("sig_point_at") < names.index("say")
+    # The pointer leaves as soon as the range is found; the frame and card are drawn while it flies.
+    assert names.index("sig_point_at") < names.index("sig_draw") < names.index("say")
     # The question beat keeps the last card up; its buttons come with the question, not after it is read.
     ask = names.index("sig_choices")
     assert m.log[ask][1] == ("Em sửa giúp anh nhé?", ["Sửa giúp tôi", "Để tôi xem"])
@@ -486,6 +489,12 @@ def test_play_shows_one_idea_at_a_time_then_offers_the_buttons(monkeypatch):
     # The chat panel steps aside for the whole walk-through and stays away while the buttons are up.
     assert names[0] == "sig_guided" and m.log[0][1] == (True,)
     assert ("sig_guided", (False,)) not in m.log
+    # The robot waits for the end of the story, not for a quiet spell: a card read without a voice sits
+    # still for ten seconds while scenes are still to come.
+    events = [json.loads(l) for l in scene.read_text(encoding="utf-8").splitlines()]
+    assert events[-1]["event"] == "story_end" and events[-1]["beats"] == 3
+    assert events[-1]["choices"] == ["Sửa giúp tôi", "Để tôi xem"]
+    assert [e["i"] for e in events if e["event"] == "spoken"] == [0, 1, 2]
 
 
 def test_fix_runs_behind_a_still_screen_and_ends_on_the_profit_card(folder):
@@ -500,9 +509,12 @@ def test_fix_runs_behind_a_still_screen_and_ends_on_the_profit_card(folder):
     bridge = Recording(folder)
     pq = FakePQ(bridge, folder)
     _begin(bridge, pq, sources.DAY_FIRST)
+    assert bridge.screen == [False, True]                    # the check after "Đúng rồi, làm tiếp" runs frozen too
     beats = month_close.approve(bridge, pq)
-    assert bridge.screen == [False, True]                    # frozen while sheets are added, released after
-    assert beats[-2].text.startswith("Lợi nhuận thực là")    # the warning is the last scene before the save line
+    assert bridge.screen == [False, True] * 2                # frozen while sheets are added, released after
+    # The warning, then how 556 becomes 436, then what to check before the boss sees it, then the save line.
+    assert beats[-4].text.startswith("Lợi nhuận thực là")
+    assert beats[-3].graphic["kind"] == "bridge" and beats[-2].graphic["kind"] == "notes"
     assert any(name == "BC thang" and widths["A"] >= 30 for name, widths, _ in bridge.layouts)
     assert ("'BC thang'!A4:I4", ) == tuple(r for r, o in bridge.styles if r == "'BC thang'!A4:I4")[:1]
 
@@ -750,6 +762,68 @@ def test_tamper_hook_changes_the_saved_cell_only_when_asked(folder, monkeypatch)
     assert beats[0].mark == "bad" and beats[0].ref == "'Doi chieu'!C7"
 
 
+def _lock_like_excel(monkeypatch, path):
+    """Excel holds the saved workbook open: on Windows any write to it fails with Errno 13."""
+    from openpyxl.workbook.workbook import Workbook
+    real = Workbook.save
+
+    def save(self, filename):
+        if Path(filename).resolve() == Path(path).resolve():
+            raise PermissionError(13, "Permission denied", str(filename))
+        return real(self, filename)
+    monkeypatch.setattr(Workbook, "save", save)
+
+
+def test_tamper_hook_works_while_excel_holds_the_saved_file(folder, monkeypatch):
+    # PC run 37265be: the hook rewrote the open workbook, got Errno 13, and the card said only
+    # "không đọc lại được"; it must name the cell and the gap, and leave the saved file as it was.
+    import hashlib
+    bridge = SavingBridge(folder)
+    pq = _to_the_save_question(bridge, folder)
+    real_save = bridge.save
+
+    def save_then_lock():
+        done = real_save()
+        _lock_like_excel(monkeypatch, bridge.path)
+        bridge.digest = hashlib.sha256(Path(bridge.path).read_bytes()).hexdigest()
+        return done
+    bridge.save = save_then_lock
+    monkeypatch.setenv("CLICKY_TEST_TAMPER", "'BC thang'!C23=5000000")
+    beats = month_close.approve(bridge, pq)
+    assert beats[0].mark == "bad" and beats[0].ref == "'BC thang'!C23"
+    assert "cần 436 triệu, file ghi 441 triệu" in beats[0].note and beats[0].value.endswith("5 triệu")
+    assert hashlib.sha256(Path(bridge.path).read_bytes()).hexdigest() == bridge.digest
+
+
+def test_a_saved_file_that_cannot_be_read_back_is_never_called_matching(folder, monkeypatch):
+    from engine import saved_check
+    bridge = SavingBridge(folder)
+    pq = _to_the_save_question(bridge, folder)
+
+    def locked(path, expect):
+        raise PermissionError(13, "Permission denied", str(path))
+    monkeypatch.setattr(saved_check, "check", locked)
+    beats = month_close.approve(bridge, pq)
+    said = " ".join(f"{b.text} {b.label} {b.note}" for b in beats)
+    assert "Khớp sổ cái" not in said and "không đọc lại được" in said and beats[0].mark == "bad"
+
+
+def test_a_failed_re_read_logs_no_path(folder, monkeypatch, caplog):
+    # PC run 37265be: clicky.log carried "Permission denied: '...\\Thu_Clicky_Case01_beta\\BaoCao….xlsx'".
+    import logging
+    from engine import saved_check
+    caplog.set_level(logging.DEBUG)
+    bridge = SavingBridge(folder)
+    pq = _to_the_save_question(bridge, folder)
+
+    def locked(path, expect):
+        raise PermissionError(13, "Permission denied", "C:\\Users\\chi\\AgriS\\BCTC_Q3.xlsx")
+    monkeypatch.setattr(saved_check, "check", locked)
+    month_close.approve(bridge, pq)
+    assert "AgriS" not in caplog.text and "BCTC" not in caplog.text
+    assert "re-reading the saved workbook failed: PermissionError 0x0000000D" in caplog.text
+
+
 # ── Beta job 5: each input has a role; two of the same kind → ask, never pick ──
 
 def test_two_trial_balances_of_one_month_are_asked_about_not_picked(folder):
@@ -791,3 +865,461 @@ def test_receipt_rows_carry_their_role(folder):
     beats = month_close.start(bridge, FakePQ(bridge, folder), sources.DAY_FIRST)
     roles_shown = [r.get("role") for r in beats[0].intake["card"]["rows"]]
     assert roles_shown[:3] == ["Số chính thức", "Số chính thức", "Chi tiết để giải thích"]
+
+
+def test_revenue_scope_follows_what_the_order_files_cover():
+    """Case 07 class: a sales file with goods and finished products must be compared with all of 511,
+    not 5111 alone (that reported a false gap equal to 5112); goods-only files still use 5111."""
+    from types import SimpleNamespace as L
+    ledger = L(leaves=[L(account="5111", cr=Decimal(700), dr=0), L(account="5112", cr=Decimal(300), dr=0)])
+    assert sources.revenue_scope(ledger, Decimal(1000)) == "511"
+    assert sources.revenue_scope(ledger, Decimal(700)) == "5111"
+    # Neither matches: the closer scope, so a real 100 gap is not reported as 300 + 100.
+    assert sources.revenue_scope(ledger, Decimal(900)) == "511"
+    assert sources.revenue_scope(ledger, Decimal(650)) == "5111"
+
+
+def test_plan_versions_are_not_duplicates_and_never_official(tmp_path):
+    """AOP and AOPR1 side by side are versions used together: no 'which one?' question, and a plan
+    laid out like a trial balance is never read as Số chính thức. Only the same scenario twice is a copy."""
+    from engine import roles
+    assert roles.plan_scenario("AOP_FY2627_v6.xlsx") == "AOP"
+    assert roles.plan_scenario("AOPR1 FY26-27.xlsx") == "AOPR1"
+    assert roles.plan_scenario("TB_T10.xlsx") == ""
+    assert roles.is_plan("AOPR1 FY26-27.xlsx") and roles.is_plan("MUF_T10.xlsx")
+    assert not roles.is_plan("TB_T10.xlsx") and not roles.is_plan("DonHang_HN_T10.csv")
+    _write_tb(tmp_path / "AOP_FY2627.xlsx", [["Bảng cân đối số phát sinh tháng 10 năm 2026"], ["511", "Doanh thu", 0, 0, 0, 9]])
+    from engine.cli import read_rows
+    names = [n for n, _, _ in sources.find_trial_balances(tmp_path, read_rows)]
+    assert "AOP_FY2627" not in names
+
+
+def test_unread_cost_ledger_csv_is_named_truthfully(tmp_path):
+    from engine import intake
+    p = tmp_path / "SoChiTiet_ChiPhi_T10.csv"
+    p.write_text("SoCT,Ngay,TK,ThanhTien\nPC1,05/10/2026,6421,1000\n", encoding="utf-8")
+    why = intake._csv_why(p)
+    assert "sổ chi tiết chi phí" in why and "không có cột ngày" not in why
+    r = tmp_path / "SCT_T10.csv"
+    r.write_text("Ngay_CT,So_CT,TK_No,TK_Co,So_tien_VND\n05/10/2026,PC1,6421,1111,1000\n", encoding="utf-8")
+    assert "sổ chi tiết chi phí" in intake._csv_why(r)
+    q = tmp_path / "ghi_chu.csv"
+    q.write_text("a,b\n1,2\n", encoding="utf-8")
+    assert "không có cột ngày" in intake._csv_why(q)
+def test_cards_keep_off_each_block_of_figures_not_just_the_used_range():
+    """The card is told where every block of figures is; without that read it keeps off the whole filled area."""
+    import asyncio
+    from office import month_close
+
+    class Excel:
+        def __init__(self, boxes):
+            self.boxes = boxes
+
+        def figure_boxes(self):
+            return self.boxes
+
+        def content_rect(self):
+            return (0, 0, 800, 600)
+
+    class M:
+        def __init__(self, boxes):
+            self._excel = Excel(boxes)
+
+        def _physical_to_logical_bbox(self, rect):
+            return tuple(v / 2 for v in rect)
+
+    figures, words = asyncio.run(month_close._figures(M({"numbers": [(200, 100, 800, 600)],
+                                                          "text": [(0, 100, 200, 600)]})))
+    assert figures == [(100, 50, 400, 300)] and words == [(0, 50, 100, 300)]
+    figures, words = asyncio.run(month_close._figures(M(None)))
+    assert figures == [(0, 0, 400, 300)] and words == []
+    beat = month_close.Beat("Lợi nhuận thật", "C9", label="LNST thực", value="436tr")
+    card = month_close.shapes_for((10, 10, 100, 30), beat, figures, words)[1]
+    assert card["avoid"] == [[0, 0, 400, 300]] and card["soft"] is None
+
+
+def _timed_out(dialog=""):
+    from office.power_query import LoadTimeout
+    out = LoadTimeout("Power Query refresh did not finish in 180s")
+    out.seconds, out.dialog = 180.0, dialog
+    return out
+
+
+def test_a_query_excel_does_not_finish_loading_stops_with_the_reason_and_no_fix_offer(folder, tmp_path, monkeypatch):
+    """Excel stuck behind a credentials or privacy dialog: Clicky stops waiting, says which dialog, offers no
+    rewritten query (it would not load either), builds no report, and logs every step it reached."""
+    import json
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+
+    class StuckPQ(FakePQ):
+        def load(self, name):
+            return _timed_out("Truy cập Nội dung Web")
+    bridge = FakeBridge(folder)
+    said = _text(_begin(bridge, StuckPQ(bridge, folder), sources.DAY_FIRST))
+    assert "Excel chưa tải được query DonHang" in said and not month_close.pending()
+    note = bridge.sheets["Doi chieu"][9][4]
+    assert "Truy cập Nội dung Web" in note and "trả lời hoặc đóng hộp thoại" in note and "Power Query refresh" not in note
+    assert "Báo cáo tháng đã lập" not in said
+    steps = [(e["step"], e.get("state")) for e in map(json.loads, log.read_text(encoding="utf-8").splitlines())
+             if e.get("event") == "close_step"]
+    assert ("query_load", "start") in steps and ("query_load", "timeout") in steps
+    assert [s for s, _ in steps].index("read_folder") < [s for s, _ in steps].index("query_load")
+
+
+def test_load_errors_name_a_timeout_in_plain_words():
+    with_dialog = month_close.load_error_vi(_timed_out("Privacy levels"))
+    assert "Privacy levels" in with_dialog and "quyền riêng tư" not in with_dialog
+    plain = month_close.load_error_vi(_timed_out())
+    assert "180 giây" in plain and "gọi lại em" in plain and "Power Query refresh" not in plain
+
+
+def test_a_save_excel_refuses_gives_a_clear_card_and_no_check(folder):
+    # The bridge refuses to save a workbook with no file behind it (it would open Save As): the user
+    # gets "chưa lưu được", never "khớp", and no delivery.
+    bridge = SavingBridge(folder)
+    pq = _to_the_save_question(bridge, folder)
+    bridge.save = lambda: False
+    beats = month_close.approve(bridge, pq)
+    said = " ".join(f"{b.text} {b.label} {b.note}" for b in beats)
+    assert beats[0].label == "Chưa lưu được" and beats[0].mark == "warn" and "Khớp sổ cái" not in said
+
+
+def test_folder_query_combines_only_the_order_files_when_a_cost_ledger_csv_sits_beside_them(tmp_path):
+    """Robot run 07/11 (bhc_e2e): Folder.Files also picked GL_ChiTiet_ChiPhi.csv, typing its missing Ngay_HD
+    column failed the whole load. Each CSV must carry the order columns before its columns are typed."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "dien_tap"))
+    import bhc_case
+    bhc_case.make(tmp_path)
+    order = sources.load_order_file(tmp_path / "Mastersale_T07-T10.csv")
+    m = m_code.folder_query(str(tmp_path), {order.name: "vi-VN"}, month_close._typed_columns([order]),
+                            order.header[order.columns["doc"]], folder_parameter="ThuMuc")
+    keep = re.search(r'FileDonHang = Table\.SelectRows\(DocFile, each Table\.HasColumns\(\[Tho\], \{(.*?)\}\)\)', m)
+    assert keep, m
+    needed = re.findall(r'"((?:[^"]|"")*)"', keep.group(1))
+    typed = [c for c, _ in month_close._typed_columns([order])]
+    assert set(typed) <= set(needed) and m.index("FileDonHang") < m.index("Table.TransformColumnTypes(")
+    assert "Table.Combine(DoiKieu[Bang])" in m and m_code.lint("DonHang", m) == []
+    kept = []
+    for p in sorted(tmp_path.glob("*.csv")):
+        with open(p, encoding="utf-8-sig", newline="") as fh:
+            head = next(csv.reader(fh))
+        if set(needed) <= set(head):
+            kept.append(p.name)
+    assert kept == ["Mastersale_T07-T10.csv"]          # the cost ledger CSV is left out, not typed
+
+
+@pytest.mark.parametrize("variant", ["bom_comma", "no_bom_semicolon", "spaced_header", "crlf_footer"])
+def test_the_query_names_the_columns_exactly_as_power_query_reads_the_header(tmp_path, variant):
+    """Power Query (Encoding 65001) drops a UTF-8 BOM, splits on the query's own delimiter and keeps header
+    text as written. The query must ask for those exact names, or the load fails with 'column not found'."""
+    sep = ";" if variant == "no_bom_semicolon" else ","
+    head = ["Ngay HD ", "So HD", " Doanh thu"] if variant == "spaced_header" else ["Ngay_HD", "So_HD", "Doanh_thu"]
+    rows = [["20/10/2026", "HD001", "1200000"], ["21/10/2026", "HD002", "3400000"]]
+    if variant == "crlf_footer":
+        rows.append(["", "Tổng", "4600000"])
+    nl = "\r\n" if variant == "crlf_footer" else "\n"
+    text = nl.join(sep.join(r) for r in [head] + rows) + nl
+    raw = ("﻿" if variant in ("bom_comma", "crlf_footer", "spaced_header") else "") + text
+    p = tmp_path / "Mastersale_T10.csv"
+    p.write_bytes(raw.encode("utf-8"))
+    (tmp_path / "GL_ChiTiet_ChiPhi.csv").write_bytes("﻿Ngay_CT,So_CT,So_tien_VND\n2026-10-01,PK1,5\n".encode("utf-8"))
+    order = sources.load_order_file(p)
+    assert order is not None and order.delimiter == sep
+    m = m_code.folder_query(str(tmp_path), {order.name: order.culture(None)}, month_close._typed_columns([order]),
+                            order.header[order.columns["doc"]], folder_parameter="ThuMuc",
+                            delimiter={order.name: order.delimiter})
+    assert f"[Delimiter = {m_code._m_sep(sep)}, Encoding = 65001]" in m
+    keep = re.search(r"Table\.HasColumns\(\[Tho\], \{(.*?)\}\)\)", m)
+    needed = [n.replace('""', '"') for n in re.findall(r'"((?:[^"]|"")*)"', keep.group(1))]
+    seen_by_pq = p.read_bytes().decode("utf-8").lstrip("﻿").splitlines()[0].split(sep)
+    assert needed and set(needed) <= set(seen_by_pq), (needed, seen_by_pq)
+    gl_head = (tmp_path / "GL_ChiTiet_ChiPhi.csv").read_bytes().decode("utf-8").lstrip("﻿").splitlines()[0].split(",")
+    assert not set(needed) <= set(gl_head)                     # the cost ledger is left out of the combine
+    if variant == "crlf_footer":
+        assert "each [Ngay HD ] <> null" not in m and "<> null" in m and len(order.footers) == 1
+
+
+class _PlaySig:
+    def __init__(self, log, name):
+        self.log, self.name = log, name
+
+    def emit(self, *a):
+        self.log.append((self.name, a))
+
+
+class _PlayExcel:
+    """Two workbooks: the pack (shown) and a source file Clicky has to bring forward to light a cell in it."""
+    def __init__(self, on_screen=True):
+        self.front, self.shown, self.on_screen = "pack", [], on_screen
+
+    def show_workbook(self, path):
+        self.shown.append(path)
+        self.front = path
+        return True
+
+    def activate(self, sheet):
+        pass
+
+    def screen_rect(self, ref, reveal):
+        if ref.startswith("Data!") and (self.front != "C:/case/KeHoach_AOPR1.xlsx" or not self.on_screen):
+            return None                        # that cell is in the source file, not on the pack
+        return (100.0, 50.0, 200.0, 70.0)
+
+
+class _PlayManager:
+    def __init__(self, excel):
+        self.log, self._excel = [], excel
+        for n in ("sig_clear_drawings", "sig_response_chunk", "sig_draw", "sig_point_hold",
+                  "sig_point_at", "sig_point_release", "sig_choices", "sig_guided"):
+            setattr(self, n, _PlaySig(self.log, n))
+
+    def _physical_to_logical_bbox(self, rect):
+        return rect
+
+    async def _reply_local(self, text):
+        self.log.append(("say", (text,)))
+        return True
+
+
+def _between_says(log):
+    """The screen events of each beat: [[names before say 1], [between say 1 and 2], ...]."""
+    out, cur = [], []
+    for n, a in log:
+        if n == "say":
+            out.append(cur)
+            cur = []
+        else:
+            cur.append((n, a))
+    return out
+
+
+def test_a_cell_in_another_file_is_lit_in_that_file_and_no_card_outlives_its_mistake(monkeypatch, tmp_path):
+    """Grading round 8 (AA): a mistake in the AOPR file had no box; the previous mistake's card stayed up for
+    14 s while the new one was read. Now the source file comes forward (read-only) and its cell is lit."""
+    import asyncio
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(tmp_path / "scene.jsonl"))
+    monkeypatch.setattr(month_close, "BEAT_GAP_S", 0)
+    excel = _PlayExcel()
+    m = _PlayManager(excel)
+    beats = [month_close.Beat("Có 2 chỗ cần sửa."),
+             month_close.Beat("Tổng lệch sổ.", "'Tong hop'!B13", "Tổng chi phí lệch sổ", "bad", "10 đ", book="C:/case/pack.xlsx",
+                              book_pack=True),
+             month_close.Beat("Tháng 7 còn số AOP.", "Data!I174", "File AOPR: tháng khoá còn số kế hoạch", "bad", "5 đ",
+                              note="Nhóm 5 · file KeHoach_AOPR1.xlsx, ô Data!I174", book="C:/case/KeHoach_AOPR1.xlsx"),
+             month_close.Beat("Em đã ghi kết quả.", mark="ok")]
+    asyncio.run(month_close.play(m, beats, keep_card=False))
+    assert excel.shown == ["C:/case/pack.xlsx", "C:/case/KeHoach_AOPR1.xlsx"]
+    import json
+    from office.excel_com import book_id
+    shows = [json.loads(l) for l in (tmp_path / "scene.jsonl").read_text(encoding="utf-8").splitlines() if '"show_book"' in l]
+    assert [(e["book"], e["pack"]) for e in shows] == [(book_id("C:/case/pack.xlsx"), True),
+                                                      (book_id("C:/case/KeHoach_AOPR1.xlsx"), False)]
+    raw = (tmp_path / "scene.jsonl").read_text(encoding="utf-8")
+    assert "KeHoach" not in raw and "pack.xlsx" not in raw          # the card says the name; the log never does
+    assert f"[file {book_id('C:/case/KeHoach_AOPR1.xlsx')}]" in raw
+    per = _between_says(m.log)
+    third = [n for n, _ in per[2]]
+    assert third.index("sig_clear_drawings") < third.index("sig_draw")          # old card gone, then the new frame
+    spot = next(a[0] for n, a in per[2] if n == "sig_draw")
+    assert spot["kind"] == "spotlight" and (spot["x1"], spot["y1"]) == (100.0, 50.0)
+    assert "sig_clear_drawings" in [n for n, _ in per[3]]                        # the closing line keeps no card
+
+
+def test_a_cell_that_cannot_be_shown_gets_its_own_card_without_a_pointer(monkeypatch, tmp_path):
+    import asyncio
+    import json
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    monkeypatch.setattr(month_close, "BEAT_GAP_S", 0)
+    m = _PlayManager(_PlayExcel(on_screen=False))
+    beats = [month_close.Beat("Tổng lệch sổ.", "'Tong hop'!B13", "Tổng chi phí lệch sổ", "bad", "10 đ"),
+             month_close.Beat("Tháng 7 còn số AOP.", "Data!I174", "File AOPR: tháng khoá còn số kế hoạch", "bad", "5 đ",
+                              was="7 đ", note="Nhóm 5 · file KeHoach_AOPR1.xlsx, ô Data!I174")]
+    asyncio.run(month_close.play(m, beats))                  # even when a story keeps cards up, not this one
+    second = _between_says(m.log)[1]
+    names = [n for n, _ in second]
+    assert names.index("sig_clear_drawings") < names.index("sig_draw") and "sig_point_at" not in names
+    card = next(a[0] for n, a in second if n == "sig_draw")
+    assert card["kind"] == "card" and card["free"] and card["value"] == "5 đ" and card["was"] == "7 đ"
+    assert "KeHoach_AOPR1.xlsx" in card["note"] and "Data!I174" in card["note"]
+    events = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
+    assert {"event": "clear", "i": 1, "ref": "Data!I174", "free_card": True}.items() <= \
+        next(e for e in events if e.get("event") == "clear").items()
+
+
+def test_a_beat_without_a_range_still_keeps_the_card_in_a_story_that_wants_it(monkeypatch, tmp_path):
+    import asyncio
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(tmp_path / "scene.jsonl"))
+    monkeypatch.setattr(month_close, "BEAT_GAP_S", 0)
+    m = _PlayManager(_PlayExcel())
+    asyncio.run(month_close.play(m, [month_close.Beat("Lệch.", "'Doi chieu'!C7", "Lệch", "bad", "−1 tỷ"),
+                                     month_close.Beat("Em sửa giúp anh nhé?", choices=("Sửa giúp tôi", "Để tôi xem"))]))
+    assert "sig_clear_drawings" not in [n for n, _ in _between_says(m.log)[1]]
+
+
+def test_confirm_logs_where_its_time_goes(folder, tmp_path, monkeypatch):
+    # PC gate on 0b88545: the first "Đúng rồi, làm tiếp" after install took 11.8 s to its first card.
+    # Each part of the step logs its own time, so the slow one on the PC is named, not guessed.
+    import json
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    bridge = FakeBridge(folder)
+    _begin(bridge, FakePQ(bridge, folder), sources.DAY_FIRST)
+    events = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
+    parts = {e["part"]: e["ms"] for e in events if e.get("event") == "close_step" and e.get("step") == "timing"}
+    assert {"keep_original", "read_files", "find_query", "build_query", "query_add", "lint", "check_sheet",
+            "reconcile", "audit_sheet"} <= set(parts)
+    assert all(isinstance(ms, int) and ms >= 0 for ms in parts.values())
+    assert parts["reconcile"] >= parts["check_sheet"]
+
+
+def test_a_failing_check_still_releases_the_screen(folder):
+    class Recording(FakeBridge):
+        def __init__(self, f):
+            super().__init__(f)
+            self.screen = []
+
+        def screen_updating(self, on):
+            self.screen.append(on)
+
+    class Broken(FakePQ):
+        def load(self, name):
+            raise RuntimeError("COM went away")
+    bridge = Recording(folder)
+    with pytest.raises(RuntimeError):
+        _begin(bridge, Broken(bridge, folder), sources.DAY_FIRST)
+    assert bridge.screen == [False, True]
+
+
+def _recording(folder):
+    class Recording(FakeBridge):
+        def __init__(self, f):
+            super().__init__(f)
+            self.screen = []
+
+        def screen_updating(self, on):
+            self.screen.append(on)
+    return Recording(folder)
+
+
+def test_a_failing_bien_ban_never_leaves_the_screen_frozen(folder, monkeypatch):
+    # Excel rejects a call (the user clicked into a cell) while the Biên bản is rewritten: the screen must
+    # still be released, in the check after "Đúng rồi, làm tiếp" and in the fix after "Sửa giúp tôi".
+    bridge = _recording(folder)
+    pq = FakePQ(bridge, folder)
+    real = month_close._write_audit
+
+    def rejected(_bridge):
+        raise RuntimeError("Call was rejected by callee")
+    monkeypatch.setattr(month_close, "_write_audit", rejected)
+    with pytest.raises(RuntimeError, match="rejected"):
+        _begin(bridge, pq, sources.DAY_FIRST)
+    assert bridge.screen == [False, True]
+
+
+def test_the_step_s_own_error_is_not_hidden_by_a_failing_bien_ban(folder, monkeypatch):
+    bridge = _recording(folder)
+    pq = FakePQ(bridge, folder)
+    _begin(bridge, pq, sources.DAY_FIRST)
+    bridge.screen.clear()
+
+    def broken(*_a):
+        raise ValueError("the fix itself failed")
+
+    def rejected(_bridge):
+        raise RuntimeError("Call was rejected by callee")
+    monkeypatch.setattr(month_close, "_approve", broken)
+    monkeypatch.setattr(month_close, "_write_audit", rejected)
+    with pytest.raises(ValueError, match="fix itself"):
+        month_close.approve(bridge, pq)
+    assert bridge.screen == [False, True]
+
+
+def test_a_failing_bien_ban_never_logs_the_workbook_name(folder, monkeypatch, caplog):
+    import logging
+    caplog.set_level(logging.DEBUG)
+    bridge = _recording(folder)
+    pq = FakePQ(bridge, folder)
+    _begin(bridge, pq, sources.DAY_FIRST)
+
+    def broken(*_a):
+        raise ValueError("the fix itself failed")
+
+    def rejected(_bridge):
+        raise RuntimeError(-2147352567, "Cannot access 'BCTC_AgriS_Q3.xlsx' in C:\\Users\\chi\\AgriS")
+    monkeypatch.setattr(month_close, "_approve", broken)
+    monkeypatch.setattr(month_close, "_write_audit", rejected)
+    with pytest.raises(ValueError):
+        month_close.approve(bridge, pq)
+    assert "AgriS" not in caplog.text and "BCTC" not in caplog.text
+    assert "Bien ban sheet failed" in caplog.text and "RuntimeError 0x80020009" in caplog.text
+
+
+def test_the_line_under_the_cursor_says_when_excel_starts_loading(folder):
+    # The first Power Query work of an Excel session takes seconds: the caption says what is happening.
+    shown = []
+    bridge = FakeBridge(folder)
+    pq = FakePQ(bridge, folder)
+    month_close.start(bridge, pq, sources.DAY_FIRST)
+    month_close._PROGRESS = shown.append
+    try:
+        month_close.confirm(bridge, pq)
+    finally:
+        month_close._PROGRESS = None
+    assert shown == ["load"] and month_close.WORKING["load"] == "Em đang nạp đơn hàng vào Excel…"
+
+
+def test_a_total_row_at_the_end_of_the_export_is_dropped_before_dates_are_typed_and_counted(tmp_path):
+    """Robot run 07/11 (bhc_e2e, dcf6bca): the synthetic Mastersale ends with a 'Tổng' row. Typing 'Tổng' as a
+    date failed the whole load ('couldn't parse the input provided as a Date value'). The query drops rows whose
+    date has no digit before typing; the receipt counts the same row as dropped, so used + dropped = total."""
+    import csv
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "dien_tap"))
+    import bhc_case
+    from engine import intake
+    bhc_case.make(tmp_path)
+    path = tmp_path / "Mastersale_T07-T10.csv"
+    with open(path, encoding="utf-8-sig", newline="") as fh:
+        lines = list(csv.reader(fh))[1:]
+    assert lines[-1][0] == "Tổng"                                   # the writer's footer, like a real export
+    order = sources.load_order_file(path)
+    assert len(order.footers) == 1 and order.footers[0][0] == "Tổng"
+    assert len(order.rows) + len(order.footers) == len(lines)
+    truth = sources.truth([order], (2026, 10))
+    assert truth.unreadable_dates == 0
+    m = m_code.folder_query(str(tmp_path), {order.name: order.culture(None)}, month_close._typed_columns([order]),
+                            order.header[order.columns["doc"]], folder_parameter="ThuMuc", period=(2026, 10))
+    date = order.header[order.columns["date"]]
+    step = next(l for l in m.splitlines() if l.strip().startswith("DoiKieu ="))
+    keep = f'Text.Select(Text.From(Record.FieldOrDefault(_, "{date}", "") ?? ""), {{"0".."9"}}) <> ""'
+    assert keep in step and step.index(keep) < step.index("{{"), step       # filtered on the raw text, then typed
+    kept = [r for r in lines if any(ch.isdigit() for ch in r[0])]          # what that filter keeps
+    assert kept == order.rows
+    assert f"try [{date}] <> null otherwise true" in m and m_code.lint("DonHang", m) == []
+    _, items = intake._order_lines([order], truth, (2026, 10))
+    footer = [d for d in items if d.what.startswith('Dòng "Tổng"')]
+    assert len(footer) == 1 and footer[0].reason.startswith("dòng tổng cuối file") and footer[0].file == order.name
+
+
+def test_the_receipt_counts_rows_used_and_left_out_for_every_file(tmp_path):
+    """bhc_e2e 84603e7, stages 1–2: the intake event gave amounts per file but not rows. Rule 4 is in rows too:
+    rows used + rows left out = rows the file holds, for the order export and each trial balance."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "dien_tap"))
+    import bhc_case
+    from engine import intake
+    bhc_case.make(tmp_path)
+    files = sources.find_order_files(tmp_path)
+    tbs, ledger = month_close._ledger(tmp_path)
+    truth = sources.truth(files, sources.period_of(tbs[-1][1]))
+    receipt = intake.build(tmp_path, files, tbs, truth, month_close._net_of_returns(ledger, truth),
+                           "BaoCao_QuanTri_T10.xlsx")
+    logged = intake.log_fields(receipt, "")["files"]
+    sales = next(f for f in logged if f["kind"] == "Bán hàng")
+    assert (sales["rows_total"], sales["rows_used"], sales["rows_dropped"]) == (97, 24, 73)   # 72 outside + 'Tổng'
+    for f in logged:
+        if f["kind"] in ("Bán hàng",) or f["kind"].startswith("Sổ cân đối"):
+            assert f["rows_total"] == f["rows_used"] + f["rows_dropped"] and f["rows_total"] > 0, f

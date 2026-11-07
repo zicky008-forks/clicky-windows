@@ -144,3 +144,27 @@ def test_new_pointer_spot_under_the_frame_passes():
     ev.append({"t": 2.4, "event": "point", "x": x, "y": y, "label": NO_BUBBLE})
     rows = visual.grade(ev, [capture()])
     assert all(r[1] for r in rows), [r for r in rows if not r[1]]
+
+
+def test_watcher_can_be_stopped_and_joined(tmp_path):
+    # Regression: an attribute named _stop shadowed Thread._stop, so join() raised TypeError on Python 3.12.
+    w = visual.Watcher(tmp_path / "scene.jsonl", tmp_path)
+    w.run = lambda: w._halt.wait(5)
+    w.start()
+    w.stop()
+    w.join(timeout=5)
+    assert not w.is_alive()
+
+
+def test_sticky_notes_scene_is_not_asked_for_a_frame(tmp_path):
+    """Run (a), 07/11: the notes scene lights no range on purpose, so 'no frame found' was a false note."""
+    shot = tmp_path / "giay-nho.png"
+    Image.new("RGB", (800, 600), (255, 255, 255)).save(shot)
+    ev = events()
+    ev[2]["graphic"] = {"kind": "notes", "notes": [{"codes": ["returns_in_revenue"]}]}
+    del ev[3]                                   # no spotlight is drawn for a notes scene
+    names = by_name(visual.grade(ev, [capture(str(shot))], lambda p: Image.open(p).convert("RGB")))
+    assert "Thấy khung vẽ trên ảnh chụp" not in names
+    assert "Khung vẽ thật nằm đúng ô trên màn hình" not in names
+    plain = by_name(visual.grade(events(), [capture(str(shot))], lambda p: Image.open(p).convert("RGB")))
+    assert not plain["Thấy khung vẽ trên ảnh chụp"][1]     # an ordinary scene with no frame is still noted

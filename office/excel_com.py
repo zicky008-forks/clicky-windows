@@ -6,6 +6,7 @@ used from any thread. Needs pywin32 on Windows; elsewhere every call returns Non
 """
 import ctypes
 import logging
+import os
 import sys
 from decimal import Decimal
 from typing import Optional
@@ -35,6 +36,57 @@ def _as_grid(value):
     if isinstance(value, tuple):
         return [list(row) if isinstance(row, tuple) else [row] for row in value]
     return [[value]]
+
+
+def _cell_kind(v):
+    """'n' for a figure, 't' for words, else None.
+
+    A figure is a number, or text that is mostly digits or short with a digit: "436tr", "5,42 tỷ",
+    "TK 6411", "T10". A title that only mentions a month ("Báo cáo tháng 10") is words.
+    """
+    if v is None or isinstance(v, bool):
+        return None if v is None else "t"
+    if isinstance(v, (int, float, Decimal)):
+        return "n"
+    text = str(v).strip()
+    if not text:
+        return None
+    digits = sum(c.isdigit() for c in text)
+    if not digits:
+        return "t"
+    solid = sum(not c.isspace() for c in text)
+    return "n" if len(text) <= 10 or digits >= 0.3 * solid else "t"
+
+
+def figure_blocks(grid) -> list:
+    """Rectangles of same-kind cells in a value grid: [(kind, row0, row1, col0, col1)], ends inclusive, 0-based.
+
+    Each row is cut into runs of figures ('n') or words ('t'); a run that repeats on the next row grows down,
+    so a column of numbers becomes one block and an empty gap between blocks stays free for a card.
+    """
+    done, open_ = [], {}
+    for i, row in enumerate(grid):
+        runs, j = [], 0
+        while j < len(row):
+            kind = _cell_kind(row[j])
+            if kind is None:
+                j += 1
+                continue
+            k = j
+            while k + 1 < len(row) and _cell_kind(row[k + 1]) == kind:
+                k += 1
+            runs.append((kind, j, k))
+            j = k + 1
+        still = {}
+        for run in runs:
+            r0 = open_.pop(run, i)
+            still[run] = r0
+        for (kind, c0, c1), r0 in open_.items():
+            done.append((kind, r0, i - 1, c0, c1))
+        open_ = still
+    for (kind, c0, c1), r0 in open_.items():
+        done.append((kind, r0, len(grid) - 1, c0, c1))
+    return sorted(done, key=lambda b: (b[1], b[3]))
 
 
 def _block_address(row: int, col: int, rows: int, cols: int) -> str:
@@ -72,6 +124,47 @@ def reveal_scroll(row: int, rows: int, col: int, seen_rows: int, seen_cols: int)
     top = 1 if row + rows - 1 <= seen_rows - 1 else max(1, row - seen_rows // 3)
     left = 1 if col < seen_cols - 1 else col
     return top, left
+
+XL_OPEN_XML_WORKBOOK = 51        # .xlsx
+
+
+def _same_path(a: str, b: str) -> bool:
+    """Two Windows paths name the same file (Excel's FullName may differ in case from ours)."""
+    return bool(a) and bool(b) and os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+from scene_log import book_id  # noqa: E402,F401 - one id for a file in every log (kept importable from here)
+
+
+def _shape(name, wb=None) -> str:
+    """What a workbook name looks like, never the name: clicky.log must not carry a company's file names.
+
+    Enough to tell the cases apart: no file, Excel's temporary name (no extension, as "65302810"),
+    or a normal file, plus whether it sits in Clicky's own folder and whether Excel holds it read-only."""
+    name = str(name or "")
+    if not name:
+        return "a workbook with no name"
+    ext = os.path.splitext(name.replace("\\", "/").rsplit("/", 1)[-1])[1].lower()
+    kind = f"a {ext} file" if ext else "a name with no extension (Excel's temporary name?)"
+    has_path = bool(str(getattr(wb, "Path", "") or "")) if wb is not None else ("\\" in name or "/" in name)
+    try:
+        from storage import data_dir
+        inside = os.path.normcase(os.path.abspath(name)).startswith(os.path.normcase(str(data_dir())))
+    except Exception:
+        inside = False
+    where = "inside" if inside else "outside"
+    flags = ("with a folder" if has_path else "with no folder") + (
+        ", read-only" if wb is not None and bool(getattr(wb, "ReadOnly", False)) else "")
+    return f"{kind} ({flags}, {where} the Clicky folder)"
+
+
+def _why(exc) -> str:
+    """An Excel error without its text: COM messages quote the file's name and folder."""
+    code = next((a for a in getattr(exc, "args", ()) if isinstance(a, int)), None)
+    if code is None and isinstance(exc, OSError):
+        code = exc.errno
+    return type(exc).__name__ + (f" 0x{code & 0xFFFFFFFF:08X}" if isinstance(code, int) else "")
+
 
 class ExcelBridge:
     def __init__(self, app=None, dpi: Optional[int] = None):
@@ -240,27 +333,125 @@ class ExcelBridge:
             app.WindowState = -4137            # xlMaximized
             return True
         except Exception as exc:
-            log.warning("Opening %s in Excel failed: %s", path, exc)
+            log.warning("Opening %s in Excel failed: %s", _shape(path), _why(exc))
             return False
 
-    def save(self) -> bool:
-        """Save the active workbook in place (only when the user asked Clicky to)."""
+    def show_workbook(self, path: str) -> bool:
+        """Bring a workbook to the front so a cell in it can be lit: the open one with that file, else the file
+        opened read-only (a source file such as the AOPR plan is never changed). Files opened here are
+        remembered, so close_opened() puts Excel back as it was."""
         app = self._excel()
+        if app is None:
+            return False
         try:
-            app.ActiveWorkbook.Save()
+            for i in range(1, app.Workbooks.Count + 1):
+                wb = app.Workbooks(i)
+                if _same_path(str(wb.FullName or ""), path):
+                    wb.Activate()
+                    return True
+            alerts = app.DisplayAlerts
+            app.DisplayAlerts = False           # no "update links?" or "read-only?" window over the story
+            try:
+                wb = app.Workbooks.Open(path, UpdateLinks=0, ReadOnly=True, AddToMru=False)
+            finally:
+                app.DisplayAlerts = alerts
+            wb.Activate()
+            self.__dict__.setdefault("_opened", []).append(str(wb.FullName))
             return True
         except Exception as exc:
-            log.warning("Saving the workbook failed: %s", exc)
+            log.warning("Showing %s in Excel failed: %s", _shape(path), _why(exc))
+            return False
+
+    def close_opened(self, back_to: Optional[str] = None) -> list:
+        """Close, without saving, the read-only files show_workbook opened; then show back_to again.
+        Returns [(full name, closed)] so the caller can log what was closed (the robot checks it)."""
+        app, out = self._excel(), []
+        opened, self._opened = list(getattr(self, "_opened", [])), []
+        if app is None:
+            return [(name, False) for name in opened]
+        for name in opened:
+            closed = False
+            try:
+                for i in range(app.Workbooks.Count, 0, -1):
+                    wb = app.Workbooks(i)
+                    if _same_path(str(wb.FullName or ""), name):
+                        wb.Close(SaveChanges=False)
+                        closed = True
+            except Exception as exc:
+                log.warning("Closing a source file failed: %s", _why(exc))
+            out.append((name, closed))
+        if back_to:
+            self.show_workbook(back_to)
+        return out
+
+    def save(self, path: Optional[str] = None) -> bool:
+        """Save the active workbook (only when the user asked Clicky to); never shows a window.
+
+        Workbook.Save on a workbook with no file behind it (new, or renamed by Excel to a temporary
+        name like "65302810" after a save it could not finish) opens a modal Save As dialog. That
+        dialog shows the user's own folders and blocks every later COM call. So:
+        - with `path` (a file Clicky made, e.g. the sample in Clicky's folder), any workbook that is not
+          already that saved file goes through SaveAs with that exact name;
+        - without it (the user's own file), Clicky refuses and says it could not save.
+        Alerts stay off while saving, so a failure comes back as an error rather than a window, and the
+        save counts only if the workbook ends up at the file it should be.
+        """
+        app = self._excel()
+        try:
+            wb = app.ActiveWorkbook
+            before = str(wb.FullName or "")
+            has_file = bool(str(wb.Path or "")) and not bool(getattr(wb, "ReadOnly", False))
+            if path is None and not has_file:
+                log.warning("Not saving %s: no writable file behind it (Excel would open Save As)", _shape(before, wb))
+                return False
+            target = str(path) if path else before
+            alerts = app.DisplayAlerts
+            app.DisplayAlerts = False
+            try:
+                if has_file and _same_path(before, target):
+                    wb.Save()
+                else:
+                    wb.SaveAs(Filename=target, FileFormat=XL_OPEN_XML_WORKBOOK)
+            finally:
+                app.DisplayAlerts = alerts
+            after = str(wb.FullName or "")
+            if not _same_path(after, target):
+                log.warning("Saving %s did not finish: Excel now holds %s", _shape(target), _shape(after, wb))
+                return False
+            return True
+        except Exception as exc:
+            log.warning("Saving the workbook failed: %s", _why(exc))
             return False
 
     def save_copy(self, path: str) -> bool:
-        """Save a copy of the workbook as it is now under another name; the open workbook is not renamed or saved."""
+        """Save a copy of the workbook as it is now under another name; the open workbook is not renamed or saved.
+
+        When Excel says nothing changed since the last save, the file on disk is the workbook as it is now,
+        so it is copied straight from disk: a file copy takes milliseconds, while SaveCopyAs makes Excel
+        write the whole workbook again (seconds on the first save after Excel starts)."""
         app = self._excel()
         try:
-            app.ActiveWorkbook.SaveCopyAs(path)
+            wb = app.ActiveWorkbook
+            disk = str(wb.FullName or "") if str(wb.Path or "") else ""
+            if disk and bool(wb.Saved) and os.path.isfile(disk):
+                import shutil
+                try:
+                    shutil.copyfile(disk, path)
+                    return True
+                except OSError as exc:
+                    log.info("Copying the saved file failed (%s); asking Excel for the copy", _why(exc))
+        except Exception:
+            pass
+        try:
+            alerts = app.DisplayAlerts
+            app.DisplayAlerts = False           # a failure comes back as an error, never as a window
+            try:
+                app.ActiveWorkbook.SaveCopyAs(path)
+            finally:
+                app.DisplayAlerts = alerts
             return True
         except Exception as exc:
-            log.warning("Saving a copy to %s failed: %s", path, exc)
+            log.warning("Saving a copy to %s failed: %s", _shape(path), _why(exc))
             return False
 
     def sheet_names(self) -> list:
@@ -290,6 +481,51 @@ class ExcelBridge:
             return self.screen_rect(f"'{name}'!{filled.Address.replace('$', '')}")
         except Exception as exc:
             log.debug("content_rect failed: %s", exc)
+            return None
+
+    def figure_boxes(self):
+        """Physical screen boxes of the visible cells holding figures and of those holding words, or None.
+
+        {"numbers": [(l, t, r, b), ...], "text": [...]}. One read of the visible values per pane, then each
+        block is mapped with that pane's own geometry, so a card can sit in a gap between blocks of figures
+        instead of over them (one box for the whole used range left no room on a full sheet).
+        """
+        app = self._excel()
+        if app is None:
+            return None
+        try:
+            ws, win = app.ActiveSheet, app.ActiveWindow
+            dpi = self._dpi or _window_dpi(app.Hwnd)
+            out = {"numbers": [], "text": []}
+            for p in range(1, win.Panes.Count + 1):
+                pane = win.Panes(p)
+                filled = app.Intersect(ws.UsedRange, pane.VisibleRange)
+                if filled is None:
+                    continue
+                grid = _as_grid(filled.Value2)
+                rows, cols = len(grid), len(grid[0]) if grid else 0
+                if not rows or not cols or rows * cols > MAX_WRITE_CELLS:
+                    continue
+                x0, y0 = float(filled.Left), float(filled.Top)
+                xs = [float(filled.Columns(j + 1).Left) for j in range(cols)] + [x0 + float(filled.Width)]
+                ys = [float(filled.Rows(i + 1).Top) for i in range(rows)] + [y0 + float(filled.Height)]
+                left, top = pane.PointsToScreenPixelsX(x0), pane.PointsToScreenPixelsY(y0)
+                right, bottom = pane.PointsToScreenPixelsX(xs[-1]), pane.PointsToScreenPixelsY(ys[-1])
+                # Same guard as screen_rect: some builds ignore zoom in PointsToScreenPixels.
+                expect_w = (xs[-1] - x0) * (win.Zoom / 100.0) * dpi / 72.0
+                sx = (right - left) / max(xs[-1] - x0, 1e-6)
+                sy = (bottom - top) / max(ys[-1] - y0, 1e-6)
+                if expect_w > 4 and not 0.7 <= (right - left) / expect_w <= 1.3:
+                    scale = expect_w / max(right - left, 1)
+                    sx, sy = sx * scale, sy * scale
+                for kind, r0, r1, c0, c1 in figure_blocks(grid):
+                    box = (left + (xs[c0] - x0) * sx, top + (ys[r0] - y0) * sy,
+                           left + (xs[c1 + 1] - x0) * sx, top + (ys[r1 + 1] - y0) * sy)
+                    if box[2] > box[0] and box[3] > box[1]:
+                        out["numbers" if kind == "n" else "text"].append(tuple(float(v) for v in box))
+            return out
+        except Exception as exc:
+            log.debug("figure_boxes failed: %s", exc)
             return None
 
     def scroll_home(self, name: str) -> None:

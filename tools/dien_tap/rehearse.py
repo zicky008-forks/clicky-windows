@@ -34,6 +34,7 @@ import checks          # noqa: E402
 import drivers         # noqa: E402
 import visual          # noqa: E402
 import beta_checks     # noqa: E402
+import layout_checks   # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 COMPOSER = "Tin nhắn cho Clicky"
@@ -46,7 +47,10 @@ def say(text: str) -> None:
 
 def find_clicky() -> str | None:
     base = os.environ.get("LOCALAPPDATA", "")
-    hits = sorted(glob.glob(os.path.join(base, "*", "current", "Clicky.exe")), key=os.path.getmtime, reverse=True)
+    # Velopack builds live in <app>\current\, the Setup-Clicky-bi installer in Programs\Clicky\: newest wins.
+    hits = glob.glob(os.path.join(base, "*", "current", "Clicky.exe")) + \
+        glob.glob(os.path.join(base, "Programs", "Clicky*", "Clicky.exe"))
+    hits = sorted(hits, key=os.path.getmtime, reverse=True)
     return hits[0] if hits else None
 
 
@@ -114,6 +118,16 @@ def wait_log(log: Path, done, timeout: float, quiet: float = 0.0) -> list:
     return events
 
 
+def story_ended(events, target: str) -> bool:
+    """After the beat titled `target`, Clicky has asked its closing question or put the story away."""
+    at = next((i for i, e in enumerate(events)
+               if e.get("event") == "beat" and target in (e.get("title") or "")), None)
+    if at is None:
+        return False
+    return any((e.get("event") == "beat" and e.get("choices")) or (e.get("event") == "guided" and not e.get("active"))
+               or e.get("event") in ("turn", "story_end") for e in events[at + 1:])
+
+
 def file_hash(path: Path) -> str:
     import hashlib
     try:
@@ -175,21 +189,51 @@ class NetWatch:
 def no_workbook(allow_others: bool):
     import win32com.client
     excel = win32com.client.Dispatch("Excel.Application")
-    others = [wb.Name for wb in excel.Workbooks]
+    try:
+        others = com_retry(lambda: excel.Workbooks.Count, tries=10)   # a count only: never the names
+    except Exception as exc:
+        raise SystemExit(EXCEL_STUCK + f" ({exc})")
     if others and not allow_others:
-        raise SystemExit(f"Excel đang mở file khác: {', '.join(others)}. Đóng hết rồi chạy lại.")
+        raise SystemExit(f"Excel đang mở {others} file khác. Đóng hết rồi chạy lại.")
     return excel, None, None
+
+
+COPY_TAG = "_dientap_"                # every file the robot (or Clicky, from the robot's copy) leaves in the case folder
+
+
+def park_old_copies(source: Path, dest: Path) -> list:
+    """Move the robot's own leftovers (earlier laps or crashed runs) out of the case folder.
+
+    Clicky's intake lists every workbook next to the one it works on, so a copy left from an
+    earlier lap shows up on the next lap's receipt as a skipped file. Only names carrying the
+    robot's tag are touched: the customer's or the case's own files are never moved."""
+    moved = []
+    for f in sorted(source.parent.iterdir()):
+        if not f.is_file() or f == source or COPY_TAG not in f.name or f.name.startswith("~$"):
+            continue
+        dest.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.move(str(f), str(dest / f.name))
+            moved.append(f.name)
+        except OSError as exc:         # still open in Excel: leave it, say so
+            say(f"   Không dời được bản sao cũ {f.name}: {exc}")
+    if moved:
+        say(f"   Dời {len(moved)} bản sao cũ của robot ra {dest}")
+    return moved
 
 
 def open_workbook(source: Path, allow_others: bool, zoom: int | None = None):
     import win32com.client
     excel = win32com.client.Dispatch("Excel.Application")
-    others = [wb.Name for wb in excel.Workbooks]
+    try:
+        others = com_retry(lambda: excel.Workbooks.Count, tries=10)   # a count only: never the names
+    except Exception as exc:
+        raise SystemExit(EXCEL_STUCK + f" ({exc})")
     if others and not allow_others:
-        raise SystemExit(f"Excel đang mở file khác: {', '.join(others)}. Đóng hết rồi chạy lại "
+        raise SystemExit(f"Excel đang mở {others} file khác. Đóng hết rồi chạy lại "
                          "(diễn tập chỉ dùng số giả lập).")
     stamp = time.strftime("%m%d_%H%M%S")
-    copy = source.with_name(f"{source.stem}_dientap_{stamp}{source.suffix}")
+    copy = source.with_name(f"{source.stem}{COPY_TAG}{stamp}{source.suffix}")
     shutil.copy2(source, copy)
     excel.Visible = True
     wb = excel.Workbooks.Open(str(copy))
@@ -215,7 +259,29 @@ def open_chat(shortcut: str) -> None:
         say(f"   Không bấm được phím tắt mở chat: {exc}")
 
 
+EXCEL_STUCK = ("Excel không trả lời robot: có thể đang mở một hộp thoại (Lưu thành…) hoặc bị treo từ lượt trước. "
+               "Xem màn hình, đóng hộp thoại hoặc tắt Excel (khi không còn file nào của chị) rồi chạy lại.")
+BUSY = (-2147418111, -2147417846)      # RPC_E_CALL_REJECTED, RPC_E_SERVERCALL_RETRYLATER: Excel is busy
+
+
+def com_retry(fn, tries: int = 30, wait: float = 1.0):
+    """Call fn(); while Excel rejects the call because it is busy (saving, re-opening), wait and try again."""
+    for n in range(tries):
+        try:
+            return fn()
+        except Exception as exc:
+            code = getattr(exc, "hresult", None) or (exc.args[0] if exc.args else None)
+            if code not in BUSY or n == tries - 1:
+                raise
+            time.sleep(wait)
+
+
 def sheet_values(wb, max_rows: int = 200, max_cols: int = 12) -> dict:
+    """Every sheet's values; retried as a whole while Excel is busy (run c: Clicky had just saved)."""
+    return com_retry(lambda: _sheet_values(wb, max_rows, max_cols))
+
+
+def _sheet_values(wb, max_rows: int, max_cols: int) -> dict:
     out = {}
     for ws in wb.Worksheets:
         rng = ws.Range(ws.Cells(1, 1), ws.Cells(max_rows, max_cols))
@@ -230,6 +296,8 @@ def main(argv=None) -> int:
     ap.add_argument("--sample", action="store_true",
                     help="Việc 10: gõ \"xem em làm\", Clicky tự chạy file mẫu có sẵn; robot đọc workbook Clicky mở")
     ap.add_argument("--expected", default=str(HERE / "case01_expected.json"), help="Đáp án cần đạt (JSON)")
+    ap.add_argument("--also", action="append", default=[], metavar="JSON",
+                    help="Thêm phần chấm từ file đáp án khác (ví dụ case01_layout_expected.json)")
     ap.add_argument("--clicky", default=None, help="Đường dẫn Clicky.exe (mặc định: bản cài trong LOCALAPPDATA)")
     ap.add_argument("--driver", choices=("auto", "agent-desktop", "uia"), default="auto")
     ap.add_argument("--agent-desktop", default="agent-desktop", help="Đường dẫn agent-desktop.exe")
@@ -246,6 +314,8 @@ def main(argv=None) -> int:
     ap.add_argument("--tamper", default=None, metavar="SHEET!CELL=DELTA",
                     help="Việc 3b: nhờ Clicky (móc thử CLICKY_TEST_TAMPER) cộng DELTA vào ô đó ngay sau khi lưu; "
                          "chấm Clicky có phát hiện đúng ô và đúng số lệch không")
+    ap.add_argument("--lan", type=int, default=1,
+                    help="Chạy cùng case N lượt liền; chỉ ĐẠT khi mọi lượt đều đạt (xử lý ở run_laps)")
     ap.add_argument("--egress-log", default=None,
                     help="Nhật ký gửi đi của Clicky (mặc định %%LOCALAPPDATA%%\\Clicky\\gui-di.jsonl)")
     args = ap.parse_args(argv)
@@ -258,6 +328,8 @@ def main(argv=None) -> int:
     elif not args.workbook:
         ap.error("cần --workbook (hoặc --sample để chạy file mẫu)")
     expected = json.loads(Path(args.expected).read_text(encoding="utf-8"))
+    for extra in args.also:
+        expected = {**expected, **json.loads(Path(extra).read_text(encoding="utf-8"))}
     workbook = Path(args.workbook).resolve() if args.workbook else None
     base = workbook.parent if workbook else Path(args.expected).resolve().parent
     out = Path(args.out) if args.out else base / "dien-tap" / time.strftime("%Y%m%d_%H%M%S")
@@ -276,6 +348,7 @@ def main(argv=None) -> int:
 
     if workbook:
         say(f"1/6 Mở bản sao {workbook.name} trong Excel")
+        park_old_copies(workbook, out / "ban-sao-cu")
         excel, wb, copy = open_workbook(workbook, args.allow_other_workbooks, args.zoom)
     else:
         say("1/6 File mẫu: Clicky tự mở, robot chỉ kiểm Excel đang trống")
@@ -380,6 +453,11 @@ def main(argv=None) -> int:
         or (not target and len(ev) > 0)  # noqa: E731
     limit = expected.get("second_stage_seconds", 300)
     done_events = wait_log(log, finished, limit, quiet=6.0)
+    if target and finished(done_events) and not story_ended(done_events, target):
+        # Without a voice each scene stays up for its reading time, often longer than the quiet window:
+        # the scenes after the final card (bridge, sticky notes, save question) are still to come.
+        say("   Chờ Clicky kể hết các cảnh sau thẻ cuối")
+        wait_log(log, lambda ev: story_ended(ev, target), expected.get("story_end_seconds", 90), quiet=2.0)
     clock.lap("Chặng 2–3: sửa và lập báo cáo")
     if not finished(done_events):
         stalled.append(("Chặng 2–3", clock.steps[-1][1]))
@@ -392,9 +470,18 @@ def main(argv=None) -> int:
 
     say("6/6 Đọc số trong file và chấm")
     if wb is None:                     # the sample: read the workbook Clicky opened itself
-        wb = excel.ActiveWorkbook
-        copy = Path(wb.FullName) if wb is not None else None
-    sheets = sheet_values(wb) if wb is not None else {}
+        try:
+            wb = com_retry(lambda: excel.ActiveWorkbook)
+            copy = Path(com_retry(lambda: wb.FullName)) if wb is not None else None
+        except Exception as exc:
+            raise SystemExit(EXCEL_STUCK + f" ({exc})")
+    try:
+        sheets = sheet_values(wb) if wb is not None else {}
+    except Exception as exc:
+        raise SystemExit(EXCEL_STUCK + f" ({exc})")
+    if "latency" in (expected.get("layout") or {}):
+        # The last turn's latency line is written when that turn ends, often after its final scene.
+        wait_log(log, layout_checks.turns_measured, expected.get("latency_wait_seconds", 15))
     events = checks.read_log(log)
     result = checks.evaluate(events, sheets, expected)
     result.checks.append(checks.stage_check(stalled))
@@ -408,6 +495,7 @@ def main(argv=None) -> int:
         egress_text = ""
     result.checks += beta_checks.evaluate(events, sheets, expected, untouched_before_confirm=untouched,
                                           workbook=copy, egress_text=egress_text, network=network)
+    result.checks += layout_checks.evaluate(events, expected)
     if watcher is not None:
         watcher.stop()
         watcher.join(timeout=10)
@@ -458,10 +546,79 @@ def add_visual(result, events, captures, out: Path) -> None:
         result.checks.append(checks.Check(name, e["ok"], detail, blocking=e["blocking"]))
 
 
+def close_between_laps(keep: set) -> None:
+    """Between two laps: quit Clicky and close, without saving, every workbook the lap opened.
+    Workbooks that were open before lap 1 (only with --allow-other-workbooks) are left alone."""
+    subprocess.run(["taskkill", "/IM", "Clicky.exe", "/F"], capture_output=True)
+    try:
+        import win32com.client
+        excel = win32com.client.Dispatch("Excel.Application")
+        for wb in list(excel.Workbooks):
+            if wb.FullName not in keep:
+                wb.Close(SaveChanges=False)
+    except Exception as exc:
+        say(f"   Không đóng được file Excel của lượt trước: {exc}")
+    time.sleep(3)
+
+
+def open_workbook_names() -> set:
+    try:
+        import win32com.client
+        return {wb.FullName for wb in win32com.client.Dispatch("Excel.Application").Workbooks}
+    except Exception:
+        return set()
+
+
+def run_laps(argv, runner=None, cleanup=None, before=None) -> int:
+    """--lan N: the same case N times in a row; ĐẠT only when every lap is ĐẠT (pass^k).
+
+    A customer runs the month close once and must get it right that once, so one lucky pass
+    proves little. Each lap gets its own result folder; the summary names every lap that failed.
+    Exit code: 1 if any lap is KHÔNG ĐẠT, else 2 if any lap could not run, else 0."""
+    runner = runner or main
+    cleanup = cleanup or close_between_laps
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--lan", type=int, default=1)
+    pre.add_argument("--out", default=None)
+    known, rest = pre.parse_known_args(argv)
+    if known.lan <= 1:
+        return runner(rest + (["--out", known.out] if known.out else []))
+    keep = before() if before else open_workbook_names()
+    codes, times = [], []
+    for i in range(1, known.lan + 1):
+        say(f"===== Lượt {i}/{known.lan} =====")
+        lap_argv = list(rest) + (["--out", str(Path(known.out) / f"lan-{i}")] if known.out else [])
+        t0 = time.monotonic()
+        try:
+            code = runner(lap_argv)
+        except SystemExit as exc:
+            if isinstance(exc.code, str):
+                say(exc.code)
+            code = exc.code if isinstance(exc.code, int) else 2
+        codes.append(code)
+        times.append(time.monotonic() - t0)
+        if i < known.lan:
+            cleanup(keep)
+    names = {0: "ĐẠT", 1: "KHÔNG ĐẠT", 2: "không chạy được"}
+    passed = sum(c == 0 for c in codes)
+    lines = [f"# Tổng hợp {known.lan} lượt: {'ĐẠT' if passed == known.lan else 'KHÔNG ĐẠT'} ({passed}/{known.lan} lượt đạt)",
+             "", "Chỉ ĐẠT khi mọi lượt đều đạt: khách chạy một lần là phải đúng lần đó.", "",
+             "| Lượt | Kết quả | Thời gian |", "| --- | --- | --- |"]
+    lines += [f"| {i} | {names.get(c, str(c))} | {t:.0f} giây |" for i, (c, t) in enumerate(zip(codes, times), 1)]
+    text = "\n".join(lines) + "\n"
+    say(text)
+    if known.out:
+        Path(known.out).mkdir(parents=True, exist_ok=True)
+        (Path(known.out) / "tong-hop.md").write_text(text, encoding="utf-8")
+    if any(c == 1 for c in codes):
+        return 1
+    return 2 if any(c != 0 for c in codes) else 0
+
+
 def run() -> int:
     """A crash is 'could not run' (2), never confused with KHÔNG ĐẠT (1)."""
     try:
-        return main()
+        return run_laps(sys.argv[1:])
     except SystemExit as exc:
         if isinstance(exc.code, str):
             say(exc.code)

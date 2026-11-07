@@ -13,6 +13,7 @@ next, never pretended.
 from __future__ import annotations
 
 import asyncio
+import re
 import logging
 from pathlib import Path
 from typing import Optional
@@ -70,15 +71,37 @@ def source_folder(paths: list) -> tuple:
     return parents.pop(), None
 
 
+# a monthly report's file name, and the names of the other workbooks a finance folder holds beside it
+_REPORT_NAME = re.compile(r"(^| )(bao cao|bc|report|quan tri|bctc|ket qua kinh doanh|kqkd)( |$)")
+_OTHER_NAME = re.compile(r"(^| )(pack|bod|trinh bay|slide|ke hoach|aop|aopr|budget|forecast|danh muc|cau hinh|"
+                         r"ty gia|cat giam|tham so|nam truoc|gl|so chi tiet|mastersale|ban hang|doanh thu)( |$)")
+
+
 def report_workbook(folder: Path) -> Optional[Path]:
-    """The one workbook in the folder that is not a trial balance, a kept original, or Excel's lock file."""
+    """The monthly report workbook in the folder: the one that is not a trial balance, a kept original or Excel's
+    lock file. A folder that also holds plans, a BOD pack or catalogues: the one whose name says report
+    ('BaoCao_QuanTri_T10') and nothing else. Two such names, or none: Clicky does not guess."""
     from engine.cli import read_rows
     from engine import sources
     from engine.intake import ORIGINAL_TAG
+    from engine.tables import _split_camel, key
     tbs = {stem for stem, _, _ in sources.find_trial_balances(folder, read_rows)}
     found = [p for p in sorted(folder.glob("*.xls*"))
              if p.stem not in tbs and ORIGINAL_TAG not in p.stem and not p.name.startswith("~$")]
-    return found[0] if len(found) == 1 else None
+    if len(found) == 1:
+        return found[0]
+    named = [p for p in found if _REPORT_NAME.search(key(_split_camel(p.stem)))
+             and not _OTHER_NAME.search(key(_split_camel(p.stem)))]
+    return named[0] if len(named) == 1 else None
+
+
+def args(argv: list) -> Optional[str]:
+    """The folder after --drop, when given: the rehearsal robot drops a folder the way a person would."""
+    if "--drop" in argv:
+        i = argv.index("--drop")
+        if i + 1 < len(argv):
+            return argv[i + 1]
+    return None
 
 
 def _same(a: Optional[str], b: Path) -> bool:

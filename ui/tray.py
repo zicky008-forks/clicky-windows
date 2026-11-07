@@ -77,6 +77,7 @@ class TrayManager(QObject):
     on_set_stt_language      = pyqtSignal(str)  # "" = auto-detect, else ISO code
     on_set_custom_instructions = pyqtSignal(str)
     on_outgoing_log = pyqtSignal()
+    on_present      = pyqtSignal()          # Trợ lý bên cạnh: follow a slide show, answer from the question bank
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -148,6 +149,9 @@ class TrayManager(QObject):
         # What Clicky sent to the AI, after masking names and IDs.
         outgoing_log = menu.addAction("Nhật ký gửi đi")
         outgoing_log.triggered.connect(self.on_outgoing_log)
+
+        present_action = menu.addAction("Trình bày báo cáo (trợ lý bên cạnh)…")
+        present_action.triggered.connect(self.on_present)
 
         # Off by default: Clicky's windows stay out of screenshots and screen recordings.
         recording_action = menu.addAction("Cho phép quay màn hình Clicky (để quay demo)")

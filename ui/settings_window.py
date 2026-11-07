@@ -63,12 +63,12 @@ class SettingsWindow(QWidget):
         voice_page = QWidget()
         voice = QFormLayout(voice_page)
         self.provider = QComboBox()
-        for label,value in (("Automatic",'auto'),("Windows voice — offline",'sapi'),("Microsoft online — sends each spoken sentence to Microsoft",'edge_tts'),("OpenAI — API key",'openai'),("ElevenLabs — API key",'elevenlabs')):
+        for label,value in (("Automatic",'auto'),("Tiếng Việt trên máy — offline",'vi_offline'),("Windows voice — offline",'sapi'),("Microsoft online — sends each spoken sentence to Microsoft",'edge_tts'),("OpenAI — API key",'openai'),("ElevenLabs — API key",'elevenlabs')):
             self.provider.addItem(label,value)
         self.provider.setCurrentIndex(max(0,self.provider.findData(setting('tts_provider','auto'))))
         voice.addRow("Speech provider",self.provider)
         self.transcription = QComboBox()
-        for label,value in (("Automatic",''),("Local Whisper",'faster_whisper'),("Local whisper.cpp",'whisper_cpp'),("Deepgram — internet",'deepgram'),("OpenAI Whisper — internet",'openai'),("Windows voice typing (Win+H) — internet",'windows')):
+        for label,value in (("Automatic",''),("Tiếng Việt trên máy — offline",'sherpa_vi'),("Local Whisper",'faster_whisper'),("Local whisper.cpp",'whisper_cpp'),("Deepgram — internet",'deepgram'),("OpenAI Whisper — internet",'openai'),("Type instead of talking",'typed')):
             self.transcription.addItem(label,value)
         import os
         self.transcription.setCurrentIndex(max(0,self.transcription.findData(os.getenv('CLICKY_STT',''))))

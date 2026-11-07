@@ -4,6 +4,11 @@ name: Windows installer build
 # Actions tab, or it runs when packaging files change in a pull request.
 on:
   workflow_dispatch:
+    inputs:
+      vieneu:
+        description: Bundle the VieNeu v3 offline voice
+        type: boolean
+        default: false
   push:
     tags: ['v*']
   pull_request:
@@ -15,6 +20,9 @@ on:
       - updates.py
       - installer.iss
       - requirements.txt
+      - tools/giong_noi/tai_model.py
+      - tools/giong_noi/tai_vieneu.py
+      - requirements-vieneu.txt
 permissions:
   contents: write        # a v* tag publishes the Velopack release for in-app updates
 jobs:
@@ -32,7 +40,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install -r requirements.txt pyinstaller
+      - run: python -m pip install -r requirements.txt pyinstaller sentencepiece
+      # Offline Vietnamese speech (~75 MB, Apache-2.0 weights), checked by SHA-256, bundled as voice/asr-vi.
+      - run: python tools/giong_noi/tai_model.py --model 70k --out voice/asr-vi
+      # Offline Vietnamese voice (Piper vais1000 through sherpa-onnx, ~63 MB, no espeak-ng).
+      - run: python tools/giong_noi/tai_model.py --model piper-vais1000 --out voice/tts-piper-vi
+      # VieNeu v3 (offline voice, Apache-2.0) without gradio/librosa/torch. Off until the blind listening
+      # test picks it: run the workflow by hand with vieneu=true, or set the repo variable CLICKY_VIENEU=1.
+      - name: VieNeu voice
+        if: inputs.vieneu == true || vars.CLICKY_VIENEU == '1'
+        run: |
+          python -m pip install -r requirements-vieneu.txt
+          python -m pip install --no-deps vieneu==3.8.3
+          python tools/giong_noi/tai_vieneu.py --precision both --out voice/vieneu
       - run: choco install innosetup --no-progress -y
       - run: .\build.bat installer
         shell: cmd

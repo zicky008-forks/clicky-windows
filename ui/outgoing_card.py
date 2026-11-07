@@ -14,6 +14,8 @@ from PyQt6.QtWidgets import (
     QPushButton, QVBoxLayout, QWidget,
 )
 
+from ui.card_layout import BOARD, record_widget, settle
+
 from ui.choice_card import _CARD, _PRIMARY, _SECONDARY
 
 VISIBLE_LINES = 12
@@ -34,6 +36,10 @@ def _mono() -> QFont:
 
 class OutgoingCard(QWidget):
     answered = pyqtSignal(bool)
+
+    def hideEvent(self, event):
+        BOARD.release("outgoing_card")       # its place on screen is free again for cards
+        super().hideEvent(event)
 
     def __init__(self):
         super().__init__()
@@ -139,7 +145,11 @@ class OutgoingCard(QWidget):
         self.adjustSize()
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         area = screen.availableGeometry()
-        self.move(area.right() - self.width() - 28, area.bottom() - self.height() - 72)
+        spot = (area.right() - self.width() - 28, area.bottom() - self.height() - 72)
+        x, y, placed = settle("outgoing_card", spot, (self.width(), self.height()),
+                              (area.left(), area.top(), area.right(), area.bottom()))
+        self.move(int(x), int(y))
+        record_widget("outgoing_card", placed)
         self._open = True
         self.show()
         self.raise_()

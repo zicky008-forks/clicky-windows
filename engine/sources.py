@@ -19,6 +19,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
+from engine import roles
 from engine.trial_balance import ZERO, fold, parse_amount, read_trial_balance
 
 # Header words after fold() with spaces removed.
@@ -213,8 +214,9 @@ def load_order_file(path: Path) -> Optional[OrderFile]:
     data, footers = [], []
     for r in rows[1:]:
         # A row without a date is not an order (exports often end with a "Tổng cộng" line whose
-        # amount is the whole file); counting it would double the file in the yardstick.
-        blank = cols["date"] >= len(r) or not str(r[cols["date"]] or "").strip()
+        # amount is the whole file); counting it would double the file in the yardstick. A date cell with
+        # no digit at all ("Tổng", "Cộng", "Total") is that footer too; the query drops the same rows.
+        blank = cols["date"] >= len(r) or not any(ch.isdigit() for ch in str(r[cols["date"]] or ""))
         (footers if blank else data).append(r)
     order = date_order([r[cols["date"]] for r in data if cols["date"] < len(r)])
     return OrderFile(path, rows[0], data, cols, order, footers, delim)
@@ -303,6 +305,8 @@ def find_trial_balances(folder: Path, read_rows) -> list:
     for p in sorted(folder.glob("*.xlsx")):
         if p.name.startswith("~$"):
             continue
+        if roles.is_plan(p.name):
+            continue  # an AOP/AOPR laid out like a trial balance is a plan, never "Số chính thức"
         try:
             rows = read_rows(p)
             tb = read_trial_balance(rows, p.stem[:31])
@@ -341,6 +345,22 @@ def ledger_movement(tb, prefix: str, side: str) -> Decimal:
 def revenue_account(tb) -> str:
     """5111 (goods) when the ledger splits 511, else 511."""
     return "5111" if any(l.account.startswith("5111") for l in tb.leaves) else "511"
+
+
+def revenue_scope(tb, source_gross: Decimal, tol: Decimal = Decimal(1)) -> str:
+    """The 511 scope the order files cover: 5111 alone, or every 511 sub-account.
+
+    A sales export may hold goods only (5111) or goods and finished products together
+    (5111 + 5112 ...). Picking 5111 by default reports a false gap equal to the other
+    sub-accounts. Take the scope whose credit movement matches the files; when neither
+    matches, take the closer one; the gap is still reported, never hidden.
+    """
+    default = revenue_account(tb)
+    scopes = list(dict.fromkeys((default, "511")))
+    # Exact match first; otherwise the closest scope, so a real gap in a goods+products file is not
+    # inflated by the whole of 5112. The receipt names the scope used.
+    return min(scopes, key=lambda a: (abs(ledger_movement(tb, a, "cr") - source_gross) > tol,
+                                      abs(ledger_movement(tb, a, "cr") - source_gross)))
 
 
 def returns_in_revenue(tb) -> Decimal:

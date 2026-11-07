@@ -13,6 +13,8 @@ from PyQt6.QtWidgets import (
     QApplication, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
+from ui.card_layout import BOARD, settle
+
 _CARD = ("QFrame#card { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 14px; }"
          "QLabel#question { color: #0F172A; }"
          "QPushButton#close { background: transparent; border: none; color: #94A3B8; font-size: 16px; }"
@@ -186,12 +188,25 @@ class ChoiceCard(QWidget):
         area = screen.availableGeometry()
         if card:
             # The receipt stands on the right, under the ribbon, where a sheet's figures rarely are.
-            self.move(area.right() - self.width() - 96, area.top() + max(160, int(area.height() * 0.18)))
+            spot = (area.right() - self.width() - 96, area.top() + max(160, int(area.height() * 0.18)))
         else:
             # Bottom-right, above Excel's sheet tabs and status bar: the corner least likely to hold figures.
-            self.move(area.right() - self.width() - 28, area.bottom() - self.height() - 72)
+            spot = (area.right() - self.width() - 28, area.bottom() - self.height() - 72)
+        # ...unless figures or Clicky's explanation card are there: then the nearest free place instead.
+        bounds = (area.left(), area.top(), area.right(), area.bottom())
+        x, y, placed = settle("choice", spot, (self.width(), self.height()), bounds)
+        self.move(int(x), int(y))
+        try:
+            import scene_log
+            scene_log.record("choice_card", **placed)
+        except Exception:
+            pass
         self.show()
         self.raise_()
+
+    def hideEvent(self, event):
+        BOARD.release("choice")
+        super().hideEvent(event)
 
     def _pick(self, label: str) -> None:
         self.hide()

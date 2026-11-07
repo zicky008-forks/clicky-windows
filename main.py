@@ -258,15 +258,22 @@ def main():
     caption.setFixedWidth(620)
     def _caption(text):
         from storage import setting
+        from ui.card_layout import BOARD, record_widget, settle
         if not text or not setting('captions',True):
             caption.hide()
+            BOARD.release("caption")
             return
         from PyQt6.QtGui import QCursor
         screen = app.screenAt(QCursor.pos()) or app.primaryScreen()
         area = screen.availableGeometry()
         caption.setText(text)
         caption.adjustSize()
-        caption.move(area.center().x()-caption.width()//2,area.bottom()-caption.height()-30)
+        # Bottom centre, unless figures or a card are there (it is drawn over Excel, like the cards).
+        x, y, placed = settle("caption", (area.center().x()-caption.width()//2, area.bottom()-caption.height()-30),
+                              (caption.width(), caption.height()),
+                              (area.left(), area.top(), area.right(), area.bottom()))
+        caption.move(int(x), int(y))
+        record_widget("caption", placed)
         caption.show()
         try:
             from screen.privacy import exclude_window
@@ -303,13 +310,10 @@ def main():
     manager.sig_dictation_ready.connect(_dictation_ready)
 
     def _voice_typing(into_chat: bool):
-        # Windows voice typing writes into whichever box has focus, so focus
-        # Clicky's composer first unless the user is dictating into their app.
-        from PyQt6.QtCore import QTimer
-        import keyboard
-        if into_chat:
-            panel.focus_composer()
-        QTimer.singleShot(250, lambda: keyboard.send("windows+h"))
+        # No speech model on this PC: the talk key opens the typed chat. Windows voice typing (Win+H)
+        # is never started: it sends audio to Microsoft and types into whatever window has focus.
+        panel.focus_composer()
+        manager.sig_notice.emit("Máy này chưa có bộ nghe tiếng Việt. Chị gõ câu hỏi vào đây nhé.")
     manager.sig_voice_typing.connect(_voice_typing)
 
     def _review_drive(value):
@@ -722,6 +726,42 @@ def main():
 
     tray.on_quit.connect(lambda: (tray.hide_icon(), manager.shutdown(), app.quit()))
 
+    # ── Trợ lý bên cạnh: follow the presenter's slide show ─────────────────────
+    from ui.present_mode import PresentMode, present_args
+    _present = [None]
+    def _start_present(spec, xlsx, deck):
+        if _present[0] is not None:
+            _present[0].stop()
+        panel.hide()                     # the chat never shows during a talk
+        mode = PresentMode(manager, spec, xlsx, deck)
+        mode.finished.connect(lambda path: path and tray.show_notification("Đã lưu biên bản buổi trình bày", path))
+        _present[0] = mode
+        try:
+            exclude_window(mode.panel, not _allow_recording())
+        except OSError:
+            pass
+        try:
+            mode.start()
+        except Exception as exc:         # noqa: BLE001 - say it plainly, never crash the app
+            import logging
+            logging.getLogger(__name__).exception("present mode failed")
+            manager.sig_error.emit(f"Không mở được phần trình bày: {exc}")
+    def _pick_present():
+        from PyQt6.QtWidgets import QFileDialog
+        spec = QFileDialog.getExistingDirectory(None, "Thư mục kịch bản (kich_ban.yaml, hoi_dap.yaml)")
+        if not spec:
+            return
+        xlsx, _ = QFileDialog.getOpenFileName(None, "File số liệu Excel", spec, "Excel (*.xlsx *.xlsm)")
+        if not xlsx:
+            return
+        deck, _ = QFileDialog.getOpenFileName(None, "File PowerPoint", spec, "PowerPoint (*.pptx)")
+        if deck:
+            _start_present(spec, xlsx, deck)
+    tray.on_present.connect(_pick_present)
+    _present_cli = present_args(sys.argv)
+    from office.bod_skill import args as bod_args
+    from office.drop import args as drop_args
+
     # ── Global hotkey ─────────────────────────────────────────────────────────
     _shortcuts = []
     _text_shortcut = [None]
@@ -782,6 +822,13 @@ def main():
         welcome.started.connect(lambda: start_after_welcome(manager))
         QTimer.singleShot(400, welcome.present)
         _setup_keepalive[0] = welcome           # keep a reference so it isn't GC'd
+    elif drop_args(sys.argv):
+        # Clicky.exe --drop <folder>: the same path as a folder dropped on the drop zone (rehearsal robot)
+        QTimer.singleShot(800, lambda: manager.submit_drop([drop_args(sys.argv)]))
+    elif bod_args(sys.argv):
+        QTimer.singleShot(800, lambda: manager.submit_bod_review(bod_args(sys.argv)))
+    elif _present_cli:
+        QTimer.singleShot(600, lambda: _start_present(_present_cli["spec"], _present_cli["xlsx"], _present_cli["deck"]))
     elif not _setting("start_hidden", False):
         QTimer.singleShot(400, panel.show)       # the open chat says what to type; no toast on top of it
     else:

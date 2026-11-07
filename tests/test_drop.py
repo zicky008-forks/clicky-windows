@@ -57,6 +57,19 @@ def test_the_report_workbook_is_the_one_that_is_not_a_trial_balance(tmp_path):
     assert drop.report_workbook(book.parent) is None
 
 
+def test_a_folder_with_plans_and_a_bod_pack_still_finds_the_report_by_its_name(tmp_path):
+    """The BHC-style folder: trial balances, plans, catalogues, a BOD pack and one 'BaoCao_QuanTri_T10'."""
+    book = _sample(tmp_path)
+    folder = book.parent
+    book.rename(folder / "BaoCao_QuanTri_T10.xlsx")
+    for name in ("Pack_BOD_T10_ban_nhap.xlsx", "KeHoach_AOPR1_FY2627.xlsx", "DanhMuc_CauHinh.xlsx",
+                 "TyGia_FY2627.xlsx", "CatGiam_ThamSo.xlsx", "NamTruoc_FY2526.xlsx", "Bao cao BOD T10.xlsx"):
+        (folder / name).write_bytes(b"x")
+    assert drop.report_workbook(folder) == folder / "BaoCao_QuanTri_T10.xlsx"
+    (folder / "BC thang 10 ban 2.xlsx").write_bytes(b"x")                 # two reports: Clicky does not guess
+    assert drop.report_workbook(folder) is None
+
+
 class _Excel:
     def __init__(self, folder=None, path=None):
         self.folder, self.path, self.opened = folder, path, []

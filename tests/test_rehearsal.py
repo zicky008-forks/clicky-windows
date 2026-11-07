@@ -166,7 +166,7 @@ def test_month_close_play_logs_each_beat(tmp_path, monkeypatch):
     asyncio.run(month_close.play(Manager(), [beat]))
     events = [json.loads(x) for x in target.read_text(encoding="utf-8").splitlines()]
     kinds = [e["event"] for e in events]
-    assert kinds == ["locate", "beat", "spoken"]
+    assert kinds == ["locate", "beat", "spoken", "story_end"]
     assert events[1]["box"] == [10.0, 20.0, 110.0, 40.0] and events[2]["spoke"] is True
 
 
@@ -292,8 +292,155 @@ def test_source_choice_never_matches_a_longer_name_sharing_the_prefix():
 
 
 def test_returns_line_may_be_negative_on_the_report():
-    exp = {"numbers": [{"name": "Hàng trả lại 120 triệu", "sheet": "BC", "label": "hàng trả lại",
-                        "value": 120000000, "tolerance": 1000000, "abs": True}]}
-    sheets = {"BC thang": [["Trừ hàng trả lại", None, -120000000.0]]}
-    res = checks.evaluate([], sheets, exp)
-    assert [c for c in res.checks if c.name == "Hàng trả lại 120 triệu"][0].ok
+    exp = json.loads((Path(__file__).resolve().parents[1] / "tools" / "dien_tap" / "mau_expected.json")
+                     .read_text(encoding="utf-8"))
+    exp = {"numbers": [n for n in exp["numbers"] if n["name"] == "Hàng trả lại 120 triệu"]}
+    for row in (["Trừ hàng trả lại", None, -120000000.0],
+                # the sample's real line (PC, 07/11): "hàng bán bị trả lại", so "hàng trả lại" never matched
+                ["Trừ: hàng bán bị trả lại đang ghi thẳng Nợ TK 511", "511, 521, 515, 711, 911", -120000000.0]):
+        res = checks.evaluate([], {"BC thang": [row]}, exp)
+        assert [c for c in res.checks if c.name == "Hàng trả lại 120 triệu"][0].ok, row
+
+
+def test_laps_pass_only_when_every_lap_passes(tmp_path):
+    """--lan N is pass^k: one KHÔNG ĐẠT lap fails the whole run, and each lap has its own folder."""
+    import rehearse
+    seen, cleaned = [], []
+
+    def runner(argv):
+        seen.append(argv)
+        return [0, 1, 0][len(seen) - 1]
+
+    code = rehearse.run_laps(["--workbook", "x.xlsx", "--lan", "3", "--out", str(tmp_path)],
+                             runner=runner, cleanup=cleaned.append, before=set)
+    assert code == 1
+    assert [a[-1] for a in seen] == [str(tmp_path / f"lan-{i}") for i in (1, 2, 3)]
+    assert all("--lan" not in a for a in seen)
+    assert len(cleaned) == 2                       # between laps only; the last lap stays open to inspect
+    summary = (tmp_path / "tong-hop.md").read_text(encoding="utf-8")
+    assert "KHÔNG ĐẠT (2/3 lượt đạt)" in summary
+
+
+def test_laps_all_pass_and_could_not_run():
+    import rehearse
+    assert rehearse.run_laps(["--lan", "2"], runner=lambda a: 0, cleanup=lambda k: None, before=set) == 0
+    assert rehearse.run_laps(["--lan", "2"], runner=lambda a: 2, cleanup=lambda k: None, before=set) == 2
+
+
+def test_single_lap_is_unchanged():
+    import rehearse
+    seen = []
+    assert rehearse.run_laps(["--workbook", "x.xlsx", "--out", "o"], runner=lambda a: seen.append(a) or 0) == 0
+    assert seen == [["--workbook", "x.xlsx", "--out", "o"]]
+
+
+def test_notes_scene_shows_sticky_notes_instead_of_a_lit_range():
+    events = good_run() + [
+        {"t": 80.0, "event": "beat", "i": 2, "ref": "'BC thang'!A1:G23", "box": BOX, "graphic": {"kind": "notes"}},
+        {"t": 80.1, "event": "draw", "shape": {"kind": "notes", "notes": []}},
+    ]
+    res = checks.evaluate(events, SHEETS, EXPECTED)
+    assert "Khung sáng nằm đúng ô Excel" not in [c.name for c in res.checks if not c.ok]
+    events[-1] = {"t": 80.1, "event": "draw", "shape": {"kind": "card"}}
+    res = checks.evaluate(events, SHEETS, EXPECTED)
+    assert "Khung sáng nằm đúng ô Excel" in [c.name for c in res.checks if not c.ok]
+
+
+def test_old_robot_copies_leave_the_case_folder_before_a_run(tmp_path):
+    import rehearse
+    case = tmp_path / "case"
+    case.mkdir()
+    src = case / "BaoCao_T10_Beta.xlsx"
+    keep = [src, case / "NhatKy_Ban_Hang.xlsx", case / "BaoCao_T10_Beta_ban-goc.xlsx"]
+    old = [case / "BaoCao_T10_Beta_dientap_1107_123225.xlsx",
+           case / "BaoCao_T10_Beta_dientap_1107_123225_ban-goc.xlsx"]
+    for f in keep + old + [case / "~$BaoCao_T10_Beta_dientap_1107_130000.xlsx"]:
+        f.write_bytes(b"x")
+    dest = tmp_path / "out" / "ban-sao-cu"
+    moved = rehearse.park_old_copies(src, dest)
+    assert sorted(moved) == sorted(f.name for f in old)
+    assert all(f.exists() for f in keep)
+    assert not any(f.exists() for f in old)
+    assert sorted(p.name for p in dest.iterdir()) == sorted(f.name for f in old)
+    assert rehearse.park_old_copies(src, dest) == []
+
+
+def test_story_is_not_over_at_the_final_card_while_scenes_remain():
+    """lan3-v2, 07/11: the robot graded 6 s after the profit card, while Clicky was still showing it
+    (no voice, long reading time), and the bridge and sticky notes never came on screen."""
+    import rehearse
+    t = "Lợi nhuận sau thuế"
+    ev = [{"event": "turn"}, {"event": "beat", "title": "Báo cáo tháng đã lập"},
+          {"event": "beat", "title": "Lợi nhuận sau thuế thực"}, {"event": "spoken", "i": 3}]
+    assert not rehearse.story_ended(ev, t)
+    more = ev + [{"event": "beat", "title": "", "graphic": {"kind": "bridge"}},
+                 {"event": "beat", "title": "", "graphic": {"kind": "notes"}}]
+    assert not rehearse.story_ended(more, t)
+    assert rehearse.story_ended(more + [{"event": "beat", "title": "", "choices": ["Lưu và kiểm tra"]}], t)
+    assert rehearse.story_ended(ev + [{"event": "guided", "active": False}], t)
+    assert rehearse.story_ended(more + [{"event": "story_end", "beats": 6, "choices": []}], t)   # PR #25
+    assert not rehearse.story_ended([{"event": "beat", "title": "Lệch", "choices": ["Sửa giúp tôi"]}], t)
+
+
+def test_busy_excel_is_retried_not_a_robot_crash(monkeypatch):
+    """Run (c), 07/11: reading the sheets right after Clicky saved got 'Call was rejected by callee'."""
+    import rehearse
+    monkeypatch.setattr(rehearse.time, "sleep", lambda s: None)
+
+    class Rejected(Exception):
+        pass
+
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 3:
+            raise Rejected(-2147418111, "Call was rejected by callee.", None, None)
+        return "ok"
+
+    assert rehearse.com_retry(flaky) == "ok" and len(calls) == 3
+
+    def broken():
+        raise Rejected(-2147352567, "Exception occurred.", None, None)
+
+    import pytest
+    with pytest.raises(Rejected):
+        rehearse.com_retry(broken)
+    with pytest.raises(Rejected):
+        rehearse.com_retry(lambda: (_ for _ in ()).throw(Rejected(-2147418111, "busy")), tries=2)
+
+
+def _fake_excel(monkeypatch, app):
+    import types
+    client = types.SimpleNamespace(Dispatch=lambda name: app)
+    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=client))
+    monkeypatch.setitem(sys.modules, "win32com.client", client)
+
+
+def test_other_workbooks_are_counted_never_named(monkeypatch):
+    import types
+    import pytest
+    import rehearse
+    named = types.SimpleNamespace(Name="So_cai_cong_ty_that.xlsx")
+    _fake_excel(monkeypatch, types.SimpleNamespace(Workbooks=types.SimpleNamespace(Count=2, __iter__=lambda: iter([named]))))
+    with pytest.raises(SystemExit) as exc:
+        rehearse.no_workbook(False)
+    assert "2 file khác" in str(exc.value) and "So_cai" not in str(exc.value)
+
+
+def test_excel_stuck_behind_a_dialog_is_said_plainly(monkeypatch):
+    """Run (e), 07/11: a Save As dialog held Excel; the next run crashed on excel.Workbooks."""
+    import types
+    import pytest
+    import rehearse
+    monkeypatch.setattr(rehearse.time, "sleep", lambda s: None)
+
+    class Stuck:
+        @property
+        def Workbooks(self):
+            raise AttributeError("Excel.Application.Workbooks")
+
+    _fake_excel(monkeypatch, Stuck())
+    with pytest.raises(SystemExit) as exc:
+        rehearse.no_workbook(False)
+    assert "hộp thoại" in str(exc.value)
