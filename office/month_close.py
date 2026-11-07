@@ -1389,15 +1389,15 @@ def _file_error_vi(file: str, text: str) -> str:
     """Which file, which column when Excel says, and one next step (grader F6). Never a value from Excel's message:
     it can quote a cell of the file; the raw message goes to the scene log only, scrubbed."""
     col = re.search(r"column '([^']+)' of the table wasn't found", text, re.I)
-    resave = (f"Chị mở file {file} bằng Excel, chọn File > Save As, lưu thành CSV UTF-8 cùng thư mục và cất bản cũ "
+    resave = (f"{you(True)} mở file {file} bằng Excel, chọn File > Save As, lưu thành CSV UTF-8 cùng thư mục và cất bản cũ "
               "ra chỗ khác, rồi gọi em làm lại.")
     if col:
-        what, step = f"không thấy cột \"{col.group(1)}\"", f"Chị xem file {file} còn cột đó không, rồi gọi em làm lại."
+        what, step = f"không thấy cột \"{col.group(1)}\"", f"{you(True)} xem file {file} còn cột đó không, rồi gọi em làm lại."
     elif re.search(r"DataFormat\.Error|couldn't convert|could not convert", text, re.I):
         what = "có một ô không đổi được sang số hoặc ngày"      # never the cell itself: Excel's text quotes it
-        step = f"Chị tìm ô đó trong file {file}, sửa cho đúng số hoặc ngày, rồi gọi em làm lại."
+        step = f"{you(True)} tìm ô đó trong file {file}, sửa cho đúng số hoặc ngày, rồi gọi em làm lại."
     elif re.search(r"DataSource\.(Error|NotFound)|being used by another|access.*denied", text, re.I):
-        what, step = "file đang mở ở nơi khác hoặc không mở được", f"Chị đóng file {file} ở nơi khác rồi gọi em làm lại."
+        what, step = "file đang mở ở nơi khác hoặc không mở được", f"{you(True)} đóng file {file} ở nơi khác rồi gọi em làm lại."
     elif re.search(r"field '[^']+' of the record wasn't found|wasn't recognized|Excel\.Workbook", text, re.I):
         what, step = "bên trong file khác cách em đọc loại file này", resave
     else:
