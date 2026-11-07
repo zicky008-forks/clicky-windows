@@ -213,8 +213,8 @@ def wait_event(log: Path, kind: str, timeout: float, where=lambda e: True) -> di
     return None
 
 
-def show_outcome(log: Path, timeout: float = 20.0) -> str:
-    """'attached' / 'failed' from Clicky's own events (builds with BHC 6320d44: it retries for up to 12 s),
+def show_outcome(log: Path, timeout: float = 40.0) -> str:
+    """'attached' / 'failed' from Clicky's own events (BHC fb08855: two attempts, 15 s grace; BHC asks ≥ 30 s),
     or 'unknown' on an older build that logs neither, which then falls back to waiting for the window."""
     e = wait_event(log, "", timeout, where=lambda e: e.get("event") in ("present_attached", "present_failed"))
     if e is None:
@@ -337,6 +337,9 @@ def main(argv=None) -> int:
             say("Clicky không bắt đầu trình chiếu sau 60 giây.")
         elif show_outcome(log) == "failed":
             say("Clicky báo không mở được trình chiếu (present_failed); robot dừng đúng chỗ.")
+            for e in read_events(log):          # what Clicky tried, for the BHC thread (no file names in these)
+                if e.get("event") in ("present_retry", "present_failed"):
+                    say("   " + json.dumps({k: v for k, v in e.items() if k != "ts"}, ensure_ascii=False))
         else:
             win = show_window()
             hwnd = int(win.HWND)
