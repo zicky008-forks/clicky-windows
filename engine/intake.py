@@ -52,6 +52,8 @@ class Dropped:
     amount: Optional[Decimal]        # None for a whole file or a total line (its figure is in the reason)
     reason: str
     rows: int = 1
+    kind: str = ""                   # the card's group when the wording cannot tell it: "cancel", "title", "sign",
+                                     # "unread" (a table-like file Clicky could not use: format, or a missing column)
 
 
 @dataclass
@@ -155,15 +157,48 @@ def _tb_line(name: str, rows, tb, previous=None) -> tuple:
     return line, items
 
 
+# A Status that only says the order went through: not worth a person's look on the receipt.
+_DONE = {"completed", "complete", "paid", "delivered", "fulfilled", "closed", "success", "successful", "done",
+         "hoan thanh", "da hoan thanh", "da giao", "giao thanh cong", "thanh cong", "da thanh toan"}
+_SIGN = re.compile(r"^(nguoi lap|ke toan|giam doc|thu truong|thu quy|ngay \d|ngay\.|lap bieu|ky,|\(ky|signature|prepared)")
+
+
+def _status_note(f) -> str:
+    """The other Status values in a file, with how many orders carry each: they stay in, a person decides."""
+    s = f.columns.get("status")
+    if s is None:
+        return ""
+    from collections import Counter
+    seen = Counter(str(_cell(r, s) or "").strip() for r in f.rows)
+    other = [(v, n) for v, n in seen.most_common() if v and re.sub(r"\s+", " ", fold(v)).strip() not in _DONE]
+    if not other:
+        return ""
+    shown = ", ".join(f"\"{v}\" {n} đơn" for v, n in other[:4]) + ("…" if len(other) > 4 else "")
+    return f"trạng thái cần xem: {shown} (em vẫn tính vào doanh thu)"
+
+
 def _order_lines(files: list, truth, period: Optional[tuple]) -> tuple:
     lines, items = [], []
     for f in files:
         a = f.columns.get("amount")
-        total = sum((_amount(_cell(r, a)) for r in f.rows), ZERO)
+        cancelled = getattr(f, "cancelled", [])
+        preamble = getattr(f, "preamble", [])
+        void = sum((_amount(_cell(r, a)) for r in cancelled), ZERO)
+        total = sum((_amount(_cell(r, a)) for r in f.rows), ZERO) + void
         used_rows, used = truth.by_file.get(f.name, (0, ZERO))
         dups = [(doc, amt) for doc, name, amt in truth.duplicates if name == f.name]
         outside = [(doc, d, amt) for doc, name, d, amt in truth.outside if name == f.name]
-        dropped = sum((amt for _, amt in dups), ZERO) + sum((amt for *_, amt in outside), ZERO)
+        dropped = sum((amt for _, amt in dups), ZERO) + sum((amt for *_, amt in outside), ZERO) + void
+        if preamble:
+            title = next((str(c).strip() for r in preamble for c in r if str(c or "").strip()), "")
+            items.append(Dropped(f"{len(preamble)} dòng tiêu đề phía trên bảng", f.name, None,
+                                 "tên báo cáo, công ty, kỳ: không phải đơn hàng" + (f" (\"{title[:60]}\")" if title else ""),
+                                 rows=len(preamble), kind="title"))
+        st = f.columns.get("status")
+        for r in cancelled:
+            doc = str(_cell(r, f.columns.get("doc")) or "").strip() if "doc" in f.columns else ""
+            items.append(Dropped(f"Đơn {doc or '(không số)'} trạng thái \"{str(_cell(r, st) or '').strip()}\"", f.name,
+                                 _amount(_cell(r, a)), "đơn đã huỷ, không phải doanh thu", kind="cancel"))
         for doc, amt in dups:
             items.append(Dropped(f"Đơn {doc} bị xuất 2 lần", f.name, amt, "trùng hệt một dòng khác, bỏ 1 bản"))
         for doc, d, amt in outside:
@@ -174,19 +209,36 @@ def _order_lines(files: list, truth, period: Optional[tuple]) -> tuple:
                          "Dòng không có ngày")
             blank = not str(_cell(r, a) or "").strip()
             value = _amount(_cell(r, a))
+            no_figure = not any(ch.isdigit() for ch in str(_cell(r, a) or ""))
+            if no_figure and (preamble or getattr(f, "kind", "csv") != "csv") and _SIGN.match(fold(label)):
+                # A print layout's signature block: "Người lập biểu", "Ngày 31 tháng 10 năm 2026".
+                items.append(Dropped(f"Dòng \"{label[:60]}\" cuối file", f.name, None,
+                                     "dòng ký tên cuối file, không phải đơn hàng", kind="sign"))
+                continue
             check = ("khớp tổng các dòng" if abs(value - total) <= TOLERANCE else f"lệch tổng các dòng {spoken(value - total)}")
             items.append(Dropped(f"Dòng \"{label}\" cuối file", f.name, None,
                                  "dòng tổng cuối file, không phải đơn hàng" +
                                  ("" if blank else f", ghi {spoken(value)}, dùng làm mốc kiểm: {check}")))
-        lines.append(FileLine(name=f.name, kind="Bán hàng", period=_period_text(period), unit="đồng",
+        note = _status_note(f)
+        lines.append(FileLine(name=f.name, kind="Bán hàng", period=_period_text(period), unit=_unit(preamble) or "đồng",
                               rows=used_rows, rows_label=f"{used_rows} đơn",
-                              checks=f"tổng {spoken(used)}", total=total, used=used, dropped=dropped,
-                              rows_total=len(f.rows) + len(f.footers), rows_used=used_rows,
-                              rows_dropped=len(dups) + len(outside) + len(f.footers)))
+                              checks=f"tổng {spoken(used)}" + (f" · {note}" if note else ""), total=total, used=used,
+                              dropped=dropped,
+                              rows_total=len(f.rows) + len(f.footers) + len(cancelled) + len(preamble),
+                              rows_used=used_rows,
+                              rows_dropped=len(dups) + len(outside) + len(f.footers) + len(cancelled) + len(preamble)))
     return lines, items
 
 
 _LEDGER_AMOUNT = ("sotien", "giatri", "psno", "psco", "phatsinh", "debit", "credit", "amount", "thanhtien")
+
+
+def _missing(header: list, cols: dict) -> str:
+    """'thiếu cột ngày (em thấy: Order ID, SKU, Amount…)': what an order file needs and this one lacks."""
+    lacks = [name for role, name in (("date", "cột ngày"), ("amount", "cột số tiền")) if role not in cols]
+    seen = [str(h).strip() for h in header if str(h or "").strip()]
+    shown = ", ".join(seen[:5]) + ("…" if len(seen) > 5 else "")
+    return f"thiếu {' và '.join(lacks)}" + (f" (em thấy các cột: {shown})" if shown else "")
 
 
 def _csv_why(p: Path) -> str:
@@ -194,9 +246,10 @@ def _csv_why(p: Path) -> str:
     import csv as _csv
     try:
         with open(p, newline="", encoding="utf-8-sig") as f:
-            header = next(_csv.reader(f), [])
+            top = [row for _, row in zip(range(sources.HEADER_SCAN), _csv.reader(f))]
     except (OSError, UnicodeDecodeError):
         return "em chưa mở được file CSV này"
+    header = top[0] if top else []
     cols = sources.find_columns(header)
     keys = {sources._key(h) for h in header}
     has_date = "date" in cols or any(k.startswith(("ngay", "date")) for k in keys)
@@ -204,6 +257,10 @@ def _csv_why(p: Path) -> str:
     # never to read a ledger detail as sales.
     has_amount = "amount" in cols or any(k.startswith(_LEDGER_AMOUNT) for k in keys)
     if not (has_date and has_amount):
+        at, best = sources.best_header(top)
+        if at is not None and ("date" in best) != ("amount" in best):
+            # One of the two order columns is there under a name Clicky knows: say which one is missing.
+            return _missing(top[at], best) + ", em chưa dùng file này"
         return "không có cột ngày và cột số tiền, không phải file đơn hàng"
     from engine.trial_balance import fold
     text = re.sub(r"[^a-z0-9]", "", fold(p.stem + " " + " ".join(str(h) for h in header)))
@@ -230,9 +287,14 @@ def _unused_files(folder: Path, used: set, workbook: Optional[str], roles: dict)
         elif suffix in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".heic"):
             why = "ảnh, vai trò Ghi chú: em không bao giờ lấy số từ ảnh"
         elif suffix == ".xls":
-            why = "định dạng .xls cũ, em chưa đọc được; anh mở và lưu lại thành .xlsx"
+            why, kind = _xls_why(p)
+            out.append(Dropped(f"File {p.name}", p.name, None, why, rows=0, kind=kind))
+            continue
         elif suffix == ".csv":
             why = _csv_why(p)
+            if why.startswith("thiếu"):
+                out.append(Dropped(f"File {p.name}", p.name, None, why, rows=0, kind="unread"))
+                continue
         elif suffix in (".xlsx", ".xlsm"):
             why = "không phải sổ cân đối tài khoản"
         elif suffix not in DATA_SUFFIXES:
@@ -241,6 +303,35 @@ def _unused_files(folder: Path, used: set, workbook: Optional[str], roles: dict)
             why = "không phải file số liệu, em không lấy số từ file này"
         out.append(Dropped(f"File {p.name}", p.name, None, why, rows=0))
     return out
+
+
+def unused_files(folder: Path, used: set, workbook: Optional[str] = None) -> list:
+    """Public face of _unused_files: every data-looking file not in `used`, with why it was not used."""
+    return _unused_files(folder, used, workbook, {})
+
+
+def _xls_why(p: Path) -> tuple:
+    """(why, card group) for a .xls that is neither an order file nor a trial balance: read by its bytes first."""
+    from engine import tabular
+    try:
+        found = tabular.sheets(p)
+    except tabular.Unreadable as exc:
+        return f"chưa đọc được định dạng: {exc}", "unread"
+    best_at, best_cols, best_rows = None, {}, []
+    for _, rows in found:
+        at, cols = sources.best_header(rows)
+        if len(cols) > len(best_cols):
+            best_at, best_cols, best_rows = at, cols, rows
+    if best_at is not None and "date" in best_cols and "amount" in best_cols:
+        return "có tiêu đề cột ngày và số tiền nhưng không có dòng đơn hàng nào bên dưới", "unread"
+    if best_at is not None and ("date" in best_cols or "amount" in best_cols):
+        return _missing(best_rows[best_at], best_cols) + ", em chưa dùng file này", "unread"
+    return "không có cột ngày và cột số tiền, không phải file đơn hàng hay sổ cân đối", ""
+
+
+def unread(intake: Intake) -> list:
+    """Table-like files in the folder Clicky could not use as orders (format, or a missing column)."""
+    return [d for d in intake.dropped if d.kind == "unread"]
 
 
 def query_files(folder: Path) -> list:
@@ -333,7 +424,7 @@ def summarize_dropped(items: list, limit: int = 4) -> list:
     """Short phrases for the card; the full list with every amount goes to the Biên bản sheet."""
     groups = {}
     for d in items:
-        key = ("dup" if d.what.startswith("Đơn") and "xuất 2 lần" in d.what else
+        key = d.kind or ("dup" if d.what.startswith("Đơn") and "xuất 2 lần" in d.what else
                "out" if d.what.startswith("Đơn") else
                "foot" if d.what.startswith("Dòng \"") and "cuối file" in d.what else
                "tbfoot" if d.what.startswith("Dòng \"") else
@@ -354,6 +445,15 @@ def summarize_dropped(items: list, limit: int = 4) -> list:
             out.append(f"{len(ds)} dòng \"Tổng cộng\" cuối sổ cân đối (dùng làm mốc kiểm)")
         elif key == "tb":
             out.append(f"{len(ds)} dòng sổ cân đối có mã TK không đọc được ({spoken(total)})")
+        elif key == "cancel":
+            out.append(f"{len(ds)} đơn đã huỷ ở {where}, không tính doanh thu ({spoken(total)})")
+        elif key == "title":
+            out.append(f"{sum(d.rows for d in ds)} dòng tiêu đề phía trên bảng ở {where}")
+        elif key == "sign":
+            out.append(f"{len(ds)} dòng ký tên cuối file ở {where}")
+        elif key == "unread":
+            out.append(f"{len(ds)} file em chưa đọc được: " + "; ".join(f"{d.file} {d.reason}" for d in ds[:2])
+                       + ("…" if len(ds) > 2 else ""))
         else:
             out.append(f"{len(ds)} file không dùng: " + ", ".join(d.file for d in ds[:2]) + ("…" if len(ds) > 2 else ""))
     return out[:limit] + ([f"và {len(out) - limit} nhóm khác, xem sheet Bien ban Clicky"] if len(out) > limit else [])

@@ -619,7 +619,7 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
         return [Beat("File Excel này chưa được lưu. Anh lưu nó vào thư mục có các file đơn hàng và file cân đối tài khoản, rồi gọi lại em.")]
     files = sources.find_order_files(folder)
     if not files:
-        return [Beat(f"Em không thấy file đơn hàng CSV nào trong thư mục {folder.name}.")]
+        return [Beat(_no_orders(folder, _workbook_name(bridge)))]
     _tbs, aside, conflict = _tb_groups(folder)
     if conflict:
         return _ask_which(folder, conflict, machine_order)
@@ -634,12 +634,33 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
                                           for name, p in aside])
     scene_log.record("roles", files=[{"name": n, "role": r} for n, r in receipt.roles.items()])
     n_tb = len(tbs[-2:])
-    text = (f"Em đọc được {n_tb} sổ cân đối và {truth.unique_rows} đơn bán hàng. Anh xem giúp em có đúng không, "
-            "em chưa sửa gì trong file.")
+    unread = intake_mod.unread(receipt)
+    # Every order-like file that was not used is named, never skipped in silence (rule 4).
+    missed = "" if not unread else (
+        f" File {unread[0].file} em chưa đọc được: {unread[0].reason}." if len(unread) == 1 else
+        f" Còn {len(unread)} file em chưa đọc được, lý do ghi trong phiếu bên dưới.")
+    text = (f"Em đọc được {n_tb} sổ cân đối và {truth.unique_rows} đơn bán hàng"
+            + (f" từ {len(files)} trên {len(files) + len(unread)} file đơn hàng" if unread else "") + "." + missed
+            + " Anh xem giúp em có đúng không, em chưa sửa gì trong file.")
     _PENDING = {"stage": "intake", "order": machine_order, "intake": receipt, "folder": str(folder),
                 "period": f"{period[1]:02d}/{period[0]}" if period else "", "picked": list(_PICKS)}
     return [Beat(text, choices=INTAKE_CHOICES,
                  intake={"card": intake_mod.card(receipt), "log": intake_mod.log_fields(receipt, text)})]
+
+
+def _no_orders(folder: Path, workbook: Optional[str]) -> str:
+    """No usable order file: say what is there and why each could not be used. "Không thấy" only when there is
+    really no CSV or .xls file to look at."""
+    from engine.cli import read_rows
+    books = {p.name for name, _, _ in sources.find_trial_balances(folder, read_rows) for p in folder.glob(f"{name}.xls*")}
+    unused = intake_mod.unused_files(folder, books, workbook)
+    cands = [d for d in unused if Path(d.file).suffix.lower() in sources.ORDER_SUFFIXES]
+    scene_log.record("intake_none", files=[{"name": d.file, "reason": d.reason} for d in cands])
+    if not cands:
+        return f"Em không thấy file đơn hàng nào (CSV hoặc .xls) trong thư mục {folder.name}."
+    said = "; ".join(f"{d.file} {d.reason}" for d in cands[:2]) + (f"; và {len(cands) - 2} file khác" if len(cands) > 2 else "")
+    return (f"Em thấy {len(cands)} file CSV hoặc .xls trong thư mục {folder.name} nhưng chưa đọc được file nào "
+            f"làm đơn hàng: {said}. Em chưa sửa gì trong file.")
 
 
 # The user's answers to "which file?", kept for the Biên bản: (what, chosen, set aside, when).
@@ -705,6 +726,39 @@ def _keep_original(bridge) -> str:
     return copy.name if copy.exists() else ""
 
 
+_KIND_VI = {"xls": "là file Excel 97-2003 (.xls)", "xlsx": "là file Excel lưu dưới tên .xls",
+            "html": "là trang HTML lưu dưới tên .xls", "xml": "là bảng XML lưu dưới tên .xls",
+            "text": "là văn bản có dấu phân cách lưu dưới tên .xls"}
+_TIME = re.compile(r"\d{1,2}:\d{2}")
+
+
+def cannot_load(files: list) -> Optional[tuple]:
+    """(file, why) when the query Clicky builds would not read these order files the way the receipt did.
+
+    That query reads plain CSV files whose header is the first row, with the same column names in every file,
+    and keeps every row with a date. A file outside that (an .xls of any kind, a print layout, cancelled
+    orders to set aside, dates with a time) would load short or fail, and the gap would be wrong. Until the
+    query has a reader for it, Clicky stops before changing anything and says so; it never reports that gap.
+    """
+    first = files[0] if files else None
+    for f in files:
+        if f.kind != "csv":
+            return f, _KIND_VI.get(f.kind, "là loại file khác CSV")
+        if f.preamble:
+            return f, f"có {len(f.preamble)} dòng tiêu đề phía trên bảng"
+        if f.cancelled:
+            return f, f"có {len(f.cancelled)} đơn đã huỷ cần để riêng ra"
+        d = f.columns["date"]
+        if any(_TIME.search(str(r[d])) for r in f.rows[:200] if d < len(r)):
+            return f, "có cột ngày kèm giờ"
+        for role in ("date", "amount", "doc", "cost"):
+            mine = f.header[f.columns[role]] if role in f.columns else None
+            theirs = first.header[first.columns[role]] if role in first.columns else None
+            if mine != theirs:
+                return f, f"đặt tên cột khác file {first.name}"
+    return None
+
+
 def confirm(bridge, pq) -> list:
     """Stage 1, after "Đúng rồi, làm tiếp": keep the original, then reconcile and change what needs changing."""
     global _PENDING, _AUDIT
@@ -712,6 +766,12 @@ def confirm(bridge, pq) -> list:
     if not job or job.get("stage") != "intake":
         return []
     receipt = job["intake"]
+    stop = cannot_load(sources.find_order_files(Path(job["folder"])))
+    if stop:
+        f, why = stop
+        _step("query_unsupported", file=f.name, kind=f.kind, why=why)
+        return [Beat(f"Em dừng ở đây, chưa đối chiếu: file {f.name} {why}, bản Clicky này chưa nạp được loại file đó "
+                     "vào Excel bằng Power Query nên chưa so được với sổ cái. Em chưa sửa gì trong file.", mark="warn")]
     _step("confirmed")
     with _timed("keep_original"):
         original = _keep_original(bridge)
