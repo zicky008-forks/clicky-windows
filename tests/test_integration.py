@@ -225,7 +225,7 @@ def test_main_wires_all_windows_without_network_or_hooks(qt_app,monkeypatch):
         with pytest.raises(SystemExit) as exit_result:main.main()
         assert exit_result.value.code==0
         titles={window.windowTitle() for window in qt_app.topLevelWidgets()}
-        assert 'Clicky Settings' in titles and 'Clicky Connections' in titles
+        assert 'Cài đặt Clicky' in titles and 'Clicky Connections' in titles
     finally:
         for instance in created:instance.shutdown();instance._thread.join(timeout=5)
         for widget in qt_app.topLevelWidgets():widget.close()

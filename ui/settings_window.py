@@ -4,6 +4,36 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout, QFormLayout, QTabWidget, QLabe
 from config import cfg
 from storage import setting, set_setting, data_dir
 
+MIC_TEST = "Thử micrô (3 giây)"
+MIC_GONE = "Micrô chị chọn trước đây không còn trên máy, em đang dùng micrô mặc định của Windows."
+DOWNLOAD = "Tải bản cài mới"
+
+
+# Voice and recognition choices. Plain ones are for everyone; the rest show only in technical mode
+# (tech_mode.py): a beta user never meets an engine name, an online provider or a key.
+TTS_PLAIN = (("Tự động", 'auto'), ("Tiếng Việt trên máy, không cần mạng", 'vi_offline'))
+TTS_TECH = (("Windows voice — offline (English only)", 'sapi'),
+            ("Microsoft online — sends each spoken sentence to Microsoft", 'edge_tts'),
+            ("OpenAI — API key", 'openai'), ("ElevenLabs — API key", 'elevenlabs'))
+STT_PLAIN = (("Tự động", ''), ("Tiếng Việt trên máy, không cần mạng", 'sherpa_vi'), ("Gõ phím thay vì nói", 'typed'))
+STT_TECH = (("Local Whisper", 'faster_whisper'), ("Local whisper.cpp", 'whisper_cpp'),
+            ("Deepgram — internet", 'deepgram'), ("OpenAI Whisper — internet", 'openai'))
+
+GUIDE = ("1. Thả file hoặc cả thư mục vào ô thả của Clicky, hoặc gõ: làm báo cáo tháng từ thư mục này.\n\n"
+         "2. Em đọc file rồi hiện phiếu nhận file. Chị xem lại, đúng thì bấm \"Đúng rồi, làm tiếp\".\n\n"
+         "3. Em không sửa file gốc của chị. Em giữ một bản gốc và ghi mọi thay đổi vào sheet \"Bien ban Clicky\".\n\n"
+         "4. Phím Esc luôn dừng Clicky.\n\n"
+         "5. Muốn không gửi gì ra khỏi máy, chị bật \"Chỉ chạy trên máy\" ở thẻ Chung.")
+GUIDE_TECH = ("Tutor features: hold the talk shortcut or type; ask 'where is the Save button?' for pointing; ask for a "
+              "graph or 3D shape to open Clicky Sketch; say 'click the Save button for me' for Clicky Drive; use Work & "
+              "routines for background answers. Offline use: choose Ollama/LM Studio, local Whisper, Windows voice, "
+              "and leave web search off.")
+MIC_PROBLEMS = (("No microphone audio", "Micrô chưa gửi tiếng nào tới. Chị kiểm tra micrô đã chọn và quyền dùng micrô "
+                                        "trong Cài đặt của Windows."),
+                ("The microphone produced silence", "Micrô chỉ thu được im lặng. Chị kiểm tra nút tắt tiếng và mức "
+                                                    "thu âm của Windows."))
+TECH_SWITCH = "Chế độ kỹ thuật: hiện các mục dành cho người kiểm thử và lập trình"
+
 
 class SettingsWindow(QWidget):
     update_ready = pyqtSignal(object)
@@ -16,14 +46,18 @@ class SettingsWindow(QWidget):
     open_connections = pyqtSignal()
     open_outgoing_log = pyqtSignal()
     microphone_level = pyqtSignal(float)
+    tech_mode_changed = pyqtSignal(bool)
 
     def __init__(self, manager):
         super().__init__()
+        import tech_mode
         self.manager = manager
-        self.setWindowTitle("Clicky Settings")
+        self.setWindowTitle("Cài đặt Clicky")
         self.resize(620, 600)
+        self._tech_rows = []          # (form, widget) rows shown only in technical mode
+        self._tech_widgets = []
         layout = QVBoxLayout(self)
-        tabs = QTabWidget()
+        tabs = self.tabs = QTabWidget()
         layout.addWidget(tabs)
         behavior = QWidget()
         form = QFormLayout(behavior)
@@ -37,19 +71,22 @@ class SettingsWindow(QWidget):
         outgoing_log = QPushButton("Nhật ký gửi đi…")
         outgoing_log.clicked.connect(self.open_outgoing_log.emit)
         form.addRow(outgoing_log)
-        for label,key,default,callback in (
-            ("Protect sensitive screens",'privacy_guard',True,manager.set_privacy_guard),
-            ("Allow web searches for current facts",'web_search',False,manager.set_web_search),
-            ("Keep local history and study journal",'journal',True,manager.set_journal),
-            ("Reply in my language",'multilang',True,manager.set_multilang),
-            ("Enable OCR",'ocr',True,manager.set_ocr_enabled),
-            ("Use code context in editors",'code_mode',True,manager.set_code_mode_auto),
+        for label,key,default,callback,tech in (
+            ("Che các cửa sổ nhạy cảm khi Clicky nhìn màn hình",'privacy_guard',True,manager.set_privacy_guard,False),
+            ("Lưu lịch sử trò chuyện trên máy này",'journal',True,manager.set_journal,False),
+            ("Cho phép tìm trên mạng",'web_search',False,manager.set_web_search,True),
+            ("Trả lời theo ngôn ngữ của người hỏi",'multilang',True,manager.set_multilang,True),
+            ("Đọc chữ trong ảnh màn hình (OCR)",'ocr',True,manager.set_ocr_enabled,True),
+            ("Dùng ngữ cảnh mã nguồn trong trình soạn code",'code_mode',True,manager.set_code_mode_auto,True),
         ):
             box = QCheckBox(label)
             box.setChecked(setting(key,default))
             box.toggled.connect(lambda value, call=callback:self.apply(lambda:call(value)))
             form.addRow(box)
-        privacy_note = QLabel("Privacy Guard masks windows with sensitive titles on every monitor. It cannot recognize every secret in an ordinary document. Workflow capture never records typed characters.")
+            if tech:
+                self._tech_rows.append((form, box))
+        privacy_note = QLabel("Clicky che các cửa sổ có tiêu đề nhạy cảm trên mọi màn hình, nhưng không nhận ra được "
+                              "mọi thông tin bí mật nằm trong một tài liệu thường.")
         privacy_note.setWordWrap(True)
         form.addRow(privacy_note)
         keys = QPushButton("Manage protected API keys…")
@@ -58,60 +95,57 @@ class SettingsWindow(QWidget):
         connections = QPushButton("Browser and app connections…")
         connections.clicked.connect(self.open_connections.emit)
         form.addRow(connections)
-        tabs.addTab(behavior,"General")
+        self._tech_rows += [(form, keys), (form, connections)]
+        tabs.addTab(behavior,"Chung")
 
         voice_page = QWidget()
         voice = QFormLayout(voice_page)
         self.provider = QComboBox()
-        for label,value in (("Automatic",'auto'),("Tiếng Việt trên máy — offline",'vi_offline'),("Windows voice — offline",'sapi'),("Microsoft online — sends each spoken sentence to Microsoft",'edge_tts'),("OpenAI — API key",'openai'),("ElevenLabs — API key",'elevenlabs')):
-            self.provider.addItem(label,value)
-        self.provider.setCurrentIndex(max(0,self.provider.findData(setting('tts_provider','auto'))))
-        voice.addRow("Speech provider",self.provider)
+        voice.addRow("Giọng đọc",self.provider)
         self.transcription = QComboBox()
-        for label,value in (("Automatic",''),("Tiếng Việt trên máy — offline",'sherpa_vi'),("Local Whisper",'faster_whisper'),("Local whisper.cpp",'whisper_cpp'),("Deepgram — internet",'deepgram'),("OpenAI Whisper — internet",'openai'),("Type instead of talking",'typed')):
-            self.transcription.addItem(label,value)
-        import os
-        self.transcription.setCurrentIndex(max(0,self.transcription.findData(os.getenv('CLICKY_STT',''))))
-        voice.addRow("Speech recognition",self.transcription)
+        voice.addRow("Nghe giọng nói",self.transcription)
+        self._fill_voice_choices()
         self.voice_name = QLineEdit(setting('voice' if cfg.tts_provider()=='sapi' else 'voice_'+cfg.tts_provider(),''))
         self.voice_name.setPlaceholderText("Installed Windows voice, Edge name, or provider voice ID")
-        voice.addRow("Voice (blank uses default)",self.voice_name)
+        voice.addRow("Voice name (blank uses default)",self.voice_name)
+        self._tech_rows.append((voice, self.voice_name))
         self.rate = QSpinBox()
         self.rate.setRange(-10,10)
         self.rate.setValue(setting('speech_rate',0))
-        voice.addRow("Speech speed",self.rate)
-        self.captions = QCheckBox("Show narration captions")
+        voice.addRow("Tốc độ đọc",self.rate)
+        self.captions = QCheckBox("Hiện chữ khi Clicky nói")
         self.captions.setChecked(setting('captions',True))
         voice.addRow(self.captions)
-        save_voice = QPushButton("Apply voice settings")
+        save_voice = QPushButton("Áp dụng")
         save_voice.clicked.connect(self.save_voice)
         voice.addRow(save_voice)
-        preview = QPushButton("Hear a sample")
+        preview = QPushButton("Nghe thử")
         preview.clicked.connect(self.preview_voice.emit)
         voice.addRow(preview)
-        tabs.addTab(voice_page,"Voice")
+        tabs.addTab(voice_page,"Giọng nói")
 
         microphone_page = QWidget()
         mic = QFormLayout(microphone_page)
         self.microphone = QComboBox()
-        mic.addRow('Input device', self.microphone)
-        refresh_mics = QPushButton('Refresh device list')
+        mic.addRow('Micrô', self.microphone)
+        refresh_mics = QPushButton('Tìm lại micrô')
         refresh_mics.clicked.connect(self.refresh_microphones)
         mic.addRow(refresh_mics)
-        apply_mic = QPushButton('Use this microphone')
+        apply_mic = QPushButton('Dùng micrô này')
         apply_mic.clicked.connect(lambda: manager.set_mic_device(self.microphone.currentData()))
         mic.addRow(apply_mic)
         self.mic_level = QProgressBar()
         self.mic_level.setRange(0, 100)
         self.mic_level.setTextVisible(False)
-        mic.addRow('Input level', self.mic_level)
+        mic.addRow('Mức tiếng', self.mic_level)
         self.mic_status = QLabel('')
         self.mic_status.setWordWrap(True)
         mic.addRow(self.mic_status)
-        self.mic_test = QPushButton('Test microphone (3 seconds)')
+        self.mic_test = QPushButton(MIC_TEST)
         self.mic_test.clicked.connect(self.test_microphone)
         mic.addRow(self.mic_test)
-        note = QLabel('The test stays on this PC and is not saved or sent for transcription. Speak while the meter is moving. Check Windows microphone permissions and mute if no sound arrives. Other driver options are included for troubleshooting.')
+        note = QLabel('Lần thử này chỉ diễn ra trên máy, không lưu lại và không gửi đi đâu. Chị nói trong lúc thanh mức '
+                      'tiếng đang chạy. Nếu không có tiếng, chị kiểm tra nút tắt tiếng và quyền dùng micrô của Windows.')
         note.setWordWrap(True)
         mic.addRow(note)
         self._mic_listener = None
@@ -120,65 +154,131 @@ class SettingsWindow(QWidget):
         self._mic_timer.timeout.connect(self.finish_microphone_test)
         self.microphone_level.connect(lambda level: self.mic_level.setValue(min(100, int(level * 1000))))
         self.refresh_microphones()
-        tabs.addTab(microphone_page, 'Microphone')
+        tabs.addTab(microphone_page, 'Micrô')
 
         shortcuts_page = QWidget()
         shortcuts = QFormLayout(shortcuts_page)
         self.talk_key = QLineEdit(cfg.hotkey)
         self.text_key = QLineEdit(setting('text_hotkey','ctrl+alt+t'))
         self.dictation_key = QLineEdit(setting('dictation_hotkey','ctrl+alt+d'))
-        shortcuts.addRow("Hold to talk",self.talk_key)
-        shortcuts.addRow("Open typed chat",self.text_key)
-        shortcuts.addRow("Hold to dictate",self.dictation_key)
-        shortcuts.addRow(QLabel("Examples: ctrl+win, ctrl+alt+space. Esc always stops Clicky."))
-        save_shortcuts = QPushButton("Apply shortcuts")
+        shortcuts.addRow("Giữ để nói",self.talk_key)
+        shortcuts.addRow("Mở khung gõ",self.text_key)
+        shortcuts.addRow("Giữ để đọc cho Clicky gõ",self.dictation_key)
+        shortcuts.addRow(QLabel("Ví dụ: ctrl+win, ctrl+alt+space. Phím Esc luôn dừng Clicky."))
+        save_shortcuts = QPushButton("Áp dụng phím tắt")
         save_shortcuts.clicked.connect(self.save_shortcuts)
         shortcuts.addRow(save_shortcuts)
-        tabs.addTab(shortcuts_page,"Shortcuts")
+        tabs.addTab(shortcuts_page,"Phím tắt")
 
         history = QWidget()
         history_layout = QVBoxLayout(history)
-        history_layout.addWidget(QLabel("History is local to this Windows account. Clearing it does not erase the separate study journal."))
+        history_layout.addWidget(QLabel("Lịch sử trò chuyện chỉ lưu trên máy này, trong tài khoản Windows của chị."))
         self.history = QPlainTextEdit()
         self.history.setReadOnly(True)
         history_layout.addWidget(self.history)
-        refresh = QPushButton("Refresh history")
+        refresh = QPushButton("Làm mới")
         refresh.clicked.connect(self.refresh_history)
         history_layout.addWidget(refresh)
-        clear = QPushButton("Clear conversation history")
+        clear = QPushButton("Xoá lịch sử trò chuyện")
         clear.clicked.connect(self.clear_history)
         history_layout.addWidget(clear)
-        tabs.addTab(history,"History")
+        tabs.addTab(history,"Lịch sử")
 
         guide = QWidget()
         guide_layout = QVBoxLayout(guide)
-        help_text = QLabel("1. Hold your talk shortcut, or type in the panel.\n\n2. Ask 'where is the Save button?' for pointing. Say 'next' to continue using a fresh screen.\n\n3. Ask for a graph, chart or 3D shape to open Clicky Sketch. Drag a 3D shape to turn it; use lesson buttons to ask more.\n\n4. Say 'click the Save button for me' to propose Clicky Drive actions. Review the plan before allowing it. Esc stops; moving your mouse away stops its next action.\n\n5. Use Work & routines for background answers and recurring prompts. Results are saved in your local workspaces.\n\nOffline use: choose Ollama/LM Studio, local Whisper, Windows voice, and leave web search off. Cloud providers and connected browser/app tools use the network.")
+        help_text = QLabel(GUIDE)
         help_text.setWordWrap(True)
         guide_layout.addWidget(help_text)
+        tech_help = QLabel(GUIDE_TECH)
+        tech_help.setWordWrap(True)
+        guide_layout.addWidget(tech_help)
+        self._tech_widgets.append(tech_help)
         for text,signal in (("Try Clicky Sketch",self.show_sketch),("Open Work & routines",self.show_work)):
             button = QPushButton(text)
             button.clicked.connect(signal.emit)
             guide_layout.addWidget(button)
-        tabs.addTab(guide,"Getting started")
+            self._tech_widgets.append(button)
+        guide_layout.addStretch()
+        tabs.addTab(guide,"Bắt đầu")
         updates = QWidget()
         update_layout = QVBoxLayout(updates)
         from updates import VERSION
-        self.update_status = QLabel('Installed source version: '+VERSION+'\nUpdates come from your own Clicky GitHub repository.')
+        self.update_status = QLabel(f"Bản đang dùng: {VERSION}. Clicky tự cập nhật lúc rảnh và báo một dòng khi mở lần sau.")
         self.update_status.setWordWrap(True)
         update_layout.addWidget(self.update_status)
-        check = QPushButton('Check for updates')
+        check = QPushButton('Kiểm tra bản mới')
         check.clicked.connect(self.check_updates)
         update_layout.addWidget(check)
-        self.install = QPushButton('Download verified installer')
+        self.install = QPushButton(DOWNLOAD)
         self.install.setEnabled(False)
         self.install.clicked.connect(self.download_update)
         update_layout.addWidget(self.install)
         update_layout.addStretch()
-        tabs.addTab(updates,'Updates')
+        tabs.addTab(updates,'Cập nhật')
+
+        # Technical mode: reachable only by holding Shift while opening Cài đặt (or CLICKY_TECH_MODE=1).
+        tech_page = QWidget()
+        tech_layout = QVBoxLayout(tech_page)
+        self.tech_switch = QCheckBox(TECH_SWITCH)
+        self.tech_switch.setChecked(tech_mode.on())
+        self.tech_switch.setEnabled(not tech_mode.forced())
+        self.tech_switch.toggled.connect(self._set_tech_mode)
+        tech_layout.addWidget(self.tech_switch)
+        tech_layout.addStretch()
+        self._tech_tab = tabs.addTab(tech_page, "Kỹ thuật")
         self._update=None
         self.update_ready.connect(self.show_update)
         self.installer_ready.connect(self.install_update)
         self.refresh_history()
+        self.apply_tech_mode()
+
+    def present(self, shift: bool = False):
+        """Open the window. Holding Shift while opening shows the "Kỹ thuật" tab."""
+        import tech_mode
+        self.tabs.setTabVisible(self._tech_tab, bool(shift) or tech_mode.on())
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _set_tech_mode(self, value):
+        import tech_mode
+        self.apply(lambda: tech_mode.set_on(value))
+        self.apply_tech_mode()
+        self.tech_mode_changed.emit(tech_mode.on())
+
+    def apply_tech_mode(self):
+        import tech_mode
+        shown = tech_mode.on()
+        for form, widget in self._tech_rows:
+            form.setRowVisible(widget, shown)
+        for widget in self._tech_widgets:
+            widget.setVisible(shown)
+        if not shown and not self.isVisible():
+            self.tabs.setTabVisible(self._tech_tab, False)
+        self._fill_voice_choices()
+
+    def _fill_voice_choices(self):
+        """Plain choices for everyone, engine choices in technical mode. A choice already saved stays listed."""
+        import os
+        import tech_mode
+        tech = tech_mode.on()
+        for combo, plain, more, current in (
+                (self.provider, TTS_PLAIN, TTS_TECH, setting('tts_provider','auto')),
+                (self.transcription, STT_PLAIN, STT_TECH, os.getenv('CLICKY_STT',''))):
+            combo.blockSignals(True)
+            combo.clear()
+            for label, value in plain + more:
+                if tech or (label, value) in plain or value == current:
+                    combo.addItem(label if tech or (label, value) in plain else "Lựa chọn đang dùng", value)
+            combo.setCurrentIndex(max(0, combo.findData(current)))
+            combo.blockSignals(False)
+
+    def closeEvent(self, event):
+        import tech_mode
+        self.finish_microphone_test()
+        if not tech_mode.on():
+            self.tabs.setTabVisible(self._tech_tab, False)
+        super().closeEvent(event)
 
     def check_updates(self):
         async def check():
@@ -191,20 +291,20 @@ class SettingsWindow(QWidget):
     def refresh_microphones(self):
         from audio.devices import input_devices, recommended_inputs, resolve_input
         self.microphone.clear()
-        self.microphone.addItem('Windows default (recommended)', -1)
+        self.microphone.addItem('Mặc định của Windows (nên dùng)', -1)
         try:
             devices = input_devices()
             preferred = recommended_inputs(devices)
             for item in preferred + [item for item in devices if item not in preferred]:
-                prefix = '' if item in preferred else 'Other driver: '
+                prefix = '' if item in preferred else 'Driver khác: '
                 self.microphone.addItem(prefix + item['name'] + ' (' + item['host_name'] + ')', item['index'])
             saved = setting('mic_identity', {'default': True})
             selected, warning = resolve_input(cfg.mic_device_index, saved)
             if saved != {'default': True} and (saved or cfg.mic_device_index is not None):
                 self.microphone.setCurrentIndex(max(0, self.microphone.findData(selected['index'])))
-            self.mic_status.setText(warning or 'Ready. Test the selected microphone before using it.')
+            self.mic_status.setText(MIC_GONE if warning else 'Sẵn sàng. Chị thử micrô đã chọn trước khi dùng nhé.')
         except Exception as exc:
-            self.mic_status.setText('Microphone unavailable: ' + str(exc))
+            self.mic_status.setText(_plain('Chưa dùng được micrô.', exc))
 
     def test_microphone(self):
         if self._mic_listener:
@@ -216,13 +316,13 @@ class SettingsWindow(QWidget):
             selected = self.microphone.currentData()
             item = next((item for item in input_devices() if item['index'] == selected), None)
             if selected is not None and selected >= 0 and not item:
-                raise ValueError('That microphone is no longer available. Refresh the device list.')
+                raise ValueError('Micrô này không còn cắm vào máy. Chị bấm Tìm lại micrô.')
             saved = identity(item) if item else {'default': True}
             self._mic_listener = AmbientListener(self.microphone_level.emit, lambda: None,
                                                  device=selected, ambient=False, identity=saved)
             self._mic_listener.start_recording()
-            self.mic_status.setText('Speak now — testing ' + self._mic_listener.device_name)
-            self.mic_test.setText('Stop test')
+            self.mic_status.setText('Chị nói đi, em đang thử ' + self._mic_listener.device_name)
+            self.mic_test.setText('Dừng thử')
             self._mic_timer.start(3000)
         except Exception as exc:
             if self._mic_listener:
@@ -238,29 +338,33 @@ class SettingsWindow(QWidget):
             try:
                 pcm = listener.stop_recording()
                 problem = capture_problem(pcm)
-                self.mic_status.setText(problem or 'Audio received from ' + listener.device_name + '. Choose “Use this microphone” to apply it. This test checks capture, not recognition accuracy.')
+                self.mic_status.setText(_mic_problem(problem) or 'Đã nghe được tiếng từ ' + listener.device_name
+                                        + '. Chị bấm “Dùng micrô này” để chọn micrô này.')
             finally:
                 listener.stop()
-        self.mic_test.setText('Test microphone (3 seconds)')
+        self.mic_test.setText(MIC_TEST)
         self.mic_level.setValue(0)
 
-    def closeEvent(self, event):
-        self.finish_microphone_test()
-        super().closeEvent(event)
-
     def show_update(self,value):
+        import tech_mode
         self._update=value
         self.install.setEnabled(bool(value and (value.get('asset') or value.get('velopack'))))
-        self.install.setText('Update and restart' if value and value.get('velopack') else 'Download verified installer')
-        self.update_status.setText(value.get('error') if value and value.get('error') else ('Available: '+value['version']+'\n'+value['url'] if value else 'No newer release is available.'))
+        self.install.setText('Cập nhật và mở lại' if value and value.get('velopack') else DOWNLOAD)
+        if value and value.get('error'):
+            text = _plain('Em chưa kiểm tra được bản mới. Chị thử lại sau nhé.', value['error'])
+        elif value:
+            text = 'Có bản mới: ' + value['version'] + ('\n' + value['url'] if tech_mode.on() else '')
+        else:
+            text = 'Chị đang dùng bản mới nhất.'
+        self.update_status.setText(text)
 
     def download_update(self):
         self.install.setEnabled(False)
         if self._update and self._update.get('velopack'):
-            if QMessageBox.question(self,'Update Clicky','Download the update, then restart Clicky into it?',QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)!=QMessageBox.StandardButton.Yes:
+            if QMessageBox.question(self,'Cập nhật Clicky','Em tải bản mới rồi mở lại Clicky nhé?',QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)!=QMessageBox.StandardButton.Yes:
                 self.install.setEnabled(True)
                 return
-            self.update_status.setText('Downloading the update…')
+            self.update_status.setText('Em đang tải bản mới…')
             async def apply():
                 try:
                     from updates import apply_in_place
@@ -276,7 +380,7 @@ class SettingsWindow(QWidget):
         self.manager._submit(fetch())
 
     def install_update(self,path):
-        if QMessageBox.question(self,'Installer verified','Quit Clicky and open the verified installer?',QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)==QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self,'Bản cài đã kiểm tra','Em đóng Clicky và mở bản cài mới nhé?',QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)==QMessageBox.StandardButton.Yes:
             import subprocess
             subprocess.Popen([path])
             from PyQt6.QtWidgets import QApplication
@@ -286,7 +390,7 @@ class SettingsWindow(QWidget):
         try:
             callback()
         except (OSError,ValueError) as exc:
-            QMessageBox.warning(self,"Could not save settings",str(exc))
+            QMessageBox.warning(self,"Chưa lưu được cài đặt",str(exc))
 
     def save_voice(self):
         def save():
@@ -314,7 +418,7 @@ class SettingsWindow(QWidget):
             import keyboard
             values = [field.text().strip().lower() for field in (self.talk_key,self.text_key,self.dictation_key)]
             if len(set(values)) != 3 or any(not value or value == 'esc' for value in values):
-                raise ValueError("Choose three different nonempty shortcuts; Esc is reserved")
+                raise ValueError("Chị chọn ba phím tắt khác nhau, không để trống. Phím Esc đã dành để dừng Clicky.")
             for value in values:
                 keyboard.parse_hotkey(value)
             cfg._write_env('CLICKY_HOTKEY',values[0])
@@ -329,6 +433,19 @@ class SettingsWindow(QWidget):
         self.history.setPlainText('\n\n'.join('['+app+']\n'+'\n\n'.join(row['role']+': '+row['content'] for row in rows) for app,rows in session_store.recent()))
 
     def clear_history(self):
-        if QMessageBox.question(self,"Clear history?","Remove saved conversation history from this PC?",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self,"Xoá lịch sử?","Xoá lịch sử trò chuyện đã lưu trên máy này?",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
             self.manager.clear_history()
             self.refresh_history()
+
+
+def _plain(sentence: str, exc) -> str:
+    """A plain sentence for everyone; the technical detail only in technical mode."""
+    import tech_mode
+    return sentence + (f"\n{exc}" if tech_mode.on() else "")
+
+
+def _mic_problem(problem: str) -> str:
+    for start, text in MIC_PROBLEMS:
+        if problem.startswith(start):
+            return text
+    return problem
