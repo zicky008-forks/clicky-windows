@@ -125,7 +125,7 @@ def story_ended(events, target: str) -> bool:
     if at is None:
         return False
     return any((e.get("event") == "beat" and e.get("choices")) or (e.get("event") == "guided" and not e.get("active"))
-               or e.get("event") == "turn" for e in events[at + 1:])
+               or e.get("event") in ("turn", "story_end") for e in events[at + 1:])
 
 
 def file_hash(path: Path) -> str:

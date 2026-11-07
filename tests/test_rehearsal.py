@@ -375,6 +375,7 @@ def test_story_is_not_over_at_the_final_card_while_scenes_remain():
     assert not rehearse.story_ended(more, t)
     assert rehearse.story_ended(more + [{"event": "beat", "title": "", "choices": ["Lưu và kiểm tra"]}], t)
     assert rehearse.story_ended(ev + [{"event": "guided", "active": False}], t)
+    assert rehearse.story_ended(more + [{"event": "story_end", "beats": 6, "choices": []}], t)   # PR #25
     assert not rehearse.story_ended([{"event": "beat", "title": "Lệch", "choices": ["Sửa giúp tôi"]}], t)
 
 
