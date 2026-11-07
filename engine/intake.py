@@ -12,6 +12,7 @@ import calendar
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal
+from glob import escape as glob_escape
 from pathlib import Path
 from typing import Optional
 
@@ -347,6 +348,13 @@ def query_files(folder: Path) -> list:
     return out
 
 
+def file_name(folder: Path, stem: str) -> str:
+    """A trial balance is known by its stem (it names the sheet Clicky copies it to); people see the file's own name,
+    extension included (TB_T11.xlsx, not TB_T11), on the receipt and in the Biên bản."""
+    on_disk = next(iter(sorted(folder.glob(f"{glob_escape(stem)}.xls*"))), None)
+    return on_disk.name if on_disk else stem
+
+
 def build(folder: Path, files: list, tbs: list, truth, ledger: dict, workbook: Optional[str] = None,
           set_aside: Optional[list] = None) -> Intake:
     """tbs: [(name, rows, tb)] oldest first, one per period; set_aside: [(name, why)] other copies of a period."""
@@ -355,20 +363,19 @@ def build(folder: Path, files: list, tbs: list, truth, ledger: dict, workbook: O
     picked = tbs[-2:]
     for i, (name, rows, tb) in enumerate(reversed(picked)):
         previous = picked[0][2] if i == 0 and len(picked) == 2 else None
-        line, items = _tb_line(name, rows, tb, previous)
-        on_disk = next(iter(sorted(folder.glob(f"{name}.xls*"))), None)
-        line.shown = on_disk.name if on_disk else ""
+        line, items = _tb_line(file_name(folder, name), rows, tb, previous)
+        line.shown = line.name
         intake.files.append(line)
         intake.dropped += items
     for name, _rows, _tb in tbs[:-2]:
-        intake.dropped.append(Dropped(f"Sổ cân đối {name}", name, None,
+        intake.dropped.append(Dropped(f"Sổ cân đối {file_name(folder, name)}", file_name(folder, name), None,
                                       "kỳ cũ hơn, báo cáo chỉ cần kỳ này và kỳ trước", rows=0))
     for name, why in set_aside or []:
-        intake.dropped.append(Dropped(f"Sổ cân đối {name}", name, None, why, rows=0))
+        intake.dropped.append(Dropped(f"Sổ cân đối {file_name(folder, name)}", file_name(folder, name), None, why, rows=0))
     for name, _rows, _tb in tbs:
-        intake.roles[name] = roles_mod.OFFICIAL
+        intake.roles[file_name(folder, name)] = roles_mod.OFFICIAL
     for name, _why in set_aside or []:
-        intake.roles[name] = roles_mod.OFFICIAL
+        intake.roles[file_name(folder, name)] = roles_mod.OFFICIAL
     for f in files:
         intake.roles[f.name] = roles_mod.DETAIL
     lines, items = _order_lines(files, truth, period)
