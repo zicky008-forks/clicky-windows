@@ -166,7 +166,7 @@ def test_month_close_play_logs_each_beat(tmp_path, monkeypatch):
     asyncio.run(month_close.play(Manager(), [beat]))
     events = [json.loads(x) for x in target.read_text(encoding="utf-8").splitlines()]
     kinds = [e["event"] for e in events]
-    assert kinds == ["locate", "beat", "spoken"]
+    assert kinds == ["locate", "beat", "spoken", "story_end"]
     assert events[1]["box"] == [10.0, 20.0, 110.0, 40.0] and events[2]["spoke"] is True
 
 

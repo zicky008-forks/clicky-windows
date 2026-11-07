@@ -431,8 +431,10 @@ def test_machine_order_follows_the_region_culture_not_a_custom_short_date():
     assert month_close.machine_date_order() in (None, sources.DAY_FIRST, sources.MONTH_FIRST)
 
 
-def test_play_shows_one_idea_at_a_time_then_offers_the_buttons(monkeypatch):
-    import asyncio
+def test_play_shows_one_idea_at_a_time_then_offers_the_buttons(monkeypatch, tmp_path):
+    import asyncio, json
+    scene = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(scene))
     from ui.card_layout import NO_BUBBLE
     monkeypatch.setattr(month_close, "BEAT_GAP_S", 0)
 
@@ -487,6 +489,12 @@ def test_play_shows_one_idea_at_a_time_then_offers_the_buttons(monkeypatch):
     # The chat panel steps aside for the whole walk-through and stays away while the buttons are up.
     assert names[0] == "sig_guided" and m.log[0][1] == (True,)
     assert ("sig_guided", (False,)) not in m.log
+    # The robot waits for the end of the story, not for a quiet spell: a card read without a voice sits
+    # still for ten seconds while scenes are still to come.
+    events = [json.loads(l) for l in scene.read_text(encoding="utf-8").splitlines()]
+    assert events[-1]["event"] == "story_end" and events[-1]["beats"] == 3
+    assert events[-1]["choices"] == ["Sửa giúp tôi", "Để tôi xem"]
+    assert [e["i"] for e in events if e["event"] == "spoken"] == [0, 1, 2]
 
 
 def test_fix_runs_behind_a_still_screen_and_ends_on_the_profit_card(folder):
@@ -751,6 +759,52 @@ def test_tamper_hook_changes_the_saved_cell_only_when_asked(folder, monkeypatch)
     monkeypatch.setenv("CLICKY_TEST_TAMPER", "'Doi chieu'!C7=1000")
     beats = month_close.approve(bridge, pq)
     assert beats[0].mark == "bad" and beats[0].ref == "'Doi chieu'!C7"
+
+
+def _lock_like_excel(monkeypatch, path):
+    """Excel holds the saved workbook open: on Windows any write to it fails with Errno 13."""
+    from openpyxl.workbook.workbook import Workbook
+    real = Workbook.save
+
+    def save(self, filename):
+        if Path(filename).resolve() == Path(path).resolve():
+            raise PermissionError(13, "Permission denied", str(filename))
+        return real(self, filename)
+    monkeypatch.setattr(Workbook, "save", save)
+
+
+def test_tamper_hook_works_while_excel_holds_the_saved_file(folder, monkeypatch):
+    # PC run 37265be: the hook rewrote the open workbook, got Errno 13, and the card said only
+    # "không đọc lại được"; it must name the cell and the gap, and leave the saved file as it was.
+    import hashlib
+    bridge = SavingBridge(folder)
+    pq = _to_the_save_question(bridge, folder)
+    real_save = bridge.save
+
+    def save_then_lock():
+        done = real_save()
+        _lock_like_excel(monkeypatch, bridge.path)
+        bridge.digest = hashlib.sha256(Path(bridge.path).read_bytes()).hexdigest()
+        return done
+    bridge.save = save_then_lock
+    monkeypatch.setenv("CLICKY_TEST_TAMPER", "'BC thang'!C23=5000000")
+    beats = month_close.approve(bridge, pq)
+    assert beats[0].mark == "bad" and beats[0].ref == "'BC thang'!C23"
+    assert "cần 436 triệu, file ghi 441 triệu" in beats[0].note and beats[0].value.endswith("5 triệu")
+    assert hashlib.sha256(Path(bridge.path).read_bytes()).hexdigest() == bridge.digest
+
+
+def test_a_saved_file_that_cannot_be_read_back_is_never_called_matching(folder, monkeypatch):
+    from engine import saved_check
+    bridge = SavingBridge(folder)
+    pq = _to_the_save_question(bridge, folder)
+
+    def locked(path, expect):
+        raise PermissionError(13, "Permission denied", str(path))
+    monkeypatch.setattr(saved_check, "check", locked)
+    beats = month_close.approve(bridge, pq)
+    said = " ".join(f"{b.text} {b.label} {b.note}" for b in beats)
+    assert "Khớp sổ cái" not in said and "không đọc lại được" in said and beats[0].mark == "bad"
 
 
 # ── Beta job 5: each input has a role; two of the same kind → ask, never pick ──
