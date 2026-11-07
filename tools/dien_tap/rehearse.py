@@ -69,6 +69,8 @@ class Clock:
 
 
 AUTO_PRESS = []        # (driver, labels): buttons pressed whenever they come up, e.g. the intake receipt's confirm
+PRESS_DELAY = {}       # label -> seconds the robot "reads" before pressing it (--doc-phieu-giay: the receipt)
+WARM_BOOK = "clicky-khoi-dong.xlsx"   # office/pq_warmup.py: Clicky's own hidden workbook while the receipt is read
 
 
 def _file_stem(text: str) -> str:
@@ -98,6 +100,9 @@ def _auto_press(events) -> None:
                 hit = next((lab for lab in e.get("labels") or [] if lab in labels), None)
             if hit:
                 done.add(i)
+                if PRESS_DELAY.get(hit):
+                    say(f"   Đọc {PRESS_DELAY[hit]:g} giây trước khi bấm \"{hit}\"")
+                    time.sleep(PRESS_DELAY[hit])
                 say(f"   Bấm \"{hit}\"")
                 if driver.wait_for(hit, 20):
                     driver.press(hit)
@@ -351,6 +356,7 @@ def main(argv=None) -> int:
 
 def _main(argv=None) -> int:
     AUTO_PRESS.clear()                 # --lan N runs main N times in one process: no lap answers for the next
+    PRESS_DELAY.clear()
     TURN_USAGE.clear()
     ap = argparse.ArgumentParser(description="Diễn tập trọn hành trình báo cáo tháng bằng robot.")
     ap.add_argument("--workbook", default=None, help="File Excel trống của case, nằm trong thư mục dữ liệu tháng")
@@ -365,6 +371,8 @@ def _main(argv=None) -> int:
     ap.add_argument("--command", default="làm báo cáo tháng từ thư mục này")
     ap.add_argument("--out", default=None, help="Thư mục kết quả (mặc định: dien-tap\\<giờ> cạnh file Excel)")
     ap.add_argument("--allow-other-workbooks", action="store_true")
+    ap.add_argument("--doc-phieu-giay", type=float, default=None, metavar="GIÂY",
+                    help="Chờ GIÂY giây trước khi bấm nút của phiếu nhận file, như người thật đọc phiếu (mặc định 0)")
     ap.add_argument("--chat-shortcut", default="ctrl+alt+t", help="Phím tắt mở khung chat Clicky")
     ap.add_argument("--zoom", type=int, default=None, help="Độ phóng Excel cho lần chạy (ví dụ 85, 100, 130)")
     ap.add_argument("--no-visual", action="store_true", help="Bỏ phần chụp màn hình và chấm bằng ảnh")
@@ -495,11 +503,18 @@ def _main(argv=None) -> int:
     answerer = columns.Answerer(expected.get("columns"))
     AUTO_PRESS.append((driver, answerer, set()))     # unknown column names: answered from the key, never guessed
     AUTO_PRESS.append((driver, first_feedback.Later(), set()))   # "bớt được bao lâu": closed with "Để sau"
+    receipt_label = (expected.get("intake") or {}).get("confirm_label", "Đúng rồi, làm tiếp")
+    read_s = args.doc_phieu_giay if args.doc_phieu_giay is not None else expected.get("receipt_read_seconds", 0)
+    if read_s:
+        PRESS_DELAY[receipt_label] = float(read_s)
     if "intake" in expected:
-        confirm = expected["intake"].get("confirm_label", "Đúng rồi, làm tiếp")
+        confirm = receipt_label
         asked = lambda ev: any(confirm in (e.get("labels") or []) for e in ev if e.get("event") == "choices")  # noqa: E731
         if asked(wait_log(log, asked, expected.get("first_stage_seconds", 240))):
             untouched = wb is not None and sheet_values(wb) == baseline and file_hash(copy) == hash_before
+            if read_s:
+                say(f"   Đọc phiếu {float(read_s):g} giây")
+                time.sleep(float(read_s))
             say(f"   Phiếu nhận file: bấm \"{confirm}\"")
             if driver.wait_for(confirm, 20):
                 driver.press(confirm)
@@ -574,6 +589,7 @@ def _main(argv=None) -> int:
     result.checks += [checks.Check(n, ok, d, blocking=b)
                       for n, ok, d, b in first_feedback.check_lines(events, sample=bool(args.sample))]
     result.checks.append(checks.receipt_reached_check(events, data_files, expected.get("stop_before_receipt_ok", False)))
+    result.checks += warmup_checks(events, warm_book_open(excel))
     network = net.stop()
     egress_text = None
     if "egress" in expected and egress.exists():
@@ -722,6 +738,8 @@ def excel_state() -> dict:
         books = list(excel.Workbooks)
         state["workbooks"] = len(books)
         for wb in books:
+            if wb.Name.casefold() == WARM_BOOK:
+                state["warm_books"] = state.get("warm_books", 0) + 1
             if COPY_TAG in wb.Name:
                 state["robot_copies"] += 1
                 state["connections"] += int(wb.Connections.Count)
@@ -731,12 +749,48 @@ def excel_state() -> dict:
     return state
 
 
+def warm_book_open(excel):
+    """Is Clicky's Power Query warm-up workbook still open? Asked by its name only; other names are never read.
+    None when Excel cannot be asked."""
+    if excel is None:
+        return None
+    try:
+        excel.Workbooks(WARM_BOOK)
+        return True
+    except Exception as exc:                           # noqa: BLE001
+        # "Subscript out of range" is the normal answer when it is closed; anything else means no answer.
+        return False if "-2147352565" in str(exc) or "out of range" in str(exc).casefold() else None
+
+
+WARM_PARTS = ("pq_warm_open", "pq_warm_add", "pq_warm_load", "pq_warm_total", "pq_warm_wait")
+
+
+def warmup_checks(events, still_open) -> list:
+    """Info: the warm-up's own timings. Blocking: its hidden workbook is closed by the time the run is graded."""
+    parts = {}
+    for e in events:
+        if e.get("event") == "close_step" and e.get("step") == "timing" and e.get("part") in WARM_PARTS:
+            parts.setdefault(e["part"], e.get("ms"))
+    out = []
+    if parts:
+        out.append(checks.Check("Khởi động Power Query trong lúc đọc phiếu (chỉ đo)", True,
+                                ", ".join(f"{p[len('pq_warm_'):]} {parts[p]} ms" for p in WARM_PARTS if p in parts),
+                                blocking=False))
+    if still_open:
+        out.append(checks.Check("Sổ khởi động Power Query của Clicky đã đóng", False,
+                                f"{WARM_BOOK} vẫn mở khi chấm", blocking=True))
+    elif parts and still_open is False:
+        out.append(checks.Check("Sổ khởi động Power Query của Clicky đã đóng", True, "đã đóng", blocking=True))
+    return out
+
+
 def state_line(when: str, state: dict) -> str:
     def v(key, unit=""):
         return "?" if state.get(key) is None else f"{state[key]}{unit}"
     return (f"   Excel {when}: {state.get('excel', 0)} tiến trình, {v('ws_mb', ' MB')}, {v('handles')} handle, "
             f"{state.get('workbooks', 0)} file mở (bản sao robot {state.get('robot_copies', 0)}, "
-            f"kết nối {state.get('connections', 0)}, query {state.get('queries', 0)})"
+            f"kết nối {state.get('connections', 0)}, query {state.get('queries', 0)}"
+            + (f", sổ khởi động PQ {state['warm_books']}" if state.get("warm_books") else "") + ")"
             + (f", lỗi đọc: {state['error']}" if state.get("error") else ""))
 
 
