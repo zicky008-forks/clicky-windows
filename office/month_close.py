@@ -620,9 +620,10 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     _tbs, aside, conflict = _tb_groups(folder)
     if conflict:
         return _ask_which(folder, conflict, machine_order)
-    tbs, ledger = _ledger(folder)
-    period = sources.period_of(tbs[-1][1]) if tbs else None
-    truth = sources.truth(files, period)
+    with _timed("read_files"):
+        tbs, ledger = _ledger(folder)
+        period = sources.period_of(tbs[-1][1]) if tbs else None
+        truth = sources.truth(files, period)
     ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
     receipt = intake_mod.build(folder, files, tbs, truth, ledger, _workbook_name(bridge),
                                set_aside=[(name, f"bản sổ cân đối T{p[1]:02d} khác; anh đã chọn dùng {_CHOSEN[p]}"
@@ -709,15 +710,19 @@ def confirm(bridge, pq) -> list:
         return []
     receipt = job["intake"]
     _step("confirmed")
-    _AUDIT = audit.AuditLog(period=job.get("period", ""), original=_keep_original(bridge),
+    with _timed("keep_original"):
+        original = _keep_original(bridge)
+    _AUDIT = audit.AuditLog(period=job.get("period", ""), original=original,
                             dropped=intake_mod.dropped_rows(receipt), coverage=intake_mod.coverage_rows(receipt))
     for what, chosen, others, agreed in job.get("picked", []):
         _AUDIT.add("—", f"Chọn nguồn: {what}", others, chosen,
                    "Hai file cùng vai trò Số chính thức cho cùng kỳ; người dùng chọn bản dùng", agreed, "Thư mục dữ liệu")
     before = set(bridge.sheet_names())
-    beats = _reconcile(bridge, pq, job["order"])
+    with _timed("reconcile"):
+        beats = _reconcile(bridge, pq, job["order"])
     _note_new_sheets(bridge, before)
-    _write_audit(bridge)
+    with _timed("audit_sheet"):
+        _write_audit(bridge)
     return beats
 
 
@@ -811,6 +816,24 @@ def _step(step: str, **data) -> None:
     scene_log.record("close_step", step=step, **data)
 
 
+class _timed:
+    """Logs how long one part of a step took ("close_step" step="timing"), so a slow turn on the PC shows
+    where its time went: Excel saving the original, Power Query, writing sheets, or Clicky's own code."""
+
+    def __init__(self, part: str):
+        self.part = part
+
+    def __enter__(self):
+        import time
+        self.t0 = time.monotonic()
+        return self
+
+    def __exit__(self, *exc):
+        import time
+        _step("timing", part=self.part, ms=int(round((time.monotonic() - self.t0) * 1000)))
+        return False
+
+
 def _load(pq, name: str):
     """pq.load with its start, end and outcome in the scene log."""
     import time
@@ -838,9 +861,10 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
     files = sources.find_order_files(folder)
     if not files:
         return [Beat(f"Em không thấy file đơn hàng CSV nào trong thư mục {folder.name}.")]
-    tbs, ledger = _ledger(folder)
-    period = sources.period_of(tbs[-1][1]) if tbs else None
-    truth = sources.truth(files, period)
+    with _timed("read_files"):
+        tbs, ledger = _ledger(folder)
+        period = sources.period_of(tbs[-1][1]) if tbs else None
+        truth = sources.truth(files, period)
     ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
     beats, notes = [], []
     if truth.outside:
@@ -875,7 +899,8 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
         notes.append(["Kiểu ngày trong file gốc", "", "", "",
                       "; ".join(f"{f.name}: {_order_vi(f.date_order)}" for f in files)])
 
-    name, formula, origin = _query_to_check(pq, folder)
+    with _timed("find_query"):
+        name, formula, origin = _query_to_check(pq, folder)
     keys = _dedup_key(files, truth)
     if truth.invoice_lines:
         lines = ", ".join(sorted(truth.invoice_lines)[:5])
@@ -944,7 +969,8 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
     why = diagnose(truth, loaded, read_order) if not clean else {"date": [], "distinct": [], "other": [], "excel_dups": []}
     cause_beats, cause_rows = _cause_beats(why, read_order, 0, f"Query ghi cứng {culture}, nên đọc" if culture else "Máy này đọc",
                                            None if clean else loaded.amount - truth.amount)
-    check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, cause_rows + notes, "ok" if clean else "bad")
+    with _timed("check_sheet"):
+        check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, cause_rows + notes, "ok" if clean else "bad")
     ref = f"{_q(check_sheet)}!C7" if check_sheet and ledger else None
     if clean:
         beats.append(Beat(f"Excel khớp sổ cái đến từng đồng: doanh thu {spoken(loaded.amount)}.",

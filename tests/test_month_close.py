@@ -1022,3 +1022,18 @@ def test_the_query_names_the_columns_exactly_as_power_query_reads_the_header(tmp
     assert not set(needed) <= set(gl_head)                     # the cost ledger is left out of the combine
     if variant == "crlf_footer":
         assert "each [Ngay HD ] <> null" not in m and "<> null" in m and len(order.footers) == 1
+
+
+def test_confirm_logs_where_its_time_goes(folder, tmp_path, monkeypatch):
+    # PC gate on 0b88545: the first "Đúng rồi, làm tiếp" after install took 11.8 s to its first card.
+    # Each part of the step logs its own time, so the slow one on the PC is named, not guessed.
+    import json
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    bridge = FakeBridge(folder)
+    _begin(bridge, FakePQ(bridge, folder), sources.DAY_FIRST)
+    events = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
+    parts = {e["part"]: e["ms"] for e in events if e.get("event") == "close_step" and e.get("step") == "timing"}
+    assert {"keep_original", "read_files", "find_query", "check_sheet", "reconcile", "audit_sheet"} <= set(parts)
+    assert all(isinstance(ms, int) and ms >= 0 for ms in parts.values())
+    assert parts["reconcile"] >= parts["check_sheet"]
