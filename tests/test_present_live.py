@@ -476,3 +476,58 @@ def test_a_show_that_comes_a_moment_after_the_command_line_is_credited_to_it(qt_
     assert [(e["sent"], e["ok"]) for e in retry] == [(True, False), (True, False)]
     attached = [e for e in _events(tmp_path) if e.get("event") == "present_attached"]
     assert len(attached) == 1 and attached[0]["started_by"] == "command_line"
+
+
+class _NoHwndShow:
+    """A show window as PowerPoint gives it on the test PC: Left/Top/Width/Height in points, HWND refused."""
+    Left, Top, Width, Height = 0.0, 30.75, 960.0, 540.0
+
+    @property
+    def HWND(self):
+        raise RuntimeError("no HWND")
+
+
+def _bridge_on(show):
+    from present.deck import PowerPointBridge
+    b = PowerPointBridge(app=object())
+    b.pres = type("P", (), {"PageSetup": type("PS", (), {"SlideWidth": 960.0, "SlideHeight": 540.0})()})()
+    b.show = show
+    return b
+
+
+def test_without_an_hwnd_the_frame_uses_the_real_dpi_and_wraps_the_number(monkeypatch):
+    """bhc_e2e fb08855 slide 3 at 150 %: the frame [77,290,442,444] sat above '0,5 tỷ' (text at y 455–520).
+    The fallback turned PowerPoint's points into pixels at a fixed 96 dpi; at 150 % it is 144."""
+    from present import deck
+    from present.deck import ShapeInfo
+    monkeypatch.setattr(deck, "system_dpi", lambda: 144)
+    b = _bridge_on(_NoHwndShow())
+    box = ShapeInfo(3, "TextBox 2", 58, 187, 274, 115, "0,5 tỷ")          # the bhc_case deck's slide 3
+    left, top, right, bottom = b.shape_pixels(box)
+    assert b.rect_from == "points"
+    assert top <= 455 and bottom >= 520 and left == 116 and right == 664, (left, top, right, bottom)
+
+
+def test_a_text_shape_is_framed_on_its_text_not_its_box(monkeypatch):
+    """A box anchored at the bottom, taller than its text: the frame goes round the text PowerPoint reports."""
+    from present import deck
+    from present.deck import ShapeInfo
+    monkeypatch.setattr(deck, "system_dpi", lambda: 96)
+    b = _bridge_on(_NoHwndShow())
+    box = ShapeInfo(3, "TextBox 2", 58, 187, 274, 200, "0,5 tỷ", text_box=(70, 330, 120, 50))
+    l, t, r, btm = b.shape_pixels(box)
+    k = 96 / 72
+    assert (l, t) == (round(70 * k), round((30.75 + 330) * k)) and btm - t == round(50 * k)
+    chart = ShapeInfo(4, "Chart", 58, 187, 274, 200, "", is_chart=True, text_box=(70, 330, 120, 50))
+    assert b.shape_pixels(chart)[1] == round((30.75 + 187) * k)          # charts keep their own box
+
+
+def test_describe_reads_the_text_bounds_from_powerpoint():
+    from present.deck import describe
+    rng = type("R", (), {"Text": "0,5 tỷ", "BoundLeft": 70.0, "BoundTop": 330.0, "BoundWidth": 120.0, "BoundHeight": 50.0})()
+    tf = type("TF", (), {"HasText": True, "TextRange": rng})()
+    shape = type("S", (), {"HasTextFrame": True, "TextFrame": tf, "Type": 17, "Name": "TextBox 2",
+                           "Left": 58.0, "Top": 187.0, "Width": 274.0, "Height": 200.0})()
+    info = describe(shape, 3)
+    assert info.text == "0,5 tỷ" and info.text_box == (70.0, 330.0, 120.0, 50.0)
+    assert (info.framed.top, info.framed.height) == (330.0, 50.0)
