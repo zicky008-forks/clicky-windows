@@ -36,6 +36,7 @@ import visual          # noqa: E402
 import beta_checks     # noqa: E402
 import layout_checks   # noqa: E402
 import columns         # noqa: E402
+import power           # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 COMPOSER = "Tin nhắn cho Clicky"
@@ -393,6 +394,8 @@ def _main(argv=None) -> int:
     clock = Clock()
     stalled = []
 
+    power_before = power.snapshot()
+    say(f"   Nguồn điện: {power.describe(power_before)}")
     if drivers.pids_of("Clicky.exe"):
         say("Clicky đang chạy. Thoát Clicky (khay hệ thống → Thoát) rồi chạy lại, để robot mở bản có nhật ký cảnh.")
         return 2
@@ -569,14 +572,19 @@ def _main(argv=None) -> int:
         egress_text = ""
     result.checks += beta_checks.evaluate(events, sheets, expected, untouched_before_confirm=untouched,
                                           workbook=copy, egress_text=egress_text, network=network)
-    result.checks += layout_checks.evaluate(events, expected)
+    power_state = power.worst(power_before, power.snapshot())
+    void = power.void_reason(power_state)
+    if void and "latency" in (expected.get("layout") or {}):
+        say(f"   Thời gian đo được không tính: {void}")
+    result.checks += layout_checks.evaluate(events, expected, void=void)
     if watcher is not None:
         watcher.stop()
         watcher.join(timeout=10)
         add_visual(result, events, watcher.captures, out)
     meta = {"case": expected.get("case", ""), "clicky": exe, "when": time.strftime("%d/%m/%Y %H:%M"),
             "driver": f"{driver.label} {driver.version}", "steps": clock.steps, "workbook": str(copy),
-            "zoom": args.zoom or "mặc định", "network": network,
+            "zoom": args.zoom or "mặc định", "network": network, "power": power_state,
+            "power_text": power.describe(power_state), "timing_void": void,
             "mode": "local-only" if args.local_only else ("tamper " + args.tamper if args.tamper else "thường")}
     (out / "ket-qua.md").write_text(checks.report_md(result, meta), encoding="utf-8")
     if TURN_USAGE:

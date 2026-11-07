@@ -206,7 +206,18 @@ def latency_checks(events, spec) -> list:
     return out
 
 
-def evaluate(events, expected) -> list:
+def void_timing(checks_: list, why) -> list:
+    """Timing gates measured on a throttled PC (on battery, CPU under 90%): shown, never failed or passed."""
+    if not why:
+        return checks_
+    for c in checks_:
+        c.blocking = False
+        c.detail = f"KHÔNG TÍNH ({why}): " + c.detail
+    return checks_
+
+
+def evaluate(events, expected, void=None) -> list:
+    """void: why this PC's timings do not count (power.void_reason); the latency gates then only inform."""
     spec = expected.get("layout")
     if spec is None:
         return []
@@ -218,5 +229,5 @@ def evaluate(events, expected) -> list:
     if "notes" in spec:
         out += notes_checks(events, spec["notes"])
     if "latency" in spec:
-        out += latency_checks(events, spec["latency"])
+        out += void_timing(latency_checks(events, spec["latency"]), void)
     return out
