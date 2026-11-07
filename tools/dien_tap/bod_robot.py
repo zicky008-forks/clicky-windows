@@ -106,7 +106,7 @@ def source_books(res: Result, events: list) -> None:
         res.unchecked(SOURCE_CLOSED, "show_book/close_book chưa ghi mã file (book), chưa tách được bộ BOD")
         return
     sources = {e["book"] for e in shown if not e.get("pack")}
-    missing = sources - {e["book"] for e in closed}
+    missing = sources - {e["book"] for e in closed if e.get("closed", True)}   # closed=false: Excel kept it open
     res.add(SOURCE_CLOSED, not missing,
             f"mở {len(sources)} file nguồn ngoài bộ BOD" + (f", còn {len(missing)} file chưa đóng" if missing else ", đã đóng hết"))
 

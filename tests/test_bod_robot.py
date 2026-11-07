@@ -144,6 +144,8 @@ def test_source_files_opened_to_point_must_be_closed_unsaved(tmp_path, monkeypat
     assert ok.ok and not ok.unchecked
     # The plan file left open.
     assert not line(pack + plan + [{"event": "close_book", "book": "p1", "pack": True, "saved": False}]).ok
+    # Clicky tried but Excel kept the file open.
+    assert not line(pack + plan + [{"event": "close_book", "book": "k1", "pack": False, "closed": False, "saved": False}]).ok
     # Closed with a save.
     bad = line(pack + plan + [{"event": "close_book", "book": "k1", "pack": False, "saved": True}])
     assert not bad.ok and "lưu" in bad.detail
