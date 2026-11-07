@@ -619,7 +619,7 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
         return [Beat("File Excel này chưa được lưu. Anh lưu nó vào thư mục có các file đơn hàng và file cân đối tài khoản, rồi gọi lại em.")]
     files = sources.find_order_files(folder)
     if not files:
-        return [Beat(_no_orders(folder, _workbook_name(bridge)))]
+        return _stop_no_orders(folder, _workbook_name(bridge))
     _tbs, aside, conflict = _tb_groups(folder)
     if conflict:
         return _ask_which(folder, conflict, machine_order)
@@ -645,6 +645,26 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     _PENDING = {"stage": "intake", "order": machine_order, "intake": receipt, "folder": str(folder),
                 "period": f"{period[1]:02d}/{period[0]}" if period else "", "picked": list(_PICKS)}
     return [Beat(text, choices=INTAKE_CHOICES,
+                 intake={"card": intake_mod.card(receipt), "log": intake_mod.log_fields(receipt, text)})]
+
+
+STOP_CHOICES = ("Để tôi xem",)
+
+
+def _stop_no_orders(folder: Path, workbook: Optional[str]) -> list:
+    """No order file Clicky can use: the receipt still comes first, one line per file with why, then the honest
+    sentence. Nothing in the workbook changes; "Để tôi xem" ends the turn and opens the chat."""
+    global _PENDING
+    text = _no_orders(folder, workbook)
+    _tbs, aside, _conflict = _tb_groups(folder)
+    tbs, ledger = _ledger(folder)
+    receipt = intake_mod.stopped(folder, tbs, ledger, workbook,
+                                 set_aside=[(name, "bản cũ hơn của cùng kỳ") for name, _p in aside])
+    if not receipt.files:                           # an empty folder: nothing to list, the sentence says so
+        return [Beat(text)]
+    scene_log.record("roles", files=[{"name": n, "role": r} for n, r in receipt.roles.items()])
+    _PENDING = {"stage": "stopped", "folder": str(folder)}
+    return [Beat(text, choices=STOP_CHOICES,
                  intake={"card": intake_mod.card(receipt), "log": intake_mod.log_fields(receipt, text)})]
 
 
@@ -958,8 +978,8 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
     if folder is None:
         return [Beat("File Excel này chưa được lưu. Anh lưu nó vào thư mục có các file đơn hàng và file cân đối tài khoản, rồi gọi lại em.")]
     files = sources.find_order_files(folder)
-    if not files:
-        return [Beat(f"Em không thấy file đơn hàng CSV nào trong thư mục {folder.name}.")]
+    if not files:                                   # the files changed since the receipt: same honest sentence
+        return [Beat(_no_orders(folder, _workbook_name(bridge)))]
     with _timed("read_files"):
         tbs, ledger = _ledger(folder)
         period = sources.period_of(tbs[-1][1]) if tbs else None
@@ -1106,6 +1126,8 @@ def approve(bridge, pq) -> list:
     global _PENDING
     if stage() == "intake":                        # "ok" / "đồng ý" said to the receipt means the same as its button
         return confirm(bridge, pq)
+    if stage() == "stopped":                       # nothing to agree to: the early-stop card only offers a look
+        return reject()
     if stage() == "save":
         return save_and_verify(bridge)
     job, _PENDING = _PENDING, None
@@ -1283,6 +1305,10 @@ def reject() -> list:
         return []
     if stage() == "intake":
         return wrong()
+    if stage() == "stopped":
+        _PENDING = None
+        return [Beat("Dạ, anh xem các file trong phiếu nhé. Khi có file đơn hàng em đọc được, anh gọi lại em. "
+                     "Em chưa sửa gì trong file.")]
     if stage() == "save":
         _PENDING = None
         return self_save()
@@ -1748,7 +1774,7 @@ async def handle_approve(manager, transcript: str) -> str:
 
 
 async def handle_reject(manager, transcript: str) -> str:
-    was_intake = intake_pending()
+    was_intake = stage() in ("intake", "stopped")
     await play(manager, reject())
     if was_intake:
         _open_chat(manager)

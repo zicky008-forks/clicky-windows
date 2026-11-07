@@ -403,6 +403,20 @@ def build(folder: Path, files: list, tbs: list, truth, ledger: dict, workbook: O
     return intake
 
 
+UNUSED_KIND = "Chưa dùng"
+
+
+def stopped(folder: Path, tbs: list, ledger: dict, workbook: Optional[str] = None,
+            set_aside: Optional[list] = None) -> Intake:
+    """The receipt when no order file could be used and Clicky stops early: what was read, and one line per file it
+    did not use with why (rule 4 holds on the early stop too). Nothing is computed from it."""
+    intake = build(folder, [], tbs, sources.truth([]), ledger, workbook, set_aside)
+    for d in intake.dropped:
+        if d.amount is None and d.rows == 0 and d.what == f"File {d.file}":
+            intake.files.append(FileLine(name=d.file, kind=UNUSED_KIND, checks=d.reason, ok=False))
+    return intake
+
+
 def card(intake: Intake) -> dict:
     """What the receipt card shows: a few grouped lines, then what was left out. Plain data for the UI."""
     rows = []
@@ -422,7 +436,12 @@ def card(intake: Intake) -> dict:
         if f.kind == "Query Power Query":
             rows.append({"ok": True, "title": f"{f.name} · {f.kind}", "count": "", "detail": f.checks,
                          "role": roles_mod.NOTE})
-    left = summarize_dropped(intake.dropped)
+    own_line = {f.name for f in intake.files if f.kind == UNUSED_KIND}
+    for f in intake.files:
+        if f.kind == UNUSED_KIND:                   # the early stop: each file Clicky did not use, on its own line
+            rows.append({"ok": False, "title": f"{f.name} · {f.kind}", "count": "", "detail": f.checks,
+                         "role": intake.roles.get(f.name, "")})
+    left = summarize_dropped([d for d in intake.dropped if not (d.file in own_line and d.what == f"File {d.file}")])
     return {"eyebrow": "TRƯỚC KHI TÍNH", "title": "Em đọc được những gì", "rows": rows,
             "left_out": left, "left_out_title": "Em đã bỏ ra ngoài" if left else "Em không bỏ dòng nào"}
 

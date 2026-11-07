@@ -139,6 +139,76 @@ def test_step_one_never_says_it_saw_no_order_file_when_files_are_there(tmp_path,
     assert "không thấy file đơn hàng nào" in _start(empty)[0].text          # true only when there is none
 
 
+def _play(monkeypatch, beats):
+    """Run play() with a manager that draws nothing, so the scene log holds what the robot reads."""
+    import asyncio
+    monkeypatch.setattr(month_close, "BEAT_GAP_S", 0)
+
+    class Sig:
+        def emit(self, *a):
+            pass
+
+    class Manager:
+        _excel = None
+
+        def __init__(self):
+            for name in ("sig_guided", "sig_clear_drawings", "sig_draw", "sig_point_hold", "sig_point_at",
+                         "sig_point_release", "sig_choices", "sig_response_chunk", "sig_intake"):
+                setattr(self, name, Sig())
+
+        async def _reply_local(self, _text):
+            return True
+
+    asyncio.run(month_close.play(Manager(), beats))
+
+
+def test_an_early_stop_still_shows_the_receipt_with_one_line_per_file(tmp_path, monkeypatch):
+    """Grader F3a (Case 05): with no usable order file Clicky stopped with a sentence only. The receipt comes first
+    anyway: every file in the folder on its own line with why, logged for the robot, and only "Để tôi xem"."""
+    import tb_samples as tb
+    from test_month_close import _write_tb
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    data = tmp_path / "T10"
+    data.mkdir()
+    t10 = tb.month(8400, 450, 210, 5800, 6000, 9000, 5500, 15, 70, (760, 420, 200), (520, 170), 5, 25, 139)
+    _write_tb(data / "TB_T10.xlsx", tb.misa_rows(tb.OPENING_T9, t10, "Tháng 10 năm 2026"))
+    (data / "DonHang_MISA.xls").write_bytes(b"\x00garbage\x00" * 64)
+    ox.write_english_csv(data / "Shopee_T10.csv", header=["Order ID", "Customer", "SKU", "Line total"])
+    (data / "anh_chup.png").write_bytes(b"png")
+    beats = _start(data)
+    assert len(beats) == 1 and beats[0].choices == ("Để tôi xem",) and month_close.stage() == "stopped"
+    card, logged = beats[0].intake["card"], beats[0].intake["log"]
+    titles = [r["title"] for r in card["rows"]]
+    assert titles[0].startswith("TB_T10.xlsx · Sổ cân đối")
+    lines = {r["title"].split(" · ")[0]: r for r in card["rows"][1:]}
+    assert set(lines) == {"DonHang_MISA.xls", "Shopee_T10.csv", "anh_chup.png"}
+    assert "chưa đọc được định dạng" in lines["DonHang_MISA.xls"]["detail"]
+    assert "thiếu cột ngày" in lines["Shopee_T10.csv"]["detail"]
+    assert "ảnh" in lines["anh_chup.png"]["detail"] and not any(r["ok"] for r in lines.values())
+    assert not any("DonHang_MISA" in x or "Shopee" in x for x in card["left_out"])     # each file said once
+    assert {f["name"] for f in logged["files"]} == {"TB_T10.xlsx", "DonHang_MISA.xls", "Shopee_T10.csv", "anh_chup.png"}
+    assert "không thấy" not in beats[0].text and "Em thấy 2 file" in beats[0].text
+    events = [json.loads(line)["event"] for line in log.read_text(encoding="utf-8").splitlines()]
+    assert "intake_none" in events and "roles" in events
+    _play(monkeypatch, beats)                        # robot gate f703018: a folder with data files reaches the receipt
+    played = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    receipt = [e for e in played if e["event"] == "intake"]
+    assert len(receipt) == 1 and {f["name"] for f in receipt[0]["files"]} >= {"DonHang_MISA.xls", "Shopee_T10.csv"}
+    after = month_close.reject()                     # "Để tôi xem": ends the turn, nothing pending, nothing changed
+    assert month_close.stage() is None and "Em chưa sửa gì trong file" in after[0].text
+
+
+def test_the_reconcile_step_says_the_same_honest_sentence(tmp_path):
+    """Grader F3b: if the order files vanish between the receipt and the confirm, _reconcile names what is there
+    instead of the old "Em không thấy file đơn hàng CSV nào"."""
+    data = tmp_path / "T10"
+    data.mkdir()
+    (data / "DonHang_MISA.xls").write_bytes(b"\x00garbage\x00" * 64)
+    text = month_close._reconcile(_Bridge(data), None, sources.DAY_FIRST)[0].text
+    assert "CSV nào" not in text and "DonHang_MISA.xls" in text and "chưa đọc được định dạng" in text
+
+
 def test_step_one_reads_an_xls_source_and_names_the_file_it_could_not_read(tmp_path):
     ox.write_html_xls(tmp_path / "DonHang_MISA_T10.xls")
     (tmp_path / "DonHang_cu.xls").write_bytes(b"\x00garbage\x00" * 64)
