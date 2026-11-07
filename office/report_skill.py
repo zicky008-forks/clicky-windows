@@ -6,13 +6,14 @@ the conclusion. It only adds new sheets; the user's own sheets are never changed
 """
 import asyncio
 import logging
+from engine.address import you  # the one word for the user (CLAUDE.md rule 8)
 
 log = logging.getLogger(__name__)
 
 TRIGGER = (r"(l[ậa]p|l[àa]m|t[ạa]o|d[ựu]ng|xu[ấa]t)\b.{0,20}b[áa]o\s+c[áa]o.{0,30}\bth[áa]ng\b"
            r"|\b(build|make|create)\b.{0,20}\bmonthly\s+report\b")
 OUTPUT_PREFIXES = ("TB ky nay", "TB ky truoc", "BC thang", "Cau hoi xac minh", "Kiem tra")
-NEED_TWO = ("Anh mở file Excel có hai sheet cân đối phát sinh, kỳ này và kỳ trước, "
+NEED_TWO = (f"{you(True)} mở file Excel có hai sheet cân đối phát sinh, kỳ này và kỳ trước, "
             "rồi gọi lại em. Em tìm thấy {n} sheet đọc được.")
 
 
@@ -71,7 +72,7 @@ def run_report(bridge, periods=None) -> tuple:
     for key in ("report", "questions", "checks", "tb_cur", "tb_prev"):
         actual = bridge.add_sheet(SHEET_NAMES[key])
         if not actual:
-            return "Em không thêm được sheet mới vào file này. Anh kiểm tra file có đang bị khoá hoặc chỉ đọc không.", None, None
+            return f"Em không thêm được sheet mới vào file này. {you(True)} kiểm tra file có đang bị khoá hoặc chỉ đọc không.", None, None
         names[key] = actual
     report = build(cur_rows, prev_rows, cur_name, prev_name, text_prefix="'", names=names)
     for name, grid in report.sheets.items():

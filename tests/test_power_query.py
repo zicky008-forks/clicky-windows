@@ -103,7 +103,7 @@ def test_fix_skill_backs_up_then_rewrites(tmp_path, monkeypatch):
     assert bridge.queries.Item("KhachHang").Formula == CLEAN_QUERY
     backup = json.loads((tmp_path / "power_query_backups.json").read_text(encoding="utf-8"))
     assert backup[0]["query"] == "Ban hang HN" and backup[0]["formula"] == BRANCH_QUERY
-    assert pq_skill.run_fix(bridge, "sửa query giúp anh").startswith("Anh nói rõ")
+    assert pq_skill.run_fix(bridge, "sửa query giúp anh").startswith("Chị nói rõ")
 
 
 def test_prompt_context_lists_steps_and_findings():

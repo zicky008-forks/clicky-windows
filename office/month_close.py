@@ -30,6 +30,7 @@ from engine.monthly_report import spoken
 from engine.trial_balance import ZERO
 from office.power_query import LoadTimeout, ReadFailed
 import scene_log
+from engine.address import you  # the one word for the user (CLAUDE.md rule 8)
 
 log = logging.getLogger(__name__)
 
@@ -620,14 +621,14 @@ def _cause_beats(why: dict, machine_order: Optional[str], first_row: int, reader
     if why["other"]:
         n, amt = len(why["other"]), _amount(why["other"])
         add(Beat(f"Còn {n} chứng từ bị mất mà em chưa rõ lý do.", label="Chưa rõ nguyên nhân", mark="warn",
-                 value=spoken(amt), note="Anh xem danh sách trong bảng chi tiết."),
+                 value=spoken(amt), note=f"{you(True)} xem danh sách trong bảng chi tiết."),
             ["Chưa rõ nguyên nhân", n, amt, "", "Có trong file gốc nhưng không có trong bảng query."])
     # The causes must add up to the gap; whatever they do not cover is said, never left silent.
     if gap is not None:
         rest = gap - explained(why)
         if abs(rest) > TOLERANCE:
             add(Beat(f"Còn {spoken(abs(rest))} em chưa tìm ra nguyên nhân.", label="Chưa rõ nguyên nhân", mark="warn",
-                     value=_signed(rest), note="Phần này chưa được giải thích. Anh xem bảng query trước khi dùng số."),
+                     value=_signed(rest), note=f"Phần này chưa được giải thích. {you(True)} xem bảng query trước khi dùng số."),
                 ["Phần lệch chưa rõ nguyên nhân", "", rest, "", "Tổng các nguyên nhân ở trên chưa bằng chỗ lệch giữa query và file gốc."])
     if why["excel_dups"]:
         n = len(why["excel_dups"])
@@ -642,7 +643,7 @@ def _lint_rows(findings) -> list:
 
 
 def _fix_offer() -> Beat:
-    return Beat("Em sửa query giúp anh nhé? Bản cũ vẫn được giữ lại.", choices=FIX_CHOICES)
+    return Beat(f"Em sửa query giúp {you()} nhé? Bản cũ vẫn được giữ lại.", choices=FIX_CHOICES)
 
 
 _AUDIT: Optional[audit.AuditLog] = None
@@ -660,10 +661,10 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     _step("read_folder")
     _EXPECT.clear()
     if not bridge.available():
-        return [Beat("Anh mở file Excel đã lưu trong thư mục dữ liệu tháng rồi gọi lại em.")]
+        return [Beat(f"{you(True)} mở file Excel đã lưu trong thư mục dữ liệu tháng rồi gọi lại em.")]
     folder = _data_folder(bridge)
     if folder is None:
-        return [Beat("File Excel này chưa được lưu. Anh lưu nó vào thư mục có các file đơn hàng và file cân đối tài khoản, rồi gọi lại em.")]
+        return [Beat(f"File Excel này chưa được lưu. {you(True)} lưu nó vào thư mục có các file đơn hàng và file cân đối tài khoản, rồi gọi lại em.")]
     _load_columns()
     files = sources.find_order_files(folder)
     unknown = sources.unexplained_order_files(folder, {f.name for f in files})
@@ -680,7 +681,7 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
         truth = sources.truth(files, period)
     ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
     receipt = intake_mod.build(folder, files, tbs, truth, ledger, _workbook_name(bridge),
-                               set_aside=[(name, f"bản sổ cân đối T{p[1]:02d} khác; anh đã chọn dùng {intake_mod.file_name(folder, _CHOSEN[p])}"
+                               set_aside=[(name, f"bản sổ cân đối T{p[1]:02d} khác; {you()} đã chọn dùng {intake_mod.file_name(folder, _CHOSEN[p])}"
                                            if p in _CHOSEN else "bản cũ hơn của cùng kỳ")
                                           for name, p in aside])
     scene_log.record("roles", files=[{"name": n, "role": r} for n, r in receipt.roles.items()])
@@ -694,7 +695,7 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
         missed += " " + receipt.impact
     text = (f"Em đọc được {n_tb} sổ cân đối và {truth.unique_rows} đơn bán hàng"
             + (f" từ {len(files)} trên {len(files) + len(unread)} file đơn hàng" if unread else "") + "." + missed
-            + " Anh xem giúp em có đúng không, em chưa sửa gì trong file.")
+            + f" {you(True)} xem giúp em có đúng không, em chưa sửa gì trong file.")
     _PENDING = {"stage": "intake", "order": machine_order, "intake": receipt, "folder": str(folder),
                 "period": f"{period[1]:02d}/{period[0]}" if period else "", "picked": list(_PICKS),
                 "columns": list(_COLUMN_PICKS)}
@@ -794,18 +795,18 @@ def _column_question(job: dict) -> Beat:
     lead = f"File {file} có vẻ là file đơn hàng nhưng tên cột lạ, em chưa lấy số từ file này. "
     if not chosen and len(dates) == 1 and len(amounts) == 1:
         job["need"] = "confirm"
-        text = lead + f"Em hiểu cột \"{dates[0]}\" là ngày bán, cột \"{amounts[0]}\" là số tiền. Đúng không chị?"
+        text = lead + f"Em hiểu cột \"{dates[0]}\" là ngày bán, cột \"{amounts[0]}\" là số tiền. Đúng không {you()}?"
         choices = (COLUMN_YES, COLUMN_NO)
     elif "date" not in chosen and len(dates) > 1:
         job["need"] = "date"
-        text = lead + "Cột nào là ngày bán hả chị?"
+        text = lead + f"Cột nào là ngày bán hả {you()}?"
         choices = _column_choices(dates)
     else:
         job["need"] = "amount"
         options = [a for a in amounts if a != chosen.get("date")]
         job["options"] = options
         said = f"Ngày bán là cột \"{chosen.get('date') or dates[0]}\". " if "date" in chosen or len(dates) == 1 else ""
-        text = (lead if not chosen else "") + said + "Còn số tiền bán là cột nào hả chị?"
+        text = (lead if not chosen else "") + said + f"Còn số tiền bán là cột nào hả {you()}?"
         choices = _column_choices(options)
     _step("column_question", file=file, need=job["need"], options=list(choices))
     return Beat(text, choices=choices)
@@ -834,7 +835,7 @@ def answer_columns(bridge, pq, answer: str) -> list:
         options = job["dates"] if need == "date" else job.get("options", job["amounts"])
         hit = next((n for n in sorted(options, key=len, reverse=True) if fold_text(n) in said), None)
         if hit is None:
-            return [Beat("Chị bấm một trong các nút để chọn cột nhé.", choices=_column_choices(options))]
+            return [Beat(f"{you(True)} bấm một trong các nút để chọn cột nhé.", choices=_column_choices(options))]
         job["chosen"][need] = hit
         if len(job["dates"]) == 1:
             job["chosen"].setdefault("date", job["dates"][0])
@@ -883,7 +884,7 @@ def pick(bridge, pq, answer: str) -> list:
     # Longest name first: "Dùng TB_T10_cu" also contains "TB_T10".
     hit = next((n for n in sorted(job["options"], key=len, reverse=True) if fold_text(n) in text), None)
     if hit is None:
-        return [Beat("Anh bấm một trong hai nút để chọn sổ cân đối nhé.", choices=tuple(f"Dùng {n}" for n in job["options"]))]
+        return [Beat(f"{you(True)} bấm một trong hai nút để chọn sổ cân đối nhé.", choices=tuple(f"Dùng {n}" for n in job["options"]))]
     _PENDING = None
     _CHOSEN[job["period"]] = hit
     others = [n for n in job["options"] if n != hit]
@@ -937,7 +938,7 @@ def needs_reader(files: list) -> Optional[tuple]:
         if f.kind != "csv":
             return f, _KIND_VI.get(f.kind, "là loại file khác CSV")
         if f.remembered:
-            return f, "có cột ngày hoặc số tiền do chị chỉ"
+            return f, f"có cột ngày hoặc số tiền do {you()} chỉ"
         if f.preamble:
             return f, f"có {len(f.preamble)} dòng tiêu đề phía trên bảng"
         if f.cancelled:
@@ -1011,14 +1012,14 @@ def confirm(bridge, pq) -> list:
     for file, chosen, agreed in job.get("columns", []):
         asked.add(file)
         _AUDIT.add("—", f"Chọn cột: {file}", "—", chosen,
-                   "Tên cột lạ; chị chỉ cột nào là ngày bán và số tiền, Clicky nhớ cho các tháng sau", agreed,
+                   f"Tên cột lạ; {you()} chỉ cột nào là ngày bán và số tiền, Clicky nhớ cho các tháng sau", agreed,
                    "Thư mục dữ liệu")
     for f in sources.find_order_files(Path(job["folder"])):
         if f.remembered and f.name not in asked:
             told = ", ".join(f"{label} = cột \"{f.header[f.columns[role]]}\"" for role, label in
                              (("date", "ngày"), ("amount", "số tiền")) if role in f.columns)
             _AUDIT.add("—", f"Cột đã nhớ: {f.name}", "—", told,
-                       "Chị đã chỉ các cột này cho cùng tiêu đề ở lần trước; Clicky dùng lại", audit.AUTO,
+                       f"{you(True)} đã chỉ các cột này cho cùng tiêu đề ở lần trước; Clicky dùng lại", audit.AUTO,
                        "Thư mục dữ liệu")
     before = set(bridge.sheet_names())
     # As in approve: adding and styling the check sheets with the screen frozen is faster (Excel does not
@@ -1035,7 +1036,7 @@ def wrong() -> list:
     """ "Có chỗ sai": stop before anything changed and let the user say what is wrong in the chat."""
     global _PENDING
     _PENDING = None
-    return [Beat("Anh nói giúp em chỗ nào chưa đúng nhé. Em chưa sửa gì trong file.")]
+    return [Beat(f"{you(True)} nói giúp em chỗ nào chưa đúng nhé. Em chưa sửa gì trong file.")]
 
 
 def _close_out(bridge, before: set, quiet: bool = False) -> None:
@@ -1135,7 +1136,7 @@ def make_final(bridge) -> list:
     """ "chốt chính thức": the one step that turns SƠ BỘ into CHÍNH THỨC, only ever on the user's word."""
     global _AUDIT
     if not bridge.available() or audit.SHEET not in bridge.sheet_names():
-        return [Beat("Em chưa thấy sheet Bien ban Clicky trong file này. Anh chạy báo cáo tháng trước rồi mới chốt nhé.")]
+        return [Beat(f"Em chưa thấy sheet Bien ban Clicky trong file này. {you(True)} chạy báo cáo tháng trước rồi mới chốt nhé.")]
     if _AUDIT is None:
         # Clicky was restarted: keep what the sheet already shows and only change its status line.
         rows = bridge.sheet_rows(audit.SHEET) or []
@@ -1152,7 +1153,7 @@ def make_final(bridge) -> list:
                    audit.who(), "—")
         _AUDIT.status = audit.FINAL
         _write_audit(bridge)
-    return [Beat("Em đã chuyển báo cáo sang Chính thức và ghi vào biên bản. Anh bấm Ctrl + S để lưu nhé.",
+    return [Beat(f"Em đã chuyển báo cáo sang Chính thức và ghi vào biên bản. {you(True)} bấm Ctrl + S để lưu nhé.",
                  f"{_q(audit.SHEET)}!A1:I4", "Đã chốt", "ok", audit.FINAL)]
 
 
@@ -1201,10 +1202,10 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
     global _PENDING
     _PENDING = None
     if not bridge.available():
-        return [Beat("Anh mở file Excel đã lưu trong thư mục dữ liệu tháng rồi gọi lại em.")]
+        return [Beat(f"{you(True)} mở file Excel đã lưu trong thư mục dữ liệu tháng rồi gọi lại em.")]
     folder = _data_folder(bridge)
     if folder is None:
-        return [Beat("File Excel này chưa được lưu. Anh lưu nó vào thư mục có các file đơn hàng và file cân đối tài khoản, rồi gọi lại em.")]
+        return [Beat(f"File Excel này chưa được lưu. {you(True)} lưu nó vào thư mục có các file đơn hàng và file cân đối tài khoản, rồi gọi lại em.")]
     files = sources.find_order_files(folder)
     if not files:                                   # the files changed since the receipt: same honest sentence
         return [Beat(_no_orders(folder, _workbook_name(bridge)))]
@@ -1235,7 +1236,7 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
         same = abs(diff) <= TOLERANCE
         beats.append(Beat(
             f"File gốc và sổ cái khớp nhau: doanh thu {spoken(truth.amount)}." if same else
-            f"File gốc {_gap_vi(diff)} so với sổ cái, anh cần xem lại file xuất.",
+            f"File gốc {_gap_vi(diff)} so với sổ cái, {you()} cần xem lại file xuất.",
             _check_ref("C5:C6"), "File gốc khớp sổ cái" if same else "File gốc lệch sổ cái", "ok" if same else "bad",
             spoken(truth.amount) if same else _signed(diff), source_note + f" · TK {ledger['rev_acct']}"))
     else:
@@ -1301,7 +1302,7 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
         _write_check_sheet(bridge, None, truth, ledger, notes)
         return beats + [Beat("Em chưa đọc lại được bảng query, nên chưa có số chênh lệch. Đây là lỗi của Clicky.",
                              _check_ref("A7:E7"), "Chưa đối chiếu được", "warn", "Chưa có số",
-                             "Không phải lỗi file của anh. Anh cập nhật Clicky rồi gọi lại em.")]
+                             f"Không phải lỗi file của {you()}. {you(True)} cập nhật Clicky rồi gọi lại em.")]
     if isinstance(result, str):
         log.warning("loading query %s failed: %s", name, scrub(result))
         why_vi = load_error_vi(result)
@@ -1378,9 +1379,9 @@ def load_error_vi(raw: str) -> str:
     """One plain Vietnamese sentence for a Power Query / COM load error; the raw text goes to the log only."""
     if isinstance(raw, LoadTimeout):
         if raw.dialog:
-            return (f"Excel đang chờ trả lời hộp thoại \"{raw.dialog}\", nên query chưa tải xong. Chị xem cửa sổ "
+            return (f"Excel đang chờ trả lời hộp thoại \"{raw.dialog}\", nên query chưa tải xong. {you(True)} xem cửa sổ "
                     "Excel, trả lời hoặc đóng hộp thoại đó, rồi gọi lại em.")
-        return (f"Excel tải query quá {int(raw.seconds)} giây vẫn chưa xong, nên em dừng chờ. Chị đợi Excel rảnh "
+        return (f"Excel tải query quá {int(raw.seconds)} giây vẫn chưa xong, nên em dừng chờ. {you(True)} đợi Excel rảnh "
                 "(hoặc đóng bớt file đang mở), rồi gọi lại em.")
     text = str(raw or "")
     m = re.search(r"column '([^']+)' of the table wasn't found", text, re.I)
@@ -1407,7 +1408,7 @@ def _approve(bridge, pq, job) -> list:
         before = None
     pq.add(PARAM_NAME, m_code.parameter_query(str(folder)))
     if not pq.add(job["name"], job["formula"]):
-        return [Beat(f"Em không sửa được query {job['name']}. Anh kiểm tra file có đang bị khoá không.")]
+        return [Beat(f"Em không sửa được query {job['name']}. {you(True)} kiểm tra file có đang bị khoá không.")]
     files = sources.find_order_files(folder)
     tbs, ledger = _ledger(folder)
     truth = sources.truth(files, sources.period_of(tbs[-1][1]) if tbs else None)
@@ -1438,7 +1439,7 @@ def _approve(bridge, pq, job) -> list:
     check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, fixed_note, "ok" if ok else "bad")
     ref = f"{_q(check_sheet)}!C7" if check_sheet and ledger else None
     if not ok:
-        return [Beat(f"Em đã sửa nhưng Excel vẫn {_gap_vi(gap)} so với sổ cái. Em dừng ở đây để anh xem.",
+        return [Beat(f"Em đã sửa nhưng Excel vẫn {_gap_vi(gap)} so với sổ cái. Em dừng ở đây để {you()} xem.",
                      ref, "Vẫn lệch sổ cái", "bad", _signed(gap), f"Query còn {len(rows)} chứng từ. Chưa lập báo cáo.")]
     cost_ok = not ledger or "cost" not in loaded.columns or abs(loaded.cost - ledger["cost"]) <= TOLERANCE
     note = f"{len(rows)} chứng từ · doanh thu {spoken(loaded.amount)}" + (
@@ -1458,7 +1459,7 @@ def _approve(bridge, pq, job) -> list:
 
 # Clicky changes the open workbook but never saves it for the user; closing without saving
 # loses the fix and the report, so the last thing it says is how to keep them.
-SAVE_REMINDER = Beat("Em chưa lưu file. Anh bấm Ctrl + S để giữ kết quả nhé.")
+SAVE_REMINDER = Beat(f"Em chưa lưu file. {you(True)} bấm Ctrl + S để giữ kết quả nhé.")
 SAVE_CHOICES = ("Lưu và kiểm tra", "Để tôi tự lưu")
 SAVE_TRIGGER = r"^\s*(lưu và kiểm tra|luu va kiem tra|lưu đi|luu di|lưu giúp|luu giup)\b(\s+\S+){0,3}\s*[.!]?\s*$"
 SELF_SAVE_TRIGGER = r"^\s*(để tôi tự lưu|de toi tu luu|tôi tự lưu|toi tu luu|để tôi lưu|de toi luu)\b(\s+\S+){0,3}\s*[.!]?\s*$"
@@ -1488,7 +1489,7 @@ def save_and_verify(bridge, target=None) -> list:
     if not bridge.available():
         return [Beat("Em không thấy file Excel đang mở, nên chưa lưu được.")]
     if not _try(bridge, "save", *([str(target)] if target else [])):
-        return [Beat("Em chưa lưu được file. Anh bấm Ctrl + S rồi gọi \"kiểm tra file đã lưu\" nhé.",
+        return [Beat(f"Em chưa lưu được file. {you(True)} bấm Ctrl + S rồi gọi \"kiểm tra file đã lưu\" nhé.",
                      label="Chưa lưu được", mark="warn")]
     return verify_saved(bridge)
 
@@ -1497,7 +1498,7 @@ def verify_saved(bridge) -> list:
     from engine import saved_check
     path = _try(bridge, "workbook_path")
     if not path or not _EXPECT:
-        return [Beat("Em chưa có số nào để đối chiếu với file đã lưu. Anh chạy báo cáo tháng trước nhé.")]
+        return [Beat(f"Em chưa có số nào để đối chiếu với file đã lưu. {you(True)} chạy báo cáo tháng trước nhé.")]
     try:
         # The robot's tamper hook hands back a changed copy; without it this is the saved file itself.
         ok, diffs = saved_check.check(saved_check.tamper_from_env(Path(path)), _EXPECT)
@@ -1519,14 +1520,14 @@ def verify_saved(bridge) -> list:
     else:
         where, detail = "", "Em không đọc lại được file đã lưu."
     more = f" Còn {len(diffs) - 1} ô khác lệch." if len(diffs) > 1 else ""
-    return [Beat("File đã lưu không giống số em tính, em chưa giao file này. Anh đừng gửi bản này nhé.",
+    return [Beat(f"File đã lưu không giống số em tính, em chưa giao file này. {you(True)} đừng gửi bản này nhé.",
                  where or None, "File đã lưu bị lệch", "bad",
                  _signed(Decimal(first["got"] - first["want"])) if first.get("got") is not None and first.get("want") is not None
                  else "Lệch", detail + more)]
 
 
 def self_save() -> list:
-    return [Beat("Anh bấm Ctrl + S để lưu nhé. Lưu xong anh gõ \"kiểm tra file đã lưu\", em mở lại và đối chiếu.")]
+    return [Beat(f"{you(True)} bấm Ctrl + S để lưu nhé. Lưu xong {you()} gõ \"kiểm tra file đã lưu\", em mở lại và đối chiếu.")]
 
 
 def reject() -> list:
@@ -1537,13 +1538,13 @@ def reject() -> list:
         return wrong()
     if stage() == "stopped":
         _PENDING = None
-        return [Beat("Dạ, anh xem các file trong phiếu nhé. Khi có file đơn hàng em đọc được, anh gọi lại em. "
+        return [Beat(f"Dạ, {you()} xem các file trong phiếu nhé. Khi có file đơn hàng em đọc được, {you()} gọi lại em. "
                      "Em chưa sửa gì trong file.")]
     if stage() == "save":
         _PENDING = None
         return self_save()
     _PENDING = None
-    return [Beat("Em giữ nguyên query. Số trong Excel vẫn lệch sổ cái, anh đừng dùng cho báo cáo nhé.")]
+    return [Beat(f"Em giữ nguyên query. Số trong Excel vẫn lệch sổ cái, {you()} đừng dùng cho báo cáo nhé.")]
 
 
 # ── Stage 3: the report ───────────────────────────────────────────────────────
@@ -1959,7 +1960,7 @@ WORKING = {
     "load": "Em đang nạp đơn hàng vào Excel…",
     "save": "Em đang lưu rồi mở lại file để kiểm…",
     "verify": "Em đang mở lại file đã lưu để kiểm…",
-    "pick": "Em đang đọc lại với sổ chị chọn…",
+    "pick": f"Em đang đọc lại với sổ {you()} chọn…",
     "final": "Em đang chuyển sang Chính thức…",
 }
 

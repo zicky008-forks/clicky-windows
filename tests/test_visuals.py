@@ -107,7 +107,7 @@ def test_cause_notes_name_each_cause_with_its_size():
     notes = visuals.cause_notes(rows)
     assert notes[0]["warn"] == "Đọc nhầm ngày tháng: 334 chứng từ · 2,9 tỷ"
     assert notes[1]["warn"] == "Xoá trùng nhầm: 27 chứng từ · 182,2 triệu"
-    assert notes[2]["action"].startswith("Anh xem bảng chi tiết") and [n["row"] for n in notes] == [0, 1, 2]
+    assert notes[2]["action"].startswith("Chị xem bảng chi tiết") and [n["row"] for n in notes] == [0, 1, 2]
 
 
 # ── layout ────────────────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from typing import Optional
+from engine.address import you  # the one word for the user (CLAUDE.md rule 8)
 
 SHEET = "Bien ban Clicky"
 DRAFT, FINAL = "SƠ BỘ", "CHÍNH THỨC"
@@ -60,7 +61,7 @@ def status_note(status: str, period: str) -> str:
     if status == FINAL:
         return "Đã chuyển sang Chính thức."
     month = f" tháng {period}" if period else ""
-    return (f"Chưa khóa sổ{month}. Sau khi kế toán trưởng duyệt, anh/chị gõ \"chốt chính thức\" cho Clicky "
+    return (f"Chưa khóa sổ{month}. Sau khi kế toán trưởng duyệt, {you()} gõ \"chốt chính thức\" cho Clicky "
             "để đổi sang Chính thức.")
 
 
