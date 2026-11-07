@@ -88,3 +88,28 @@ def test_open_files_are_counted_not_named(monkeypatch):
     monkeypatch.setattr(bod_robot, "find_clicky", lambda: __file__)
     assert bod_robot.main(["--tu-tao"]) == 2
     assert "2 file khác" in said[-1] and "So_cai" not in said[-1]
+
+
+def test_review_is_not_over_until_every_finding_has_had_its_card(tmp_path, monkeypatch):
+    """Case 07, 07/11: bod_done comes before the walk-through; the robot stopped after 2 of 12 cards."""
+    events, _ = _run(tmp_path, monkeypatch)
+    assert bod_robot.review_finished(events)
+    first_beats = []
+    for e in events:
+        first_beats.append(e)
+        if e.get("event") == "spoken" and e.get("i") == 1:
+            break
+    assert any(e.get("event") == "bod_done" for e in first_beats)
+    assert not bod_robot.review_finished(first_beats)
+    assert bod_robot.review_finished(first_beats + [{"event": "story_end", "beats": 13}])
+
+
+def test_a_group_checked_in_part_and_said_so_is_not_a_failure(tmp_path, monkeypatch):
+    events, answers = _run(tmp_path, monkeypatch)
+    done = next(e for e in events if e.get("event") == "bod_done")
+    done["partly"], done["not_checked"] = [5], []
+    line = {l.name: l for l in bod_robot.grade(events, True, answers).lines}["Đủ 7 nhóm đều kiểm được"]
+    assert line.ok and "nhóm 5 kiểm một phần" in line.detail
+    done["not_checked"] = [6]
+    line = {l.name: l for l in bod_robot.grade(events, True, answers).lines}["Đủ 7 nhóm đều kiểm được"]
+    assert not line.ok and "chưa kiểm được nhóm 6" in line.detail
