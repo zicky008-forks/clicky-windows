@@ -72,6 +72,7 @@ class Intake:
     impact_short: bool = False       # True when the revenue is short of the ledger because of it
     comparable: str = ""             # why the two periods do not compare like for like (F5, F8); "" when they do
     same_basis: bool = True          # False: the prior period is on another basis, no change will be explained
+    basis_note: str = ""             # soft: a basis line stated in one period only; nothing is blocked
 
     @property
     def balanced(self) -> bool:
@@ -431,7 +432,7 @@ def _comparable(intake: Intake, folder: Path, picked: list) -> str:
     (_, prev_rows, prev_tb), (_, cur_rows, cur_tb) = picked[-2], picked[-1]
     g = comparable.gate(prev_rows, prev_tb, cur_rows, cur_tb, mapping, mapping_file,
                         comparable.is_new_year(sources.period_of(prev_rows), sources.period_of(cur_rows)))
-    intake.comparable, intake.same_basis = g.sentence(you()), g.same_basis
+    intake.comparable, intake.same_basis, intake.basis_note = g.sentence(you()), g.same_basis, g.note()
     if mapping_file:
         intake.roles[mapping_file] = roles_mod.NOTE
         intake.files.append(FileLine(name=mapping_file, kind="Bảng ghép tài khoản", rows=len(mapping),
@@ -501,6 +502,9 @@ def card(intake: Intake) -> dict:
     if intake.comparable:                           # before the button: a change that will not be explained
         rows.append({"ok": False, "title": "So với kỳ trước · chưa so được", "count": "", "detail": intake.comparable,
                      "role": ""})
+    elif intake.basis_note:
+        rows.append({"ok": True, "title": "So với kỳ trước · lưu ý", "count": "", "detail": intake.basis_note,
+                     "role": ""})
     for f in intake.files:
         if f.kind == "Query Power Query":
             rows.append({"ok": True, "title": f"{f.name} · {f.kind}", "count": "", "detail": f.checks,
@@ -568,7 +572,7 @@ def log_fields(intake: Intake, text: str) -> dict:
                       for f in intake.files],
             "dropped": [{"what": d.what, "amount": None if d.amount is None else int(d.amount), "reason": d.reason,
                          "file": d.file} for d in intake.dropped],
-            "impact": intake.impact, "comparable": intake.comparable, "same_basis": intake.same_basis, "text": text}
+            "impact": intake.impact, "comparable": intake.comparable, "same_basis": intake.same_basis, "basis_note": intake.basis_note, "text": text}
 
 
 def dropped_rows(intake: Intake) -> list:

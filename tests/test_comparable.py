@@ -49,12 +49,42 @@ def test_period_words_report_names_and_a_unit_said_once_are_not_a_different_basi
     (("BẢNG CÂN ĐỐI TÀI KHOẢN", "Đơn vị tính: nghìn đồng"), ("BẢNG CÂN ĐỐI TÀI KHOẢN", "Đơn vị tính: đồng"), "đơn vị tính"),
     (("BẢNG CÂN ĐỐI TÀI KHOẢN", "Loại sổ: Sổ quản trị"), ("BẢNG CÂN ĐỐI TÀI KHOẢN",), "loại sổ"),
     (("BẢNG CÂN ĐỐI TÀI KHOẢN", "Ban hành theo Thông tư 200/2014/TT-BTC"),
-     ("BẢNG CÂN ĐỐI TÀI KHOẢN", "Ban hành theo Thông tư 99/2025/TT-BTC"), "dòng đầu file"),
+     ("BẢNG CÂN ĐỐI TÀI KHOẢN", "Ban hành theo Thông tư 133/2016/TT-BTC"), "chế độ kế toán"),
+    (("BẢNG CÂN ĐỐI TÀI KHOẢN", "Chế độ kế toán: Thông tư 200/2014/TT-BTC"),
+     ("BẢNG CÂN ĐỐI TÀI KHOẢN", "Chế độ kế toán: Thông tư 133/2016/TT-BTC"), "chế độ kế toán"),
+    (("BẢNG CÂN ĐỐI TÀI KHOẢN", "Sổ tài chính"), ("BẢNG CÂN ĐỐI TÀI KHOẢN", "Sổ quản trị"), "loại sổ"),
+    (("TRIAL BALANCE", "Basis of preparation: management book"), ("TRIAL BALANCE", "Basis of preparation: statutory"),
+     "basis of preparation"),
 ])
 def test_a_different_book_method_or_unit_is_a_different_basis(prev_lines, cur_lines, what):
     g = _gate(_with_header(tb.t9_rows(), *prev_lines), _with_header(tb.t10_rows(), *cur_lines))
     assert not g.same_basis and g.basis[0][0] == what
     assert "xuất lại kỳ trước cùng cơ sở" in g.sentence("chị")
+
+
+@pytest.mark.parametrize("prev_lines,cur_lines", [
+    (("BẢNG CÂN ĐỐI TÀI KHOẢN", "Ngày in: 05/10/2026 08:01"), ("BẢNG CÂN ĐỐI TÀI KHOẢN", "Ngày in: 05/11/2026 10:23")),
+    (("BẢNG CÂN ĐỐI TÀI KHOẢN", "In lúc 08:01 05/10/2026"), ("BẢNG CÂN ĐỐI TÀI KHOẢN", "In lúc 10:23 05/11/2026")),
+    (("BẢNG CÂN ĐỐI TÀI KHOẢN", "Trang 1/2"), ("BẢNG CÂN ĐỐI TÀI KHOẢN", "Trang 1/3")),
+    (("BẢNG CÂN ĐỐI TÀI KHOẢN", "Loại tiền: VND"), ("BẢNG CÂN ĐỐI TÀI KHOẢN",)),
+    (("TRIAL BALANCE", "September 2026"), ("TRIAL BALANCE", "October 2026")),
+    (("TRIAL BALANCE SEPTEMBER 2026", "Printed by: ketoan01"), ("TRIAL BALANCE OCTOBER 2026", "Printed by: admin")),
+    (("BẢNG CÂN ĐỐI TÀI KHOẢN THÁNG CHÍN", "Người in: Lan"), ("BẢNG CÂN ĐỐI TÀI KHOẢN THÁNG MƯỜI", "Người in: Hùng")),
+    (("BẢNG CÂN ĐỐI TÀI KHOẢN", "Ngày lập: 30/09/2026", "Đơn vị tính: đồng"),
+     ("BẢNG CÂN ĐỐI TÀI KHOẢN", "Ngày lập: 31/10/2026", "Loại tiền: VND")),
+])
+def test_print_time_pages_users_and_month_names_never_make_a_different_basis(prev_lines, cur_lines):
+    """Lead's probe on #53: ordinary export header lines that changed between two months of the same report."""
+    g = _gate(_with_header(tb.t9_rows(), *prev_lines), _with_header(tb.t10_rows(), *cur_lines))
+    assert g.same_basis, g.basis
+    assert g.notes == []
+
+
+def test_a_regime_line_stated_in_one_period_only_is_a_soft_note_not_a_block():
+    g = _gate(_with_header(tb.t9_rows(), "BẢNG CÂN ĐỐI TÀI KHOẢN", "Ban hành theo Thông tư 200/2014/TT-BTC"),
+              _with_header(tb.t10_rows(), "BẢNG CÂN ĐỐI TÀI KHOẢN"))
+    assert g.same_basis and g.notes and "Thông tư 200" in g.note()
+    assert g.sentence("chị") == ""
 
 
 def test_year_to_date_movement_columns_are_a_different_basis():
@@ -229,3 +259,64 @@ def test_month_close_on_case_01_files_says_nothing_about_the_basis(folder):  # n
     assert "cơ sở khác" not in said and "không khớp số dư" not in said and "đổi mã" not in said
     assert not any("Cơ sở lập" in c.item or "Số dư đầu kỳ" in c.item for c in month_close._AUDIT.changes)
     month_close._PENDING = None
+
+
+def test_the_soft_note_shows_on_the_receipt_as_a_note_not_a_warning(tmp_path):
+    folder = _folder(tmp_path, _with_header(tb.t9_rows(), "BẢNG CÂN ĐỐI TÀI KHOẢN", "Tháng 9 năm 2026",
+                                            "Chế độ kế toán: Thông tư 200/2014/TT-BTC"),
+                     _with_header(tb.t10_rows(), "BẢNG CÂN ĐỐI TÀI KHOẢN", "Tháng 10 năm 2026"))
+    r = _receipt(folder)
+    assert r.same_basis and r.comparable == "" and "Thông tư 200" in r.basis_note
+    row = next(x for x in intake.card(r)["rows"] if x["title"].startswith("So với kỳ trước"))
+    assert row["ok"] is True and row["title"].endswith("lưu ý")
+
+
+def _bhc():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "dien_tap"))
+    import bhc_case
+    return bhc_case
+
+
+def test_the_bhc_shaped_month_close_bridges_and_keeps_its_basis(tmp_path):
+    """BHC-shaped books (tools/dien_tap/bhc_case.py, synthetic): Sep → Oct carries every balance across."""
+    from engine.cli import read_rows
+    _bhc().make(tmp_path)
+    prev, cur = read_rows(tmp_path / "TB_T09.xlsx"), read_rows(tmp_path / "TB_T10.xlsx")
+    g = _gate(prev, cur)
+    assert g.ok and g.checked, (g.basis, [(x.account, x.diff) for x in g.gaps], g.renumbered)
+
+
+def test_a_year_end_421_split_in_bhc_shaped_books_bridges_only_as_a_new_year(tmp_path):
+    """December's profit (4212) opens January as prior years' profit (4211): the same money, under 421."""
+    from decimal import Decimal as D
+    bhc = _bhc()
+    bhc.make(tmp_path)
+    fig = bhc.month_figures(tmp_path, bhc.PERIOD)
+    opening = {"111": D(350_000_000), "112": D(9_000_000_000), "131": D(6_500_000_000), "155": D(8_200_000_000),
+               "331": D(-5_100_000_000), "3334": D(-300_000_000), "411": D(-12_000_000_000)}
+    opening["4212"] = -sum(opening.values(), D(0))
+    rows12, closing12 = bhc._tb_rows((2026, 12), opening, bhc._movements(fig))
+    jan = dict(closing12)
+    jan["4211"], jan["4212"] = jan.get("4211", D(0)) + jan.pop("4212"), D(0)
+    mv = bhc._movements(fig)
+    mv.setdefault("4211", (D(0), D(0)))
+    rows01, _ = bhc._tb_rows((2027, 1), jan, mv)
+    assert sources.period_of(rows12) == (2026, 12) and sources.period_of(rows01) == (2027, 1)
+    g = comparable.gate(rows12, read_trial_balance(rows12), rows01, read_trial_balance(rows01), new_year=True)
+    assert g.ok, [(x.account, x.diff) for x in g.gaps]
+    g = comparable.gate(rows12, read_trial_balance(rows12), rows01, read_trial_balance(rows01), new_year=False)
+    assert {x.account for x in g.gaps} == {"4211", "4212"}
+    # The month close decides "new year" from the two titles: December → January is one.
+    assert comparable.is_new_year(sources.period_of(rows12), sources.period_of(rows01))
+    report = build.build(rows01, rows12, "T01", "T12")
+    assert not any(i.code == "opening_bridge" for i in report.issues)
+
+
+def test_the_case_01_sample_bridges_and_keeps_its_basis():
+    from pathlib import Path
+    from engine.cli import read_rows
+    sample = Path(__file__).resolve().parents[1] / "assets" / "mau" / "Mau_SongHong_T10"
+    g = _gate(read_rows(sample / "TB_T09.xlsx"), read_rows(sample / "TB_T10.xlsx"))
+    assert g.ok and g.checked and g.notes == []

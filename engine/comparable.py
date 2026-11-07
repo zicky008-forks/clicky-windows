@@ -24,38 +24,54 @@ from engine.trial_balance import ACCOUNT, ZERO, TrialBalance, fold
 TOLERANCE = Decimal(1)
 
 # ── Basis signature (F8) ──────────────────────────────────────────────────────
+#
+# An allowlist: only the title and lines that carry a basis word enter the signature. Everything else an export
+# prints above its columns (print time, page number, printed by, user names, the period in any language) is
+# ignored, so two months of the same report never differ by accident.
 
-# Lines that name the company, not the basis: they never make two periods incomparable.
-_IDENTITY = ("cong ty", "tnhh", "co phan", "doanh nghiep", "dia chi", "ma so thue", "mst", "dien thoai", "fax",
-             "email", "website", "du lieu gia lap", "company", "address", "tax code")
-# Words that only say which period a line is about; with the numbers taken out they carry no basis.
-_PERIOD_WORDS = ("tu ngay", "den ngay", "ngay", "thang", "quy", "nam", "ky bao cao", "ky", "from", "to", "date",
-                 "period", "month", "quarter", "year")
+# Lines that name the company, not the basis.
+_IDENTITY = ("cong ty", "tnhh", "co phan", "dia chi", "ma so thue", "mst", "dien thoai", "fax", "email", "website",
+             "du lieu gia lap", "company", "address", "tax code")
+# Words a title carries; the first such line above the columns is the title.
+_TITLE_WORDS = ("bang can doi", "can doi", "so cai", "so tong hop", "so chi tiet", "bao cao", "trial balance", "ledger")
 # Names software gives the same report: one name, so "Bảng cân đối số phát sinh" equals "Bảng cân đối tài khoản".
-_TB_TITLES = ("bang can doi so phat sinh", "bang can doi phat sinh tai khoan", "bang can doi phat sinh",
-              "bang can doi tai khoan", "can doi tai khoan", "can doi so phat sinh", "trial balance")
-_UNIT = re.compile(r"^(don vi tinh|dvt|don vi|unit|currency|tien te)\s*[:\-]?\s*(.*)$")
-_YTD = ("luy ke", "tu dau nam", "year to date", "ytd", "cumulative")
-
-
-_DATES = (r"(?<!\d)\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}(?!\d)",          # 01/10/2026
-          r"(?<!\d)\d{1,2}[/.\-](?:19|20)\d{2}(?!\d)",                   # 10/2026
+_TB_TITLES = ("bang can doi so phat sinh tai khoan", "bang can doi so phat sinh", "bang can doi phat sinh tai khoan",
+              "bang can doi phat sinh", "bang can doi tai khoan", "can doi tai khoan", "can doi so phat sinh",
+              "trial balance")
+# Basis words by kind. "book" and "method" block when they differ or are stated in one period only; "regime" and
+# "unit" block only when both periods state them and they differ (a line in one period only is a soft note).
+_BASIS = (("book", ("loai so", "so tai chinh", "so quan tri", "hop nhat", "bao cao rieng", "rieng le",
+                    "management book", "financial book", "consolidated")),
+          ("method", ("phuong phap", "co so lap", "method", "basis of preparation")),
+          ("movement", ("luy ke", "tu dau nam", "year to date", "ytd")),
+          ("regime", ("che do ke toan", "thong tu", "quyet dinh", "tt-btc", "qd-btc")),
+          ("unit", ("don vi tinh", "dvt", "loai tien", "tien te", "currency")))
+HARD = ("book", "method", "movement")
+_MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+           "november", "december", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+           "thang mot", "thang hai", "thang ba", "thang tu", "thang nam", "thang sau", "thang bay", "thang tam",
+           "thang chin", "thang muoi mot", "thang muoi hai", "thang muoi", "thang gieng", "thang chap")
+_PERIOD_WORDS = ("tu ngay", "den ngay", "ngay", "thang", "quy", "nam", "ky bao cao", "ky", "from", "to", "date",
+                 "period", "month", "quarter", "year", "luc", "gio")
+_DATES = (r"(?<!\d)\d{1,2}:\d{2}(?::\d{2})?(?!\d)",                       # 10:23, 08:01:59
+          r"(?<!\d)\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}(?!\d)",              # 01/10/2026
+          r"(?<!\d)\d{1,2}[/.\-](?:19|20)\d{2}(?!\d)",                    # 10/2026
           r"(?:tu ngay|den ngay|ngay|thang|quy|nam|ky|month|quarter|year|q)\s*\d{1,4}(?!\d)",
-          r"(?<!\d)(?:19|20)\d{2}(?!\d)")                                 # a year on its own
+          r"(?<!\d)(?:19|20)\d{2}(?!\d)")                                  # a year on its own
 
 
 def _strip_period(text: str) -> str:
-    """The line without the period it names; other numbers stay ("Thông tư 200/2014" vs "Thông tư 99/2025")."""
+    """The line without the period, time and month it names; other numbers stay ("Thông tư 200" vs "133")."""
     t = text
     for pattern in _DATES:
         t = re.sub(pattern, " ", t)
-    for w in sorted(_PERIOD_WORDS, key=len, reverse=True):
-        t = re.sub(rf"(^|[\s(,]){w}(?=$|[\s),:])", " ", t)
-    return re.sub(r"[\s,.;\-–()/]+$", "", re.sub(r"^[\s,.;\-–()/]+", "", re.sub(r"\s+", " ", t))).strip()
+    for w in sorted(_MONTHS + _PERIOD_WORDS, key=len, reverse=True):
+        t = re.sub(rf"(^|[^a-z0-9]){w}(?=$|[^a-z0-9])", " ", t)
+    return re.sub(r"[\s,.;:\-–()/]+$", "", re.sub(r"^[\s,.;:\-–()/]+", "", re.sub(r"\s+", " ", t))).strip()
 
 
-def _unit_of(value: str) -> str:
-    v = value.strip()
+def _unit_of(text: str) -> str:
+    v = text.split(":", 1)[-1].strip() if ":" in text else re.sub(r"^(don vi tinh|dvt|loai tien|tien te|currency)", "", text).strip()
     if v.startswith(("dong", "vnd", "vn dong")):
         return "đồng"
     if v.startswith(("nghin", "ngan")):
@@ -65,70 +81,68 @@ def _unit_of(value: str) -> str:
     return v
 
 
+def _has_word(t: str, words) -> bool:
+    return any(re.search(rf"(^|[^a-z0-9]){re.escape(w)}($|[^a-z0-9])", t) for w in words)
+
+
 @dataclass
 class Basis:
-    lines: dict = field(default_factory=dict)       # signature key → (shown text, normalized value)
+    lines: dict = field(default_factory=dict)       # kind → (shown text, normalized value)
+
+    def compare(self, other: "Basis") -> tuple:
+        """(hard, soft): [(what, this period's text, the other's text)]. hard blocks every explanation; soft is a
+        note on the receipt (a regime line stated in one period only)."""
+        hard, soft = [], []
+        for key in ("title",) + tuple(k for k, _ in _BASIS):
+            a, b = self.lines.get(key), other.lines.get(key)
+            if not a and not b or (a and b and a[1] == b[1]):
+                continue
+            shown = (a or b)[0]
+            what = shown.split(":")[0].strip().lower() if ":" in shown and " · " not in shown and key != "title" \
+                else _WHAT[key]
+            item = (what, a[0] if a else "", b[0] if b else "")
+            if a and b:
+                (soft if key == "unit" and not (a[1] and b[1]) else hard).append(item)
+            elif key in HARD:
+                hard.append(item)
+            elif key != "unit":                       # a unit said once is "unknown" on the other side, not a change
+                soft.append(item)
+        return hard, soft
 
     def differs(self, other: "Basis") -> list:
-        """[(what, this period's text, the other's text)] for every signature line that is not the same."""
-        out = []
-        for key in sorted(set(self.lines) | set(other.lines), key=lambda k: (k != "title", k)):
-            a, b = self.lines.get(key), other.lines.get(key)
-            if a and b and a[1] == b[1]:
-                continue
-            if key == "unit" and not (a and b):
-                continue                  # a file that does not say its unit is not on another unit
-            out.append((_what(key, a or b), a[0] if a else "", b[0] if b else ""))
-        return out
+        return self.compare(other)[0]
 
 
-def _what(key: str, line) -> str:
-    if key == "title":
-        return "tiêu đề"
-    if key == "unit":
-        return "đơn vị tính"
-    if key == "movement":
-        return "cột phát sinh"
-    shown = line[0] if line else key
-    return shown.split(":")[0].strip().lower() if ":" in shown else "dòng đầu file"
+_WHAT = {"title": "tiêu đề", "book": "loại sổ", "method": "phương pháp lập", "movement": "cột phát sinh",
+         "regime": "chế độ kế toán", "unit": "đơn vị tính"}
 
 
 def basis(rows: list, tb: TrialBalance) -> Basis:
-    """The basis signature of one trial balance: its header block above the column header, and what its
+    """The basis signature of one trial balance: its title, the header lines that carry a basis word, and what its
     movement columns hold (the period, or the year to date)."""
     sig = Basis()
-    others = 0
+    found: dict = {}
     for row in rows[:max(tb.header_row - 1, 0)]:
         for cell in row or []:
             if not isinstance(cell, str) or not cell.strip():
                 continue
             shown = re.sub(r"\s+", " ", cell.strip())
             t = fold(shown)
-            if any(w in t for w in _IDENTITY):
+            if _has_word(t, _IDENTITY):
                 continue
-            unit = _UNIT.match(t)
-            if unit:
-                if unit.group(2).strip():
-                    sig.lines["unit"] = (shown, _unit_of(unit.group(2)))
-                continue
-            if ":" in t:
-                label, value = t.split(":", 1)
-                value = _strip_period(value)
-                if value:
-                    sig.lines[f"line:{_strip_period(label)}"] = (shown, value)
-                continue
-            value = _strip_period(t)
-            if not value:
-                continue                              # "Tháng 10 năm 2026": the period only
-            for name in _TB_TITLES:
-                value = value.replace(name, "bang can doi tai khoan")
-            if "title" not in sig.lines:
+            if "title" not in sig.lines and _has_word(t, _TITLE_WORDS):
+                value = _strip_period(t)
+                for name in _TB_TITLES:
+                    value = value.replace(name, "bang can doi tai khoan")
                 sig.lines["title"] = (shown, value)
-            else:
-                others += 1
-                sig.lines[f"text:{others}"] = (shown, value)
+            for kind, words in _BASIS:
+                if _has_word(t, words):
+                    value = _unit_of(t) if kind == "unit" else _strip_period(t)
+                    found.setdefault(kind, []).append((shown, value))
+    for kind, items in found.items():
+        sig.lines[kind] = (" · ".join(x for x, _ in items), " | ".join(sorted(v for _, v in items)))
     move = tb.columns.get("dr")
-    if move is not None:
+    if move is not None and "movement" not in sig.lines:
         header = []
         for r in range(max(tb.header_row - 1, 0), min(tb.header_row + 1, len(rows))):
             row = rows[r] or []
@@ -137,9 +151,8 @@ def basis(rows: list, tb: TrialBalance) -> Basis:
                 if i < len(row) and isinstance(row[i], str) and row[i].strip():
                     header.append(fold(row[i]))
                     break
-        text = " ".join(header)
-        ytd = any(w in text for w in _YTD)
-        sig.lines["movement"] = ("Lũy kế từ đầu năm" if ytd else "Phát sinh trong kỳ", "ytd" if ytd else "period")
+        if _has_word(" ".join(header), dict(_BASIS)["movement"]):
+            sig.lines["movement"] = ("Phát sinh lũy kế", "ytd")
     return sig
 
 
@@ -299,7 +312,8 @@ def renumbered_pnl(prev: TrialBalance, cur: TrialBalance) -> list:
 
 @dataclass
 class Gate:
-    basis: list = field(default_factory=list)       # [(what, this period's text, prior period's text)]
+    basis: list = field(default_factory=list)       # [(what, this period's text, prior period's text)]: blocks
+    notes: list = field(default_factory=list)       # same shape, soft: said on the receipt, blocks nothing
     gaps: list = field(default_factory=list)        # [Gap]
     renumbered: list = field(default_factory=list)  # [(old, new)] income/expense codes, no mapping for them
     checked: bool = False                           # the balances could be bridged (both files have them)
@@ -334,6 +348,14 @@ class Gate:
             return f"{what} kỳ này \"{now}\", kỳ trước \"{before}\""
         return f"{what}: chỉ file {'kỳ này' if now else 'kỳ trước'} ghi \"{now or before}\""
 
+    def note(self) -> str:
+        """The soft line for the receipt: a basis line stated in one period only. "" when there is none."""
+        if not self.notes:
+            return ""
+        what, now, before = self.notes[0]
+        return (f"Chỉ file {'kỳ này' if now else 'kỳ trước'} ghi {what} (\"{now or before}\"); em vẫn so hai kỳ, "
+                "nhưng nếu hai kỳ lập theo chế độ khác nhau thì báo em nhé.")
+
     def sentence(self, you_word: str) -> str:
         """One line for the receipt and the summary; "" when the two periods compare like for like."""
         if self.basis:
@@ -356,7 +378,7 @@ def gate(prev_rows: list, prev: TrialBalance, cur_rows: list, cur: TrialBalance,
          mapping_file: str = "", new_year: bool = False) -> Gate:
     """Both checks on two trial balances; prev is read under this period's codes (remap) for the bridge."""
     g = Gate(mapping_file=mapping_file, mapped=len(mapping or {}))
-    g.basis = basis(cur_rows, cur).differs(basis(prev_rows, prev))
+    g.basis, g.notes = basis(cur_rows, cur).compare(basis(prev_rows, prev))
     prev = remap(prev, mapping or {})
     g.gaps, g.checked = bridge(prev, cur, mapping, new_year)
     g.renumbered = renumbered_pnl(prev, cur)
