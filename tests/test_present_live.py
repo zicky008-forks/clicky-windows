@@ -220,3 +220,134 @@ def test_present_mode_duplicate_screen_never_shows_the_ask_box(qt_app):
     mode.layout = Layout("duplicate", 0, None)
     mode._on_ask_key()
     assert mode.panel.isHidden() and manager.log[-1][0] == "sig_notice"
+
+
+# ---- the show must start, or the presenter is told why (robot run 07/11: ended 15 ms after start) ----------
+class _View:
+    def __init__(self, state=1):
+        self.State = state
+
+
+class _ShowWindow:
+    def __init__(self, pres):
+        self.Presentation, self.View = pres, _View()
+
+
+class _Settings:
+    def __init__(self, app, pres):
+        self.app, self.pres, self.StartingSlide = app, pres, 1
+
+    def Run(self):
+        self.app.runs += 1
+        if self.app.refuse:
+            raise RuntimeError("PowerPoint busy")
+        window = _ShowWindow(self.pres)
+        if self.app.late:                   # the show window exists only from the second look on
+            self.app.pending.append(window)
+            return _Stale()
+        self.app.windows.append(window)
+        return window
+
+
+class _Stale:
+    @property
+    def View(self):
+        raise RuntimeError("not ready")
+
+
+class _Pres:
+    def __init__(self, app, path):
+        self.FullName, self.Slides = path, type("S", (), {"Count": 4})()
+        self.SlideShowSettings = _Settings(app, self)
+
+
+class _Windows:
+    def __init__(self, app):
+        self.app = app
+
+    @property
+    def Count(self):
+        self.app.windows += self.app.pending
+        self.app.pending = []
+        return len(self.app.windows)
+
+    def __call__(self, i):
+        return self.app.windows[i - 1]
+
+
+class _Presentations:
+    def __init__(self, app):
+        self.app = app
+
+    def Open(self, path, read_only, untitled, with_window):
+        assert read_only and with_window and not untitled
+        self.app.opened += 1
+        return _Pres(self.app, path)
+
+
+class _PowerPoint:
+    def __init__(self, late=False, refuse=False):
+        self.late, self.refuse = late, refuse
+        self.windows, self.pending, self.runs, self.opened = [], [], 0, 0
+        self.Presentations, self.SlideShowWindows = _Presentations(self), _Windows(self)
+
+
+def _mode_with(app, monkeypatch, tmp_path):
+    from present.deck import PowerPointBridge
+    from ui import present_mode
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(tmp_path / "scene.jsonl"))
+    manager = FakeManager()
+    mode = present_mode.PresentMode(manager, "spec", "a.xlsx", r"C:\case\deck.pptx")
+    bridge = PowerPointBridge(app)
+    mode.attached = bridge.attach(mode.deck_path)
+    mode.bridge = bridge
+    try:
+        bridge.start(1)
+    except Exception as exc:                # what start() does
+        bridge.last_error = type(exc).__name__
+    minutes = type("Minutes", (), {"markdown": lambda self: "# biên bản"})()
+    mode.live = type("Live", (), {"poll": lambda self: None, "minutes": minutes})()
+    import storage
+    monkeypatch.setattr(storage, "data_dir", lambda: tmp_path)
+    clock = [1000.0]
+    monkeypatch.setattr(present_mode.time, "monotonic", lambda: clock[0])
+    mode._started = clock[0]
+    return mode, manager, clock
+
+
+def _events(tmp_path):
+    import json
+    p = tmp_path / "scene.jsonl"
+    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines()] if p.exists() else []
+
+
+def test_a_show_window_that_comes_late_is_followed_not_taken_for_the_end(qt_app, monkeypatch, tmp_path):
+    app = _PowerPoint(late=True)
+    mode, manager, clock = _mode_with(app, monkeypatch, tmp_path)
+    assert app.opened == 1 and not mode.attached              # opened read-only with a window, show started
+    mode._tick()                                              # the first look: window not there yet
+    assert mode.live is not None and mode.bridge.running()    # found on that look and followed
+    assert any(e.get("event") == "present_attached" for e in _events(tmp_path))
+    mode.bridge.show.View.State = 5                           # the presenter ends it
+    mode._tick()
+    assert mode.live is None
+
+
+def test_when_powerpoint_will_not_show_the_presenter_gets_a_card_never_a_silent_end(qt_app, monkeypatch, tmp_path):
+    from ui import present_mode
+    app = _PowerPoint(refuse=True)
+    mode, manager, clock = _mode_with(app, monkeypatch, tmp_path)
+    finished = []
+    mode.finished.connect(finished.append)
+    mode._tick()
+    assert mode.live is not None and not finished             # still waiting, not ended
+    clock[0] += present_mode.RETRY_AFTER_S
+    mode._tick()
+    assert app.runs == 2                                      # started once more
+    clock[0] += present_mode.START_GRACE_S
+    mode._tick()
+    assert finished == [""] and mode.live is None
+    assert ("sig_notice", present_mode.NO_SHOW) in manager.log and "PowerPoint" in mode.panel.warning.text()
+    failed = [e for e in _events(tmp_path) if e.get("event") == "present_failed"]
+    assert failed and failed[0]["stage"] == "show" and failed[0]["why"] == "RuntimeError"
+    assert [e["ok"] for e in _events(tmp_path) if e.get("event") == "present_retry"] == [False]

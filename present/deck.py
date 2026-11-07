@@ -113,6 +113,7 @@ class PowerPointBridge:
         self._app = app
         self.pres = None
         self.show = None
+        self.last_error = ""
 
     def app(self):
         if self._app is None:
@@ -145,6 +146,37 @@ class PowerPointBridge:
             pass
         self.open(path)
         return False
+
+    def find_show(self, path: str) -> bool:
+        """A slide show of this deck already on screen (PowerPoint may hand back the show window only once
+        it exists): follow it."""
+        want = fold(str(path)).replace("/", "\\")
+        try:
+            app = self.app()
+            for i in range(1, int(app.SlideShowWindows.Count) + 1):
+                window = app.SlideShowWindows(i)
+                if fold(str(window.Presentation.FullName)).replace("/", "\\") == want:
+                    self.pres, self.show = window.Presentation, window
+                    return True
+        except Exception as exc:            # noqa: BLE001 - kept as the reason if the show never comes
+            self.last_error = f"{type(exc).__name__}"
+        return False
+
+    def restart(self, path: str) -> bool:
+        """Open the deck again over COM (read-only, with a window) when the first copy is gone, and start
+        the show. False, with last_error, when PowerPoint refuses."""
+        try:
+            try:
+                _ = self.pres.FullName
+            except Exception:               # noqa: BLE001 - no copy open, or it was closed
+                self.pres = None
+            if self.pres is None:
+                self.open(path)
+            self.start(1)
+            return True
+        except Exception as exc:            # noqa: BLE001 - said to the presenter, never a traceback
+            self.last_error = f"{type(exc).__name__}"
+            return False
 
     def count(self) -> int:
         return int(self.pres.Slides.Count)

@@ -25,6 +25,10 @@ from present import hotkeys
 log = logging.getLogger(__name__)
 
 POLL_MS = 300
+START_GRACE_S = 12.0                   # PowerPoint may need seconds before the show window answers
+RETRY_AFTER_S = 3.0
+NO_SHOW = ("Em chưa mở được PowerPoint để trình chiếu bộ slide này. File slide của anh chị vẫn nguyên. "
+           "Anh chị mở PowerPoint, bấm Trình chiếu (F5), rồi gọi lại em.")
 FORCE_PANEL = "CLICKY_PRESENT_FORCE_PANEL"     # robot on a one-screen PC: show the box anyway
 DUPLICATE_NOTICE = ("Máy đang để chế độ Nhân bản màn hình nên khán giả sẽ thấy ô hỏi. "
                     "Anh chị bấm Win+P, chọn Mở rộng (Extend), rồi bấm Ctrl+Alt+H để hỏi.")
@@ -84,6 +88,9 @@ class PresentMode(QObject):
         self.layout = None
         self.attached = False
         self.total = 0
+        self._started = 0.0
+        self._seen_running = False
+        self._retried = False
 
     # ---- start ----------------------------------------------------------------------------
     def start(self) -> bool:
@@ -102,7 +109,10 @@ class PresentMode(QObject):
             source, whatif = OpenpyxlSource(self.xlsx), None
         resolver = Resolver(source)
         self.bridge = PowerPointBridge()
-        self.attached = self.bridge.attach(self.deck_path)
+        try:
+            self.attached = self.bridge.attach(self.deck_path)
+        except Exception as exc:            # noqa: BLE001 - no PowerPoint: say so, never end quietly
+            return self._fail("attach", type(exc).__name__)
         minutes = Minutes()
         safety = {"voice_offline": True, "ai_on": os.environ.get("CLICKY_LOCAL_ONLY") != "1"}
         report = preflight.run((checks or {}).get("kiem_tra", []), resolver, self.bridge, script, bank, safety)
@@ -115,8 +125,16 @@ class PresentMode(QObject):
             self.finished.emit("")
             return False
         if not self.attached:
-            self.bridge.start(1)
-        self.total = self.bridge.count()
+            try:
+                self.bridge.start(1)
+            except Exception as exc:        # noqa: BLE001 - one retry from _tick before it is called failed
+                log.warning("starting the slide show failed: %s", type(exc).__name__)
+                self.bridge.last_error = type(exc).__name__
+        self._started, self._seen_running, self._retried = time.monotonic(), False, False
+        try:
+            self.total = self.bridge.count()
+        except Exception as exc:            # noqa: BLE001
+            return self._fail("count", type(exc).__name__)
         self.live = LiveTalk(script, bank, resolver, self.bridge, frame=self._frame, clear=self._clear,
                              slide_hint=self._hint, whatif=whatif, minutes=minutes)
         self._place()
@@ -230,9 +248,42 @@ class PresentMode(QObject):
         if self.live is None:
             return
         if not self.bridge.running():
-            self.stop()
-            return
+            if self._seen_running:
+                self.stop()                 # the presenter ended the show
+                return
+            # Not on screen yet: PowerPoint may still be opening it (robot run 07/11 ended 15 ms after the
+            # start). Follow a show window of this deck when it appears, start once more, then say why.
+            waited = time.monotonic() - self._started
+            if self.bridge.find_show(self.deck_path) and self.bridge.running():
+                scene_log.record("present_attached", after=round(waited, 1))
+            elif waited < START_GRACE_S:
+                if waited >= RETRY_AFTER_S and not self._retried:
+                    self._retried = True
+                    ok = self.bridge.restart(self.deck_path)
+                    scene_log.record("present_retry", ok=ok, why=getattr(self.bridge, "last_error", ""))
+                return
+            else:
+                self._fail("show", getattr(self.bridge, "last_error", "") or "không thấy cửa sổ trình chiếu")
+                return
+        self._seen_running = True
         self.live.poll()
+
+    def _fail(self, stage: str, why: str) -> bool:
+        """The show could not start: a plain card for the presenter, a log line, and the robot's event."""
+        log.warning("present mode: no slide show (%s: %s)", stage, why)
+        scene_log.record("present_failed", stage=stage, why=str(why)[:200])
+        self.timer.stop()
+        if self.keys is not None:
+            self.keys.stop()
+            self.keys = None
+        self.live = None
+        self._show_panel_anywhere()
+        self.panel.set_warning(NO_SHOW)
+        notice = getattr(self.manager, "sig_notice", None)
+        if notice is not None:
+            notice.emit(NO_SHOW)
+        self.finished.emit("")
+        return False
 
     def stop(self) -> str:
         self.timer.stop()

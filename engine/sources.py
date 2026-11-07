@@ -214,8 +214,9 @@ def load_order_file(path: Path) -> Optional[OrderFile]:
     data, footers = [], []
     for r in rows[1:]:
         # A row without a date is not an order (exports often end with a "Tổng cộng" line whose
-        # amount is the whole file); counting it would double the file in the yardstick.
-        blank = cols["date"] >= len(r) or not str(r[cols["date"]] or "").strip()
+        # amount is the whole file); counting it would double the file in the yardstick. A date cell with
+        # no digit at all ("Tổng", "Cộng", "Total") is that footer too; the query drops the same rows.
+        blank = cols["date"] >= len(r) or not any(ch.isdigit() for ch in str(r[cols["date"]] or ""))
         (footers if blank else data).append(r)
     order = date_order([r[cols["date"]] for r in data if cols["date"] < len(r)])
     return OrderFile(path, rows[0], data, cols, order, footers, delim)

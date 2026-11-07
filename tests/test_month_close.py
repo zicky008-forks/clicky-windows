@@ -218,7 +218,7 @@ def test_folder_query_reads_each_file_in_its_own_format_and_lints_clean():
     m = m_code.folder_query("C:\\T10", {"a.csv": "en-US", "b.csv": "vi-VN", "c.csv": "vi-VN"},
                             [("Ngay", "type date"), ("ThanhTien", "type number")], "SoCT", folder_parameter="ThuMuc")
     assert 'if [Name] = "a.csv" then "en-US"' in m and 'else "vi-VN"' in m
-    assert 'Table.SelectRows(GopFile, each [Ngay] <> null)' in m          # a "Tổng cộng" footer has no date
+    assert 'Table.SelectRows(GopFile, each try [Ngay] <> null otherwise true)' in m     # an unconvertible date stays, counted
     assert 'Table.Distinct(BoDongKhongNgay, {"SoCT"})' in m and "Folder.Files(ThuMuc)" in m
     assert m_code.lint("DonHang", m) == []
     assert "IsParameterQuery = true" in m_code.parameter_query("C:\\T10")
@@ -999,7 +999,7 @@ def test_folder_query_combines_only_the_order_files_when_a_cost_ledger_csv_sits_
     assert keep, m
     needed = re.findall(r'"((?:[^"]|"")*)"', keep.group(1))
     typed = [c for c, _ in month_close._typed_columns([order])]
-    assert set(typed) <= set(needed) and m.index("FileDonHang") < m.index("TransformColumnTypes([Tho]")
+    assert set(typed) <= set(needed) and m.index("FileDonHang") < m.index("Table.TransformColumnTypes(")
     assert "Table.Combine(DoiKieu[Bang])" in m and m_code.lint("DonHang", m) == []
     kept = []
     for p in sorted(tmp_path.glob("*.csv")):
@@ -1260,3 +1260,36 @@ def test_the_line_under_the_cursor_says_when_excel_starts_loading(folder):
     finally:
         month_close._PROGRESS = None
     assert shown == ["load"] and month_close.WORKING["load"] == "Em đang nạp đơn hàng vào Excel…"
+
+
+def test_a_total_row_at_the_end_of_the_export_is_dropped_before_dates_are_typed_and_counted(tmp_path):
+    """Robot run 07/11 (bhc_e2e, dcf6bca): the synthetic Mastersale ends with a 'Tổng' row. Typing 'Tổng' as a
+    date failed the whole load ('couldn't parse the input provided as a Date value'). The query drops rows whose
+    date has no digit before typing; the receipt counts the same row as dropped, so used + dropped = total."""
+    import csv
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "dien_tap"))
+    import bhc_case
+    from engine import intake
+    bhc_case.make(tmp_path)
+    path = tmp_path / "Mastersale_T07-T10.csv"
+    with open(path, encoding="utf-8-sig", newline="") as fh:
+        lines = list(csv.reader(fh))[1:]
+    assert lines[-1][0] == "Tổng"                                   # the writer's footer, like a real export
+    order = sources.load_order_file(path)
+    assert len(order.footers) == 1 and order.footers[0][0] == "Tổng"
+    assert len(order.rows) + len(order.footers) == len(lines)
+    truth = sources.truth([order], (2026, 10))
+    assert truth.unreadable_dates == 0
+    m = m_code.folder_query(str(tmp_path), {order.name: order.culture(None)}, month_close._typed_columns([order]),
+                            order.header[order.columns["doc"]], folder_parameter="ThuMuc", period=(2026, 10))
+    date = order.header[order.columns["date"]]
+    step = next(l for l in m.splitlines() if l.strip().startswith("DoiKieu ="))
+    keep = f'Text.Select(Text.From(Record.FieldOrDefault(_, "{date}", "") ?? ""), {{"0".."9"}}) <> ""'
+    assert keep in step and step.index(keep) < step.index("{{"), step       # filtered on the raw text, then typed
+    kept = [r for r in lines if any(ch.isdigit() for ch in r[0])]          # what that filter keeps
+    assert kept == order.rows
+    assert f"try [{date}] <> null otherwise true" in m and m_code.lint("DonHang", m) == []
+    _, items = intake._order_lines([order], truth, (2026, 10))
+    footer = [d for d in items if d.what.startswith('Dòng "Tổng"')]
+    assert len(footer) == 1 and footer[0].reason.startswith("dòng tổng cuối file") and footer[0].file == order.name
