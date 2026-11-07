@@ -105,7 +105,10 @@ async def run(manager) -> str:
         await asyncio.sleep(0.5)
     else:
         # Never run the month close on whatever else is in front: it may be the user's own file.
-        log.warning("the sample did not become the active workbook: expected %s, Excel has %r", workbook, active)
+        # The other workbook may be a company file: log only whether it sits in Clicky's folder, never its name.
+        where = "inside" if active and Path(active).parent == Path(workbook).parent else "outside"
+        log.warning("the sample did not become the active workbook: expected %s, Excel has %s (%s the Clicky folder)",
+                    workbook, "a workbook" if active else "none", where)
         await mc.play(manager, [Beat("Em chưa mở được file mẫu trong Excel. Chị đóng các hộp thoại của Excel "
                                      "rồi bấm Xem em làm lần nữa nhé. File của chị không bị đụng tới.")])
         return ""

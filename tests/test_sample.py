@@ -61,7 +61,7 @@ def test_sample_copy_is_writable_even_when_the_installed_one_is_read_only(tmp_pa
     assert book.stat().st_mode & stat.S_IWRITE
 
 
-def test_sample_stops_when_excel_shows_another_workbook(tmp_path, monkeypatch):
+def test_sample_stops_when_excel_shows_another_workbook(tmp_path, monkeypatch, caplog):
     # Never run the month close on whatever workbook happens to be in front: it may be the user's own.
     played = []
 
@@ -84,8 +84,12 @@ def test_sample_stops_when_excel_shows_another_workbook(tmp_path, monkeypatch):
     monkeypatch.setattr(mc, "play", play)
     monkeypatch.setattr(mc, "start", lambda *a: (_ for _ in ()).throw(AssertionError("month close started")))
     monkeypatch.setattr(sample.asyncio, "sleep", no_wait)
-    asyncio.run(sample.run(Manager()))
+    with caplog.at_level("WARNING"):
+        asyncio.run(sample.run(Manager()))
     assert len(played) == 1 and "chưa mở được file mẫu" in played[0].text
+    # The other workbook may be a company file: its name and folder never reach clicky.log.
+    assert "65302810" not in caplog.text and "Documents" not in caplog.text
+    assert "outside the Clicky folder" in caplog.text
 
 
 def test_same_file_needs_both_paths():
