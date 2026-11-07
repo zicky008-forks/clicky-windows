@@ -2,13 +2,14 @@
 English headers, cancelled orders. Grader Case 05 (07/11) stopped at step 1 on these classes: an .xls source was
 ignored and Clicky said it saw no order file; an English-header CSV was skipped in silence."""
 import json
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
 import order_exports as ox
-from engine import intake, sources, tabular
+from engine import m_code, intake, sources, tabular
 from office import month_close
 
 PERIOD = (2026, 10)
@@ -221,40 +222,108 @@ def test_step_one_reads_an_xls_source_and_names_the_file_it_could_not_read(tmp_p
     assert any("DonHang_cu.xls" in line for line in card["left_out"])
 
 
-def test_step_two_stops_with_a_plain_card_before_changing_anything(tmp_path, monkeypatch):
-    log = tmp_path / "scene.jsonl"
-    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+class _ReaderPQ:
+    """Power Query on a vi-VN machine for the per-file query: loads what sources.query_rows says it must. The real
+    query is checked against the same yardstick on the PC by tools/dien_tap/m_agree.py."""
+
+    def __init__(self, bridge, folder):
+        self.bridge, self.folder, self.queries = bridge, folder, {}
+
+    def list(self):
+        return list(self.queries.items())
+
+    def add(self, name, formula):
+        self.queries[name] = formula
+        return True
+
+    def load(self, name):
+        formula = self.queries[name]
+        assert "DocTungFile" in formula, "a folder with .xls or print-layout files gets the per-file query"
+        files = sources.find_order_files(self.folder)
+        roles = [r for r in m_code.CANON if any(r in f.columns for f in files) or r in ("doc", "date", "amount")]
+        header = [m_code.CANON[r] for r in roles] + [m_code.SOURCE_COLUMN]
+        rows = sources.query_rows(files, roles)
+        self.bridge.sheets[name] = [header] + rows
+        return name, header, rows
+
+
+@pytest.mark.parametrize("make", [ox.write_ole2_xls, ox.write_html_xls, ox.write_spreadsheetml, ox.write_english_csv])
+def test_step_two_loads_every_format_through_the_per_file_query(tmp_path, make):
+    """F1 step 2: the stop card is gone. Confirm keeps the original, adds the folder parameter and a query that
+    reads each file by its own format, and the loaded table agrees with the receipt to the đồng."""
+    from test_month_close import CopyingBridge
     data = tmp_path / "T10"
     data.mkdir()
-    ox.write_html_xls(data / "DonHang_MISA_T10.xls")
-    _start(data)
-    beats = month_close.confirm(_Bridge(data), None)            # _Bridge.sheet_names raises if the workbook is touched
-    assert len(beats) == 1 and beats[0].mark == "warn"
-    text = beats[0].text
-    assert "DonHang_MISA_T10.xls" in text and "trang HTML" in text and "chưa sửa gì" in text
-    assert "lệch" not in text and "chênh" not in text            # no gap is claimed
-    assert not (data / "BaoCao_T10_ban-goc.xlsx").exists()
-    steps = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
-    stop = [e for e in steps if e.get("step") == "query_unsupported"]
-    assert stop and stop[0]["file"] == "DonHang_MISA_T10.xls" and stop[0]["kind"] == "html"
+    make(data / ("DonHang_T10.csv" if make is ox.write_english_csv else "DonHang_T10.xls"))
+    bridge = CopyingBridge(data)
+    pq = _ReaderPQ(bridge, data)
+    month_close._PENDING, month_close._CHOSEN = None, {}
+    receipt = month_close.start(bridge, pq, sources.DAY_FIRST)
+    assert month_close.intake_pending(), receipt[0].text
+    beats = month_close.confirm(bridge, pq)
+    text = " ".join(b.text for b in beats)
+    assert "Em dừng ở đây" not in text and "Excel khớp" in text, text
+    assert set(pq.queries) == {month_close.PARAM_NAME, month_close.QUERY_NAME}
+    m = pq.queries[month_close.QUERY_NAME]
+    assert "Folder.Files(ThuMucDonHang)" in m and not m_code.lint(month_close.QUERY_NAME, m)
+    want = ox.SALES_EN if make is ox.write_english_csv else ox.TOTAL
+    assert sum(r[2] for r in bridge.sheets[month_close.QUERY_NAME][1:]) == want
 
 
 @pytest.mark.parametrize("make,why", [
     (lambda d: ox.write_english_csv(d / "shop.csv"), "dòng tiêu đề phía trên bảng"),
     (lambda d: ox.write_ole2_xls(d / "ole.xls"), "Excel 97-2003"),
+    (lambda d: ox.write_html_xls(d / "misa.xls"), "trang HTML"),
 ])
-def test_what_the_query_cannot_read_yet_is_named(tmp_path, make, why):
+def test_files_the_plain_folder_query_cannot_read_get_the_per_file_one(tmp_path, make, why):
     make(tmp_path)
-    f, said = month_close.cannot_load(sources.find_order_files(tmp_path))
-    assert why in said
+    files = sources.find_order_files(tmp_path)
+    f, said = month_close.needs_reader(files)
+    assert why in said and month_close.cannot_load(files) is None
 
 
-def test_plain_csv_exports_still_go_through(tmp_path):
+def test_plain_csv_exports_keep_the_plain_folder_query(tmp_path):
     import csv
     for name, rows in (("HN.csv", [["HN1", "05/10/2026", "100"]]), ("HCM.csv", [["HCM1", "21/10/2026", "200"]])):
         with open(tmp_path / name, "w", newline="", encoding="utf-8-sig") as fh:
             csv.writer(fh).writerows([["SoCT", "Ngay", "ThanhTien"]] + rows)
-    assert month_close.cannot_load(sources.find_order_files(tmp_path)) is None
+    assert month_close.needs_reader(sources.find_order_files(tmp_path)) is None
+
+
+@pytest.mark.parametrize("name,make", [("ole.xls", ox.write_ole2_xls), ("misa.xls", ox.write_html_xls),
+                                       ("ss.xls", ox.write_spreadsheetml), ("shop.csv", ox.write_english_csv)])
+def test_the_query_yardstick_is_the_receipt(tmp_path, name, make):
+    """sources.query_rows, which m_agree.py holds Excel's rows to, counts what the receipt counts."""
+    make(tmp_path / name)
+    files = sources.find_order_files(tmp_path)
+    t = sources.truth(files)
+    rows = sources.query_rows(files, ["doc", "date", "amount", "cost", "customer", "item", "status"])
+    assert len(rows) == t.unique_rows and sum(r[2] for r in rows) == t.amount
+    assert all(isinstance(r[1], date) for r in rows) and {r[-1] for r in rows} == {name}
+
+
+def test_the_per_file_query_is_written_from_the_engines_own_rules():
+    """No second copy of the rules: every name, the cancelled values, the scan depth and the folding come from
+    engine.sources and trial_balance.fold, so the query and the receipt cannot drift apart."""
+    from engine.trial_balance import fold
+    m = m_code.order_files_query("ThuMucDonHang", {'Chi "HN".xls': {"order": "en-US", "encoding": 1258}},
+                                 ["doc", "date", "amount", "status"], None, (2026, 10))
+    for names in list(sources.MORE_COLS.values()) + [sources.DOC_COLS, sources.DATE_COLS, sources.AMOUNT_COLS]:
+        assert all(f'"{n}"' in m for n in names)
+    assert all(f'"{v}"' in m for v in sources.CANCELLED)
+    assert f"List.FirstN(rows, {sources.HEADER_SCAN})" in m
+    for ch in "àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ":
+        assert f'#"{ch}" = "{fold(ch)}"' in m
+    assert '#"Chi ""HN"".xls" = [thu = "en-US", ma_hoa = 1258]' in m
+    assert "Date.Year([#\"Ngày\"]) = 2026" in m and "Web.Page" not in m and "Html.Table" not in m
+    assert not m_code.lint("DonHang", m) and m_code.fixed_culture(m) is None
+    assert m.count("(") == m.count(")") and m.count("{") == m.count("}") and m.count("[") == m.count("]")
+
+
+def test_loaded_canonical_names_read_back_as_their_roles():
+    header = [m_code.CANON[r] for r in m_code.CANON] + [m_code.SOURCE_COLUMN]
+    cols = sources.find_columns(header)
+    assert {r: header[i] for r, i in cols.items()} == m_code.CANON
 
 
 # ── trial balances and the report workbook ──────────────────────────────────────
@@ -314,3 +383,25 @@ def test_an_xml_file_with_entity_declarations_is_refused(tmp_path):
     with pytest.raises(tabular.Unreadable):
         tabular.sheets(p)
     assert sources.load_order_file(p) is None
+
+
+def test_the_per_file_query_parses_as_m(tmp_path):
+    """Microsoft's M parser, where it is installed (npm i @microsoft/powerquery-parser, NODE_PATH set), checks the
+    query's syntax for every format; elsewhere this test is skipped and m_agree.py on the PC is the check."""
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node or subprocess.run([node, "-e", "require('@microsoft/powerquery-parser')"], capture_output=True).returncode:
+        pytest.skip("Microsoft's M parser is not installed here")
+    paths = []
+    for i, make in enumerate((ox.write_ole2_xls, ox.write_html_xls, ox.write_spreadsheetml, ox.write_english_csv)):
+        folder = tmp_path / f"d{i}"
+        folder.mkdir()
+        make(folder / ("x.csv" if make is ox.write_english_csv else "x.xls"))
+        files = sources.find_order_files(folder)
+        m = month_close._reader_query(files, sources.truth(files), None)
+        paths.append(tmp_path / f"q{i}.m")
+        paths[-1].write_text(m, encoding="utf-8")
+    run = subprocess.run([node, str(Path(__file__).with_name("m_syntax.js"))] + [str(p) for p in paths],
+                         capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr

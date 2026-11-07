@@ -754,14 +754,14 @@ _KIND_VI = {"xls": "là file Excel 97-2003 (.xls)", "xlsx": "là file Excel lưu
 _TIME = re.compile(r"\d{1,2}:\d{2}")
 
 
-def cannot_load(files: list) -> Optional[tuple]:
-    """(file, why) when the query Clicky builds would not read these order files the way the receipt did.
+def needs_reader(files: list) -> Optional[tuple]:
+    """(file, why) when the plain folder query (m_code.folder_query) would not read these files the way the receipt
+    did, so the query that reads each file by its own format (m_code.order_files_query) is built instead.
 
-    That query reads plain CSV files whose header is the first row, with the same column names in every file,
-    and keeps every row with a date. A file outside that (an .xls of any kind, a print layout, cancelled
-    orders to set aside, dates with a time) would load short or fail, and the gap would be wrong. Until the
-    query has a reader for it, Clicky stops before changing anything and says so; it never reports that gap.
-    """
+    The plain query reads CSV files whose header is the first row, with the same column names in every file,
+    and keeps every row with a date. An .xls of any kind, a print layout, cancelled orders to set aside, dates
+    with a time or other column names need the per-file reader. Folders the plain query reads (Case 01, BHC)
+    keep exactly the query they always had."""
     first = files[0] if files else None
     for f in files:
         if f.kind != "csv":
@@ -779,6 +779,37 @@ def cannot_load(files: list) -> Optional[tuple]:
             if mine != theirs:
                 return f, f"đặt tên cột khác file {first.name}"
     return None
+
+
+READABLE_KINDS = ("csv", "xls", "xlsx", "html", "xml", "text")
+
+
+def cannot_load(files: list) -> Optional[tuple]:
+    """(file, why) for an order file no query Clicky builds can read the way the receipt did. Every kind
+    engine.tabular reads has a reader in m_code.order_files_query, so this only guards a kind added later."""
+    for f in files:
+        if f.kind not in READABLE_KINDS:
+            return f, _KIND_VI.get(f.kind, "là loại file khác CSV")
+    return None
+
+
+def _reader_query(files: list, truth, period) -> str:
+    """The per-file query for these files: each file's date order and code page, the roles any file has, and the
+    same de-duplication rule as the receipt (sources.truth)."""
+    params = {f.name: {"order": f.date_order or sources.DAY_FIRST, "encoding": sources.file_encoding(f.path)}
+              for f in files}
+    roles = sorted({r for f in files for r in f.columns} | {"doc", "date", "amount"})
+    return m_code.order_files_query(PARAM_NAME, params, roles, _dedup_roles(files, truth),
+                                    period=period if truth.outside else None)
+
+
+def _dedup_roles(files: list, truth: sources.SourceTruth) -> Optional[list]:
+    """_dedup_key by role, for the per-file query whose columns carry one name whatever each file called them."""
+    if not truth.multi:
+        return None
+    if truth.invoice_lines:
+        return []
+    return ["branch", "doc"] if all("branch" in f.columns and "doc" in f.columns for f in files) else []
 
 
 def confirm(bridge, pq) -> list:
@@ -1034,10 +1065,12 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
                       f"{len(truth.collisions)} số chứng từ được dùng cho các đơn khác nhau ({shared}). Đây là đơn thật, "
                       + ("Clicky xoá trùng theo Chi nhánh + Số CT." if keys else "Clicky chỉ xoá dòng giống hệt nhau.")])
     with _timed("build_query"):
-        fixed_m = m_code.folder_query(str(folder), {f.name: f.culture(machine_order) for f in files},
-                                      _typed_columns(files), files[0].header[files[0].columns["doc"]] if "doc" in files[0].columns else None,
-                                      folder_parameter=PARAM_NAME, key_columns=keys, period=period if truth.outside else None,
-                                      delimiter={f.name: f.delimiter for f in files})
+        # Plain CSV exports keep the plain folder query; anything else is read file by file, each by its format.
+        fixed_m = _reader_query(files, truth, period) if needs_reader(files) else \
+            m_code.folder_query(str(folder), {f.name: f.culture(machine_order) for f in files},
+                                _typed_columns(files), files[0].header[files[0].columns["doc"]] if "doc" in files[0].columns else None,
+                                folder_parameter=PARAM_NAME, key_columns=keys, period=period if truth.outside else None,
+                                delimiter={f.name: f.delimiter for f in files})
     _progress("load")                             # Excel's first Power Query work of the session takes seconds
     if name is None:
         name, formula, origin = QUERY_NAME, None, "clicky"

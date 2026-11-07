@@ -483,3 +483,58 @@ def returns_in_revenue(tb) -> Decimal:
               + ledger_movement(tb, "515", "cr") + ledger_movement(tb, "711", "cr"))
     gap = income - sum((l.cr for l in closing), ZERO)
     return gap if gap > 0 else ZERO
+
+
+def query_rows(files: list, roles: list, period: Optional[tuple] = None, dedup: Optional[list] = None) -> list:
+    """The rows m_code.order_files_query must load for these files, from the receipt's own reading: one list per
+    order in the roles' order (engine.m_code.CANON) plus the file name. A blank amount or cost is None, as the
+    query leaves it. The yardstick tools/dien_tap/m_agree.py compares Excel's result with, row for row."""
+    order = [r for r in ("doc", "date", "amount", "cost", "branch", "customer", "item", "status") if r in roles]
+    out = []
+    for f in sorted(files, key=lambda f: f.name.lower()):
+        for row in f.rows:
+            def cell(role):
+                i = f.columns.get(role)
+                return row[i] if i is not None and i < len(row) else None
+            values = []
+            for r in order:
+                v = cell(r)
+                if r == "date":
+                    values.append(parse_date(v, f.date_order))
+                elif r in ("amount", "cost"):
+                    values.append(None if v is None or str(v).strip() == "" else parse_amount(v)[0])
+                else:
+                    values.append("" if v is None else str(v).strip())
+            out.append(values + [f.name])
+    if period and "date" in order:
+        d = order.index("date")
+        out = [r for r in out if r[d] is None or (r[d].year, r[d].month) == tuple(period)]
+    if "doc" in order:
+        i = order.index("doc")
+        keys = [j for j, r in enumerate(order) if r != "status"] if dedup == [] else \
+            [order.index(r) for r in dedup] if dedup else [i]
+        seen, kept = set(), []
+        for r in out:
+            if not r[i]:
+                continue
+            k = tuple(r[j] for j in keys)
+            if k not in seen:
+                seen.add(k)
+                kept.append(r)
+        out = kept + [r for r in out if not r[i]]
+    return out
+
+
+def file_encoding(path: Path) -> int:
+    """The code page the receipt read a text file with, so the query decodes it the same way."""
+    raw = path.read_bytes()[:1 << 20]
+    if path.suffix.lower() != ".csv" and raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return 1200 if raw.startswith(b"\xff\xfe") else 1201
+    for enc, code in (("utf-8", 65001), ("cp1258", 1258)):
+        try:
+            raw.decode(enc)
+            return code
+        except UnicodeDecodeError as exc:
+            if enc == "utf-8" and exc.start >= len(raw) - 4 and len(raw) == 1 << 20:
+                return code                       # a character cut by the 1 MB sample, not a wrong encoding
+    return 28591
