@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 import httpx
 from storage import data_dir
 
-VERSION='1.6.0-preview'
+VERSION='1.6.1-preview'   # after the v1.6.0 release: CI builds must sort above it
 REPOSITORY='zicky008-forks/clicky-windows'
 
 
@@ -24,6 +24,17 @@ def velopack_manager():
         return velopack.UpdateManager(velopack.GithubSource(f'https://github.com/{REPOSITORY}'))
     except Exception:
         return None     # source checkout, Inno Setup install, or no velopack package
+
+
+def current_version():
+    """The version this copy runs as: Velopack's installed version when there is one, else VERSION."""
+    manager = velopack_manager()
+    if manager is not None:
+        try:
+            return str(manager.get_current_version()) or VERSION
+        except Exception:
+            pass
+    return VERSION
 
 
 def version_key(value):
