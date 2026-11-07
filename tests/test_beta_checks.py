@@ -190,3 +190,18 @@ def test_no_ai_call_and_no_egress_log_is_fine_but_a_call_without_log_is_not():
     out = beta_checks.evaluate(run({"t": 4, "event": "ai_call", "preview_shown": True, "approved": True}), {}, spec,
                                egress_text=None)
     assert not [c for c in out if c.name == "Có nhật ký gửi đi"][0].ok
+
+
+def test_receipt_names_a_file_without_its_extension():
+    """Grader, Case 02–04 layer G1: Clicky writes "TB_T11" for TB_T11.xlsx. The content is right, so the line
+    passes; the missing extension gets its own non-blocking warning."""
+    spec = {"intake": {"must_mention": ["TB_T11.xlsx", "Tổng cộng"], "files_min": 1}}
+    card = {"t": 1, "event": "intake", "files": [{"name": "TB_T11"}], "text": "Bỏ dòng Tổng cộng của TB_T11"}
+    rows = {c.name: c for c in beta_checks.intake_checks([card], spec, None)}
+    assert rows["Phiếu nêu những gì bị bỏ ra"].ok
+    warn = rows["Phiếu ghi tên file kèm đuôi"]
+    assert not warn.ok and not warn.blocking and "TB_T11.xlsx" in warn.detail
+    card["text"] = "Bỏ dòng Tổng cộng"
+    card["files"] = [{"name": "TB_T10"}]
+    rows = {c.name: c for c in beta_checks.intake_checks([card], spec, None)}
+    assert not rows["Phiếu nêu những gì bị bỏ ra"].ok

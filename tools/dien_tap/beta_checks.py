@@ -32,6 +32,7 @@ from checks import Check, text_found
 
 _IDS = re.compile(r"(?<!\d)(\d{13}|\d{12}|\d{10})(?!\d)")
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
+_EXT = re.compile(r"\.(xlsx|xlsm|xls|csv|pdf|png|jpg|jpeg|txt|docx)$", re.IGNORECASE)
 
 
 def _events(events, kind):
@@ -66,10 +67,21 @@ def intake_checks(events, expected, untouched_before_confirm) -> list:
     files = card.get("files") or []
     out.append(Check("Phiếu nêu đủ các file", len(files) >= spec.get("files_min", 1),
                      f"{len(files)} file (cần ít nhất {spec.get('files_min', 1)})"))
-    blob = _text_of(card)
-    missing = [m for m in spec.get("must_mention", []) if m.casefold() not in blob.casefold()]
+    blob = _text_of(card).casefold()
+    missing, no_ext = [], []
+    for m in spec.get("must_mention", []):
+        if m.casefold() in blob:
+            continue
+        stem = _EXT.sub("", m)
+        if stem != m and stem.casefold() in blob:     # "TB_T11" for "TB_T11.xlsx": named, without its extension
+            no_ext.append(m)
+        else:
+            missing.append(m)
     out.append(Check("Phiếu nêu những gì bị bỏ ra", not missing,
                      "thiếu: " + ", ".join(missing) if missing else "đủ các mục cần nêu"))
+    if no_ext:
+        out.append(Check("Phiếu ghi tên file kèm đuôi", False, "ghi thiếu đuôi: " + ", ".join(no_ext),
+                         blocking=False))
     label = spec.get("confirm_label", "Đúng rồi, làm tiếp")
     offered = any(label in (e.get("labels") or []) for e in _events(events, "choices"))
     out.append(Check(f"Có nút \"{label}\"", offered, "" if offered else "không thấy nút xác nhận"))
