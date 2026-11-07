@@ -10,7 +10,8 @@ drops files, and marks the first time each kind of feedback reaches the screen:
     first_text    first words in the chat panel
     first_point   the cursor flies to a cell or a point
     first_draw    the first box or shape on the sheet
-    first_card    the first card with buttons
+    first_card    the first card on screen: a figure card beside a cell, or a question with buttons
+                  (the frame around a cell, a sticky note or a bridge count as first_draw only)
     first_caption the first sentence shown under the cursor (and read aloud when a voice is on)
     first_voice   the first sound of Clicky's voice (after synthesis), when a voice is on
     done          Clicky is idle again
@@ -123,7 +124,12 @@ def connect(manager, clock: TurnClock) -> None:
     """Mark the clock from what the manager already tells the screen. Signals fire on the worker thread."""
     manager.sig_response_chunk.connect(lambda text: clock.mark("first_text") if text and text.strip() else None)
     manager.sig_point_at.connect(lambda *_: clock.mark("first_point"))
-    manager.sig_draw.connect(lambda *_: clock.mark("first_draw"))
+    def _drawn(*args):
+        clock.mark("first_draw")
+        # PC 84603e7: with only the buttons counted, first_card landed on the save question 21 s later.
+        if args and isinstance(args[0], dict) and args[0].get("kind") == "card":
+            clock.mark("first_card")
+    manager.sig_draw.connect(_drawn)
     manager.sig_choices.connect(lambda *_: clock.mark("first_card"))
     manager.sig_caption.connect(lambda text: clock.mark("first_caption") if text and text.strip() else None)
 
