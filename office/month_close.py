@@ -1546,7 +1546,7 @@ async def play(manager, beats: list, keep_card: bool = True) -> None:
                 await asyncio.sleep(BEAT_GAP_S)
         if beat.book and beat.ref:
             shown = await asyncio.to_thread(getattr(manager._excel, "show_workbook", lambda p: False), beat.book)
-            scene_log.record("show_book", i=i, ref=beat.ref, ok=bool(shown))
+            scene_log.record("show_book", i=i, ref=beat.ref, name=Path(beat.book).name, ok=bool(shown))
         box = await _locate(manager, beat.ref) if beat.ref else None
         if box:
             manager.sig_point_hold.emit(True)

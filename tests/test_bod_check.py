@@ -148,8 +148,10 @@ def test_one_beat_per_finding_pointing_at_its_cell(planted):
     assert fx.value == "759.000 đ" and fx.was == "908.500 đ" and fx.mark == "bad"
 
 
-def test_run_writes_results_and_plays(tmp_path):
+def test_run_writes_results_and_plays(tmp_path, monkeypatch):
     import asyncio
+    import json
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(tmp_path / "scene.jsonl"))
     from office import bod_skill, month_close as mc
     make_case(tmp_path, plant=True)
     played = []
@@ -158,7 +160,9 @@ def test_run_writes_results_and_plays(tmp_path):
         def workbook_folder(self): return None
         def workbook_path(self): return None
         def open_workbook(self, p): played.append(("open", p)); return True
-        def close_opened(self, back_to=None): played.append(("close", back_to)); return 0
+        def close_opened(self, back_to=None):
+            played.append(("close", back_to))
+            return [(str(tmp_path / "KeHoach_AOPR1_FY2627.xlsx"), True)]
 
     class M:
         _excel = Bridge()
@@ -176,6 +180,11 @@ def test_run_writes_results_and_plays(tmp_path):
     assert played[0][0] == "open" and played[0][1].endswith("Pack_BOD_T10_ban_nhap.xlsx")
     assert played[-2] == ("play", 12, False)               # separate mistakes: no card outlives its own
     assert played[-1][0] == "close" and played[-1][1].endswith("Pack_BOD_T10_ban_nhap.xlsx")
+    # grading AD: the robot can check that every source file Clicky opened was closed, unsaved
+    closes = [json.loads(l) for l in (tmp_path / "scene.jsonl").read_text(encoding="utf-8").splitlines()
+              if '"close_book"' in l]
+    assert len(closes) == 1 and closes[0]["name"] == "KeHoach_AOPR1_FY2627.xlsx"
+    assert closes[0]["closed"] is True and closes[0]["saved"] is False and closes[0]["read_only"] is True
 
 
 @pytest.mark.parametrize("plant", [True, False])
@@ -961,3 +970,53 @@ def test_card_titles_name_the_kind_of_mistake_and_a_source_file_cell_says_where_
     assert aopr.book == str(tmp_path / "KeHoach_AOPR1_FY2627.xlsx")
     assert aopr.note == "Nhóm 5 · file KeHoach_AOPR1_FY2627.xlsx, ô Data!I174" and aopr.was and aopr.value
     assert set(bod_skill.TITLES) >= {"missing_pct", "missing_pp", "wrong_pp", "wrong_base", "locked_month_plan_file"}
+
+
+def test_a_source_file_shown_read_only_is_closed_unsaved_and_reported():
+    """ExcelBridge.show_workbook opens a source file read-only; close_opened closes it without saving and says so."""
+    from office.excel_com import ExcelBridge
+
+    class Wb:
+        def __init__(self, app, name):
+            self.app, self.FullName, self.closed = app, name, None
+
+        def Activate(self):
+            self.app.front = self
+
+        def Close(self, SaveChanges):
+            self.closed = SaveChanges
+            self.app.books.remove(self)
+
+    class Books:
+        def __init__(self, app):
+            self.app = app
+
+        @property
+        def Count(self):
+            return len(self.app.books)
+
+        def __call__(self, i):
+            return self.app.books[i - 1]
+
+        def Open(self, path, UpdateLinks, ReadOnly, AddToMru):
+            assert ReadOnly is True and UpdateLinks == 0
+            wb = Wb(self.app, path)
+            self.app.books.append(wb)
+            return wb
+
+    class App:
+        DisplayAlerts = True
+
+        def __init__(self):
+            self.books, self.front = [], None
+            self.Workbooks = Books(self)
+            self.books.append(Wb(self, r"C:\case\Pack.xlsx"))
+
+    app = App()
+    bridge = ExcelBridge(app=app)
+    assert bridge.show_workbook(r"C:\case\KeHoach_AOPR1.xlsx") and app.front.FullName.endswith("KeHoach_AOPR1.xlsx")
+    assert bridge.show_workbook(r"C:\case\Pack.xlsx") and len(app.books) == 2        # already open: brought forward
+    source = app.books[1]
+    assert bridge.close_opened(r"C:\case\Pack.xlsx") == [(r"C:\case\KeHoach_AOPR1.xlsx", True)]
+    assert source.closed is False and [b.FullName for b in app.books] == [r"C:\case\Pack.xlsx"]
+    assert app.front.FullName == r"C:\case\Pack.xlsx" and app.DisplayAlerts is True
