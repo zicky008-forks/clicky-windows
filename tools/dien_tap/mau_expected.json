@@ -1,0 +1,28 @@
+{
+  "case": "File mẫu Sông Hồng T10 (việc 10: \"xem em làm\")",
+  "voice": "text_ok",
+  "second_stage_seconds": 300,
+  "max_seconds": 240,
+  "final_title": "Xong trong",
+  "sample": {
+    "time_tolerance": 5,
+    "_note": "Gõ \"xem em làm\": Clicky tự chạy từ phiếu nhận tới đối chiếu lại, không cần bấm; thẻ cuối \"Xong trong N giây\" đúng thời gian thật."
+  },
+  "numbers": [
+    {
+      "name": "Hàng trả lại 120 triệu",
+      "sheet": "BC",
+      "label": "trả lại",
+      "value": 120000000,
+      "tolerance": 1000000,
+      "abs": true
+    },
+    {
+      "name": "Lợi nhuận sau thuế thực = 436 triệu",
+      "sheet": "BC",
+      "label": "Lợi nhuận sau thuế thực",
+      "value": 436000000,
+      "tolerance": 1000000
+    }
+  ]
+}

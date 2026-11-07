@@ -14,6 +14,7 @@ class SettingsWindow(QWidget):
     show_sketch = pyqtSignal()
     show_work = pyqtSignal()
     open_connections = pyqtSignal()
+    open_outgoing_log = pyqtSignal()
     microphone_level = pyqtSignal(float)
 
     def __init__(self, manager):
@@ -26,6 +27,16 @@ class SettingsWindow(QWidget):
         layout.addWidget(tabs)
         behavior = QWidget()
         form = QFormLayout(behavior)
+        from office.outgoing import LOCAL_ONLY_LABEL, local_only, local_only_forced
+        self.local_only = QCheckBox(LOCAL_ONLY_LABEL)
+        self.local_only.setChecked(local_only())
+        if local_only_forced():
+            self.local_only.setEnabled(False)             # CLICKY_LOCAL_ONLY=1 keeps it on
+        self.local_only.toggled.connect(lambda value: self.apply(lambda: manager.set_local_only(value)))
+        form.addRow(self.local_only)
+        outgoing_log = QPushButton("Nhật ký gửi đi…")
+        outgoing_log.clicked.connect(self.open_outgoing_log.emit)
+        form.addRow(outgoing_log)
         for label,key,default,callback in (
             ("Protect sensitive screens",'privacy_guard',True,manager.set_privacy_guard),
             ("Allow web searches for current facts",'web_search',False,manager.set_web_search),
@@ -52,12 +63,12 @@ class SettingsWindow(QWidget):
         voice_page = QWidget()
         voice = QFormLayout(voice_page)
         self.provider = QComboBox()
-        for label,value in (("Automatic",'auto'),("Windows voice — offline",'sapi'),("Edge — internet",'edge_tts'),("OpenAI — API key",'openai'),("ElevenLabs — API key",'elevenlabs')):
+        for label,value in (("Automatic",'auto'),("Tiếng Việt trên máy — offline",'vi_offline'),("Windows voice — offline",'sapi'),("Microsoft online — sends each spoken sentence to Microsoft",'edge_tts'),("OpenAI — API key",'openai'),("ElevenLabs — API key",'elevenlabs')):
             self.provider.addItem(label,value)
         self.provider.setCurrentIndex(max(0,self.provider.findData(setting('tts_provider','auto'))))
         voice.addRow("Speech provider",self.provider)
         self.transcription = QComboBox()
-        for label,value in (("Automatic",''),("Local Whisper",'faster_whisper'),("Local whisper.cpp",'whisper_cpp'),("Deepgram — internet",'deepgram'),("OpenAI Whisper — internet",'openai')):
+        for label,value in (("Automatic",''),("Tiếng Việt trên máy — offline",'sherpa_vi'),("Local Whisper",'faster_whisper'),("Local whisper.cpp",'whisper_cpp'),("Deepgram — internet",'deepgram'),("OpenAI Whisper — internet",'openai'),("Type instead of talking",'typed')):
             self.transcription.addItem(label,value)
         import os
         self.transcription.setCurrentIndex(max(0,self.transcription.findData(os.getenv('CLICKY_STT',''))))
@@ -239,11 +250,24 @@ class SettingsWindow(QWidget):
 
     def show_update(self,value):
         self._update=value
-        self.install.setEnabled(bool(value and value.get('asset')))
+        self.install.setEnabled(bool(value and (value.get('asset') or value.get('velopack'))))
+        self.install.setText('Update and restart' if value and value.get('velopack') else 'Download verified installer')
         self.update_status.setText(value.get('error') if value and value.get('error') else ('Available: '+value['version']+'\n'+value['url'] if value else 'No newer release is available.'))
 
     def download_update(self):
         self.install.setEnabled(False)
+        if self._update and self._update.get('velopack'):
+            if QMessageBox.question(self,'Update Clicky','Download the update, then restart Clicky into it?',QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)!=QMessageBox.StandardButton.Yes:
+                self.install.setEnabled(True)
+                return
+            self.update_status.setText('Downloading the update…')
+            async def apply():
+                try:
+                    from updates import apply_in_place
+                    await apply_in_place(self._update)
+                except Exception as exc:self.update_ready.emit({'error':str(exc)})
+            self.manager._submit(apply())
+            return
         async def fetch():
             try:
                 from updates import download

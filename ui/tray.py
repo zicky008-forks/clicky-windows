@@ -6,21 +6,36 @@ from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QBrush
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QObject
 
 from config import cfg
-from storage import setting
+from storage import set_setting, setting
 
 
-def _make_tray_icon(color: QColor) -> QIcon:
-    """Generate a simple coloured circle as the tray icon.
+def non_la_pixmap(size: int, color: QColor) -> QPixmap:
+    """The nón lá (conical hat) drawn at ``size`` px: the one Clicky symbol (tray, welcome, cards).
     Must be called AFTER QApplication exists (Qt requirement)."""
-    px = QPixmap(QSize(22, 22))
+    from PyQt6.QtGui import QPainterPath, QPen
+    from PyQt6.QtCore import QPointF
+    px = QPixmap(QSize(size, size))
     px.fill(Qt.GlobalColor.transparent)
     painter = QPainter(px)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.scale(size / 22.0, size / 22.0)              # drawn on the 22 px tray grid
+    hat = QPainterPath()
+    hat.moveTo(11, 2)                                   # apex
+    hat.lineTo(20.5, 16.5)
+    hat.quadTo(QPointF(11, 20.5), QPointF(1.5, 16.5))   # curved brim
+    hat.closeSubpath()
     painter.setBrush(QBrush(color))
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawEllipse(3, 3, 16, 16)
+    painter.setPen(QPen(QColor(255, 255, 255, 220), 1.0))
+    painter.drawPath(hat)
+    painter.setPen(QPen(QColor(255, 255, 255, 150), 1.0))
+    painter.drawLine(QPointF(7.2, 11.2), QPointF(14.8, 11.2))   # one woven ring
     painter.end()
-    return QIcon(px)
+    return px
+
+
+def _make_tray_icon(color: QColor) -> QIcon:
+    """Tray icon: a nón lá (conical hat) in the state colour, matching the app icon."""
+    return QIcon(non_la_pixmap(22, color))
 
 
 class TrayManager(QObject):
@@ -34,6 +49,7 @@ class TrayManager(QObject):
     on_toggle_slow_mode   = pyqtSignal(bool)
     on_toggle_quiz_mode   = pyqtSignal(bool)
     on_toggle_privacy     = pyqtSignal(bool)
+    on_toggle_recording   = pyqtSignal(bool)
     on_switch_provider    = pyqtSignal(str)     # "claude" | "openai" | "copilot" | ...
     on_copilot_login      = pyqtSignal()
     on_copilot_refresh    = pyqtSignal()
@@ -60,15 +76,17 @@ class TrayManager(QObject):
     on_set_response_language = pyqtSignal(str)  # "" = auto-detect, else ISO code
     on_set_stt_language      = pyqtSignal(str)  # "" = auto-detect, else ISO code
     on_set_custom_instructions = pyqtSignal(str)
+    on_outgoing_log = pyqtSignal()
+    on_present      = pyqtSignal()          # Trợ lý bên cạnh: follow a slide show, answer from the question bank
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
         # Icons MUST be created after QApplication exists
         self._icons = {
-            "idle":      _make_tray_icon(QColor(80, 80, 120)),
+            "idle":      _make_tray_icon(QColor(0x25, 0x63, 0xEB)),
             "listening": _make_tray_icon(QColor(50, 200, 100)),
-            "thinking":  _make_tray_icon(QColor(0, 120, 255)),
+            "thinking":  _make_tray_icon(QColor(124, 58, 237)),
             "speaking":  _make_tray_icon(QColor(255, 140, 0)),
         }
 
@@ -127,6 +145,19 @@ class TrayManager(QObject):
 
         stop_action = menu.addAction("Stop (Esc)")
         stop_action.triggered.connect(self.on_stop)
+
+        # What Clicky sent to the AI, after masking names and IDs.
+        outgoing_log = menu.addAction("Nhật ký gửi đi")
+        outgoing_log.triggered.connect(self.on_outgoing_log)
+
+        present_action = menu.addAction("Trình bày báo cáo (trợ lý bên cạnh)…")
+        present_action.triggered.connect(self.on_present)
+
+        # Off by default: Clicky's windows stay out of screenshots and screen recordings.
+        recording_action = menu.addAction("Cho phép quay màn hình Clicky (để quay demo)")
+        recording_action.setCheckable(True)
+        recording_action.setChecked(bool(setting("allow_screen_recording", False)))
+        recording_action.triggered.connect(self._toggle_recording)
 
         menu.addSeparator()
 
@@ -547,6 +578,10 @@ class TrayManager(QObject):
             "Quiz Mode: ON" if checked else "Quiz Mode: OFF"
         )
         self.on_toggle_quiz_mode.emit(checked)
+
+    def _toggle_recording(self, checked: bool):
+        set_setting("allow_screen_recording", checked)
+        self.on_toggle_recording.emit(checked)
 
     def _toggle_privacy(self, checked: bool):
         self._privacy_enabled = checked

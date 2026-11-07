@@ -1,0 +1,164 @@
+"""Offline Vietnamese voice: phoneme table, engine fallback, provider choice."""
+from pathlib import Path
+
+import pytest
+
+from audio.tts import vi_g2p, vi_offline_tts
+
+
+def test_table_covers_every_loanword_spelling():
+    t = vi_g2p.table()
+    assert len(t) > 15000
+    assert [w for v in vi_g2p.LOANWORDS.values() for w in v.split() if w not in t] == []
+
+
+def test_clause_final_level_tone_uses_the_final_form():
+    # espeak marks the level tone 1 mid-clause and 7 at the end of a clause; the table keeps both.
+    assert vi_g2p.phonemize("hai ba") == ["hˈaː1j bˈaː7"]
+    assert vi_g2p.phonemize("ba, hai.") == ["bˈaː7, hˈaː7j."]
+
+
+def test_sentences_split_and_missing_words_are_reported():
+    missing = []
+    out = vi_g2p.phonemize("Doanh thu tăng. Chi phí zzqx giảm!", missing)
+    assert len(out) == 2
+    assert missing == ["zzqx"]
+
+
+def test_slide_is_read_the_vietnamese_way():
+    assert vi_g2p.phonemize("slide") == vi_g2p.phonemize("xờ lai")
+
+
+class _Engine:
+    def __init__(self, name, fail=False):
+        self.name, self.fail = name, fail
+
+    def synthesize(self, text):
+        if self.fail:
+            raise RuntimeError("int8 garbled")
+        return b"RIFF" + self.name.encode()
+
+
+def test_falls_back_to_piper_and_says_so(monkeypatch):
+    notes = []
+    monkeypatch.setattr(vi_offline_tts, "preferred_order", lambda: ["vieneu", "piper"])
+    engines = {"vieneu": _Engine("vieneu", fail=True), "piper": _Engine("piper")}
+    monkeypatch.setattr(vi_offline_tts, "engine", lambda n: engines[n])
+    tts = vi_offline_tts.OfflineViTTS(on_fallback=notes.append)
+    assert tts.synthesize_sync("Xin chào") == b"RIFFpiper"
+    assert tts.used == "piper" and len(notes) == 1
+
+
+def test_no_voice_raises_instead_of_staying_silent(monkeypatch):
+    monkeypatch.setattr(vi_offline_tts, "preferred_order", lambda: [])
+    with pytest.raises(RuntimeError, match="Không có giọng tiếng Việt"):
+        vi_offline_tts.OfflineViTTS().synthesize_sync("Xin chào")
+
+
+def test_setting_puts_piper_first(monkeypatch):
+    import storage
+    monkeypatch.setattr(storage, "setting", lambda k, d=None: "piper" if k == "tts_vi_engine" else d)
+    monkeypatch.setattr(vi_offline_tts, "vieneu_available", lambda: True)
+    monkeypatch.setattr(vi_offline_tts, "piper_available", lambda: True)
+    assert vi_offline_tts.preferred_order() == ["piper", "vieneu"]
+
+
+def test_offline_vietnamese_voice_is_chosen_even_in_local_only(monkeypatch):
+    from config import cfg
+    import office.outgoing as outgoing
+    monkeypatch.setattr(vi_offline_tts, "available", lambda: True)
+    monkeypatch.setattr(outgoing, "local_only", lambda: True)
+    assert cfg.tts_provider() == "vi_offline"
+    monkeypatch.setattr(outgoing, "local_only", lambda: False)
+    assert cfg.tts_provider() == "vi_offline"
+
+
+def test_find_piper_reads_the_voice_folder(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLICKY_VOICE_DIR", str(tmp_path))
+    d = tmp_path / "tts-piper-vi"
+    d.mkdir()
+    (d / "vi_VN-vais1000-medium.onnx").write_bytes(b"x")
+    (d / "tokens.txt").write_text("x", encoding="utf-8")
+    assert vi_offline_tts.find_piper()["model"].name == "vi_VN-vais1000-medium.onnx"
+
+
+def test_no_gpl_piper_program_is_used():
+    root = Path(__file__).resolve().parents[1]
+    assert not (root / "audio" / "tts" / "piper_provider.py").exists()
+    assert "espeak" not in (root / "audio" / "tts" / "vi_offline_tts.py").read_text(encoding="utf-8").replace(
+        "no espeak-ng (GPL) code", "")
+
+
+def test_wav_header_and_rate():
+    import io
+    import wave
+    data = vi_offline_tts.to_wav([0.0, 0.5, -0.5], 22050)
+    with wave.open(io.BytesIO(data)) as w:
+        assert w.getframerate() == 22050 and w.getnframes() == 3
+
+
+def _fake_vieneu(root: Path, subs):
+    snap = root / "vieneu" / "hub" / vi_offline_tts.VIENEU_REPO_DIR / "snapshots" / "abc"
+    for sub in subs:
+        (snap / sub).mkdir(parents=True)
+        (snap / sub / "vieneu_prefill.onnx").write_bytes(b"x")
+
+
+def test_vieneu_bundle_is_found_with_its_precisions(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLICKY_VOICE_DIR", str(tmp_path))
+    assert vi_offline_tts.find_vieneu() is None
+    _fake_vieneu(tmp_path, ["onnx_int8", "onnx_update"])
+    found = vi_offline_tts.find_vieneu()
+    assert sorted(found["precisions"]) == ["fp32", "int8"]
+
+
+@pytest.mark.parametrize("have, vnni, want", [
+    (["int8", "fp32"], True, "int8"),
+    (["int8", "fp32"], False, "fp32"),
+    (["int8"], False, ""),            # int8 without VNNI garbles audio: no VieNeu, Piper reads instead
+    (["fp32"], True, "fp32"),
+])
+def test_int8_only_on_vnni(monkeypatch, have, vnni, want):
+    monkeypatch.setattr(vi_offline_tts, "cpu_has_vnni", lambda: vnni)
+    assert vi_offline_tts.vieneu_precision(have) == want
+
+
+def test_vieneu_deps_pin_the_same_onnxruntime_as_sherpa():
+    root = Path(__file__).resolve().parents[1]
+    reqs = (root / "requirements-vieneu.txt").read_text(encoding="utf-8")
+    assert "onnxruntime==1.28.0" in reqs   # same API line as sherpa's bundled 1.28.2
+    assert "gradio" not in reqs.replace("without gradio", "") and "librosa" not in reqs.replace("librosa or", "")
+
+
+def test_tai_vieneu_flatten_makes_snapshot_files_real(tmp_path):
+    # onnxruntime 1.28 rejects .data weights whose symlink resolves into blobs/ (outside the model folder).
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "tai_vieneu", Path(__file__).resolve().parents[1] / "tools" / "giong_noi" / "tai_vieneu.py")
+    tai = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tai)
+    repo = tmp_path / "models--pnnbao-ump--VieNeu-TTS-v3-Turbo"
+    (repo / "blobs").mkdir(parents=True)
+    (repo / "blobs" / "abc").write_bytes(b"weights")
+    snap = repo / "snapshots" / "rev" / "onnx_int8"
+    snap.mkdir(parents=True)
+    try:
+        (snap / "vieneu_backbone_shared.data").symlink_to(repo / "blobs" / "abc")
+    except OSError:
+        pytest.skip("no symlink permission")
+    assert tai.flatten(tmp_path) == 1
+    f = snap / "vieneu_backbone_shared.data"
+    assert not f.is_symlink() and f.read_bytes() == b"weights"
+    assert not (repo / "blobs").exists()
+
+
+def test_stt_dither_removes_pure_digital_silence():
+    # Pure zeros after "tài khoản năm trăm mười một" made the recognizer add "tỷ" (511 tỷ instead of TK 511).
+    import numpy as np
+    from audio.stt.sherpa_vi_stt import DITHER, dither
+    x = np.zeros(16000, dtype=np.float32)
+    y = dither(x)
+    assert y.shape == x.shape and y.dtype == np.float32
+    assert np.count_nonzero(y) == y.size
+    assert float(np.abs(y).max()) < DITHER * 10               # inaudible
+    assert np.array_equal(dither(x), y)                        # same input, same result

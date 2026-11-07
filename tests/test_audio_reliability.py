@@ -194,3 +194,84 @@ def test_settings_microphone_test_releases_input(qt_app, microphones, monkeypatc
     assert settings._mic_listener is None
     Listener.stop.assert_called_once()
     settings.close()
+
+
+def test_without_a_speech_model_the_talk_key_opens_the_typed_chat(monkeypatch):
+    import importlib.util
+    from audio.stt import sherpa_vi_stt
+    from config import cfg
+    monkeypatch.delenv('CLICKY_STT', raising=False)
+    monkeypatch.setattr(sherpa_vi_stt, 'available', lambda: False)
+    monkeypatch.setattr(cfg, 'deepgram_api_key', None)
+    monkeypatch.setattr(cfg, 'openai_api_key', None)
+    monkeypatch.setattr(importlib.util, 'find_spec', lambda name: None)
+    assert cfg.stt_provider() == 'typed'
+
+    from companion_manager import AppState, CompanionManager
+    for dictating, into_chat in ((False, True), (True, False)):
+        manager = SimpleNamespace(_state=AppState.IDLE, _dictating=dictating, sig_voice_typing=Mock(),
+                                  _claim_begin=Mock(side_effect=AssertionError('Do not open the microphone')))
+        CompanionManager.on_hotkey_press(manager)
+        manager.sig_voice_typing.emit.assert_called_once_with(into_chat)
+        assert not manager._dictating
+
+
+def test_vietnamese_text_asks_windows_for_a_vietnamese_voice():
+    from audio.tts.sapi_tts_provider import text_language
+    assert text_language("Sổ cái khớp đến từng đồng.") == "vi-VN"
+    assert text_language("Ledger matches.") == ""
+
+
+def test_local_reply_says_once_why_it_was_not_read_aloud():
+    from unittest.mock import AsyncMock
+    from companion_manager import CompanionManager
+    tts = Mock(speak=AsyncMock(side_effect=RuntimeError("Windows speech failed: blocked")))
+    manager = Mock(_get_tts=Mock(return_value=tts), _voice_failure_noticed=False)
+    asyncio.run(CompanionManager._reply_local(manager, "Em đọc 3 file."))
+    asyncio.run(CompanionManager._reply_local(manager, "Sổ cái khớp."))
+    assert manager.sig_response_done.emit.call_count == 2
+    assert manager.sig_notice.emit.call_count == 1
+    assert "giọng đọc" in manager.sig_notice.emit.call_args.args[0]
+
+
+def test_online_voice_reads_vietnamese_with_a_vietnamese_voice():
+    from audio.tts.edge_tts_provider import VI_VOICE, voice_for
+    assert voice_for("Sổ cái khớp đến từng đồng.", "en-US-AvaNeural") == VI_VOICE
+    assert voice_for("Sổ cái khớp.", "vi-VN-NamMinhNeural") == "vi-VN-NamMinhNeural"
+    assert voice_for("Ledger matches.", "en-US-AvaNeural") == "en-US-AvaNeural"
+
+
+def test_vietnamese_is_never_read_with_an_english_voice():
+    from unittest.mock import AsyncMock
+    from audio.tts.sapi_tts_provider import NoVoiceForLanguage
+    from companion_manager import CompanionManager
+    tts = Mock(speak=AsyncMock(side_effect=NoVoiceForLanguage("NO_VOICE_FOR_LANG")))
+    manager = Mock(_get_tts=Mock(return_value=tts), _voice_failure_noticed=False, _no_voice_noticed=False)
+    assert asyncio.run(CompanionManager._reply_local(manager, "Em đọc 3 file.")) is False
+    assert asyncio.run(CompanionManager._reply_local(manager, "Sổ cái khớp.")) is False
+    assert manager.sig_notice.emit.call_count == 1
+    advice = manager.sig_notice.emit.call_args.args[0]
+    assert "chỉ hiện chữ" in advice and "gửi lên Microsoft" in advice and len(advice) <= 120   # fits a toast
+    ok = Mock(speak=AsyncMock(return_value=None))
+    assert asyncio.run(CompanionManager._reply_local(Mock(_get_tts=Mock(return_value=ok)), "Khớp.")) is True
+
+
+def test_windows_speech_without_a_voice_for_the_language_raises_instead_of_speaking(monkeypatch):
+    import subprocess
+    import audio.tts.sapi_tts_provider as sapi
+
+    class Process:
+        returncode = 3
+
+        def communicate(self, data, timeout=None):
+            assert b'"lang": "vi-VN"' in data
+            return b"", b"NO_VOICE_FOR_LANG"
+
+        def poll(self):
+            return 3
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: Process())
+    monkeypatch.setattr(sapi, "setting", lambda name, default=None: default)
+    with pytest.raises(sapi.NoVoiceForLanguage):
+        asyncio.run(sapi.SapiTTSProvider().synthesize("Sổ cái khớp đến từng đồng."))
+    assert "NO_VOICE_FOR_LANG" in sapi._SCRIPT and "Windows.Media.SpeechSynthesis" in sapi._SCRIPT

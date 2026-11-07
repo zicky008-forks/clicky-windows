@@ -326,26 +326,45 @@ class Config:
 
     def stt_provider(self) -> str:
         # Allow explicit override via env (so users can force whisper_cpp etc.)
+        from office.outgoing import local_only
+        nothing_out = local_only()          # "Chỉ chạy trên máy": no cloud transcription either
         forced = os.getenv("CLICKY_STT", "").strip().lower()
-        if forced in ("deepgram", "openai", "whisper_cpp", "faster_whisper"):
+        if forced in ("deepgram", "openai", "whisper_cpp", "faster_whisper", "sherpa_vi", "typed") and not (
+                nothing_out and forced in ("deepgram", "openai")):
             return forced
-        local_model = self.llm_provider() in {"ollama", "lmstudio"}
+        # Offline Vietnamese (sherpa-onnx Zipformer) comes first: it understands accountants' Vietnamese,
+        # costs nothing and keeps every word on the PC.
+        from audio.stt import sherpa_vi_stt
+        if sherpa_vi_stt.available():
+            return "sherpa_vi"
+        local_model = nothing_out or self.llm_provider() in {"ollama", "lmstudio"}
         if self.deepgram_api_key and not local_model:
             return "deepgram"
         if self.openai_api_key and not local_model:
             return "openai"
         # Prefer whisper.cpp (GPU-accelerated, same engine as Handy) when the
         # pywhispercpp package is installed; otherwise fall back to faster-whisper.
-        try:
-            import pywhispercpp  # noqa: F401
+        import importlib.util
+        if importlib.util.find_spec("pywhispercpp"):
             return "whisper_cpp"
-        except ImportError:
+        if importlib.util.find_spec("faster_whisper"):
             return "faster_whisper"
+        # No speech model at all: the talk key opens the typed chat. Never Windows voice typing (Win+H):
+        # it sends audio to Microsoft and types into whatever window has focus.
+        return "typed"
 
     def tts_provider(self) -> str:
+        from office.outgoing import local_only
+        from audio.tts import vi_offline_tts
+        offline_vi = vi_offline_tts.available()     # VieNeu / Piper on the PC: Vietnamese, free, private
         forced = setting("tts_provider", "auto")
-        if forced in {"sapi", "edge_tts", "openai", "elevenlabs"}:
-            return forced
+        if local_only():
+            # Online voices send every sentence to their server.
+            return "vi_offline" if offline_vi and forced != "sapi" else "sapi"
+        if forced in {"sapi", "edge_tts", "openai", "elevenlabs", "vi_offline"}:
+            return forced if forced != "vi_offline" or offline_vi else "sapi"
+        if offline_vi:
+            return "vi_offline"
         if self.llm_provider() in {"ollama", "lmstudio"}:
             return "sapi"
         if self.elevenlabs_api_key:

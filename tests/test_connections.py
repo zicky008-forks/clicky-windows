@@ -61,3 +61,20 @@ def test_update_version_and_remote_connector_transport():
     assert version_key('v1.6.0')>version_key('1.6.0-preview')>version_key('1.5.1')
     with pytest.raises(ValueError):save_connector('unsafe','http://remote.example/mcp')
     with pytest.raises(ValueError):save_connector('unsafe','https://user:secret@example.com/mcp')
+
+
+def test_velopack_install_updates_in_place(monkeypatch):
+    import updates
+    from types import SimpleNamespace
+    calls=[]
+    info=SimpleNamespace(TargetFullRelease=SimpleNamespace(Version='1.7.0'))
+    manager=SimpleNamespace(check_for_updates=lambda:info,
+                            download_updates=lambda value:calls.append(('download',value)),
+                            apply_updates_and_restart=lambda value:calls.append(('apply',value)))
+    monkeypatch.setattr(updates,'velopack_manager',lambda:manager)
+    found=asyncio.run(updates.latest())
+    assert found['version']=='1.7.0' and found['asset'] is None
+    asyncio.run(updates.apply_in_place(found))
+    assert calls==[('download',info),('apply',info)]
+    manager.check_for_updates=lambda:None
+    assert asyncio.run(updates.latest()) is None

@@ -53,6 +53,20 @@ def load_all() -> list[dict]:
             continue
         _try_import(f)
 
+    # Built-in skills imported as modules, so they also load from the frozen .exe
+    from office import bod_skill, drop, month_close, pq_skill, report_skill, sample
+    for skill in bod_skill.SKILLS:            # "soát bộ BOD" before "báo cáo" words
+        _register(dict(skill))
+    for skill in sample.SKILLS:               # "xem em làm" / "file mẫu" before the month-close words
+        _register(dict(skill))
+    for skill in drop.SKILLS:
+        _register(dict(skill))
+    for skill in month_close.SKILLS:          # before report_skill: "làm báo cáo tháng từ thư mục" is the longer match
+        _register(dict(skill))
+    _register(dict(report_skill.SKILL))
+    for skill in pq_skill.SKILLS:
+        _register(dict(skill))
+
     # User skills
     user_dir = _user_skills_dir()
     user_dir.mkdir(parents=True, exist_ok=True)
@@ -72,22 +86,28 @@ def _try_import(path: Path) -> None:
         mod = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = mod
         spec.loader.exec_module(mod)
-        skill = getattr(mod, "SKILL", None)
-        if not isinstance(skill, dict):
-            return
-        if not all(k in skill for k in ("name", "trigger", "handler")):
-            return
-        skill.setdefault("description", "")
-        skill["_compiled"] = re.compile(skill["trigger"], re.IGNORECASE)
-        _loaded.append(skill)
+        _register(getattr(mod, "SKILL", None))
     except Exception as e:
         # Don't let one bad skill kill startup. Log and skip.
         print(f"[skills] failed to load {path}: {e}")
 
 
+def _register(skill) -> None:
+    if not isinstance(skill, dict):
+        return
+    if not all(k in skill for k in ("name", "trigger", "handler")):
+        return
+    skill.setdefault("description", "")
+    skill["_compiled"] = re.compile(skill["trigger"], re.IGNORECASE)
+    _loaded.append(skill)
+
+
 def match(transcript: str) -> Optional[dict]:
     """Return the first skill whose trigger matches the user's utterance."""
     for s in _loaded:
+        when = s.get("when")
+        if when is not None and not when():
+            continue                  # e.g. "đồng ý" only means something while a fix is waiting
         if s["_compiled"].search(transcript):
             return s
     return None

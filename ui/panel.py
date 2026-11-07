@@ -26,6 +26,16 @@ class AppState(Enum):
     SPEAKING  = auto()
 
 
+def _advanced() -> bool:
+    """Model picker, provider badge and power-user buttons show only when the setting
+    "advanced_panel" is on; everyone else sees a plain chat with Vietnamese labels."""
+    try:
+        from storage import setting
+        return bool(setting("advanced_panel", False))
+    except Exception:
+        return False
+
+
 def _hotkey_label() -> str:
     """Human-readable hotkey from config, e.g. 'ctrl+win' -> 'Ctrl+Win'."""
     try:
@@ -36,10 +46,10 @@ def _hotkey_label() -> str:
 
 
 STATE_LABELS = {
-    AppState.IDLE:      f"Say 'Clicky' or {_hotkey_label()}" if cfg.ambient_mic() else f"Type below or hold {_hotkey_label()}",
-    AppState.LISTENING: "Listening...",
-    AppState.THINKING:  "Thinking...",
-    AppState.SPEAKING:  "Speaking...",
+    AppState.IDLE:      f"Gọi 'Clicky' hoặc giữ {_hotkey_label()}" if cfg.ambient_mic() else f"Gõ bên dưới hoặc giữ {_hotkey_label()} để nói",
+    AppState.LISTENING: "Đang nghe…",
+    AppState.THINKING:  "Đang làm…",
+    AppState.SPEAKING:  "Đang nói…",
 }
 
 STATE_COLORS = {
@@ -215,6 +225,7 @@ class CompanionPanel(QWidget):
         header.addStretch()
         provider = cfg.llm_provider()
         self._badge = ProviderBadge(provider)
+        self._badge.setVisible(_advanced())      # model names mean nothing to an accountant
         header.addWidget(self._badge)
 
         # Minimize button — hides the panel back to tray
@@ -225,7 +236,7 @@ class CompanionPanel(QWidget):
             "border: none; border-radius: 12px; font-size: 14px; font-weight: bold; }"
             "QPushButton:hover { background: rgba(80,80,95,220); }"
         )
-        self._min_btn.setToolTip("Hide panel (use tray to reopen)")
+        self._min_btn.setToolTip("Ẩn khung chat (mở lại từ biểu tượng Clicky ở khay)")
         self._min_btn.clicked.connect(self.hide)
         header.addWidget(self._min_btn)
         root.addLayout(header)
@@ -254,7 +265,7 @@ class CompanionPanel(QWidget):
         root.addWidget(self._waveform)
 
         # Response area
-        scroll = QScrollArea()
+        scroll = self._scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._response_label = QLabel()
@@ -266,30 +277,34 @@ class CompanionPanel(QWidget):
         self._response_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._response_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         scroll.setWidget(self._response_label)
+        # Newest message always in view: follow the bottom whenever the text grows.
+        bar = scroll.verticalScrollBar()
+        bar.rangeChanged.connect(lambda _lo, hi: bar.setValue(hi))
         root.addWidget(scroll, stretch=1)
 
         self._composer = QLineEdit()
-        self._composer.setPlaceholderText("Ask Clicky about your screen…")
-        self._composer.setAccessibleName("Message to Clicky")
+        self._composer.setPlaceholderText("Gõ việc cần làm, ví dụ: làm báo cáo tháng từ thư mục này")
+        self._composer.setAccessibleName("Tin nhắn cho Clicky")
         self._composer.setMaxLength(12000)
         self._composer.returnPressed.connect(self._send_text)
         root.addWidget(self._composer)
         actions = QHBoxLayout()
-        for label, handler in (("Send", self._send_text), ("Stop", self.on_stop_requested.emit),
-                               ("New", self.on_new_chat.emit), ("Settings", self.on_settings_requested.emit)):
+        for label, handler in (("Gửi", self._send_text), ("Dừng", self.on_stop_requested.emit),
+                               ("Cuộc mới", self.on_new_chat.emit), ("Cài đặt", self.on_settings_requested.emit)):
             button = QPushButton(label)
             button.clicked.connect(handler)
             actions.addWidget(button)
         root.addLayout(actions)
         work = QHBoxLayout()
-        for label, signal in (("Work & routines", self.on_jobs_requested), ("Sketch", self.on_sketch_requested)):
+        for label, signal in (("Việc định kỳ", self.on_jobs_requested), ("Bảng vẽ", self.on_sketch_requested)):
             button = QPushButton(label)
             button.clicked.connect(signal.emit)
+            button.setVisible(_advanced())
             work.addWidget(button)
         root.addLayout(work)
 
         # Push-to-talk button
-        self._ptt_btn = QPushButton(f"Hold {_hotkey_label()} to speak")
+        self._ptt_btn = QPushButton(f"Giữ {_hotkey_label()} để nói")
         self._ptt_btn.setObjectName("hotkey_btn")
         self._ptt_btn.setFont(FONT_LABEL)
         self._ptt_btn.setFixedHeight(44)
@@ -297,7 +312,7 @@ class CompanionPanel(QWidget):
 
         # Footer: model selector + provider info
         footer = QHBoxLayout()
-        lbl = QLabel("Model:")
+        lbl = QLabel("Mô hình AI:")
         lbl.setFont(FONT_LABEL)
         lbl.setStyleSheet("color: rgb(100,100,120); font-size: 11px;")
         self._model_combo = QComboBox()
@@ -317,6 +332,8 @@ class CompanionPanel(QWidget):
         )
         footer.addWidget(lbl)
         footer.addWidget(self._model_combo, stretch=1)
+        for widget in (lbl, self._model_combo):
+            widget.setVisible(_advanced())
         root.addLayout(footer)
 
     def _populate_models(self):
@@ -395,8 +412,18 @@ class CompanionPanel(QWidget):
         if cfg.llm_provider() == "ollama":
             self._set_models_for("ollama")
 
+    def focus_composer(self):
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self._composer.setFocus()
+
     def showEvent(self, event):
         super().showEvent(event)
+        # Text that arrived while the panel was hidden (Clicky guiding on screen) never resized the
+        # word-wrapped label, so the end of the chat was cut off with no scrollbar. Re-lay it out now
+        # and land on the newest message.
+        QTimer.singleShot(0, self._refit_transcript)
         # A model pulled while Clicky was running should appear without a
         # restart; a throttled re-poll on open keeps the list current.
         if cfg.llm_provider() == "ollama":
@@ -404,6 +431,14 @@ class CompanionPanel(QWidget):
             if now - self._ollama_polled_at > 5:
                 self._ollama_polled_at = now
                 self.on_ollama_refresh_requested.emit()
+
+    def _refit_transcript(self):
+        label = self._response_label
+        width = self._scroll.viewport().width()
+        if width > 0:
+            label.setMinimumHeight(max(0, label.heightForWidth(width)))
+        bar = self._scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
     def refresh_for_provider(self, provider: str):
         """Called from outside when the active provider is switched at runtime."""
@@ -448,12 +483,18 @@ class CompanionPanel(QWidget):
             self.on_text_submitted.emit(text)
 
     def begin_turn(self, question):
-        if self._response_text:
-            self._transcript += self._response_text + "\n\n"
-        self._transcript += "You: " + question + "\n\nClicky: "
+        # A turn that ended with no answer (an error shown as a notification) still gets closed off,
+        # so the next "You:" never runs on from a dangling "Clicky: ".
+        self._transcript += (self._response_text or "(chưa trả lời được)") + "\n\n" if self._transcript else ""
+        self._transcript += "Bạn: " + question + "\n\nClicky: "
         self._transcript = self._transcript[-40000:]
         self._response_text = ""
         self._response_label.setText(self._transcript)
+
+    def show_error(self, message: str):
+        """Put a failed turn's reason in the chat itself, not only in a notification that may go unseen."""
+        first = (message or "").strip().splitlines()[0][:200] if (message or "").strip() else "lỗi không rõ"
+        self.append_response_chunk(("\n" if self._response_text else "") + "⚠ Clicky chưa trả lời được: " + first)
 
     def set_audio_level(self, rms: float):
         self._waveform.set_level(rms)
@@ -462,6 +503,7 @@ class CompanionPanel(QWidget):
         self._transcript = ""
         self._response_text = ""
         self._response_label.setText("")
+        self._response_label.setMinimumHeight(0)
 
     def show_copilot_code(self, user_code: str, verification_uri: str):
         """Thread-safe: can be called from any thread. Emits a queued signal

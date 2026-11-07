@@ -38,6 +38,23 @@ def _ensure_std_streams() -> None:
 
 _ensure_std_streams()
 
+# Velopack install/update hooks must run first; it may exit or restart the
+# process while installing or applying an update. A no-op in other builds.
+if __name__ == "__main__":
+    try:
+        import velopack
+        _velopack_app = velopack.App()
+        try:   # a fresh Velopack install greets the user again (first_run.py); an update does not
+            from first_run import forget_welcome
+            _hook = getattr(_velopack_app, "on_after_install_fast_callback", None)
+            if callable(_hook):
+                _velopack_app = _hook(lambda *_: forget_welcome()) or _velopack_app
+        except Exception:
+            pass
+        _velopack_app.run()
+    except ImportError:
+        pass
+
 # Run before normal startup imports, credentials, microphone and global hooks.
 if __name__ == "__main__" and "--smoke-test" in sys.argv:
     from packaging_smoke import run
@@ -62,6 +79,11 @@ STATE_TO_CURSOR_MODE = {
     AppState.THINKING:  MODE_THINKING,
     AppState.SPEAKING:  MODE_SPEAKING,
 }
+
+
+def _allow_recording() -> bool:
+    from storage import setting
+    return bool(setting("allow_screen_recording", False))
 
 
 def _copilot_login_flow(tray, panel, manager):
@@ -159,6 +181,8 @@ def main():
     panel   = CompanionPanel()
     overlay = CursorOverlay()
     tray    = TrayManager()
+    from ui.choice_card import ChoiceCard
+    choice_card = ChoiceCard()
     from PyQt6.QtCore import QTimer
     from desktop import foreground, restore
     _last_foreground = [{}]
@@ -203,6 +227,14 @@ def main():
     from ui.connections_window import ConnectionsWindow
     connections_window = ConnectionsWindow(manager)
     settings_window.open_connections.connect(connections_window.show)
+    # What leaves the machine: the card before the first send, the log after.
+    from ui.outgoing_card import OutgoingCard, OutgoingLogWindow
+    outgoing_card = OutgoingCard()
+    outgoing_log_window = OutgoingLogWindow()
+    manager.sig_outgoing_preview.connect(outgoing_card.show_preview)
+    outgoing_card.answered.connect(manager.answer_outgoing)
+    settings_window.open_outgoing_log.connect(outgoing_log_window.show)
+    tray.on_outgoing_log.connect(outgoing_log_window.show)
     def _review_external(proposal):
         import json
         from PyQt6.QtWidgets import QMessageBox
@@ -226,19 +258,26 @@ def main():
     caption.setFixedWidth(620)
     def _caption(text):
         from storage import setting
+        from ui.card_layout import BOARD, record_widget, settle
         if not text or not setting('captions',True):
             caption.hide()
+            BOARD.release("caption")
             return
         from PyQt6.QtGui import QCursor
         screen = app.screenAt(QCursor.pos()) or app.primaryScreen()
         area = screen.availableGeometry()
         caption.setText(text)
         caption.adjustSize()
-        caption.move(area.center().x()-caption.width()//2,area.bottom()-caption.height()-30)
+        # Bottom centre, unless figures or a card are there (it is drawn over Excel, like the cards).
+        x, y, placed = settle("caption", (area.center().x()-caption.width()//2, area.bottom()-caption.height()-30),
+                              (caption.width(), caption.height()),
+                              (area.left(), area.top(), area.right(), area.bottom()))
+        caption.move(int(x), int(y))
+        record_widget("caption", placed)
         caption.show()
         try:
             from screen.privacy import exclude_window
-            exclude_window(caption)
+            exclude_window(caption, not _allow_recording())
         except OSError:
             caption.hide()
     manager.sig_caption.connect(_caption)
@@ -269,6 +308,13 @@ def main():
             if box.clickedButton() is copy:
                 app.clipboard().setText(text)
     manager.sig_dictation_ready.connect(_dictation_ready)
+
+    def _voice_typing(into_chat: bool):
+        # No speech model on this PC: the talk key opens the typed chat. Windows voice typing (Win+H)
+        # is never started: it sends audio to Microsoft and types into whatever window has focus.
+        panel.focus_composer()
+        manager.sig_notice.emit("Máy này chưa có bộ nghe tiếng Việt. Chị gõ câu hỏi vào đây nhé.")
+    manager.sig_voice_typing.connect(_voice_typing)
 
     def _review_drive(value):
         from drive import validate_plan, describe
@@ -317,19 +363,98 @@ def main():
     # Teaching drawings — generic shape channel with progressive animation
     manager.sig_draw.connect(overlay.add_shape)
     manager.sig_clear_drawings.connect(overlay.clear_annotations)
+    # Questions Clicky asks get real buttons; a click answers as if the words were typed.
+    manager.sig_intake.connect(choice_card.set_details)
+    manager.sig_choices.connect(choice_card.ask)
+    choice_card.chosen.connect(manager.submit_text)
+    # The last card belongs to the question just answered; it must not linger while Clicky works.
+    choice_card.chosen.connect(lambda _label: overlay.clear_annotations())
+    choice_card.dismissed.connect(overlay.clear_annotations)
+    manager.sig_turn_started.connect(lambda _q: choice_card.hide())
+    # Rehearsals only (CLICKY_SCENE_LOG set): log every card, box and sentence for the robot to check.
+    import scene_log
+    scene_log.connect(manager, choice_card)
 
-    # Errors. The toast names the log file because it only has room for the
-    # message itself — issue #15 was reported with no traceback simply because
-    # nobody knew a log existed.
-    _log_hint = Path(
-        os.environ.get("LOCALAPPDATA", Path.home())
-    ) / "Clicky" / "clicky.log"
-    manager.sig_error.connect(
-        lambda e: tray.show_notification(
-            "Clicky error", f"{e}\n\nFull details: {_log_hint}"
-        )
-    )
-    manager.sig_notice.connect(lambda message: tray.show_notification('Clicky', message))
+    # While Clicky walks through the sheet step by step the cards carry everything, so the chat
+    # panel steps aside instead of covering a third of the screen, and comes back afterwards.
+    guided_state = {"panel_was_open": False, "active": False, "held": []}
+
+    def _on_guided(active: bool):
+        guided_state["active"] = active
+        if not active:
+            # Notices that arrived mid-story (e.g. "no Vietnamese voice") wait until the story ends,
+            # so a Windows toast never sits on top of the Excel range being explained.
+            held, guided_state["held"] = guided_state["held"], []
+            for message in dict.fromkeys(held):
+                tray.show_notification("Clicky", message)
+        if active:
+            if panel.isVisible():
+                guided_state["panel_was_open"] = True
+                panel.hide()
+        elif guided_state["panel_was_open"]:
+            guided_state["panel_was_open"] = False
+            panel.show()
+
+    manager.sig_guided.connect(_on_guided)
+
+    def _open_chat():
+        guided_state["panel_was_open"] = False
+        panel.show()
+        panel.raise_()
+    manager.sig_open_chat.connect(_open_chat)
+
+    # Quiet updates: download while idle, apply when Clicky exits, one line on the next start.
+    def _quiet_update():
+        try:
+            import updates
+        except Exception:
+            return
+        busy = lambda: getattr(manager, "_state", AppState.IDLE) != AppState.IDLE
+        manager._submit(updates.quiet_check(busy, manager.local_only), report_errors=False)
+
+    def _update_notice():
+        try:
+            import updates
+            line = updates.after_update_notice()
+        except Exception:
+            return
+        if line:
+            tray.show_notification("Clicky", line)
+    from PyQt6.QtCore import QTimer as _UpdateTimer
+    _UpdateTimer.singleShot(8_000, _update_notice)
+    _UpdateTimer.singleShot(180_000, _quiet_update)
+    _update_timer = _UpdateTimer(app)
+    _update_timer.timeout.connect(_quiet_update)
+    _update_timer.start(6 * 3600 * 1000)
+    # The one drop place for the first real month (after the sample, or "thả file").
+    from ui.drop_zone import DropZone
+    drop_zone = DropZone()
+    manager.sig_drop_zone.connect(drop_zone.open)
+    drop_zone.dropped.connect(manager.submit_drop)
+    choice_card.dismissed.connect(lambda: _on_guided(False))
+
+    # Errors in plain words (engine/errors_vi.py): a card with "Thử lại" and "Báo lỗi". The raw
+    # text goes to clicky.log only; "Báo lỗi" previews the masked log before anything is kept.
+    from ui.error_card import ErrorCard, ReportPreview
+    error_card, report_preview = ErrorCard(), ReportPreview()
+    last_turn = {"text": ""}
+    manager.sig_turn_started.connect(lambda q: last_turn.update(text=q) if q else None)
+    error_card.retry_requested.connect(
+        lambda _kind: manager.submit_text(last_turn["text"]) if last_turn["text"] else None)
+    error_card.report_requested.connect(
+        lambda kind: report_preview.preview(kind, getattr(getattr(manager, "_outgoing", None), "mask", None)))
+
+    def _on_error(raw: str):
+        shown = error_card.show_error(raw)
+        panel.show_error(f"{shown['title']}. {shown['hint']}")
+    manager.sig_error.connect(_on_error)
+    def _notice(message: str):
+        if guided_state["active"]:
+            guided_state["held"].append(message)
+        else:
+            tray.show_notification("Clicky", message)
+
+    manager.sig_notice.connect(_notice)
 
     # Panel → Manager
     panel.on_model_changed.connect(manager.set_model)
@@ -601,6 +726,42 @@ def main():
 
     tray.on_quit.connect(lambda: (tray.hide_icon(), manager.shutdown(), app.quit()))
 
+    # ── Trợ lý bên cạnh: follow the presenter's slide show ─────────────────────
+    from ui.present_mode import PresentMode, present_args
+    _present = [None]
+    def _start_present(spec, xlsx, deck):
+        if _present[0] is not None:
+            _present[0].stop()
+        panel.hide()                     # the chat never shows during a talk
+        mode = PresentMode(manager, spec, xlsx, deck)
+        mode.finished.connect(lambda path: path and tray.show_notification("Đã lưu biên bản buổi trình bày", path))
+        _present[0] = mode
+        try:
+            exclude_window(mode.panel, not _allow_recording())
+        except OSError:
+            pass
+        try:
+            mode.start()
+        except Exception as exc:         # noqa: BLE001 - say it plainly, never crash the app
+            import logging
+            logging.getLogger(__name__).exception("present mode failed")
+            manager.sig_error.emit(f"Không mở được phần trình bày: {exc}")
+    def _pick_present():
+        from PyQt6.QtWidgets import QFileDialog
+        spec = QFileDialog.getExistingDirectory(None, "Thư mục kịch bản (kich_ban.yaml, hoi_dap.yaml)")
+        if not spec:
+            return
+        xlsx, _ = QFileDialog.getOpenFileName(None, "File số liệu Excel", spec, "Excel (*.xlsx *.xlsm)")
+        if not xlsx:
+            return
+        deck, _ = QFileDialog.getOpenFileName(None, "File PowerPoint", spec, "PowerPoint (*.pptx)")
+        if deck:
+            _start_present(spec, xlsx, deck)
+    tray.on_present.connect(_pick_present)
+    _present_cli = present_args(sys.argv)
+    from office.bod_skill import args as bod_args
+    from office.drop import args as drop_args
+
     # ── Global hotkey ─────────────────────────────────────────────────────────
     _shortcuts = []
     _text_shortcut = [None]
@@ -633,47 +794,53 @@ def main():
     # ── Show UI + start listener ──────────────────────────────────────────────
     overlay.show()        # persistent overlay (cursor follow)
     from screen.privacy import exclude_window
-    for window in (overlay, panel):
-        try:
-            exclude_window(window)
-        except OSError as exc:
-            manager.sig_error.emit(f"Could not exclude Clicky's window from screen capture: {exc}")
-    # Panel is hidden by default — user can open it from the tray menu if needed
+
+    def _apply_capture_policy(allowed=None):
+        """Clicky hides its own windows from screen capture, unless the user turned on recording for a demo."""
+        hidden = not (_allow_recording() if allowed is None else allowed)
+        for window in (overlay, panel, choice_card, outgoing_card, caption, drop_zone, error_card, report_preview):
+            try:
+                exclude_window(window, hidden)
+            except OSError as exc:
+                manager.sig_error.emit(f"Could not change screen-capture visibility of Clicky's window: {exc}")
+    _apply_capture_policy()
+    tray.on_toggle_recording.connect(_apply_capture_policy)
     manager.start()        # begin ambient mic + wake-word scanning
     app.aboutToQuit.connect(manager.shutdown)
 
-    providers = cfg.describe()
-    _hk = "+".join(p.strip().capitalize() for p in cfg.hotkey.split("+"))
-    tray.show_notification(
-        "Clicky is running",
-        (f"Say 'Clicky' or press {_hk}  |  LLM: {providers['llm']}"
-         if cfg.ambient_mic() else
-         f"Press {_hk}, ask your question, and Clicky answers when you stop "
-         f"talking  |  LLM: {providers['llm']}"),
-    )
-
-    # ── First-run setup wizard ────────────────────────────────────────────────
-    # Show the Ollama install / model pull walkthrough on the first launch.
-    # If everything is already wired up, the helper is a no-op.
-    try:
-        from ui.setup_wizard import maybe_show_setup_wizard, SetupWizard
-
-        # Force-show via env var (handy for testing).
-        if os.environ.get("CLICKY_FORCE_SETUP", "").strip() in ("1", "true", "yes"):
-            wiz = SetupWizard()
-            wiz.show()
-            _setup_keepalive[0] = wiz
-        else:
-            wiz = maybe_show_setup_wizard()
-            if wiz is not None:
-                _setup_keepalive[0] = wiz   # keep a reference so it isn't GC'd
-    except Exception as e:
-        print(f"[setup-wizard] skipped: {e}")
+    # The chat opens on start, with an example of what to type: a first-time user who does not
+    # know the shortcut or the tray icon still sees where to begin. Setting start_hidden keeps it closed.
+    from storage import setting as _setting
+    import first_run
+    forced = os.environ.get("CLICKY_FORCE_SETUP", "").strip() in ("1", "true", "yes")
+    rehearsal = bool(os.environ.get("CLICKY_SCENE_LOG", "").strip())   # robot runs start at the chat
+    if forced or (first_run.welcome_needed() and not rehearsal):
+        # First start of this install: the 3 promises, then the sample month. Never an AI engine,
+        # provider or API key (those stay in Tray → Setup & Diagnostics for power users).
+        from ui.welcome import WelcomeCard, start_after_welcome
+        welcome = WelcomeCard()
+        welcome.started.connect(lambda: start_after_welcome(manager))
+        QTimer.singleShot(400, welcome.present)
+        _setup_keepalive[0] = welcome           # keep a reference so it isn't GC'd
+    elif drop_args(sys.argv):
+        # Clicky.exe --drop <folder>: the same path as a folder dropped on the drop zone (rehearsal robot)
+        QTimer.singleShot(800, lambda: manager.submit_drop([drop_args(sys.argv)]))
+    elif bod_args(sys.argv):
+        QTimer.singleShot(800, lambda: manager.submit_bod_review(bod_args(sys.argv)))
+    elif _present_cli:
+        QTimer.singleShot(600, lambda: _start_present(_present_cli["spec"], _present_cli["xlsx"], _present_cli["deck"]))
+    elif not _setting("start_hidden", False):
+        QTimer.singleShot(400, panel.show)       # the open chat says what to type; no toast on top of it
+    else:
+        tray.show_notification(
+            "Clicky đã sẵn sàng",
+            "Gõ vào khung Clicky, ví dụ: làm báo cáo tháng từ thư mục này",
+        )
 
     sys.exit(app.exec())
 
 
-# Module-level slots keeping references to the setup wizard [0] and the API
+# Module-level slots keeping references to the welcome card or setup wizard [0] and the API
 # keys dialog [1] alive while Qt is running (PyQt will GC them otherwise and
 # the dialog will vanish).
 _setup_keepalive: list = [None, None]

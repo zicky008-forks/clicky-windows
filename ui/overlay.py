@@ -20,8 +20,10 @@ from typing import Optional
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF
 from PyQt6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPainterPath, QCursor, QFont,
+    QPainter, QColor, QPen, QBrush, QPainterPath, QCursor, QFont, QFontMetrics,
 )
+
+from ui.card_layout import BOARD, CARD_WIDTH, NO_BUBBLE, ROLL_S, TONES, overlap, place_card, roll_amount, stem
 
 
 MODE_IDLE      = "idle"
@@ -41,6 +43,35 @@ TRI_ROTATION_DEG = -35.0
 
 # #3380FF
 CURSOR_BLUE = QColor(0x33, 0x80, 0xFF)
+HAT_BLUE = QColor(0x25, 0x63, 0xEB)       # nón lá, same blue as the panel (#2563eb)
+HAT_STRAP = QColor(0x1E, 0x40, 0xAF)
+HAT_RING = QColor(0xCF, 0xE0, 0xFF)
+# Old triangle tip sat at height/1.5 above its centre; the hat's apex stays there.
+TRI_TIP = TRI_SIZE * math.sqrt(3) / 2 / 1.5
+
+
+def _hat_paths():
+    """Nón lá seen from the side, in pointer-local coords (apex up):
+    hat body, two woven rings, chin strap. Same symbol as the app/tray icon."""
+    k = 0.75                      # 32-unit design grid -> ~20 px wide
+
+    def pt(x, y):
+        return QPointF((x - 16) * k, (y - 2.5) * k - TRI_TIP)
+
+    body = QPainterPath()
+    body.moveTo(pt(16, 2.5))
+    body.lineTo(pt(29, 23.5))
+    body.quadTo(pt(16, 28.5), pt(3, 23.5))
+    body.closeSubpath()
+    rings = QPainterPath()
+    rings.moveTo(pt(12.2, 10))
+    rings.quadTo(pt(16, 11.4), pt(19.8, 10))
+    rings.moveTo(pt(8.6, 16.2))
+    rings.quadTo(pt(16, 18.6), pt(23.4, 16.2))
+    strap = QPainterPath()
+    strap.moveTo(pt(9, 26))
+    strap.quadTo(pt(16, 31), pt(23, 26))
+    return body, rings, strap
 
 # Teaching-annotation palette. The LLM picks colors by name; default is the
 # Clicky blue. Chosen for contrast on both light and dark content.
@@ -206,6 +237,7 @@ class CursorOverlay(QWidget):
 
         # Optional highlight ring around detected element (x, y, radius)
         self._ring: Optional[tuple] = None
+        self._quiet = False
         self._ring_phase: float = 0.0
 
         # Teaching annotations — list of shape dicts the overlay paints each
@@ -265,11 +297,13 @@ class CursorOverlay(QWidget):
         # Buddy's tip should sit on the target pixel. The triangle is drawn
         # centred on _display_pos, so we just plant _display_pos there.
         self._locked_pos = QPointF(x, y)
-        self._bubble_text = label or random.choice(POINTER_PHRASES)
+        self._bubble_text = "" if label == NO_BUBBLE else (label or random.choice(POINTER_PHRASES))
         self._bubble_scale = 0.5
         self._bubble_alpha = 0.0
-        # Halo ring around the actual target pixel
-        self._ring = (x, y, 26.0)
+        # Halo ring around the actual target pixel, unless a framed range and its card already mark the spot:
+        # then the ring and glow would only cover the neighbouring figures.
+        self._quiet = label == NO_BUBBLE
+        self._ring = None if self._quiet else (x, y, 26.0)
         self._ring_phase = 0.0
         self._lock_timer.stop()   # dwell controlled by phase machine, not timer
         self._begin_flight(self._display_pos, self._locked_pos, _PHASE_FLYING)
@@ -314,12 +348,19 @@ class CursorOverlay(QWidget):
         start = max(now, self._draw_queue_end)
         shape = dict(shape)
         # Draw at hand speed — long strokes take visibly longer
-        dur = _shape_length(shape) / STROKE_SPEED_PX_S
-        dur = max(SHAPE_DRAW_MIN_S, min(SHAPE_DRAW_MAX_S, dur))
+        if shape.get("kind") in ("leaders", "notes", "bridge"):
+            dur = 0.35            # pieces arrive one by one inside the shape (graphics_paint.STEP_S)
+        elif shape.get("kind") in ("spotlight", "card"):
+            dur = 0.35            # these fade in rather than being drawn stroke by stroke
+        else:
+            dur = _shape_length(shape) / STROKE_SPEED_PX_S
+            dur = max(SHAPE_DRAW_MIN_S, min(SHAPE_DRAW_MAX_S, dur))
         shape["start"] = start
         shape["dur"] = dur
         shape.setdefault("color", "blue")
         shape.setdefault("ttl", None)
+        if shape.get("kind") in ("card", "leaders", "notes", "bridge") and (shape.get("avoid") or shape.get("soft")):
+            BOARD.show_sheet(shape.get("avoid"), shape.get("soft"))     # the button card keeps off them too
         self._draw_queue_end = start + dur + SHAPE_GAP_SECONDS
         self._annotations.append(shape)
 
@@ -338,6 +379,8 @@ class CursorOverlay(QWidget):
                         "size": "s", "ttl": ttl})
 
     def clear_annotations(self):
+        BOARD.release("card")
+        BOARD.show_sheet([], [])
         self._annotations = []
         self._draw_queue_end = 0.0
         self._last_tip = None
@@ -587,6 +630,13 @@ class CursorOverlay(QWidget):
                     self._paint_angle(p, ann, u, col)
                 elif kind == "text":
                     self._paint_text(p, ann, u, col, alpha)
+                elif kind == "spotlight":
+                    self._paint_spotlight(p, ann, u * alpha)
+                elif kind == "card":
+                    self._paint_card(p, ann, u * alpha)
+                elif kind in ("leaders", "notes", "bridge"):
+                    from ui import graphics_paint
+                    getattr(graphics_paint, f"paint_{kind}")(self, p, ann, u * alpha)
             except Exception:
                 continue   # a malformed shape must never break the paint loop
         self._annotations = keep
@@ -674,6 +724,128 @@ class CursorOverlay(QWidget):
         y += (1.0 - u) * 6
         self._outlined_text(p, x, y, ann["text"], col, fade)
 
+    def _paint_spotlight(self, p, ann, u):
+        """Dim everything except one range, and frame that range in the tone colour."""
+        accent = QColor(TONES.get(ann.get("tone"), TONES["info"])[0])
+        pad = 5
+        hole = QRectF(ann["x1"] - pad - self.x(), ann["y1"] - pad - self.y(),
+                      ann["x2"] - ann["x1"] + 2 * pad, ann["y2"] - ann["y1"] + 2 * pad)
+        shade = QPainterPath()
+        shade.addRect(QRectF(self.rect()))
+        cut = QPainterPath()
+        cut.addRoundedRect(hole, 6, 6)
+        p.fillPath(shade.subtracted(cut), QColor(15, 23, 42, int(105 * u)))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        glow = QColor(accent)
+        glow.setAlpha(int(70 * u))
+        p.setPen(QPen(glow, 9))
+        p.drawRoundedRect(hole, 6, 6)
+        accent.setAlpha(int(255 * u))
+        p.setPen(QPen(accent, 3))
+        p.drawRoundedRect(hole, 6, 6)
+
+    def _card_screen(self, anchor):
+        """Available area of the monitor holding the anchor, in logical screen coords."""
+        from PyQt6.QtCore import QPoint
+        cx, cy = int((anchor[0] + anchor[2]) / 2), int((anchor[1] + anchor[3]) / 2)
+        screen = QApplication.screenAt(QPoint(cx, cy)) or QApplication.primaryScreen()
+        g = screen.availableGeometry() if screen else self.geometry()
+        return g.left(), g.top(), g.right(), g.bottom()
+
+    def _paint_card(self, p, ann, u):
+        """A clean explanation card beside the lit range: title, one big figure, one line of context."""
+        accent_hex, soft_hex = TONES.get(ann.get("tone"), TONES["info"])
+        pad, bar = 18, 5
+        inner = CARD_WIDTH - 2 * pad - bar
+        title_f = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
+        was_f = QFont("Segoe UI", 12)
+        was_f.setStrikeOut(True)
+        value_f = QFont("Segoe UI", 24, QFont.Weight.Bold)
+        note_f = QFont("Segoe UI", 11)
+        flags = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop) | int(Qt.TextFlag.TextWordWrap)
+        layout = ann.get("_layout")
+        if layout is None:
+            parts, h = [], pad
+            for key, font in (("title", title_f), ("was", was_f), ("value", value_f), ("note", note_f)):
+                text = ann.get(key) or ""
+                if not text:
+                    continue
+                if parts:
+                    h += 6
+                rect = QFontMetrics(font).boundingRect(0, 0, inner, 2000, flags, text)
+                parts.append((key, font, text, h, rect.height()))
+                h += rect.height()
+            h += pad
+            anchor = ann["anchor"]
+            screen = self._card_screen(anchor)
+            name = f"card{id(ann)}"
+            # Other cards already up (the button card, an earlier note) count as figures: never stacked.
+            x, y = place_card(anchor, (CARD_WIDTH, h), screen, (ann.get("avoid") or []) + BOARD.others(name),
+                              ann.get("soft"))
+            BOARD.take(name, (x, y, x + CARD_WIDTH, y + h))
+            layout = ann["_layout"] = (x, y, h, parts)
+            # Rehearsals: where the card really landed and what it lies over, so the robot can check that it
+            # covers no figure (covers_figures 0) without guessing from a screenshot.
+            import scene_log
+            rect = [x, y, x + CARD_WIDTH, y + h]
+            figures = ann.get("avoid") or []
+            scene_log.record("card", rect=rect, anchor=list(anchor), title=ann.get("title") or "",
+                             screen=list(screen), figures=len(figures),
+                             covers_figures=sum(1 for f in figures if overlap(rect, [f]) > 0),
+                             covers_words=sum(1 for f in ann.get("soft") or [] if overlap(rect, [f]) > 0),
+                             covers_range=overlap(rect, [anchor]) > 0)
+        x, y, h, parts = layout
+        line = () if ann.get("free") else stem(ann["anchor"], (x, y, x + CARD_WIDTH, y + h))   # free: no cell to tie to
+        x, y = x - self.x(), y - self.y() + (1.0 - u) * 8
+        card = QRectF(x, y, CARD_WIDTH, h)
+        if line:
+            # Tie the card to the cells it explains, so it reads as part of the sheet, not pasted on.
+            tie = QColor(accent_hex)
+            tie.setAlpha(int(200 * u))
+            p.setPen(QPen(tie, 2))
+            x1, y1, x2, y2 = (line[0] - self.x(), line[1] - self.y(), line[2] - self.x(), line[3] - self.y())
+            p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(tie)
+            p.drawEllipse(QPointF(x2, y2), 3.5, 3.5)
+        p.setPen(Qt.PenStyle.NoPen)
+        for spread, a in ((12, 16), (7, 24), (3, 34)):
+            p.setBrush(QColor(15, 23, 42, int(a * u)))
+            p.drawRoundedRect(card.adjusted(-spread / 2, -spread / 4, spread / 2, spread), 14 + spread / 2, 14 + spread / 2)
+        p.setBrush(QColor(255, 255, 255, int(252 * u)))
+        border = QColor(226, 232, 240, int(255 * u))
+        p.setPen(QPen(border, 1))
+        p.drawRoundedRect(card, 14, 14)
+        accent = QColor(accent_hex)
+        accent.setAlpha(int(255 * u))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(accent)
+        p.drawRoundedRect(QRectF(x + 8, y + 14, bar, h - 28), 2.5, 2.5)
+        colours = {"title": QColor(91, 101, 117), "was": QColor(148, 163, 184), "value": QColor(accent_hex),
+                   "note": QColor(31, 41, 55)}
+        roll = ann.get("roll")
+        for key, font, text, top, height in parts:
+            if key == "value" and roll:
+                # The figure counts from where it was to where it is: the change is seen, not swapped in.
+                elapsed = time.monotonic() - ann["start"]
+                if elapsed < ROLL_S:
+                    from decimal import Decimal
+                    from engine.monthly_report import spoken
+                    n = roll_amount(int(roll[0]), int(roll[1]), elapsed)
+                    text = ("−" if n < 0 else "") + spoken(Decimal(abs(n)))
+                    # Neutral while moving: the tone colour belongs to the result, not to the figures on the way.
+                    c = QColor(100, 116, 139)
+                    c.setAlpha(int(255 * u))
+                    p.setFont(font)
+                    p.setPen(QPen(c, 1))
+                    p.drawText(QRectF(x + pad + bar, y + top, inner, height + 2), flags, text)
+                    continue
+            c = colours[key]
+            c.setAlpha(int(255 * u))
+            p.setFont(font)
+            p.setPen(QPen(c, 1))
+            p.drawText(QRectF(x + pad + bar, y + top, inner, height + 2), flags, text)
+
     def _outlined_text(self, p, x, y, text, col, alpha):
         """Text with a dark outline so it reads on any background."""
         shadow = QColor(0, 0, 0)
@@ -717,23 +889,21 @@ class CursorOverlay(QWidget):
             p.drawEllipse(QPointF(cx, cy), radius * r_mul, radius * r_mul)
 
     def _draw_triangle(self, p, cx, cy):
-        """Flat blue equilateral triangle, rotated -35° → cursor-like tilt."""
-        size = TRI_SIZE
-        height = size * math.sqrt(3) / 2
+        """The buddy pointer: a blue nón lá (Vietnamese conical hat) seen from the side, rotated -35°.
 
-        # Build triangle in local coords, then rotate/translate
-        path = QPainterPath()
-        path.moveTo(0, -height / 1.5)              # top vertex
-        path.lineTo(-size / 2, height / 3)         # bottom-left
-        path.lineTo( size / 2, height / 3)         # bottom-right
-        path.closeSubpath()
+        From the side the hat is a triangle, so it keeps Clicky's pointing tip; the apex sits
+        exactly where the old triangle tip was (0, -TRI_TIP), so pointing stays aligned.
+        """
+        size = TRI_SIZE
+        body, rings, strap = _hat_paths()
 
         p.save()
         p.translate(cx, cy)
 
-        # Glow — drawn unrotated so it's a round halo
+        # Glow — drawn unrotated so it's a round halo (none while resting beside a framed range)
         glow = QColor(CURSOR_BLUE)
-        for i, (r_mul, alpha) in enumerate(((2.2, 35), (1.6, 55), (1.15, 85))):
+        halo = () if getattr(self, "_quiet", False) and self._locked_pos is not None else ((2.2, 35), (1.6, 55), (1.15, 85))
+        for i, (r_mul, alpha) in enumerate(halo):
             glow.setAlpha(alpha)
             p.setBrush(QBrush(glow))
             p.setPen(Qt.PenStyle.NoPen)
@@ -741,9 +911,15 @@ class CursorOverlay(QWidget):
 
         p.rotate(self._rotation_deg)
         p.scale(self._flight_scale, self._flight_scale)
-        p.setBrush(QBrush(CURSOR_BLUE))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawPath(path)
+        # Thin white rim keeps the hat readable on dark sheets and on blue selections.
+        p.setPen(QPen(QColor(255, 255, 255, 235), 1.1))
+        p.setBrush(QBrush(HAT_BLUE))
+        p.drawPath(body)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(HAT_RING, 1.0))
+        p.drawPath(rings)
+        p.setPen(QPen(HAT_STRAP, 1.1))
+        p.drawPath(strap)
 
         p.restore()
 
