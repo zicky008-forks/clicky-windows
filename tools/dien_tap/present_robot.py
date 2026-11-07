@@ -201,10 +201,19 @@ def wait_event(log: Path, kind: str, timeout: float, where=lambda e: True) -> di
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         for e in read_events(log):
-            if e.get("event") == kind and where(e):
+            if (not kind or e.get("event") == kind) and where(e):
                 return e
         time.sleep(0.25)
     return None
+
+
+def show_outcome(log: Path, timeout: float = 20.0) -> str:
+    """'attached' / 'failed' from Clicky's own events (builds with BHC 6320d44: it retries for up to 12 s),
+    or 'unknown' on an older build that logs neither, which then falls back to waiting for the window."""
+    e = wait_event(log, "", timeout, where=lambda e: e.get("event") in ("present_attached", "present_failed"))
+    if e is None:
+        return "unknown"
+    return "failed" if e.get("event") == "present_failed" else "attached"
 
 
 def show_window(wait: float = 20.0, app=None):
@@ -320,6 +329,8 @@ def main(argv=None) -> int:
             say("Kiểm tra trước chưa đạt hoặc Clicky không trả lời; robot dừng đúng chỗ.")
         elif wait_event(log, "present_start", 60) is None:
             say("Clicky không bắt đầu trình chiếu sau 60 giây.")
+        elif show_outcome(log) == "failed":
+            say("Clicky báo không mở được trình chiếu (present_failed); robot dừng đúng chỗ.")
         else:
             win = show_window()
             hwnd = int(win.HWND)
