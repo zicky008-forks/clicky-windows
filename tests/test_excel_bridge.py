@@ -306,3 +306,39 @@ def test_the_original_is_copied_from_disk_when_excel_has_nothing_unsaved(tmp_pat
     wb.Saved = False                                  # unsaved changes: only Excel has the workbook as it is now
     other = tmp_path / "again.xlsx"
     assert ExcelBridge(app=app).save_copy(str(other)) and asked == [str(other)] and not other.exists()
+
+
+def test_source_files_opened_to_point_are_closed_unsaved_and_logged_by_id(monkeypatch, tmp_path):
+    # Grader 07/11: each source file Clicky opened read-only to light a cell is closed without saving, and
+    # close_book carries the same id as show_book (Excel may report a OneDrive URL as FullName), never a name.
+    import json
+    from engine.log_safe import book_id
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    source, pack = "C:\\case\\KeHoach_AOPR1.xlsx", "C:\\case\\BOD_T10.xlsx"
+
+    class Book:
+        def __init__(self, full): self.FullName, self.closed = full, []
+        def Activate(self): pass
+        def Close(self, SaveChanges): self.closed.append(SaveChanges); books.remove(self)
+
+    books = [Book(pack)]
+
+    class Books:
+        @property
+        def Count(self): return len(books)
+        def __call__(self, i): return books[i - 1]
+        def Open(self, path, UpdateLinks, ReadOnly, AddToMru):
+            assert ReadOnly is True and AddToMru is False
+            books.append(Book("https://tenant-my.sharepoint.com/personal/chi/Documents/KeHoach_AOPR1.xlsx"))
+            return books[-1]
+
+    app = type("App", (), {"DisplayAlerts": True, "Workbooks": Books()})()
+    bridge = ExcelBridge(app=app)
+    assert bridge.show_workbook(source) is True
+    opened = books[-1]
+    assert bridge.close_opened(pack) == 1 and opened.closed == [False]
+    text = log.read_text(encoding="utf-8")
+    closes = [e for e in map(json.loads, text.splitlines()) if e["event"] == "close_book"]
+    assert closes == [{**closes[0], "book": book_id(source), "saved": False, "pack": False}]
+    assert "KeHoach" not in text and "sharepoint" not in text and "BOD_T10" not in text

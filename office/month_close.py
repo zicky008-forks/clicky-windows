@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 from engine import audit, intake as intake_mod, m_code, sources, visuals
-from engine.log_safe import scrub          # clicky.log never holds a customer's file or folder name
+from engine.log_safe import book_id, scrub  # clicky.log never holds a customer's file or folder name
 from engine.monthly_report import spoken
 from engine.trial_balance import ZERO
 from office.power_query import LoadTimeout, ReadFailed
@@ -76,6 +76,7 @@ class Beat:
     intake: Optional[dict] = None   # the receipt card ({"card": ..., "log": ...}) shown with this beat's buttons
     graphic: Optional[dict] = None  # leader tags, sticky notes or a profit bridge (engine.visuals), drawn beside the range
     book: str = ""                  # the workbook the ref is in, brought to the front first (read-only when Clicky opens it)
+    pack: bool = False              # that workbook is the BOD pack itself, not a source file
 
 
 def stage() -> Optional[str]:
@@ -1546,7 +1547,8 @@ async def play(manager, beats: list, keep_card: bool = True) -> None:
                 await asyncio.sleep(BEAT_GAP_S)
         if beat.book and beat.ref:
             shown = await asyncio.to_thread(getattr(manager._excel, "show_workbook", lambda p: False), beat.book)
-            scene_log.record("show_book", i=i, ref=beat.ref, ok=bool(shown))
+            # book: an id, never the name (on a real run it is the customer's file); pack: the BOD pack itself
+            scene_log.record("show_book", i=i, ref=beat.ref, ok=bool(shown), book=book_id(beat.book), pack=beat.pack)
         box = await _locate(manager, beat.ref) if beat.ref else None
         if box:
             manager.sig_point_hold.emit(True)

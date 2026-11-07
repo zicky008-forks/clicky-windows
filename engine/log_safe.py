@@ -8,6 +8,8 @@ step name), so a broken query can still be diagnosed; only names on disk become 
 """
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 
 _EXT = r"(?:xlsx|xlsm|xlsb|xls|csv|txt|tsv|json|xml|pbix|pbip|pptx|docx|pdf|zip|eml|png|jpe?g)"
@@ -54,3 +56,10 @@ def scrub(text) -> str:
     out = _PATH.sub(lambda m: m.group(0) if "…" in m.group(0) else shape(m.group(0)), out)
     out = _FILE.sub(lambda m: shape(m.group(0)), out)
     return out
+
+
+def book_id(path: str) -> str:
+    """A short id for a file, so a log can tell files apart without naming them: the first 8 hex digits of
+    the sha1 of the full path (case-folded the way Windows compares paths). Same file, same id."""
+    full = os.path.normcase(os.path.abspath(str(path))) if str(path) else ""
+    return hashlib.sha1(full.encode("utf-8")).hexdigest()[:8]

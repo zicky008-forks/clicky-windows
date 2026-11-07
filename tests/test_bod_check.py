@@ -146,6 +146,9 @@ def test_one_beat_per_finding_pointing_at_its_cell(planted):
     assert "9 chỗ" in beats[0].text and "không sửa gì" in beats[-1].text
     fx = next(b for b in beats if b.ref == "'Ty gia'!F7")
     assert fx.value == "759.000 đ" and fx.was == "908.500 đ" and fx.mark == "bad"
+    # the robot skips the pack when it checks that source files were closed: each beat says which it is
+    pack = reviews[0].pack
+    assert all(b.pack == (Path(b.book).name == pack) for b in beats if b.ref)
 
 
 def test_run_writes_results_and_plays(tmp_path):

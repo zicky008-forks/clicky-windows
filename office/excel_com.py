@@ -11,6 +11,7 @@ import sys
 from decimal import Decimal
 from typing import Optional
 
+from engine.log_safe import book_id
 from office.cellref import CellRef, col_letters, parse_ref
 
 try:                                # the rehearsal robot checks that nothing is written before the user confirms
@@ -353,7 +354,9 @@ class ExcelBridge:
             finally:
                 app.DisplayAlerts = alerts
             wb.Activate()
-            self.__dict__.setdefault("_opened", []).append(str(wb.FullName))
+            # Excel's FullName can differ from the path asked for (a OneDrive URL), so both are kept:
+            # the name to find the workbook again, the path for its id in the scene log.
+            self.__dict__.setdefault("_opened", []).append((str(wb.FullName), path))
             return True
         except Exception as exc:
             log.warning("Showing %s in Excel failed: %s", _shape(path), _why(exc))
@@ -365,13 +368,17 @@ class ExcelBridge:
         opened, self._opened = list(getattr(self, "_opened", [])), []
         if app is None:
             return 0
-        for name in opened:
+        for name, asked in opened:
             try:
                 for i in range(app.Workbooks.Count, 0, -1):
                     wb = app.Workbooks(i)
                     if _same_path(str(wb.FullName or ""), name):
                         wb.Close(SaveChanges=False)
                         closed += 1
+                        if scene_log is not None:
+                            # book: the same id show_book logged; never the name (it is the customer's file)
+                            scene_log.record("close_book", book=book_id(asked), saved=False,
+                                             pack=bool(back_to) and _same_path(asked, back_to))
             except Exception as exc:
                 log.warning("Closing a source file failed: %s", _why(exc))
         if back_to:

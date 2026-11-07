@@ -76,3 +76,11 @@ def test_a_onedrive_or_sharepoint_url_keeps_only_its_scheme_and_shape():
 
 def test_a_name_with_no_extension_is_shaped_too():
     assert scrub("C:\\Users\\chi\\Documents\\65302810 locked") == "C:\\…\\<8 ký tự> locked"
+
+
+def test_book_id_names_a_file_without_its_name():
+    from engine.log_safe import book_id
+    a = book_id("C:/case/KeHoach_AOPR1.xlsx")
+    assert len(a) == 8 and all(c in "0123456789abcdef" for c in a)
+    assert a == book_id("C:/case/KeHoach_AOPR1.xlsx") and a != book_id("C:/case/BOD_T10.xlsx")
+    assert "KeHoach" not in a

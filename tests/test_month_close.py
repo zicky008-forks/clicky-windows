@@ -1118,6 +1118,29 @@ def test_a_cell_in_another_file_is_lit_in_that_file_and_no_card_outlives_its_mis
     assert "sig_clear_drawings" in [n for n, _ in per[3]]                        # the closing line keeps no card
 
 
+def test_show_book_logs_a_file_id_and_whether_it_is_the_pack_never_the_name(monkeypatch, tmp_path):
+    """The BOD robot checks every source file Clicky opened is closed again unsaved (grader, 07/11). It needs
+    to tell the files apart and skip the pack, without the scene log ever holding a customer's file name."""
+    import asyncio
+    import json
+    from engine.log_safe import book_id
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    monkeypatch.setattr(month_close, "BEAT_GAP_S", 0)
+    m = _PlayManager(_PlayExcel())
+    beats = [month_close.Beat("Tổng lệch sổ.", "'Tong hop'!B13", "Tổng chi phí lệch sổ", "bad", "10 đ",
+                              book="C:/case/pack.xlsx", pack=True),
+             month_close.Beat("Tháng 7 còn số AOP.", "Data!I174", "File AOPR", "bad", "5 đ",
+                              book="C:/case/KeHoach_AOPR1.xlsx")]
+    asyncio.run(month_close.play(m, beats, keep_card=False))
+    text = log.read_text(encoding="utf-8")
+    shown = [e for e in map(json.loads, text.splitlines()) if e["event"] == "show_book"]
+    assert [(e["book"], e["pack"]) for e in shown] == [(book_id("C:/case/pack.xlsx"), True),
+                                                      (book_id("C:/case/KeHoach_AOPR1.xlsx"), False)]
+    assert all(len(e["book"]) == 8 for e in shown) and shown[0]["book"] != shown[1]["book"]
+    assert "KeHoach" not in text and "pack.xlsx" not in text
+
+
 def test_a_cell_that_cannot_be_shown_gets_its_own_card_without_a_pointer(monkeypatch, tmp_path):
     import asyncio
     import json

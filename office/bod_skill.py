@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 import scene_log
+from engine.log_safe import book_id, scrub
 from office import month_close as mc
 from office.month_close import Beat
 
@@ -77,7 +78,7 @@ def beats_for(reviews: list, out: Optional[dict]) -> list:
                               was=_figure(f.actual, f.code) if f.actual is not None and f.expected is not None else "",
                               # a cell in a source file: the card says which file, sheet and cell
                               note=f"Nhóm {f.group} · file {book}, ô {f.where}" if other else f"Nhóm {f.group}",
-                              book=str(Path(r.folder) / book) if r.folder else book))
+                              book=str(Path(r.folder) / book) if r.folder else book, pack=not other))
         if r.notes:
             beats.append(Beat(f"Sổ chi tiết còn {len(r.notes)} điểm cần hỏi kế toán, không phải lỗi của bộ BOD. "
                               "Em ghi trong file kết quả.", mark="warn"))
@@ -109,7 +110,7 @@ def _open_pack(bridge, path: Path) -> None:
             return
         bridge.open_workbook(str(path))
     except Exception as exc:                 # noqa: BLE001 - the results are written anyway
-        log.warning("cannot open %s in Excel: %s", path, exc)
+        log.warning("cannot open the pack in Excel: %s", scrub(exc))   # never the customer's file name
 
 
 async def run(manager, folder: Optional[Path] = None) -> None:
@@ -120,7 +121,7 @@ async def run(manager, folder: Optional[Path] = None) -> None:
         await mc.play(manager, [Beat("Chị mở một file trong thư mục có bộ BOD, hoặc thả thư mục đó vào ô thả file, "
                                      "rồi gõ lại: soát bộ BOD.")])
         return
-    scene_log.record("bod_start", folder=str(folder))
+    scene_log.record("bod_start", folder=book_id(folder))   # an id, never the folder name
     try:
         reviews = await asyncio.to_thread(bod_check.review, folder)
         out = await asyncio.to_thread(bod_check.write_outputs, reviews, folder / OUT_DIR) if reviews else None
