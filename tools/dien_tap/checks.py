@@ -170,6 +170,21 @@ def receipt_reached_check(events: list, data_files, allowed: bool = False) -> Ch
                  + (f". Câu cuối: \u201c{last[:160]}\u201d" if last else ""))
 
 
+def saved_check(events: list, save_label: str = "Lưu và kiểm tra") -> Check:
+    """Any case run to the end: when Clicky offers to save, the saved file is reopened and matches.
+    Not offered (Clicky stopped earlier, e.g. no file it could read) is reported, not failed."""
+    name = "Clicky lưu, mở lại file và đối chiếu khớp"
+    asked = any(save_label in (e.get("labels") or []) for e in events if e.get("event") == "choices")
+    if not asked:
+        return Check(name, True, "Clicky không đề nghị lưu ở lượt này", blocking=False)
+    v = [e for e in events if e.get("event") == "verify"]
+    if not v:
+        return Check(name, False, "đã bấm lưu nhưng không thấy bước mở lại file")
+    diffs = v[-1].get("diffs") or []
+    return Check(name, bool(v[-1].get("ok")), "mở lại khớp" if v[-1].get("ok") else
+                 f"mở lại lệch {len(diffs)} ô" if diffs else "mở lại không khớp")
+
+
 def evaluate(events: list, sheets: dict, expected: dict) -> Result:
     res = Result()
     add = res.checks.append

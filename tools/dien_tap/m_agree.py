@@ -56,6 +56,7 @@ def formats() -> list:
             ("CSV tiếng Anh có dòng tiêu đề", "Shopee_T10.csv", ox.write_english_csv),
             ("Ô ngày có giờ (.xlsx lưu tên .xls)", "NgayGio_T10.xls", ox.write_datetime_xlsx),
             ("CSV ngày có giờ dạng chữ", "NgayGio_T10.csv", ox.write_datetime_csv),
+            ("Ngày là số seri (ô General, .xlsx lưu tên .xls)", "SoSeri_T10.xls", ox.write_serial_xlsx),
             ("Cột lạ chị đã chỉ (nhớ cột)", "POS_T10.csv", ox.write_pos_csv)]
 
 
@@ -158,7 +159,9 @@ def write_ole2_with_excel(app, path: Path) -> Path:
             for c, v in enumerate((doc, None, kh, item, qty, float(amt), float(cost)), 1):
                 if v is not None:
                     ws.Cells(r, c).Value = v
-            ws.Cells(r, 2).Value = datetime(d.year, d.month, d.day)
+            # The serial day, not a datetime: pywin32 converts a datetime through the PC's time zone, and on
+            # 07/11 three dates before the end of daylight saving came out a day early (m_agree c73ec01).
+            ws.Cells(r, 2).Value = float((d - date(1899, 12, 30)).days)
             ws.Cells(r, 2).NumberFormat = "dd/mm/yyyy"
             r += 1
         ws.Cells(r, 1).Value = "Tổng cộng"

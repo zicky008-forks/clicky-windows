@@ -118,3 +118,27 @@ def test_a_failed_load_logs_excel_s_reason_without_paths(tmp_path, monkeypatch):
     err = next(e for e in ev if e.get("state") == "error")
     assert "field 'Kind' of the record wasn't found" in err["detail"]
     assert "ke.toan" not in err["detail"] and "SoChiTiet_T10" not in err["detail"]
+
+
+def test_a_date_cell_power_query_gives_as_a_number_is_read_as_its_day(tmp_path):
+    """Robot 07/11, m_agree c73ec01: date cells with a time ("dd/mm/yyyy hh:mm:ss") came out of Excel.Workbook as
+    numbers, so the query found no dates and loaded 0 rows. A workbook cell that is a bare serial day is read as
+    that day, time dropped, by the receipt and by the query alike."""
+    import order_exports as ox
+    from engine import m_code, sources
+    ox.write_serial_xlsx(tmp_path / "SoSeri_T10.xls")
+    f = sources.load_order_file(tmp_path / "SoSeri_T10.xls")
+    assert [sources.parse_date(r[f.columns["date"]], f.date_order) for r in f.rows] == [o[1] for o in ox.ORDERS]
+    assert len(f.footers) == 1                                   # "Tổng cộng" still a footer
+    m = m_code.order_files_query("ThuMuc", {"x.xls": {"order": "vi-VN", "encoding": 65001}}, ["amount", "date", "doc"],
+                                 None)
+    assert ("else if v is number then (if v >= 20000 and v < 80000 then "
+            "Date.AddDays(#date(1899, 12, 30), Number.RoundDown(v)) else null)") in m
+    assert sources.SERIAL_DAYS == (20000, 80000)
+
+
+def test_a_number_in_a_csv_date_column_is_not_a_serial_day(tmp_path):
+    from engine import sources
+    (tmp_path / "x.csv").write_text("SoCT,Ngay,ThanhTien\nA1,46298,100\nA2,03/10/2026,200\n", encoding="utf-8")
+    f = sources.load_order_file(tmp_path / "x.csv")
+    assert f.rows[0][1] == "46298" and sources.parse_date(f.rows[0][1], f.date_order) is None  # only workbooks

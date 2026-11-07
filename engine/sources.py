@@ -14,7 +14,7 @@ they must match the ledger (Có 511, Nợ 632). Amounts are Decimal.
 import csv
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Optional
@@ -319,6 +319,22 @@ def _any_date(value) -> bool:
     return parse_date(value, DAY_FIRST) is not None or parse_date(value, MONTH_FIRST) is not None
 
 
+# A workbook date cell that comes back as a plain number: Excel's serial day (1900 system), time of day dropped.
+# Power Query gives such a cell as a number when the cell's format is General or one it does not take for a date
+# (robot 07/11, m_agree: "dd/mm/yyyy hh:mm:ss" read as 0 rows); m_code's DocNgay reads it the same way.
+SERIAL_DAYS = (20000, 80000)                 # 1954-10-03 .. 2119-01-10: a day number, not an amount or a code
+_SERIAL = re.compile(r"^\d{5}(\.\d+)?$")
+
+
+def _serial_to_date(row: list, d: int) -> list:
+    v = str(row[d]).strip() if d < len(row) and row[d] is not None else ""
+    if not _SERIAL.match(v) or not SERIAL_DAYS[0] <= float(v) < SERIAL_DAYS[1]:
+        return row
+    out = list(row)
+    out[d] = (date(1899, 12, 30) + timedelta(days=int(float(v)))).isoformat()
+    return out
+
+
 def load_order_file(path: Path) -> Optional[OrderFile]:
     """An order export: a table whose header has at least a date and an amount column.
 
@@ -352,6 +368,8 @@ def load_order_file(path: Path) -> Optional[OrderFile]:
         return None
     header, body, preamble = rows[at], rows[at + 1:], rows[:at]
     cols, told = columns_of(header)
+    if kind in ("xls", "xlsx"):
+        body = [_serial_to_date(r, cols["date"]) for r in body]
     data, footers = [], []
     for r in body:
         # A row without a date is not an order (exports often end with a "Tổng cộng" line whose

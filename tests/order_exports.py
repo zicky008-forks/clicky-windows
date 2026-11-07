@@ -9,6 +9,7 @@ report name, period, unit) and, below it, a "Tổng cộng" line and a signature
 * write_english_csv  a sales-platform CSV: Order ID, Created at, SKU, Quantity, Line total, COGS, Status;
 * write_datetime_xlsx  an .xlsx saved as .xls, date cells carrying a time (serial with a fraction);
 * write_datetime_csv   a Vietnamese CSV whose dates carry a time as text: 03/10/2026 14:35:20;
+* write_serial_xlsx    an .xlsx saved as .xls whose dates are bare serial day numbers (General format);
 * write_pos_csv        a POS export whose column names Clicky does not know (POS_HEADER): chị names them once
                        (POS_REMEMBERED), and every later month is read with the columns she named.
 """
@@ -141,6 +142,20 @@ def write_english_csv(path: Path, header=None) -> Path:
                    "Quantity": qty, "Line total": f"{amt:.2f}", "COGS": f"{cost:.2f}", "Status": status}
             w.writerow([row.get(h, "") for h in header])
         w.writerow(["Total", "", "", "", "", f"{SALES_EN:.2f}", "", ""][:len(header)])
+    return path
+
+
+def write_serial_xlsx(path: Path) -> Path:
+    """Like write_datetime_xlsx, but each date is the bare serial day plus a time fraction in a General cell."""
+    from openpyxl import Workbook
+    book = Workbook()
+    ws = book.active
+    ws.append(VI_HEADER)
+    for (doc, d, kh, item, qty, amt, cost, _), (h, m, sec) in zip(ORDERS, TIMES):
+        ws.append([doc, (d - date(1899, 12, 30)).days + (h * 3600 + m * 60 + sec) / 86400, kh, item, qty, float(amt),
+                   float(cost)])
+    ws.append(["Tổng cộng", None, None, None, None, float(TOTAL)])
+    book.save(str(path))
     return path
 
 

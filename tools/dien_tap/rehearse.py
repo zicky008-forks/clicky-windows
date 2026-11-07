@@ -100,6 +100,24 @@ def _auto_press(events) -> None:
                     driver.press(hit)
 
 
+TURN_USAGE = []         # Excel's memory and handles when each turn starts (process counters only, no COM call)
+
+
+def _sample_turns(events) -> None:
+    turns = [e for e in events if e.get("event") == "turn"]
+    for e in turns[len(TURN_USAGE):]:
+        ws = handles = None
+        for pid in sorted(drivers.pids_of("EXCEL.EXE")):
+            try:
+                w, h = _process_usage(pid)
+            except Exception:                          # noqa: BLE001 - not on Windows
+                w, h = None, None
+            ws = (ws or 0) + w if w is not None else ws
+            handles = (handles or 0) + h if h is not None else handles
+        TURN_USAGE.append({"turn": len(TURN_USAGE) + 1, "text": (e.get("text") or "")[:40], "ws_mb": ws,
+                           "handles": handles})
+
+
 def wait_log(log: Path, done, timeout: float, quiet: float = 0.0) -> list:
     """Poll the scene log until done(events) holds (then `quiet` seconds with no new event), or time runs out.
     Buttons registered in AUTO_PRESS are pressed as they appear."""
@@ -108,6 +126,7 @@ def wait_log(log: Path, done, timeout: float, quiet: float = 0.0) -> list:
     while time.monotonic() < end:
         events = checks.read_log(log)
         _auto_press(events)
+        _sample_turns(events)
         if done(events):
             if not quiet:
                 return events
@@ -119,6 +138,27 @@ def wait_log(log: Path, done, timeout: float, quiet: float = 0.0) -> list:
             continue
         time.sleep(1.0)
     return events
+
+
+def pressable_labels() -> set:
+    """Every fixed label the robot presses by itself (AUTO_PRESS sets; the column and source choosers are
+    answered before the receipt, so they do not matter here)."""
+    out = set()
+    for _, labels, _ in AUTO_PRESS:
+        if isinstance(labels, (set, frozenset, list, tuple)):
+            out |= set(labels)
+    return out
+
+
+def settled(events, pressable) -> bool:
+    """Clicky has finished the work the last click started: a story_end after the last click or turn, whose
+    last card asks nothing the robot is about to press. Case 05 on ebffea4: writing the sheets took ~50 s with
+    no event at all, so a quiet spell is no sign of the end."""
+    last = max((i for i, e in enumerate(events) if e.get("event") in ("chosen", "turn")), default=-1)
+    ends = [e for e in events[last + 1:] if e.get("event") == "story_end"]
+    if not ends:
+        return False
+    return not set(ends[-1].get("choices") or []) & set(pressable)
 
 
 def story_ended(events, target: str) -> bool:
@@ -305,6 +345,7 @@ def main(argv=None) -> int:
 
 def _main(argv=None) -> int:
     AUTO_PRESS.clear()                 # --lan N runs main N times in one process: no lap answers for the next
+    TURN_USAGE.clear()
     ap = argparse.ArgumentParser(description="Diễn tập trọn hành trình báo cáo tháng bằng robot.")
     ap.add_argument("--workbook", default=None, help="File Excel trống của case, nằm trong thư mục dữ liệu tháng")
     ap.add_argument("--sample", action="store_true",
@@ -424,8 +465,14 @@ def _main(argv=None) -> int:
     auto = args.auto_press if args.auto_press is not None else (
         [] if "intake" in expected or args.sample else ["Đúng rồi, làm tiếp"])
     auto = list(auto) + list(expected.get("auto_press", []))
-    if "verify" in expected or "tamper" in expected:
-        auto.append(expected.get("save_label", "Lưu và kiểm tra"))
+    target = expected.get("final_title", "")
+    # "Xong" means saved, reopened and reconciled: a case graded without a final title (the hidden cases) is
+    # run to the end, saved and reopened. Our own Case 01 specs opt in with "verify"; "save": false opts out.
+    do_save = "verify" in expected or "tamper" in expected or bool(
+        expected.get("save", not args.sample and not target))
+    save_label = expected.get("save_label", "Lưu và kiểm tra")
+    if do_save:
+        auto.append(save_label)
     if "egress" in expected and not args.local_only:
         auto.append(expected["egress"].get("approve_label", "Gửi đi"))     # the first-send preview card
     if auto:
@@ -466,9 +513,12 @@ def _main(argv=None) -> int:
             say("4/6 Clicky không hỏi sửa. Ghi nhận và chấm tiếp.")
 
     say("5/6 Chờ Clicky làm xong báo cáo")
-    target = expected.get("final_title", "")
-    finished = lambda ev: any(target and target in (e.get("title") or "") for e in ev if e.get("event") == "beat") \
-        or (not target and len(ev) > 0)  # noqa: E731
+    pressable = pressable_labels() - {save_label}
+    if target:
+        finished = lambda ev: any(target in (e.get("title") or "") for e in ev if e.get("event") == "beat")  # noqa: E731
+    else:
+        # No title to wait for: wait for the story that ends the work, then a few seconds with no new scene.
+        finished = lambda ev: settled(ev, pressable)  # noqa: E731
     limit = expected.get("second_stage_seconds", 300)
     done_events = wait_log(log, finished, limit, quiet=6.0)
     if target and finished(done_events) and not story_ended(done_events, target):
@@ -479,7 +529,8 @@ def _main(argv=None) -> int:
     clock.lap("Chặng 2–3: sửa và lập báo cáo")
     if not finished(done_events):
         stalled.append(("Chặng 2–3", clock.steps[-1][1]))
-    if "verify" in expected or "tamper" in expected:
+    offered = lambda ev: any(save_label in (e.get("labels") or []) for e in ev if e.get("event") == "choices")  # noqa: E731
+    if "verify" in expected or "tamper" in expected or (do_save and offered(checks.read_log(log))):
         say("   Chờ Clicky lưu, mở lại file và đối chiếu")
         verified = lambda ev: any(e.get("event") == "verify" for e in ev)  # noqa: E731
         if not verified(wait_log(log, verified, expected.get("verify_seconds", 120), quiet=4.0)):
@@ -505,6 +556,8 @@ def _main(argv=None) -> int:
     result.checks.append(checks.stage_check(stalled))
     result.checks += [checks.Check(n, ok, d, blocking=b)
                       for n, ok, d, b in columns.check_lines(events, expected.get("columns"), answerer)]
+    if do_save and "verify" not in expected and "tamper" not in expected:
+        result.checks.append(checks.saved_check(events, save_label))
     result.checks.append(checks.receipt_reached_check(events, data_files, expected.get("stop_before_receipt_ok", False)))
     network = net.stop()
     egress_text = None
@@ -526,6 +579,11 @@ def _main(argv=None) -> int:
             "zoom": args.zoom or "mặc định", "network": network,
             "mode": "local-only" if args.local_only else ("tamper " + args.tamper if args.tamper else "thường")}
     (out / "ket-qua.md").write_text(checks.report_md(result, meta), encoding="utf-8")
+    if TURN_USAGE:
+        (out / "excel-moi-luot-noi.json").write_text(json.dumps(TURN_USAGE, ensure_ascii=False, indent=1),
+                                                     encoding="utf-8")
+        for u in TURN_USAGE:
+            say(f"   Excel khi bắt đầu lượt nói {u['turn']} ({u['text']}): {u['ws_mb']} MB, {u['handles']} handle")
     (out / "ket-qua.json").write_text(json.dumps(
         {"passed": result.passed, "meta": meta,
          "checks": [{"name": c.name, "ok": c.ok, "detail": c.detail, "blocking": c.blocking} for c in result.checks]},
@@ -567,9 +625,11 @@ def add_visual(result, events, captures, out: Path) -> None:
         result.checks.append(checks.Check(name, e["ok"], detail, blocking=e["blocking"]))
 
 
-def close_between_laps(keep: set) -> None:
+def close_between_laps(keep: set, quit_excel: bool = False) -> None:
     """Between two laps: quit Clicky and close, without saving, every workbook the lap opened.
-    Workbooks that were open before lap 1 (only with --allow-other-workbooks) are left alone."""
+    Workbooks that were open before lap 1 (only with --allow-other-workbooks) are left alone.
+    quit_excel (--excel-moi-luot): also quit Excel, so the next lap starts the way a person starts a month,
+    with a fresh Excel. Only when nothing was open before lap 1."""
     subprocess.run(["taskkill", "/IM", "Clicky.exe", "/F"], capture_output=True)
     try:
         import win32com.client
@@ -577,9 +637,87 @@ def close_between_laps(keep: set) -> None:
         for wb in list(excel.Workbooks):
             if wb.FullName not in keep:
                 wb.Close(SaveChanges=False)
+        if quit_excel and not keep:
+            excel.DisplayAlerts = False
+            excel.Quit()
+            del excel
+            end = time.monotonic() + 20
+            while drivers.pids_of("EXCEL.EXE") and time.monotonic() < end:
+                time.sleep(1)
+            if drivers.pids_of("EXCEL.EXE"):
+                say("   Excel chưa thoát sau 20 giây; lượt sau chạy với Excel cũ.")
     except Exception as exc:
         say(f"   Không đóng được file Excel của lượt trước: {exc}")
     time.sleep(3)
+
+
+def _process_usage(pid: int):
+    """(working set MB, handle count) of one process, by Win32 calls; (None, None) when it cannot be read."""
+    import ctypes
+    from ctypes import wintypes
+
+    class Counters(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    h = k32.OpenProcess(0x1000, False, pid)            # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return None, None
+    try:
+        c = Counters()
+        c.cb = ctypes.sizeof(Counters)
+        ws = round(c.WorkingSetSize / 2 ** 20) if k32.K32GetProcessMemoryInfo(h, ctypes.byref(c), c.cb) else None
+        n = wintypes.DWORD()
+        handles = n.value if k32.GetProcessHandleCount(h, ctypes.byref(n)) else None
+        return ws, handles
+    finally:
+        k32.CloseHandle(h)
+
+
+def excel_state() -> dict:
+    """Excel between two laps, counts only: processes, memory, handles, open workbooks, and how many of them are
+    the robot's own copies and their Power Query connections. Workbook names are matched, never printed.
+    Attaches to a running Excel only: it never starts one."""
+    pids = sorted(drivers.pids_of("EXCEL.EXE"))
+    state = {"excel": len(pids), "ws_mb": None, "handles": None, "workbooks": 0, "robot_copies": 0,
+             "connections": 0, "queries": 0}
+    for pid in pids:
+        try:
+            ws, handles = _process_usage(pid)
+        except Exception:                              # noqa: BLE001 - not on Windows, or no access
+            ws, handles = None, None
+        if ws is not None:
+            state["ws_mb"] = (state["ws_mb"] or 0) + ws
+        if handles is not None:
+            state["handles"] = (state["handles"] or 0) + handles
+    if not pids:
+        return state
+    try:
+        import win32com.client
+        excel = win32com.client.GetActiveObject("Excel.Application")
+        books = list(excel.Workbooks)
+        state["workbooks"] = len(books)
+        for wb in books:
+            if COPY_TAG in wb.Name:
+                state["robot_copies"] += 1
+                state["connections"] += int(wb.Connections.Count)
+                state["queries"] += int(wb.Queries.Count)
+    except Exception as exc:                           # noqa: BLE001 - reported, never fatal
+        state["error"] = type(exc).__name__
+    return state
+
+
+def state_line(when: str, state: dict) -> str:
+    def v(key, unit=""):
+        return "?" if state.get(key) is None else f"{state[key]}{unit}"
+    return (f"   Excel {when}: {state.get('excel', 0)} tiến trình, {v('ws_mb', ' MB')}, {v('handles')} handle, "
+            f"{state.get('workbooks', 0)} file mở (bản sao robot {state.get('robot_copies', 0)}, "
+            f"kết nối {state.get('connections', 0)}, query {state.get('queries', 0)})"
+            + (f", lỗi đọc: {state['error']}" if state.get("error") else ""))
 
 
 def open_workbook_names() -> set:
@@ -601,13 +739,24 @@ def run_laps(argv, runner=None, cleanup=None, before=None) -> int:
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--lan", type=int, default=1)
     pre.add_argument("--out", default=None)
+    pre.add_argument("--excel-moi-luot", action="store_true",
+                     help="Thoát hẳn Excel giữa các lượt, như người dùng mở máy làm tháng mới")
     known, rest = pre.parse_known_args(argv)
     if known.lan <= 1:
         return runner(rest + (["--out", known.out] if known.out else []))
     keep = before() if before else open_workbook_names()
-    codes, times = [], []
+    codes, times, states = [], [], []
+
+    def note(lap: int, when: str) -> None:
+        if probe is None:
+            return
+        st = dict(probe(), lap=lap, when=when, t=time.strftime("%H:%M:%S"))
+        states.append(st)
+        say(state_line(f"{when} lượt {lap}", st))
+    probe = excel_state if runner is main else None
     for i in range(1, known.lan + 1):
         say(f"===== Lượt {i}/{known.lan} =====")
+        note(i, "trước")
         lap_argv = list(rest) + (["--out", str(Path(known.out) / f"lan-{i}")] if known.out else [])
         t0 = time.monotonic()
         try:
@@ -618,8 +767,12 @@ def run_laps(argv, runner=None, cleanup=None, before=None) -> int:
             code = exc.code if isinstance(exc.code, int) else 2
         codes.append(code)
         times.append(time.monotonic() - t0)
+        note(i, "sau")
         if i < known.lan:
-            cleanup(keep)
+            if known.excel_moi_luot and cleanup is close_between_laps:
+                cleanup(keep, quit_excel=True)
+            else:
+                cleanup(keep)
     names = {0: "ĐẠT", 1: "KHÔNG ĐẠT", 2: "không chạy được"}
     passed = sum(c == 0 for c in codes)
     lines = [f"# Tổng hợp {known.lan} lượt: {'ĐẠT' if passed == known.lan else 'KHÔNG ĐẠT'} ({passed}/{known.lan} lượt đạt)",
@@ -631,6 +784,9 @@ def run_laps(argv, runner=None, cleanup=None, before=None) -> int:
     if known.out:
         Path(known.out).mkdir(parents=True, exist_ok=True)
         (Path(known.out) / "tong-hop.md").write_text(text, encoding="utf-8")
+        if states:
+            (Path(known.out) / "excel-giua-cac-luot.json").write_text(
+                json.dumps(states, ensure_ascii=False, indent=1), encoding="utf-8")
     if any(c == 1 for c in codes):
         return 1
     return 2 if any(c != 0 for c in codes) else 0

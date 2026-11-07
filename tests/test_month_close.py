@@ -846,7 +846,7 @@ def test_two_trial_balances_of_one_month_are_asked_about_not_picked(folder):
     assert month_close.intake_pending()
     log = receipt[0].intake["log"]
     # Grader G1: people see the file's own name, extension included, on the receipt and in the Biên bản.
-    assert any(d["file"] == "TB_T10.xlsx" and "anh đã chọn dùng TB_T10_cu.xlsx" in d["reason"] for d in log["dropped"])
+    assert any(d["file"] == "TB_T10.xlsx" and "chị đã chọn dùng TB_T10_cu.xlsx" in d["reason"] for d in log["dropped"])
     assert {f["name"] for f in log["files"] if f["kind"].startswith("Sổ cân đối")} == {"TB_T10_cu.xlsx", "TB_T09.xlsx"}
     assert not [n for n in receipt[0].intake["card"]["rows"] if n["title"].split(" · ")[0] in ("TB_T10", "TB_T10_cu")]
     reasons = {d["file"]: d["reason"] for d in log["dropped"]}

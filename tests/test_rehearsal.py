@@ -467,3 +467,67 @@ def test_folder_with_data_must_reach_the_receipt(tmp_path):
     computed = good_run()                                       # computed straight away, no receipt
     c = checks.receipt_reached_check(computed, n)
     assert not c.ok and "tính luôn" in c.detail
+
+
+def test_laps_record_excel_between_laps_and_can_quit_excel(tmp_path, monkeypatch):
+    import rehearse
+    calls, seen = [], []
+    monkeypatch.setattr(rehearse, "excel_state", lambda: {"excel": 1, "ws_mb": 300, "handles": 2000,
+                                                          "workbooks": 1, "robot_copies": 1, "connections": 2,
+                                                          "queries": 1})
+
+    def runner(a):
+        seen.append(a)
+        return 0
+    # Only the real runner is probed (a fake one is a unit test, not Excel).
+    monkeypatch.setattr(rehearse, "main", runner)
+    monkeypatch.setattr(rehearse, "close_between_laps", lambda keep, quit_excel=False: calls.append(quit_excel))
+    code = rehearse.run_laps(["--lan", "2", "--excel-moi-luot", "--out", str(tmp_path)], before=set)
+    assert code == 0 and calls == [True] and len(seen) == 2
+    states = json.loads((tmp_path / "excel-giua-cac-luot.json").read_text(encoding="utf-8"))
+    assert [(s["lap"], s["when"]) for s in states] == [(1, "trước"), (1, "sau"), (2, "trước"), (2, "sau")]
+    line = rehearse.state_line("trước lượt 2", states[2])
+    assert "300 MB" in line and "2000 handle" in line and "bản sao robot 1" in line and "kết nối 2" in line
+    assert "?" in rehearse.state_line("x", {"excel": 0, "ws_mb": None, "handles": None})
+
+
+def test_turn_usage_is_sampled_once_per_turn(monkeypatch):
+    import rehearse
+    monkeypatch.setattr(rehearse.drivers, "pids_of", lambda image: {11, 12})
+    monkeypatch.setattr(rehearse, "_process_usage", lambda pid: (100, 900))
+    rehearse.TURN_USAGE.clear()
+    ev = [{"event": "turn", "text": "làm báo cáo tháng"}, {"event": "beat"}]
+    rehearse._sample_turns(ev)
+    rehearse._sample_turns(ev + [{"event": "turn", "text": "Đúng rồi, làm tiếp"}])
+    rehearse._sample_turns(ev + [{"event": "turn", "text": "Đúng rồi, làm tiếp"}])
+    assert rehearse.TURN_USAGE == [{"turn": 1, "text": "làm báo cáo tháng", "ws_mb": 200, "handles": 1800},
+                                   {"turn": 2, "text": "Đúng rồi, làm tiếp", "ws_mb": 200, "handles": 1800}]
+    rehearse.TURN_USAGE.clear()
+
+
+def test_settled_waits_for_the_story_that_ends_the_work():
+    import rehearse
+    receipt = [{"event": "turn", "text": "làm báo cáo tháng"}, {"event": "intake"},
+               {"event": "choices", "labels": ["Đúng rồi, làm tiếp", "Để tôi xem"]},
+               {"event": "story_end", "choices": ["Đúng rồi, làm tiếp", "Để tôi xem"]}]
+    press = {"Đúng rồi, làm tiếp"}
+    assert not rehearse.settled(receipt, press)                 # the robot is about to confirm
+    clicked = receipt + [{"event": "chosen", "label": "Đúng rồi, làm tiếp"}]
+    # Case 05 on ebffea4: ~50 s writing sheets with no event at all. Not settled however long it is quiet.
+    assert not rehearse.settled(clicked, press)
+    work = clicked + [{"event": "beat", "text": "Báo cáo"}, {"event": "story_end", "choices": []}]
+    assert rehearse.settled(work, press)
+    offer = clicked + [{"event": "story_end", "choices": ["Lưu và kiểm tra", "Để tôi tự lưu"]}]
+    assert rehearse.settled(offer, press)                       # saving is waited for on its own
+    stop = receipt[:-1] + [{"event": "story_end", "choices": ["Để tôi xem"]}]
+    assert rehearse.settled(stop, press)                        # an early stop with nothing to press: done
+
+
+def test_saved_check_only_fails_a_save_that_was_not_reopened():
+    c = checks.saved_check([{"event": "story_end"}])
+    assert c.ok and not c.blocking
+    asked = [{"event": "choices", "labels": ["Lưu và kiểm tra", "Để tôi tự lưu"]}]
+    assert not checks.saved_check(asked).ok
+    assert checks.saved_check(asked + [{"event": "verify", "ok": True, "diffs": []}]).ok
+    bad = checks.saved_check(asked + [{"event": "verify", "ok": False, "diffs": [{"cell": "A1"}]}])
+    assert not bad.ok and bad.blocking and "1 ô" in bad.detail

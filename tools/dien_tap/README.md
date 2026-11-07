@@ -30,6 +30,8 @@ Khách chạy chốt tháng một lần là phải đúng lần đó, nên một
 Có `--out` thì mỗi lượt nằm trong `lan-1\`, `lan-2\`…, và bảng tổng hợp nằm ở `tong-hop.md`.
 Mốc trước khi người thật chạy tay: Case 01 phải đạt `--lan 3` ở mức phóng 100, và đạt một lượt ở mỗi mức 85 và 130.
 
+Giữa các lượt, robot ghi tình trạng Excel vào `excel-giua-cac-luot.json` ở thư mục `--out`: số tiến trình, bộ nhớ (MB), số handle, số file đang mở, số bản sao của robot và số kết nối và query trong các bản sao đó. Robot chỉ đếm, không in tên file. Ở mỗi lượt nói, robot ghi bộ nhớ và handle của Excel vào `excel-moi-luot-noi.json` trong thư mục của lượt. Phần này không gọi COM, để không làm chậm Clicky. `--excel-moi-luot` thoát hẳn Excel giữa các lượt, như khi người dùng mở máy làm tháng mới. Robot chỉ thoát Excel khi trước lượt 1 không có file nào mở.
+
 ## Robot bấm bằng gì
 
 - Mặc định thử **agent-desktop** (Vercel Labs, Apache-2.0): tải bản Windows x64 từ
@@ -94,6 +96,10 @@ Hai dòng chặn chạy cho mọi case, kể cả case kín, không cần đáp 
 
 - **Không chặng nào bị đứng quá giờ.**
 - **Thư mục có file dữ liệu thì Clicky phải tới phiếu nhận file.** Trước khi mở Clicky, robot đếm file `.xlsx/.xlsm/.xlsb/.xls/.csv` cạnh file Excel của case. Robot chỉ đếm tên, không mở file nào, và không tính chính file đó, bản `_ban-goc`, file khoá `~$` hay bản sao `_dientap_` của robot. Nếu có ít nhất 1 file mà nhật ký không có sự kiện `intake`, lượt chạy KHÔNG ĐẠT. Chi tiết ghi số cảnh và câu cuối Clicky nói. Case cố ý cho Clicky dừng trước phiếu thì đặt `"stop_before_receipt_ok": true` trong file đáp án.
+
+### Case không có `final_title` (các case kín)
+
+Robot chờ tới khi Clicky làm xong việc mà cú bấm cuối cùng giao. Dấu hiệu là một `story_end` đến sau cú bấm hay lệnh cuối, và thẻ cuối của nó không hỏi gì mà robot sắp bấm. Sau đó robot chờ thêm 6 giây không có sự kiện mới. Thời gian chờ tối đa là `second_stage_seconds`. Robot không coi một quãng im lặng là dấu hiệu xong: ở Case 05 bản ebffea4, Clicky ghi sheet gần 50 giây mà không có sự kiện nào. Nếu Clicky đề nghị "Lưu và kiểm tra", robot bấm, chờ sự kiện `verify`, rồi chấm dòng chặn "Clicky lưu, mở lại file và đối chiếu khớp". Nếu Clicky không đề nghị lưu, robot chỉ ghi một dòng thông tin. Muốn tắt bước lưu thì đặt `"save": false`. Case 01 có `final_title`, nên chỉ lưu khi đáp án có `verify`.
 
 ### Câu hỏi tên cột lạ (`columns`)
 

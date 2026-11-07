@@ -389,7 +389,10 @@ _ORDER_M = r"""let
     CoChuSo = (v) as logical => if v = null or v is logical then false else if v is text then Text.Select(v, ChuSo) <> "" else true,
     // sources.parse_date: 2026-10-13, or 13/10/2026 (day first) or 10/13/2026 (month first, thu = "en-US").
     DocNgay = (v, thu as text) => if v = null then null else if v is date then v else if v is datetime then DateTime.Date(v)
-        else if v is datetimezone then DateTime.Date(DateTimeZone.RemoveZone(v)) else if not (v is text) then null else
+        else if v is datetimezone then DateTime.Date(DateTimeZone.RemoveZone(v))
+        // sources._serial_to_date: a workbook cell Excel.Workbook gives as a number is the serial day, time dropped.
+        else if v is number then (if v >= @@SERIAL_LO@@ and v < @@SERIAL_HI@@ then Date.AddDays(#date(1899, 12, 30), Number.RoundDown(v)) else null)
+        else if not (v is text) then null else
         let
             t = Text.TrimStart(v, KhoangTrang),
             g1 = SoDau(t), r1 = Text.Range(t, Text.Length(g1)), s1 = Text.Start(r1, 1),
@@ -643,7 +646,8 @@ def order_files_query(folder_parameter: str, file_params: dict, roles: list, ded
         f"Chu(O(r, c, {_m_text(r)}))" for r in out_roles)
     m = _ORDER_M
     for token, value in (("@@FOLD@@", _fold_table()), ("@@CANCELLED@@", _m_list(sorted(sources.CANCELLED))),
-                         ("@@TIER1@@", tier1), ("@@TIER2@@", tier2), ("@@UNITS@@", _m_list(sources.UNIT_SUFFIXES)), ("@@SCAN@@", str(sources.HEADER_SCAN)),
+                         ("@@TIER1@@", tier1), ("@@TIER2@@", tier2), ("@@UNITS@@", _m_list(sources.UNIT_SUFFIXES)), ("@@SERIAL_LO@@", str(sources.SERIAL_DAYS[0])),
+                         ("@@SERIAL_HI@@", str(sources.SERIAL_DAYS[1])), ("@@SCAN@@", str(sources.HEADER_SCAN)),
                          ("@@CELLS@@", cells), ("@@PARAMS@@", params), ("@@FOLDER@@", folder_parameter),
                          ("@@ROWTYPE@@", row_type), ("@@SSNS@@", _m_text(_SS_NS)), ("@@QUOTE@@", '""""'),
                          ("@@REMEMBERED@@", told)):
