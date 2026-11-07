@@ -239,11 +239,21 @@ def folder_query(folder: str, file_cultures: dict, typed: list, doc_column: Opti
         lines.append(f"    PhanCach = Table.AddColumn(DinhDang, \"PhanCach\", each {sep_expr}),")
         previous = "PhanCach"
     sep = "[PhanCach]" if sep_expr else _m_sep(common)
+    # Folder.Files sees every CSV under the folder, a cost ledger export too. Only files that carry the
+    # order columns are combined; typing another file's columns fails the whole load ("column not found").
+    needed = [col for col, _ in typed] + ([doc_column] if doc_column and doc_column not in [c for c, _ in typed] else [])
     lines += [
-        f"    DocFile = Table.AddColumn({previous}, \"Bang\", each Table.TransformColumnTypes(",
-        f"        Table.PromoteHeaders(Csv.Document([Content], [Delimiter = {sep}, Encoding = 65001]), [PromoteAllScalars = true]),",
-        f"        {{{types}}}, [DinhDang])),",
-        "    GopFile = Table.Combine(DocFile[Bang]),",
+        f"    DocFile = Table.AddColumn({previous}, \"Tho\", each "
+        f"Table.PromoteHeaders(Csv.Document([Content], [Delimiter = {sep}, Encoding = 65001]), [PromoteAllScalars = true])),",
+    ]
+    previous = "DocFile"
+    if needed:
+        cols = ", ".join(_m_text(c) for c in needed)
+        lines.append(f"    FileDonHang = Table.SelectRows(DocFile, each Table.HasColumns([Tho], {{{cols}}})),")
+        previous = "FileDonHang"
+    lines += [
+        f"    DoiKieu = Table.AddColumn({previous}, \"Bang\", each Table.TransformColumnTypes([Tho], {{{types}}}, [DinhDang])),",
+        "    GopFile = Table.Combine(DoiKieu[Bang]),",
     ]
     last = "GopFile"
     date_column = next((col for col, t in typed if t.strip() == "type date"), None)

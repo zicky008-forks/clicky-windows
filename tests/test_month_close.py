@@ -966,3 +966,59 @@ def test_a_save_excel_refuses_gives_a_clear_card_and_no_check(folder):
     beats = month_close.approve(bridge, pq)
     said = " ".join(f"{b.text} {b.label} {b.note}" for b in beats)
     assert beats[0].label == "Chưa lưu được" and beats[0].mark == "warn" and "Khớp sổ cái" not in said
+
+
+def test_folder_query_combines_only_the_order_files_when_a_cost_ledger_csv_sits_beside_them(tmp_path):
+    """Robot run 07/11 (bhc_e2e): Folder.Files also picked GL_ChiTiet_ChiPhi.csv, typing its missing Ngay_HD
+    column failed the whole load. Each CSV must carry the order columns before its columns are typed."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "dien_tap"))
+    import bhc_case
+    bhc_case.make(tmp_path)
+    order = sources.load_order_file(tmp_path / "Mastersale_T07-T10.csv")
+    m = m_code.folder_query(str(tmp_path), {order.name: "vi-VN"}, month_close._typed_columns([order]),
+                            order.header[order.columns["doc"]], folder_parameter="ThuMuc")
+    keep = re.search(r'FileDonHang = Table\.SelectRows\(DocFile, each Table\.HasColumns\(\[Tho\], \{(.*?)\}\)\)', m)
+    assert keep, m
+    needed = re.findall(r'"((?:[^"]|"")*)"', keep.group(1))
+    typed = [c for c, _ in month_close._typed_columns([order])]
+    assert set(typed) <= set(needed) and m.index("FileDonHang") < m.index("TransformColumnTypes([Tho]")
+    assert "Table.Combine(DoiKieu[Bang])" in m and m_code.lint("DonHang", m) == []
+    kept = []
+    for p in sorted(tmp_path.glob("*.csv")):
+        with open(p, encoding="utf-8-sig", newline="") as fh:
+            head = next(csv.reader(fh))
+        if set(needed) <= set(head):
+            kept.append(p.name)
+    assert kept == ["Mastersale_T07-T10.csv"]          # the cost ledger CSV is left out, not typed
+
+
+@pytest.mark.parametrize("variant", ["bom_comma", "no_bom_semicolon", "spaced_header", "crlf_footer"])
+def test_the_query_names_the_columns_exactly_as_power_query_reads_the_header(tmp_path, variant):
+    """Power Query (Encoding 65001) drops a UTF-8 BOM, splits on the query's own delimiter and keeps header
+    text as written. The query must ask for those exact names, or the load fails with 'column not found'."""
+    sep = ";" if variant == "no_bom_semicolon" else ","
+    head = ["Ngay HD ", "So HD", " Doanh thu"] if variant == "spaced_header" else ["Ngay_HD", "So_HD", "Doanh_thu"]
+    rows = [["20/10/2026", "HD001", "1200000"], ["21/10/2026", "HD002", "3400000"]]
+    if variant == "crlf_footer":
+        rows.append(["", "Tổng", "4600000"])
+    nl = "\r\n" if variant == "crlf_footer" else "\n"
+    text = nl.join(sep.join(r) for r in [head] + rows) + nl
+    raw = ("﻿" if variant in ("bom_comma", "crlf_footer", "spaced_header") else "") + text
+    p = tmp_path / "Mastersale_T10.csv"
+    p.write_bytes(raw.encode("utf-8"))
+    (tmp_path / "GL_ChiTiet_ChiPhi.csv").write_bytes("﻿Ngay_CT,So_CT,So_tien_VND\n2026-10-01,PK1,5\n".encode("utf-8"))
+    order = sources.load_order_file(p)
+    assert order is not None and order.delimiter == sep
+    m = m_code.folder_query(str(tmp_path), {order.name: order.culture(None)}, month_close._typed_columns([order]),
+                            order.header[order.columns["doc"]], folder_parameter="ThuMuc",
+                            delimiter={order.name: order.delimiter})
+    assert f"[Delimiter = {m_code._m_sep(sep)}, Encoding = 65001]" in m
+    keep = re.search(r"Table\.HasColumns\(\[Tho\], \{(.*?)\}\)\)", m)
+    needed = [n.replace('""', '"') for n in re.findall(r'"((?:[^"]|"")*)"', keep.group(1))]
+    seen_by_pq = p.read_bytes().decode("utf-8").lstrip("﻿").splitlines()[0].split(sep)
+    assert needed and set(needed) <= set(seen_by_pq), (needed, seen_by_pq)
+    gl_head = (tmp_path / "GL_ChiTiet_ChiPhi.csv").read_bytes().decode("utf-8").lstrip("﻿").splitlines()[0].split(",")
+    assert not set(needed) <= set(gl_head)                     # the cost ledger is left out of the combine
+    if variant == "crlf_footer":
+        assert "each [Ngay HD ] <> null" not in m and "<> null" in m and len(order.footers) == 1
