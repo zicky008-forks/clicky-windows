@@ -183,7 +183,9 @@ def test_run_writes_results_and_plays(tmp_path, monkeypatch):
     # grading AD: the robot can check that every source file Clicky opened was closed, unsaved
     closes = [json.loads(l) for l in (tmp_path / "scene.jsonl").read_text(encoding="utf-8").splitlines()
               if '"close_book"' in l]
-    assert len(closes) == 1 and closes[0]["name"] == "KeHoach_AOPR1_FY2627.xlsx"
+    from office.excel_com import book_id
+    assert len(closes) == 1 and closes[0]["book"] == book_id(str(tmp_path / "KeHoach_AOPR1_FY2627.xlsx"))
+    assert closes[0]["pack"] is False and "KeHoach" not in json.dumps(closes[0])     # an id, never the file name
     assert closes[0]["closed"] is True and closes[0]["saved"] is False and closes[0]["read_only"] is True
 
 
@@ -1020,3 +1022,10 @@ def test_a_source_file_shown_read_only_is_closed_unsaved_and_reported():
     assert bridge.close_opened(r"C:\case\Pack.xlsx") == [(r"C:\case\KeHoach_AOPR1.xlsx", True)]
     assert source.closed is False and [b.FullName for b in app.books] == [r"C:\case\Pack.xlsx"]
     assert app.front.FullName == r"C:\case\Pack.xlsx" and app.DisplayAlerts is True
+
+
+def test_book_ids_match_across_spellings_and_never_hold_the_name():
+    from office.excel_com import book_id
+    a = book_id(r"C:\Case\KeHoach_AOPR1.xlsx")
+    assert a == book_id("c:/case/kehoach_aopr1.xlsx") and len(a) == 10 and "KeHoach" not in a
+    assert a != book_id(r"C:\Case\Pack.xlsx")

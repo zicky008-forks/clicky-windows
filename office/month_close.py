@@ -76,6 +76,7 @@ class Beat:
     intake: Optional[dict] = None   # the receipt card ({"card": ..., "log": ...}) shown with this beat's buttons
     graphic: Optional[dict] = None  # leader tags, sticky notes or a profit bridge (engine.visuals), drawn beside the range
     book: str = ""                  # the workbook the ref is in, brought to the front first (read-only when Clicky opens it)
+    book_pack: bool = False         # that workbook is the file under review itself (logged, never its name)
 
 
 def stage() -> Optional[str]:
@@ -1546,7 +1547,8 @@ async def play(manager, beats: list, keep_card: bool = True) -> None:
                 await asyncio.sleep(BEAT_GAP_S)
         if beat.book and beat.ref:
             shown = await asyncio.to_thread(getattr(manager._excel, "show_workbook", lambda p: False), beat.book)
-            scene_log.record("show_book", i=i, ref=beat.ref, name=Path(beat.book).name, ok=bool(shown))
+            from office.excel_com import book_id
+            scene_log.record("show_book", i=i, ref=beat.ref, book=book_id(beat.book), pack=beat.book_pack, ok=bool(shown))
         box = await _locate(manager, beat.ref) if beat.ref else None
         if box:
             manager.sig_point_hold.emit(True)

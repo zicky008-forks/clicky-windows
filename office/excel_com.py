@@ -133,6 +133,14 @@ def _same_path(a: str, b: str) -> bool:
     return bool(a) and bool(b) and os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
 
+def book_id(path: str) -> str:
+    """A short id for a workbook path, the same for Excel's FullName and Clicky's own spelling of it. Logs
+    carry this, never the name: a client's file name is their data too."""
+    import hashlib
+    key = os.path.normcase(os.path.normpath(str(path or ""))).replace("/", "\\").lower()
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
+
+
 def _shape(name, wb=None) -> str:
     """What a workbook name looks like, never the name: clicky.log must not carry a company's file names.
 
