@@ -35,6 +35,7 @@ import drivers         # noqa: E402
 import visual          # noqa: E402
 import beta_checks     # noqa: E402
 import layout_checks   # noqa: E402
+import columns         # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 COMPOSER = "Tin nhắn cho Clicky"
@@ -86,7 +87,9 @@ def _auto_press(events) -> None:
         for i, e in enumerate(events):
             if e.get("event") != "choices" or i in done:
                 continue
-            if callable(labels):
+            if getattr(labels, "needs_context", False):
+                hit = labels(e, before=events[:i])
+            elif callable(labels):
                 hit = labels(e)
             else:
                 hit = next((lab for lab in e.get("labels") or [] if lab in labels), None)
@@ -291,6 +294,17 @@ def _sheet_values(wb, max_rows: int, max_cols: int) -> dict:
 
 
 def main(argv=None) -> int:
+    """One run. Clicky's remembered column answers are set aside for the run and put back after it."""
+    data_dir = Path(os.environ.get("CLICKY_DATA_DIR") or Path(os.environ.get("LOCALAPPDATA", "")) / "Clicky")
+    restore = columns.isolate_memory(data_dir) if data_dir.is_dir() else (lambda: None)
+    try:
+        return _main(argv)
+    finally:
+        restore()
+
+
+def _main(argv=None) -> int:
+    AUTO_PRESS.clear()                 # --lan N runs main N times in one process: no lap answers for the next
     ap = argparse.ArgumentParser(description="Diễn tập trọn hành trình báo cáo tháng bằng robot.")
     ap.add_argument("--workbook", default=None, help="File Excel trống của case, nằm trong thư mục dữ liệu tháng")
     ap.add_argument("--sample", action="store_true",
@@ -422,6 +436,8 @@ def main(argv=None) -> int:
         def chooser(e, parts=tuple(roles["choose"])):
             return next(filter(None, (match_label(p, e.get("labels")) for p in parts)), None)
         AUTO_PRESS.append((driver, chooser, set()))
+    answerer = columns.Answerer(expected.get("columns"))
+    AUTO_PRESS.append((driver, answerer, set()))     # unknown column names: answered from the key, never guessed
     if "intake" in expected:
         confirm = expected["intake"].get("confirm_label", "Đúng rồi, làm tiếp")
         asked = lambda ev: any(confirm in (e.get("labels") or []) for e in ev if e.get("event") == "choices")  # noqa: E731
@@ -487,6 +503,8 @@ def main(argv=None) -> int:
     events = checks.read_log(log)
     result = checks.evaluate(events, sheets, expected)
     result.checks.append(checks.stage_check(stalled))
+    result.checks += [checks.Check(n, ok, d, blocking=b)
+                      for n, ok, d, b in columns.check_lines(events, expected.get("columns"), answerer)]
     result.checks.append(checks.receipt_reached_check(events, data_files, expected.get("stop_before_receipt_ok", False)))
     network = net.stop()
     egress_text = None

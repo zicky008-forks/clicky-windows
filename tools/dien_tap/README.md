@@ -94,6 +94,22 @@ Hai dòng chặn chạy cho mọi case, kể cả case kín, không cần đáp 
 - **Không chặng nào bị đứng quá giờ.**
 - **Thư mục có file dữ liệu thì Clicky phải tới phiếu nhận file.** Trước khi mở Clicky, robot đếm file `.xlsx/.xlsm/.xlsb/.xls/.csv` cạnh file Excel của case. Robot chỉ đếm tên, không mở file nào, và không tính chính file đó, bản `_ban-goc`, file khoá `~$` hay bản sao `_dientap_` của robot. Nếu có ít nhất 1 file mà nhật ký không có sự kiện `intake`, lượt chạy KHÔNG ĐẠT. Chi tiết ghi số cảnh và câu cuối Clicky nói. Case cố ý cho Clicky dừng trước phiếu thì đặt `"stop_before_receipt_ok": true` trong file đáp án.
 
+### Câu hỏi tên cột lạ (`columns`)
+
+Khi một file giống file đơn hàng mà tên cột lạ, Clicky hỏi cột nào là ngày bán, cột nào là số tiền, trước khi hiện phiếu nhận file. Nhật ký ghi `close_step` `column_question` (file, need, options), sau đó là `column_answer`. Robot chỉ trả lời theo mục `columns` trong file đáp án:
+
+```json
+"columns": [{"file": "Shopee_T10.csv", "date": "Order date", "amount": "Total"},
+            {"file": "ghi_chu.csv", "not_orders": true}]
+```
+
+- Câu hỏi "Đúng không chị?": robot bấm "Đúng, dùng file này" chỉ khi Clicky đoán đúng cả hai cột.
+- Câu hỏi chọn cột: robot bấm "Cột <tên>" theo đáp án.
+- Nếu đáp án không có mục cho file đó, hoặc nút đúng không có trên thẻ, robot không bấm gì và lượt chạy KHÔNG ĐẠT, kèm lý do. Robot không bao giờ đoán.
+- Nếu Clicky không hỏi về một file có trong `columns`, robot ghi một dòng không chặn.
+
+Clicky nhớ câu trả lời trong `cot_da_nho.json` ở thư mục dữ liệu. Robot cất file này sang `cot_da_nho.json.truoc-dien-tap` trước mỗi lượt và trả lại sau lượt, nên lượt nào cũng bắt đầu khi chưa nhớ gì và câu trả lời của người thử máy vẫn còn.
+
 ## 6 việc giao diện trước beta 16/11
 
 Đặc tả: `/mnt/project-files/thiet-ke/giao-dien-5-sao/6 viec truoc beta 16-11.md`. Bước kiểm nằm trong `beta_checks.py`, chỉ chạy khi file đáp án có mục tương ứng:
