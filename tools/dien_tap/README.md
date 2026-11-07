@@ -32,6 +32,8 @@ Mốc trước khi người thật chạy tay: Case 01 phải đạt `--lan 3` �
 
 Giữa các lượt, robot ghi tình trạng Excel vào `excel-giua-cac-luot.json` ở thư mục `--out`: số tiến trình, bộ nhớ (MB), số handle, số file đang mở, số bản sao của robot và số kết nối và query trong các bản sao đó. Robot chỉ đếm, không in tên file. Ở mỗi lượt nói, robot ghi bộ nhớ và handle của Excel vào `excel-moi-luot-noi.json` trong thư mục của lượt. Phần này không gọi COM, để không làm chậm Clicky. `--excel-moi-luot` thoát hẳn Excel giữa các lượt, như khi người dùng mở máy làm tháng mới. Robot chỉ thoát Excel khi trước lượt 1 không có file nào mở.
 
+Mỗi lượt chạy, robot ghi nguồn điện của máy vào đầu `ket-qua.md` và `meta.power` trong `ket-qua.json`: cắm sạc hay chạy pin, % pin, chế độ nguồn, và tốc độ CPU. Robot đọc nguồn điện trước và sau lượt chạy, và đọc tốc độ CPU mỗi 5 giây trong suốt lượt chạy. Ở chế độ Balanced, CPU lúc rảnh cố ý chạy chậm, nên robot lấy mẫu nhanh nhất. Nếu máy chạy pin, hoặc mẫu CPU nhanh nhất vẫn dưới 90% tốc độ tối đa, các dòng chấm thời gian vẫn hiện nhưng có chữ "KHÔNG TÍNH" và không làm lượt chạy đạt hay trượt. Lý do: tối 07/11, máy DN-LAP-231 chạy pin còn 11%, CPU 67%, và mọi lượt chậm gấp 2–3 lần trên cả hai bản build.
+
 ## Robot bấm bằng gì
 
 - Mặc định thử **agent-desktop** (Vercel Labs, Apache-2.0): tải bản Windows x64 từ

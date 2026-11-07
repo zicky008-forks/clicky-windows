@@ -120,10 +120,11 @@ async def run(manager) -> str:
     mc._CHOSEN.clear()
     mc._PICKS.clear()
     order = mc.machine_date_order()
-    steps = (lambda: mc.start(bridge, pq, order), lambda: mc.confirm(bridge, pq),
-             lambda: mc.approve(bridge, pq), lambda: mc.save_and_verify(bridge, workbook))
-    for step in steps:
-        beats = await asyncio.to_thread(step)
+    # Each step says what it is doing under the cursor, stage by stage, as a pressed button would.
+    steps = (("read", lambda: mc.start(bridge, pq, order)), ("confirm", lambda: mc.confirm(bridge, pq)),
+             ("approve", lambda: mc.approve(bridge, pq)), ("save", lambda: mc.save_and_verify(bridge, workbook)))
+    for caption, step in steps:
+        beats = await mc._busy(manager, caption, step)
         if not beats:
             break
         await mc.play(manager, beats)

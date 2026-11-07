@@ -1171,6 +1171,8 @@ class _timed:
 
     def __enter__(self):
         import time
+        if self.part in _STAGE_OF:
+            _progress(_STAGE_OF[self.part])
         self.t0 = time.monotonic()
         return self
 
@@ -1183,9 +1185,12 @@ class _timed:
 def _load(pq, name: str):
     """pq.load with its start, end and outcome in the scene log."""
     import time
+    global _LOADED_ONCE
+    _progress("load")                             # Excel's first Power Query work of the session takes seconds
     _step("query_load", name=name, state="start")
     t0 = time.monotonic()
     result = pq.load(name)
+    _LOADED_ONCE = True
     seconds = round(time.monotonic() - t0, 1)
     if isinstance(result, LoadTimeout):
         _step("query_load", name=name, state="timeout", seconds=seconds, dialog=result.dialog)
@@ -1269,7 +1274,6 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
                                 _typed_columns(files), files[0].header[files[0].columns["doc"]] if "doc" in files[0].columns else None,
                                 folder_parameter=PARAM_NAME, key_columns=keys, period=period if truth.outside else None,
                                 delimiter={f.name: f.delimiter for f in files})
-    _progress("load")                             # Excel's first Power Query work of the session takes seconds
     if name is None:
         name, formula, origin = QUERY_NAME, None, "clicky"
         if _AUDIT is not None:
@@ -1469,7 +1473,8 @@ def _approve(bridge, pq, job) -> list:
     ok = abs(gap) <= TOLERANCE
     fixed_note = [["Đã sửa query", "", "", "", "Đọc ngày theo đúng kiểu của từng file, xoá trùng chỉ theo số chứng từ, "
                    "không xoá âm thầm dòng lỗi, đường dẫn thư mục nằm trong tham số " + PARAM_NAME + ". " + _BACKUP_NOTE]]
-    check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, fixed_note, "ok" if ok else "bad")
+    with _timed("check_sheet"):
+        check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, fixed_note, "ok" if ok else "bad")
     ref = f"{_q(check_sheet)}!C7" if check_sheet and ledger else None
     if not ok:
         return [Beat(f"Em đã sửa nhưng Excel vẫn {_gap_vi(gap)} so với sổ cái. Em dừng ở đây để {you()} xem.",
@@ -1612,17 +1617,19 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
     _step("build_report", trial_balances=len(tbs))
     if len(tbs) < 2:
         return [Beat("Em chưa thấy đủ hai file cân đối tài khoản, kỳ này và kỳ trước, nên chưa lập báo cáo.")]
-    existing = set(bridge.sheet_names())
-    for name, rows, _ in tbs[-2:]:
-        if name not in existing:
-            sheet = bridge.add_sheet(name)
-            if sheet:
-                bridge.write(f"{quote(sheet)}!A1", [list(r) for r in rows])
+    with _timed("tb_copy"):
+        existing = set(bridge.sheet_names())
+        for name, rows, _ in tbs[-2:]:
+            if name not in existing:
+                sheet = bridge.add_sheet(name)
+                if sheet:
+                    bridge.write(f"{quote(sheet)}!A1", [list(r) for r in rows])
     bridge.activate(tbs[-1][0])
     # The rows already read from the files are what the report is built from; reading them back
     # out of Excel would only add a way to fail (cell types change on the way in and out).
     (cur, cur_rows, _), (prev, prev_rows, _) = tbs[-1], tbs[-2]
-    summary, report, names = report_skill.run_report(bridge, ((cur, cur_rows), (prev, prev_rows)))
+    with _timed("report_sheet"):
+        summary, report, names = report_skill.run_report(bridge, ((cur, cur_rows), (prev, prev_rows)))
     if report is None:
         return [Beat(summary)]
     pat = report.figures[-1].value
@@ -1985,7 +1992,9 @@ async def handle_start(manager, transcript: str) -> str:
 
 
 # Said the moment a button is pressed, before the slow part (reading files, writing, saving), so the
-# screen never sits still while Clicky works. Replaced by the first card as soon as it is ready.
+# screen never sits still while Clicky works. Each slow stage inside the step says its own line as it starts,
+# and a stage still running after STILL_AFTER_S says once more that it is still at it: no turn is silent for
+# more than two seconds. Replaced by the first card as soon as it is ready.
 WORKING = {
     "read": "Em đang đọc các file trong thư mục…",
     "confirm": "Em đang đối chiếu và sửa trong file…",
@@ -1995,7 +2004,75 @@ WORKING = {
     "verify": "Em đang mở lại file đã lưu để kiểm…",
     "pick": f"Em đang đọc lại với sổ {you()} chọn…",
     "final": "Em đang chuyển sang Chính thức…",
+    "keep": "Em đang giữ một bản gốc của file…",
+    "query": "Em đang đưa query đơn hàng vào Excel…",
+    "check_sheet": "Em đang ghi sheet Kiểm tra…",
+    "tb_copy": "Em đang chép hai bảng cân đối vào file…",
+    "report": "Em đang lập báo cáo tháng…",
+    "audit": "Em đang ghi Biên bản Clicky…",
 }
+# Excel's first Power Query load in a session starts its engine: seconds with nothing to see.
+FIRST_LOAD_STILL = f"Lần đầu chạy Power Query trong phiên Excel này nên mất vài giây, {you()} chờ em chút nhé…"
+STILL_AFTER_S = 2.0
+# A _timed part that is a stage the user should hear about, and the line it says.
+_STAGE_OF = {"keep_original": "keep", "read_files": "read", "query_add": "query", "check_sheet": "check_sheet",
+             "tb_copy": "tb_copy", "report_sheet": "report", "audit_sheet": "audit"}
+_LOADED_ONCE = False      # set after the first load of this session: later loads are not "the first time"
+
+
+def still_line(step: str) -> str:
+    """What a stage says when it is still running STILL_AFTER_S after it started."""
+    if step == "load" and not _LOADED_ONCE:
+        return FIRST_LOAD_STILL
+    return WORKING[step].rstrip("…") + f", {you()} chờ em chút nhé…"
+
+
+class Busy:
+    """The line under the cursor while one step runs in a worker thread.
+
+    say(stage) shows the stage's line at once and arms a timer; if the same stage is still running when it
+    fires, the line becomes still_line(stage), once. A new stage or stop() disarms it. timer is
+    threading.Timer, or a fake in tests."""
+
+    def __init__(self, emit, after: float = None, timer=None):
+        import threading
+        self.emit = emit
+        self.after = STILL_AFTER_S if after is None else after
+        self.timer = timer or threading.Timer
+        self.lock = threading.Lock()
+        self.current = None
+        self.armed = None
+
+    def say(self, step: str) -> None:
+        with self.lock:
+            if step == self.current:
+                return                      # the same stage again: its timer keeps running
+            self._disarm()
+            self.current = step
+            token = object()
+            self.armed = (token, self.timer(self.after, self._still, args=(step, token)))
+            self.armed[1].daemon = True
+        _step("caption", stage=step, still=False)
+        self.emit(WORKING[step])
+        self.armed[1].start()
+
+    def _still(self, step: str, token) -> None:
+        with self.lock:
+            if self.armed is None or self.armed[0] is not token or self.current != step:
+                return
+            self.armed = None
+        _step("caption", stage=step, still=True)
+        self.emit(still_line(step))
+
+    def _disarm(self) -> None:
+        if self.armed is not None:
+            self.armed[1].cancel()
+            self.armed = None
+
+    def stop(self) -> None:
+        with self.lock:
+            self._disarm()
+            self.current = None
 
 
 _PROGRESS = None          # set while a step runs in a worker thread: shows how far it got (caption only)
@@ -2011,10 +2088,18 @@ def _progress(step: str) -> None:
             log.debug("progress caption failed", exc_info=False)
 
 
-def _working(manager, step: str) -> None:
+async def _busy(manager, step: str, work):
+    """Run one step's slow part in a worker thread with its stages said under the cursor as they start."""
+    global _PROGRESS
     sig = getattr(manager, "sig_caption", None)
-    if sig is not None:
-        sig.emit(WORKING[step])
+    busy = Busy(sig.emit if sig is not None else (lambda text: None))
+    busy.say(step)
+    _PROGRESS = busy.say
+    try:
+        return await asyncio.to_thread(work)
+    finally:
+        _PROGRESS = None
+        busy.stop()
 
 
 async def run_from(manager, folder: Optional[Path]) -> None:
@@ -2022,17 +2107,15 @@ async def run_from(manager, folder: Optional[Path]) -> None:
     use_folder(folder)
     _CHOSEN.clear()                 # a new run asks again: the folder may have changed since
     _PICKS.clear()
-    _working(manager, "read")
     order = machine_date_order()
-    beats = await asyncio.to_thread(lambda: start(manager._excel, _pq(manager), order))
+    beats = await _busy(manager, "read", lambda: start(manager._excel, _pq(manager), order))
     await play(manager, beats)
 
 
 async def handle_approve(manager, transcript: str) -> str:
     # The question's frame must not stay frozen on screen while Excel reloads the query.
     manager.sig_clear_drawings.emit()
-    _working(manager, "approve")
-    beats = await asyncio.to_thread(lambda: approve(manager._excel, _pq(manager)))
+    beats = await _busy(manager, "approve", lambda: approve(manager._excel, _pq(manager)))
     await play(manager, beats)
     return ""
 
@@ -2053,15 +2136,9 @@ def _open_chat(manager) -> None:
 
 async def handle_confirm(manager, transcript: str) -> str:
     import turn_clock
-    _working(manager, "confirm")
     clock = turn_clock.of(manager)
     _step("timing", part="to_confirm", ms=clock.elapsed())      # the press → confirm() starting
-    global _PROGRESS
-    _PROGRESS = lambda step: _working(manager, step)
-    try:
-        beats = await asyncio.to_thread(lambda: confirm(manager._excel, _pq(manager)))
-    finally:
-        _PROGRESS = None
+    beats = await _busy(manager, "confirm", lambda: confirm(manager._excel, _pq(manager)))
     _step("timing", part="confirm_done", ms=clock.elapsed())    # since the press; play() logs the first card
     await play(manager, beats)
     return ""
@@ -2075,15 +2152,13 @@ async def handle_wrong(manager, transcript: str) -> str:
 
 async def handle_save(manager, transcript: str) -> str:
     manager.sig_clear_drawings.emit()
-    _working(manager, "save")
-    beats = await asyncio.to_thread(lambda: save_and_verify(manager._excel))
+    beats = await _busy(manager, "save", lambda: save_and_verify(manager._excel))
     await play(manager, beats)
     return ""
 
 
 async def handle_verify(manager, transcript: str) -> str:
-    _working(manager, "verify")
-    beats = await asyncio.to_thread(lambda: verify_saved(manager._excel))
+    beats = await _busy(manager, "verify", lambda: verify_saved(manager._excel))
     await play(manager, beats)
     return ""
 
@@ -2100,22 +2175,19 @@ def save_pending() -> bool:
 
 
 async def handle_columns(manager, transcript: str) -> str:
-    _working(manager, "pick")
-    beats = await asyncio.to_thread(lambda: answer_columns(manager._excel, _pq(manager), transcript))
+    beats = await _busy(manager, "pick", lambda: answer_columns(manager._excel, _pq(manager), transcript))
     await play(manager, beats)
     return ""
 
 
 async def handle_pick(manager, transcript: str) -> str:
-    _working(manager, "pick")
-    beats = await asyncio.to_thread(lambda: pick(manager._excel, _pq(manager), transcript))
+    beats = await _busy(manager, "pick", lambda: pick(manager._excel, _pq(manager), transcript))
     await play(manager, beats)
     return ""
 
 
 async def handle_final(manager, transcript: str) -> str:
-    _working(manager, "final")
-    beats = await asyncio.to_thread(lambda: make_final(manager._excel))
+    beats = await _busy(manager, "final", lambda: make_final(manager._excel))
     await play(manager, beats)
     return ""
 

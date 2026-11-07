@@ -276,8 +276,11 @@ def evaluate(events: list, sheets: dict, expected: dict) -> Result:
 def report_md(result: Result, meta: dict) -> str:
     verdict = "ĐẠT" if result.passed else "KHÔNG ĐẠT"
     lines = [f"# Diễn tập {meta.get('case', '')}: {verdict}", "",
-             f"Bản Clicky: {meta.get('clicky', '?')} · Lúc: {meta.get('when', '?')} · Robot: {meta.get('driver', '?')}", "",
-             "| Kiểm tra | Kết quả | Chi tiết |", "| --- | --- | --- |"]
+             f"Bản Clicky: {meta.get('clicky', '?')} · Lúc: {meta.get('when', '?')} · Robot: {meta.get('driver', '?')}", ""]
+    if meta.get("power_text"):
+        lines += [f"Máy: {meta['power_text']}"
+                  + (f". Thời gian đo được không tính vì {meta['timing_void']}." if meta.get("timing_void") else "."), ""]
+    lines += ["| Kiểm tra | Kết quả | Chi tiết |", "| --- | --- | --- |"]
     for c in result.checks:
         mark = "Đạt" if c.ok else ("Chưa đạt" if c.blocking else "Lưu ý")
         lines.append(f"| {c.name} | {mark} | {c.detail.replace('|', '/')} |")
