@@ -504,7 +504,7 @@ def test_without_an_hwnd_the_frame_uses_the_real_dpi_and_wraps_the_number(monkey
     b = _bridge_on(_NoHwndShow())
     box = ShapeInfo(3, "TextBox 2", 58, 187, 274, 115, "0,5 tỷ")          # the bhc_case deck's slide 3
     left, top, right, bottom = b.shape_pixels(box)
-    assert b.rect_from == "points"
+    assert b.rect_from == "points" and b.hwnd_error.startswith(("RuntimeError", "AttributeError"))
     assert top <= 455 and bottom >= 520 and left == 116 and right == 664, (left, top, right, bottom)
 
 

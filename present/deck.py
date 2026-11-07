@@ -184,6 +184,7 @@ class PowerPointBridge:
         self.show_is_theirs = False          # the presenter's own show, found by attach(): never closed by Clicky
         self.shows_seen, self.same_name = 0, 0
         self.rect_from = ""                  # where the last frame came from: window (HWND) or points
+        self.hwnd_error = ""                 # why the window rect was not read, for the scene log
 
     def app(self):
         if self._app is None:
@@ -324,9 +325,11 @@ class PowerPointBridge:
             from ctypes import wintypes
             rect = wintypes.RECT()
             if ctypes.windll.user32.GetWindowRect(show_hwnd(self.show), ctypes.byref(rect)):
+                self.hwnd_error = ""
                 return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
-        except Exception:                   # noqa: BLE001 - fall back to PowerPoint's points
-            pass
+            self.hwnd_error = "GetWindowRect: 0"
+        except Exception as exc:            # noqa: BLE001 - fall back to PowerPoint's points
+            self.hwnd_error = f"{type(exc).__name__}: {str(exc)[:120]}"     # COM's words, never a path
         return None
 
     def shape_pixels(self, shape: ShapeInfo) -> tuple:
