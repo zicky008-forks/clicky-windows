@@ -233,6 +233,7 @@ class PowerPointBridge:
         except Exception as exc:            # noqa: BLE001 - said to the presenter, never a traceback
             self.last_error = f"{type(exc).__name__}"
             return False
+        self.last_error = ""
         return self.find_show(path)
 
     def _command_line_show(self, path: str) -> None:

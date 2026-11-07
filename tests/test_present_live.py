@@ -446,9 +446,33 @@ def test_a_cold_powerpoint_that_ignores_run_gets_its_own_command_line_show(qt_ap
     assert launched == [[os.path.join(str(tmp_path), "POWERPNT.EXE"), "/S", r"C:\case\deck.pptx"]]
     assert app.closed == 1                                       # Clicky's read-only copy, closed unsaved
     retry = [e for e in _events(tmp_path) if e.get("event") == "present_retry"]
-    assert [(e["attempt"], e["how"], e["ok"]) for e in retry] == [(1, "run", False), (2, "command_line", True)]
+    assert [(e["attempt"], e["how"], e["sent"], e["ok"]) for e in retry] == [
+        (1, "run_again", True, False), (2, "command_line", True, True)]
     attached = [e for e in _events(tmp_path) if e.get("event") == "present_attached"]
-    assert attached and attached[0]["how"] == "path" and mode.live is not None and mode.bridge.running()
+    assert attached and attached[0]["how"] == "path" and attached[0]["started_by"] == "command_line"
+    assert mode.live is not None and mode.bridge.running()
     clock[0] += present_mode.START_GRACE_S
     mode._tick()
     assert not any(e.get("event") == "present_failed" for e in _events(tmp_path)) and mode.live is not None
+
+
+def test_a_show_that_comes_a_moment_after_the_command_line_is_credited_to_it(qt_app, monkeypatch, tmp_path):
+    """PC fb08855: both retries said ok=false (no show yet at that instant), the show attached 0.5 s later.
+    The retry says the call was sent; present_attached says which start brought the show."""
+    from ui import present_mode
+    app = _PowerPoint(ignore_run=True)
+    app.Path = str(tmp_path)
+    (tmp_path / "POWERPNT.EXE").write_bytes(b"")
+    later = []
+    mode, manager, clock = _mode_with(app, monkeypatch, tmp_path, lambda argv: later.append(argv[-1]))
+    clock[0] += present_mode.RETRY_AFTER_S
+    mode._tick()
+    clock[0] += present_mode.COMMAND_LINE_AFTER_S - present_mode.RETRY_AFTER_S
+    mode._tick()
+    app.windows.append(_ShowWindow(_Pres(app, later[0])))       # PowerPoint needed a moment
+    clock[0] += 0.5
+    mode._tick()
+    retry = [e for e in _events(tmp_path) if e.get("event") == "present_retry"]
+    assert [(e["sent"], e["ok"]) for e in retry] == [(True, False), (True, False)]
+    attached = [e for e in _events(tmp_path) if e.get("event") == "present_attached"]
+    assert len(attached) == 1 and attached[0]["started_by"] == "command_line"
