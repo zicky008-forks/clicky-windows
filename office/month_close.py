@@ -718,11 +718,17 @@ def confirm(bridge, pq) -> list:
         _AUDIT.add("—", f"Chọn nguồn: {what}", others, chosen,
                    "Hai file cùng vai trò Số chính thức cho cùng kỳ; người dùng chọn bản dùng", agreed, "Thư mục dữ liệu")
     before = set(bridge.sheet_names())
-    with _timed("reconcile"):
-        beats = _reconcile(bridge, pq, job["order"])
-    _note_new_sheets(bridge, before)
-    with _timed("audit_sheet"):
-        _write_audit(bridge)
+    # As in approve: adding and styling the check sheets with the screen frozen is faster (Excel does not
+    # repaint after every call) and does not flash sheets past the user; the result shows when it is ready.
+    _try(bridge, "screen_updating", False)
+    try:
+        with _timed("reconcile"):
+            beats = _reconcile(bridge, pq, job["order"])
+    finally:
+        _note_new_sheets(bridge, before)
+        with _timed("audit_sheet"):
+            _write_audit(bridge)
+        _try(bridge, "screen_updating", True)
     return beats
 
 

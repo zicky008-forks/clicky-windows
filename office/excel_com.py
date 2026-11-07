@@ -373,8 +373,24 @@ class ExcelBridge:
             return False
 
     def save_copy(self, path: str) -> bool:
-        """Save a copy of the workbook as it is now under another name; the open workbook is not renamed or saved."""
+        """Save a copy of the workbook as it is now under another name; the open workbook is not renamed or saved.
+
+        When Excel says nothing changed since the last save, the file on disk is the workbook as it is now,
+        so it is copied straight from disk: a file copy takes milliseconds, while SaveCopyAs makes Excel
+        write the whole workbook again (seconds on the first save after Excel starts)."""
         app = self._excel()
+        try:
+            wb = app.ActiveWorkbook
+            disk = str(wb.FullName or "") if str(wb.Path or "") else ""
+            if disk and bool(wb.Saved) and os.path.isfile(disk):
+                import shutil
+                try:
+                    shutil.copyfile(disk, path)
+                    return True
+                except OSError as exc:
+                    log.info("Copying the saved file failed (%s); asking Excel for the copy", _why(exc))
+        except Exception:
+            pass
         try:
             alerts = app.DisplayAlerts
             app.DisplayAlerts = False           # a failure comes back as an error, never as a window

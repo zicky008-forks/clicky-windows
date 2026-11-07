@@ -509,8 +509,9 @@ def test_fix_runs_behind_a_still_screen_and_ends_on_the_profit_card(folder):
     bridge = Recording(folder)
     pq = FakePQ(bridge, folder)
     _begin(bridge, pq, sources.DAY_FIRST)
+    assert bridge.screen == [False, True]                    # the check after "Đúng rồi, làm tiếp" runs frozen too
     beats = month_close.approve(bridge, pq)
-    assert bridge.screen == [False, True]                    # frozen while sheets are added, released after
+    assert bridge.screen == [False, True] * 2                # frozen while sheets are added, released after
     # The warning, then how 556 becomes 436, then what to check before the boss sees it, then the save line.
     assert beats[-4].text.startswith("Lợi nhuận thực là")
     assert beats[-3].graphic["kind"] == "bridge" and beats[-2].graphic["kind"] == "notes"
@@ -1037,3 +1038,21 @@ def test_confirm_logs_where_its_time_goes(folder, tmp_path, monkeypatch):
     assert {"keep_original", "read_files", "find_query", "check_sheet", "reconcile", "audit_sheet"} <= set(parts)
     assert all(isinstance(ms, int) and ms >= 0 for ms in parts.values())
     assert parts["reconcile"] >= parts["check_sheet"]
+
+
+def test_a_failing_check_still_releases_the_screen(folder):
+    class Recording(FakeBridge):
+        def __init__(self, f):
+            super().__init__(f)
+            self.screen = []
+
+        def screen_updating(self, on):
+            self.screen.append(on)
+
+    class Broken(FakePQ):
+        def load(self, name):
+            raise RuntimeError("COM went away")
+    bridge = Recording(folder)
+    with pytest.raises(RuntimeError):
+        _begin(bridge, Broken(bridge, folder), sources.DAY_FIRST)
+    assert bridge.screen == [False, True]

@@ -291,3 +291,18 @@ def test_save_logs_never_carry_a_workbook_name_or_folder(caplog):
     text = caplog.text
     assert "AgriS" not in text and "BCTC" not in text and "Users" not in text
     assert "Excel's temporary name" in text and "PermissionError 0x0000000D" in text and "a .xlsx file" in text
+
+
+def test_the_original_is_copied_from_disk_when_excel_has_nothing_unsaved(tmp_path):
+    # The first SaveCopyAs after Excel starts took seconds on the PC; a saved workbook is the file on disk.
+    book = tmp_path / "BaoCao_T10.xlsx"
+    book.write_bytes(b"saved bytes")
+    copy = tmp_path / "BaoCao_T10_ban-goc.xlsx"
+    asked = []
+    wb = type("W", (), {"FullName": str(book), "Path": str(tmp_path), "Saved": True,
+                        "SaveCopyAs": lambda self, p: asked.append(p)})()
+    app = type("App", (), {"ActiveWorkbook": wb, "DisplayAlerts": True})()
+    assert ExcelBridge(app=app).save_copy(str(copy)) and copy.read_bytes() == b"saved bytes" and asked == []
+    wb.Saved = False                                  # unsaved changes: only Excel has the workbook as it is now
+    other = tmp_path / "again.xlsx"
+    assert ExcelBridge(app=app).save_copy(str(other)) and asked == [str(other)] and not other.exists()
