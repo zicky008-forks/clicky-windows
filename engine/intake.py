@@ -166,10 +166,12 @@ def _order_lines(files: list, truth, period: Optional[tuple]) -> tuple:
         for r in f.footers:
             label = next((str(c).strip() for c in r if str(c or "").strip() and not re.fullmatch(r"[\d.,\s-]+", str(c))),
                          "Dòng không có ngày")
+            blank = not str(_cell(r, a) or "").strip()
             value = _amount(_cell(r, a))
             check = ("khớp tổng các dòng" if abs(value - total) <= TOLERANCE else f"lệch tổng các dòng {spoken(value - total)}")
             items.append(Dropped(f"Dòng \"{label}\" cuối file", f.name, None,
-                                 f"không phải đơn hàng, ghi {spoken(value)}, dùng làm mốc kiểm: {check}"))
+                                 "dòng tổng cuối file, không phải đơn hàng" +
+                                 ("" if blank else f", ghi {spoken(value)}, dùng làm mốc kiểm: {check}")))
         lines.append(FileLine(name=f.name, kind="Bán hàng", period=_period_text(period), unit="đồng",
                               rows=used_rows, rows_label=f"{used_rows} đơn",
                               checks=f"tổng {spoken(used)}", total=total, used=used, dropped=dropped))
