@@ -83,3 +83,37 @@ def test_show_outcome_reads_clickys_attach_or_failure(tmp_path, monkeypatch):
     assert present_robot.show_outcome(log, timeout=0.01) == "failed"
     log.write_text(json.dumps({"event": "present_attached", "hwnd": 5}) + "\n", encoding="utf-8")
     assert present_robot.show_outcome(log, timeout=0.01) == "attached"
+
+
+def test_window_handle_reads_hwnd_as_property_or_method():
+    class Early:
+        HWND = 4242
+
+    assert robot.window_handle(Early()) == 4242
+
+    class Ole:
+        def GetIDsOfNames(self, name):
+            assert name == "HWND"
+            return 7
+
+        def Invoke(self, dispid, lcid, flags, result):
+            assert dispid == 7 and flags == 2          # DISPATCH_PROPERTYGET
+            return 4343
+
+    class Late:                                 # PC 07/11: HWND() as a method raised 'Member not found'
+        _oleobj_ = Ole()
+
+        def HWND(self):
+            raise RuntimeError("Member not found.")
+
+    import types
+    sys.modules.setdefault("pythoncom", types.SimpleNamespace(DISPATCH_PROPERTYGET=2))
+    assert robot.window_handle(Late()) == 4343
+
+
+def test_screenshot_waits_until_every_frame_is_drawn():
+    assert robot.draw_seconds([], 1.2) == 1.2
+    assert robot.draw_seconds([[0, 0, 1, 1]], 1.2) == 0.5 + 2.2
+    assert robot.draw_seconds([[0, 0, 1, 1], [2, 2, 3, 3]], 1.2) == 0.5 + 4.4
+    assert robot.frames_settle({"event": "present_slide", "rects": [[0, 0, 1, 1]] * 2}, 1.2) == 0.5 + 4.4
+    assert robot.frames_settle(None, 1.2) == 1.2

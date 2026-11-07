@@ -83,29 +83,42 @@ def stale_cards(events: list) -> list:
 SOURCE_CLOSED = "File nguồn mở để chỉ ô đã đóng, không lưu"
 
 
+def sources_settled(events: list) -> bool:
+    """Every source file (not the pack) Clicky showed has its close_book line, or there is none to wait for."""
+    shown = {e["book"] for e in events if e.get("event") == "show_book" and e.get("ok") and "book" in e
+             and not e.get("pack")}
+    closed = {e.get("book") for e in events if e.get("event") == "close_book"}
+    return shown <= closed
+
+
 def source_books(res: Result, events: list) -> None:
     """Every file other than the BOD pack that Clicky opened to point at a cell is closed again, unsaved.
 
     Counted per file, not per show_book: the pack itself is shown again and again and may stay open
     (grader, 07/11). Needs `book` (an id, never a name) and `pack` on show_book and close_book; a build
-    that does not log them gets a CHƯA KIỂM ĐƯỢC line, never a silent pass.
+    that does not log them gets a CHƯA KIỂM ĐƯỢC line, never a silent pass. When only the pack was shown,
+    there is nothing to close.
     """
     shown = [e for e in events if e.get("event") == "show_book" and e.get("ok")]
     closed = [e for e in events if e.get("event") == "close_book"]
     saved = [e for e in closed if e.get("saved")]
-    if not shown:
-        res.add(SOURCE_CLOSED, not saved, "không mở file nguồn nào" + (", nhưng có lần lưu" if saved else ""))
-        return
-    if not closed:
-        res.unchecked(SOURCE_CLOSED, "build chưa ghi close_book")
-        return
     if saved:
         res.add(SOURCE_CLOSED, False, f"{len(saved)} lần đóng có lưu")
         return
-    if any("book" not in e for e in shown + closed):
-        res.unchecked(SOURCE_CLOSED, "show_book/close_book chưa ghi mã file (book), chưa tách được bộ BOD")
+    if not shown:
+        res.add(SOURCE_CLOSED, True, "không mở file nguồn nào")
+        return
+    if any("book" not in e for e in shown):
+        res.unchecked(SOURCE_CLOSED, "build chưa ghi mã file (book) trên show_book")
         return
     sources = {e["book"] for e in shown if not e.get("pack")}
+    if not sources:                           # only the pack was shown: nothing to close (fb08855, Case 07)
+        res.add(SOURCE_CLOSED, True, "chỉ mở bộ BOD, không mở file nguồn nào khác")
+        return
+    if any("book" not in e for e in closed):
+        res.unchecked(SOURCE_CLOSED, "close_book chưa ghi mã file (book)")
+        return
+    # A build that logs book ids on show_book also logs close_book (BHC bbd71d7): none means left open.
     missing = sources - {e["book"] for e in closed if e.get("closed", True)}   # closed=false: Excel kept it open
     res.add(SOURCE_CLOSED, not missing,
             f"mở {len(sources)} file nguồn ngoài bộ BOD" + (f", còn {len(missing)} file chưa đóng" if missing else ", đã đóng hết"))
@@ -245,6 +258,11 @@ def main(argv=None) -> int:
                 break
             time.sleep(0.3)
         time.sleep(1.0)
+        # Clicky closes the source files it opened after the last beat, so close_book can land just
+        # after story_end (fb08855 Case 07: graded before it, read CHƯA KIỂM ĐƯỢC). Wait for it, briefly.
+        end = time.monotonic() + 15
+        while not sources_settled(read_events(log)) and time.monotonic() < end:
+            time.sleep(0.5)
         say("3/3 Đóng bộ BOD không lưu, chấm")
         for p in packs:
             close_pack(p.name)

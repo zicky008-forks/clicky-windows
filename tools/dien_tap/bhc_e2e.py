@@ -60,8 +60,15 @@ def grade_close(events: list, key: dict, sources_unchanged: bool, original_kept:
     first_change = next((i for i, k in enumerate(kinds) if k in ("verify", "delivered")), None)
     receipt_first = intake is not None and (first_change is None or kinds.index("intake") < first_change)
     files = [str(f.get("name", "")) for f in (intake or {}).get("files", []) if isinstance(f, dict)]
+    listed = [f for f in (intake or {}).get("files", []) if isinstance(f, dict)]
     balanced = all(abs(float(f.get("total", 0)) - float(f.get("used", 0)) - float(f.get("dropped", 0))) <= 1
-                   for f in (intake or {}).get("files", []) if isinstance(f, dict))
+                   for f in listed)
+    # Rule 4 in rows (BHC fb08855 logs rows_total/rows_used/rows_dropped); amounts only on older builds.
+    in_rows = [f for f in listed if "rows_total" in f]
+    balanced = balanced and all(int(f["rows_total"]) == int(f.get("rows_used", 0)) + int(f.get("rows_dropped", 0))
+                                for f in in_rows)
+    files = [n + (f" ({f['rows_used']}+{f['rows_dropped']}={f['rows_total']} dòng)" if "rows_total" in f else "")
+             for n, f in zip(files, listed)] if len(files) == len(listed) else files
     res.add("1a. Phiếu nhận file hiện trước khi sửa gì", receipt_first,
             "" if intake else "không thấy phiếu nhận file (intake) trong nhật ký")
     res.add("1b. Mỗi file: dòng dùng + dòng bỏ = tổng", intake is not None and balanced,
