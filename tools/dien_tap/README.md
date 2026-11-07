@@ -165,4 +165,6 @@ Kết quả cho người chấm: `ket-qua-robot.md`, `ket-qua-robot.json`, `scen
 
 Không cần bản cài vẫn chạy được phần tính: `python -m engine.bod_check <thu_muc_case>`.
 
-Clicky ghi các sự kiện: `bod_start`, `bod_receipt` (mọi file, vai trò, dòng dùng, dòng bỏ), `bod_finding` (nhóm, mã kiểm, ô, số đúng, số bộ BOD ghi), `bod_done` (số lỗi, đường dẫn kết quả, `verified`), cùng `beat`, `locate`, `spoken` như lúc chốt tháng.
+Clicky ghi các sự kiện: `bod_start` (`folder` là mã thư mục, không phải tên), `bod_receipt` (mọi file, vai trò, dòng dùng, dòng bỏ), `bod_finding` (nhóm, mã kiểm, ô, số đúng, số bộ BOD ghi), `bod_done` (số lỗi, đường dẫn kết quả, `verified`), cùng `beat`, `locate`, `spoken` như lúc chốt tháng.
+
+`show_book` và `close_book` mang `book` (8 ký tự hex của sha1 đường dẫn, không bao giờ là tên file) và `pack` (đúng khi là bộ BOD). Dòng kiểm "File nguồn mở để chỉ ô đã đóng, không lưu" đếm theo từng file: bộ BOD được phép để mở, mọi file khác đã `show_book` phải có `close_book` cùng `book`, và không lần đóng nào có `saved` đúng. Bản cài chưa ghi `close_book` hoặc `book` thì dòng này hiện CHƯA KIỂM ĐƯỢC, không tính là đạt.
