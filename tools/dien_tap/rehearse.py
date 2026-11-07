@@ -185,6 +185,30 @@ def no_workbook(allow_others: bool):
     return excel, None, None
 
 
+COPY_TAG = "_dientap_"                # every file the robot (or Clicky, from the robot's copy) leaves in the case folder
+
+
+def park_old_copies(source: Path, dest: Path) -> list:
+    """Move the robot's own leftovers (earlier laps or crashed runs) out of the case folder.
+
+    Clicky's intake lists every workbook next to the one it works on, so a copy left from an
+    earlier lap shows up on the next lap's receipt as a skipped file. Only names carrying the
+    robot's tag are touched: the customer's or the case's own files are never moved."""
+    moved = []
+    for f in sorted(source.parent.iterdir()):
+        if not f.is_file() or f == source or COPY_TAG not in f.name or f.name.startswith("~$"):
+            continue
+        dest.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.move(str(f), str(dest / f.name))
+            moved.append(f.name)
+        except OSError as exc:         # still open in Excel: leave it, say so
+            say(f"   Không dời được bản sao cũ {f.name}: {exc}")
+    if moved:
+        say(f"   Dời {len(moved)} bản sao cũ của robot ra {dest}")
+    return moved
+
+
 def open_workbook(source: Path, allow_others: bool, zoom: int | None = None):
     import win32com.client
     excel = win32com.client.Dispatch("Excel.Application")
@@ -193,7 +217,7 @@ def open_workbook(source: Path, allow_others: bool, zoom: int | None = None):
         raise SystemExit(f"Excel đang mở file khác: {', '.join(others)}. Đóng hết rồi chạy lại "
                          "(diễn tập chỉ dùng số giả lập).")
     stamp = time.strftime("%m%d_%H%M%S")
-    copy = source.with_name(f"{source.stem}_dientap_{stamp}{source.suffix}")
+    copy = source.with_name(f"{source.stem}{COPY_TAG}{stamp}{source.suffix}")
     shutil.copy2(source, copy)
     excel.Visible = True
     wb = excel.Workbooks.Open(str(copy))
@@ -286,6 +310,7 @@ def main(argv=None) -> int:
 
     if workbook:
         say(f"1/6 Mở bản sao {workbook.name} trong Excel")
+        park_old_copies(workbook, out / "ban-sao-cu")
         excel, wb, copy = open_workbook(workbook, args.allow_other_workbooks, args.zoom)
     else:
         say("1/6 File mẫu: Clicky tự mở, robot chỉ kiểm Excel đang trống")

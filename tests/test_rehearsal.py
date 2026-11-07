@@ -341,3 +341,22 @@ def test_notes_scene_shows_sticky_notes_instead_of_a_lit_range():
     events[-1] = {"t": 80.1, "event": "draw", "shape": {"kind": "card"}}
     res = checks.evaluate(events, SHEETS, EXPECTED)
     assert "Khung sáng nằm đúng ô Excel" in [c.name for c in res.checks if not c.ok]
+
+
+def test_old_robot_copies_leave_the_case_folder_before_a_run(tmp_path):
+    import rehearse
+    case = tmp_path / "case"
+    case.mkdir()
+    src = case / "BaoCao_T10_Beta.xlsx"
+    keep = [src, case / "NhatKy_Ban_Hang.xlsx", case / "BaoCao_T10_Beta_ban-goc.xlsx"]
+    old = [case / "BaoCao_T10_Beta_dientap_1107_123225.xlsx",
+           case / "BaoCao_T10_Beta_dientap_1107_123225_ban-goc.xlsx"]
+    for f in keep + old + [case / "~$BaoCao_T10_Beta_dientap_1107_130000.xlsx"]:
+        f.write_bytes(b"x")
+    dest = tmp_path / "out" / "ban-sao-cu"
+    moved = rehearse.park_old_copies(src, dest)
+    assert sorted(moved) == sorted(f.name for f in old)
+    assert all(f.exists() for f in keep)
+    assert not any(f.exists() for f in old)
+    assert sorted(p.name for p in dest.iterdir()) == sorted(f.name for f in old)
+    assert rehearse.park_old_copies(src, dest) == []
