@@ -61,6 +61,25 @@ def review_finished(events: list) -> bool:
     return bool(beats) and spoken >= len(beats) and cards >= want
 
 
+def stale_cards(events: list) -> list:
+    """(previous beat, beat) pairs where a beat whose cell was not found on screen left the previous
+    beat's card up: no 'clear' between the two beats (Case 07 run 3: beat 8's card stayed during beat 9)."""
+    idx = [i for i, e in enumerate(events) if e.get("event") == "beat"]
+    out, shown = [], None
+    for n, k in enumerate(idx):
+        e = events[k]
+        end = idx[n + 1] if n + 1 < len(idx) else len(events)
+        if e.get("ref") and not e.get("box") and shown is not None:
+            cleared = any(x.get("event") == "clear" for x in events[idx[n - 1] + 1:end])
+            if not cleared:
+                out.append((events[shown].get("i"), e.get("i")))
+        if any(x.get("event") == "card" for x in events[k + 1:end]):
+            shown = k
+        elif any(x.get("event") == "clear" for x in events[k + 1:end]):
+            shown = None
+    return out
+
+
 def grade(events: list, pack_unchanged: bool, answers: list | None = None) -> Result:
     """Pure: the scene log of one run (and, for a made-up case, its planted mistakes) -> ĐẠT/KHÔNG ĐẠT lines."""
     res = Result()
@@ -87,6 +106,9 @@ def grade(events: list, pack_unchanged: bool, answers: list | None = None) -> Re
     missed = sorted({e.get("ref") for e in located if not e.get("box")})
     landed = not refs or (not missed and {e.get("ref") for e in located} == set(refs))
     res.add("Thẻ nằm đúng ô trên màn hình", landed, ", ".join(missed) if missed else "")
+    stale = stale_cards(events)
+    res.add("Không còn thẻ cũ khi sang lỗi mới", not stale,
+            "; ".join(f"thẻ beat {a} còn trên màn hình khi đọc beat {b}" for a, b in stale[:4]))
     res.add("Bộ BOD không bị sửa", pack_unchanged)
     if answers is not None:
         hit, wrong_number = 0, []
