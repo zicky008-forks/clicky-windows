@@ -292,11 +292,14 @@ def test_source_choice_never_matches_a_longer_name_sharing_the_prefix():
 
 
 def test_returns_line_may_be_negative_on_the_report():
-    exp = {"numbers": [{"name": "Hàng trả lại 120 triệu", "sheet": "BC", "label": "hàng trả lại",
-                        "value": 120000000, "tolerance": 1000000, "abs": True}]}
-    sheets = {"BC thang": [["Trừ hàng trả lại", None, -120000000.0]]}
-    res = checks.evaluate([], sheets, exp)
-    assert [c for c in res.checks if c.name == "Hàng trả lại 120 triệu"][0].ok
+    exp = json.loads((Path(__file__).resolve().parents[1] / "tools" / "dien_tap" / "mau_expected.json")
+                     .read_text(encoding="utf-8"))
+    exp = {"numbers": [n for n in exp["numbers"] if n["name"] == "Hàng trả lại 120 triệu"]}
+    for row in (["Trừ hàng trả lại", None, -120000000.0],
+                # the sample's real line (PC, 07/11): "hàng bán bị trả lại", so "hàng trả lại" never matched
+                ["Trừ: hàng bán bị trả lại đang ghi thẳng Nợ TK 511", "511, 521, 515, 711, 911", -120000000.0]):
+        res = checks.evaluate([], {"BC thang": [row]}, exp)
+        assert [c for c in res.checks if c.name == "Hàng trả lại 120 triệu"][0].ok, row
 
 
 def test_laps_pass_only_when_every_lap_passes(tmp_path):
