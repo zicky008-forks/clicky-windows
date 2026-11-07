@@ -564,13 +564,13 @@ _ORDER_M = r"""let
         in List.Transform(so, bang),
     Trong = (r as list) as logical => not List.AnyTrue(List.Transform(r, each Chu(_) <> "")),
     // sources.load_order_file, on one file.
-    DonHang = (b as binary, ten as text, ext as text) as list =>
+    DocDon = (b as binary, ten as text, ext as text) as list =>
         let
             p = Record.FieldOrDefault(ThamSo, ten, MacDinh),
             loai = Loai(b, ext, p[ma_hoa]),
-            ung = try (if loai = "csv" then DocChu(b, p[ma_hoa], true) else if loai = "text" then DocChu(b, p[ma_hoa], false)
+            ung = if loai = "csv" then DocChu(b, p[ma_hoa], true) else if loai = "text" then DocChu(b, p[ma_hoa], false)
                   else if loai = "xls" or loai = "xlsx" then DocExcel(b) else if loai = "html" then DocHtml(b, p[ma_hoa])
-                  else if loai = "xml" then DocXml(b) else {}) otherwise {},
+                  else if loai = "xml" then DocXml(b) else {},
             sach = List.Buffer(List.Transform(ung, each List.Select(_, (r) => not Trong(r)))),
             tieuDe = (rows as list) as number => List.First(List.Select(List.Positions(List.FirstN(rows, @@SCAN@@)), each
                          Record.HasFields(TimCot(rows{_}), {"date", "amount"}) and List.Count(rows) > _ + 1), -1),
@@ -583,6 +583,15 @@ _ORDER_M = r"""let
             inRa = if loai <> "csv" or h > 0 then List.FirstN(coNgay, cuoi + 1) else coNgay,
             conLai = if Record.HasFields(c, "status") then List.Select(inRa, each not Huy(O(_, c, "status"))) else inRa
         in List.Transform(conLai, (r) => {@@CELLS@@, ten}),
+    // Every cell of a file is worked out here, so a failure names its file: a file the receipt read (in ThamSo) must
+    // load, and its error says "Tệp <name>: …"; any other file in the folder (one the receipt also left out) gives
+    // no rows, as before.
+    DonHang = (b as binary, ten as text, ext as text) as list =>
+        let kq = try List.Buffer(List.Transform(DocDon(b, ten, ext), List.Buffer))
+        in if not kq[HasError] then kq[Value]
+           else if Record.HasFields(ThamSo, ten) then
+               error Error.Record(kq[Error][Reason], "Tệp " & ten & ": " & kq[Error][Message], kq[Error][Detail])
+           else {},
     ThamSo = @@PARAMS@@,
     MacDinh = [thu = "vi-VN", ma_hoa = 65001],
     Nguon = Folder.Files(@@FOLDER@@),

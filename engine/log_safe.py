@@ -18,6 +18,9 @@ _QUOTED = re.compile(r"(?<![^\W\d_])(['\"“‘])([^'\"”’\r\n]*?)(['\"”’
 _START = r"(?:https?://|[A-Za-z]:[\\/]|\\\\)"
 _PATH = re.compile(rf"{_START}(?:[^\r\n'\"]*[\\/])?(?:[^\\/\r\n'\"]*?\.{_EXT}\b|[^\s\\/'\"]*)", re.IGNORECASE)
 _FILE = re.compile(rf"(?<![\w<])[\w\-.]+\.{_EXT}\b", re.IGNORECASE)
+# Clicky's per-file query names the file that failed: "Tệp <name>: <Excel's message>" (engine.m_code). The name may
+# have spaces; a Windows file name never has a colon, so it ends at the first ": ".
+_TEP = re.compile(r"(Tệp )([^:\r\n]+?)(: )")
 
 
 def shape(name: str) -> str:
@@ -49,8 +52,21 @@ def _looks_like_name(inner: str) -> bool:
 def scrub(text) -> str:
     """The text with every path and file name replaced by shape(); everything else kept."""
     out = str(text or "")
+    out = _TEP.sub(lambda m: m.group(1) + shape(m.group(2)) + m.group(3), out)
     out = _QUOTED.sub(lambda m: m.group(1) + shape(m.group(2)) + m.group(3)
                       if _looks_like_name(m.group(2)) else m.group(0), out)
     out = _PATH.sub(lambda m: m.group(0) if "…" in m.group(0) else shape(m.group(0)), out)
     out = _FILE.sub(lambda m: shape(m.group(0)), out)
     return out
+
+
+def kind_only(text) -> str:
+    """The category of a Power Query / COM error and nothing else, for clicky.log: Excel's message can quote a cell
+    of the customer's file ("couldn't convert 'Công ty ABC' to Number"), so only the bracketed reason, the COM
+    code and whether the per-file query named a file are kept. The full message, scrubbed, goes to the scene log."""
+    t = str(text or "")
+    parts = re.findall(r"\b((?:DataSource|DataFormat|Expression|Formula|DataSourceKind|Excel|Csv|Xml|Web)\.[A-Za-z]+)",
+                       t)[:1] + re.findall(r"-21\d{8}", t)[:1]
+    if _TEP.search(t):
+        parts.append("(một file đơn hàng)")
+    return " ".join(parts) or "lỗi không rõ loại"

@@ -13,7 +13,7 @@ from typing import Callable, Optional
 
 from engine import m_code
 from storage import atomic_write, data_dir
-from engine.log_safe import scrub      # clicky.log never holds a customer's file or folder name
+from engine.log_safe import kind_only, scrub  # clicky.log never holds a customer's file or folder name
 
 log = logging.getLogger(__name__)
 MAX_PROMPT_CHARS = 6000
@@ -286,7 +286,7 @@ class PowerQuery:
                 log.warning("Power Query load of %s stopped: %s", name, scrub(late))
                 return late
         except Exception as exc:
-            log.warning("Power Query load failed for %s: %s", name, scrub(exc))
+            log.warning("Power Query load failed for %s: %s", name, kind_only(exc))
             return str(exc)
         try:
             # Value2 gives dates as serial numbers, so reading never depends on

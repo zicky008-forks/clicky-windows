@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 from engine import audit, intake as intake_mod, m_code, sources, visuals
-from engine.log_safe import scrub          # clicky.log never holds a customer's file or folder name
+from engine.log_safe import kind_only, scrub  # clicky.log never holds a customer's file or folder name
 from engine.monthly_report import spoken
 from engine.trial_balance import ZERO
 from office.power_query import LoadTimeout, ReadFailed
@@ -1303,12 +1303,13 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
                              _check_ref("A7:E7"), "Chưa đối chiếu được", "warn", "Chưa có số",
                              "Không phải lỗi file của anh. Anh cập nhật Clicky rồi gọi lại em.")]
     if isinstance(result, str):
-        log.warning("loading query %s failed: %s", name, scrub(result))
+        log.warning("loading query %s failed: %s", name, kind_only(result))
         why_vi = load_error_vi(result)
         _write_check_sheet(bridge, None, truth, ledger,
                            [["Lỗi khi tải query", "", "", "", why_vi + " Chi tiết kỹ thuật ghi trong clicky.log."]] + notes)
-        beats.append(Beat(f"Excel chưa tải được query {name}.", _check_ref("A4:E4"), "Query chưa tải được", "bad",
-                          "Lỗi tải", why_vi))
+        failed = load_error_file(result)
+        beats.append(Beat(f"Excel chưa tải được query {name}" + (f": lỗi ở file {failed}." if failed else "."),
+                          _check_ref("A4:E4"), "Query chưa tải được", "bad", "Lỗi tải", why_vi))
         if formula is None or isinstance(result, LoadTimeout):
             return beats                        # Excel is busy or asking: a rewritten query would not load either
         _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder)}
@@ -1374,6 +1375,35 @@ def approve(bridge, pq) -> list:
     return _guarded(bridge, before, lambda: _approve(bridge, pq, job))
 
 
+_FAILED_FILE = re.compile(r"Tệp ([^:\r\n]+?): ")
+
+
+def load_error_file(raw) -> Optional[str]:
+    """The order file a failed load names ("Tệp <name>: …", from the per-file query), or None."""
+    m = _FAILED_FILE.search(str(raw or ""))
+    return m.group(1).strip() if m else None
+
+
+def _file_error_vi(file: str, text: str) -> str:
+    """Which file, which column when Excel says, and one next step (grader F6). Never a value from Excel's message:
+    it can quote a cell of the file; the raw message goes to the scene log only, scrubbed."""
+    col = re.search(r"column '([^']+)' of the table wasn't found", text, re.I)
+    resave = (f"Chị mở file {file} bằng Excel, chọn File > Save As, lưu thành CSV UTF-8 cùng thư mục và cất bản cũ "
+              "ra chỗ khác, rồi gọi em làm lại.")
+    if col:
+        what, step = f"không thấy cột \"{col.group(1)}\"", f"Chị xem file {file} còn cột đó không, rồi gọi em làm lại."
+    elif re.search(r"DataFormat\.Error|couldn't convert|could not convert", text, re.I):
+        what = "có một ô không đổi được sang số hoặc ngày"      # never the cell itself: Excel's text quotes it
+        step = f"Chị tìm ô đó trong file {file}, sửa cho đúng số hoặc ngày, rồi gọi em làm lại."
+    elif re.search(r"DataSource\.(Error|NotFound)|being used by another|access.*denied", text, re.I):
+        what, step = "file đang mở ở nơi khác hoặc không mở được", f"Chị đóng file {file} ở nơi khác rồi gọi em làm lại."
+    elif re.search(r"field '[^']+' of the record wasn't found|wasn't recognized|Excel\.Workbook", text, re.I):
+        what, step = "bên trong file khác cách em đọc loại file này", resave
+    else:
+        what, step = "Excel báo lỗi khi đọc file này", resave
+    return f"Excel chưa đọc được file {file}: {what}. {step}"
+
+
 def load_error_vi(raw: str) -> str:
     """One plain Vietnamese sentence for a Power Query / COM load error; the raw text goes to the log only."""
     if isinstance(raw, LoadTimeout):
@@ -1383,6 +1413,9 @@ def load_error_vi(raw: str) -> str:
         return (f"Excel tải query quá {int(raw.seconds)} giây vẫn chưa xong, nên em dừng chờ. Chị đợi Excel rảnh "
                 "(hoặc đóng bớt file đang mở), rồi gọi lại em.")
     text = str(raw or "")
+    file = load_error_file(text)
+    if file:                                        # Clicky's per-file query names the file (engine.m_code DonHang)
+        return _file_error_vi(file, text)
     m = re.search(r"column '([^']+)' of the table wasn't found", text, re.I)
     if m:
         return f"Excel không tìm thấy cột {m.group(1)} trong file đơn hàng."
@@ -1420,7 +1453,7 @@ def _approve(bridge, pq, job) -> list:
     if isinstance(result, str):
         # The raw COM/Power Query text is for the log, never the screen. Put the user's query back as it was,
         # so a failed fix leaves the workbook as Clicky found it, and end the turn in one clear sentence.
-        log.warning("reloading the fixed query %s failed: %s", job["name"], scrub(result))
+        log.warning("reloading the fixed query %s failed: %s", job["name"], kind_only(result))
         restored = before is not None and pq.add(job["name"], before)
         kept = "Query cũ vẫn giữ nguyên." if restored else _BACKUP_NOTE
         why_vi = load_error_vi(result)

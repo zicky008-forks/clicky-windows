@@ -54,7 +54,7 @@ def test_a_power_query_load_error_quoting_a_company_path_never_reaches_the_log(c
     assert "DataSource.NotFound" in out                       # the caller still gets the full reason
     assert "AgriS" not in caplog.text and "BCTC" not in caplog.text and "Users" not in caplog.text
     assert "Power Query load failed for DonHang: DataSource.NotFound" in caplog.text
-    assert "C:\\…\\<7 ký tự>" in caplog.text
+    assert "couldn't find" not in caplog.text                 # the category only: the message can quote a cell
 
 
 def test_an_unquoted_path_with_spaces_leaks_no_folder_or_company_name():
