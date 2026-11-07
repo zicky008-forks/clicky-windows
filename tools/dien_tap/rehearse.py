@@ -140,6 +140,27 @@ def wait_log(log: Path, done, timeout: float, quiet: float = 0.0) -> list:
     return events
 
 
+def pressable_labels() -> set:
+    """Every fixed label the robot presses by itself (AUTO_PRESS sets; the column and source choosers are
+    answered before the receipt, so they do not matter here)."""
+    out = set()
+    for _, labels, _ in AUTO_PRESS:
+        if isinstance(labels, (set, frozenset, list, tuple)):
+            out |= set(labels)
+    return out
+
+
+def settled(events, pressable) -> bool:
+    """Clicky has finished the work the last click started: a story_end after the last click or turn, whose
+    last card asks nothing the robot is about to press. Case 05 on ebffea4: writing the sheets took ~50 s with
+    no event at all, so a quiet spell is no sign of the end."""
+    last = max((i for i, e in enumerate(events) if e.get("event") in ("chosen", "turn")), default=-1)
+    ends = [e for e in events[last + 1:] if e.get("event") == "story_end"]
+    if not ends:
+        return False
+    return not set(ends[-1].get("choices") or []) & set(pressable)
+
+
 def story_ended(events, target: str) -> bool:
     """After the beat titled `target`, Clicky has asked its closing question or put the story away."""
     at = next((i for i, e in enumerate(events)
@@ -444,8 +465,14 @@ def _main(argv=None) -> int:
     auto = args.auto_press if args.auto_press is not None else (
         [] if "intake" in expected or args.sample else ["Đúng rồi, làm tiếp"])
     auto = list(auto) + list(expected.get("auto_press", []))
-    if "verify" in expected or "tamper" in expected:
-        auto.append(expected.get("save_label", "Lưu và kiểm tra"))
+    target = expected.get("final_title", "")
+    # "Xong" means saved, reopened and reconciled: a case graded without a final title (the hidden cases) is
+    # run to the end, saved and reopened. Our own Case 01 specs opt in with "verify"; "save": false opts out.
+    do_save = "verify" in expected or "tamper" in expected or bool(
+        expected.get("save", not args.sample and not target))
+    save_label = expected.get("save_label", "Lưu và kiểm tra")
+    if do_save:
+        auto.append(save_label)
     if "egress" in expected and not args.local_only:
         auto.append(expected["egress"].get("approve_label", "Gửi đi"))     # the first-send preview card
     if auto:
@@ -486,9 +513,12 @@ def _main(argv=None) -> int:
             say("4/6 Clicky không hỏi sửa. Ghi nhận và chấm tiếp.")
 
     say("5/6 Chờ Clicky làm xong báo cáo")
-    target = expected.get("final_title", "")
-    finished = lambda ev: any(target and target in (e.get("title") or "") for e in ev if e.get("event") == "beat") \
-        or (not target and len(ev) > 0)  # noqa: E731
+    pressable = pressable_labels() - {save_label}
+    if target:
+        finished = lambda ev: any(target in (e.get("title") or "") for e in ev if e.get("event") == "beat")  # noqa: E731
+    else:
+        # No title to wait for: wait for the story that ends the work, then a few seconds with no new scene.
+        finished = lambda ev: settled(ev, pressable)  # noqa: E731
     limit = expected.get("second_stage_seconds", 300)
     done_events = wait_log(log, finished, limit, quiet=6.0)
     if target and finished(done_events) and not story_ended(done_events, target):
@@ -499,7 +529,8 @@ def _main(argv=None) -> int:
     clock.lap("Chặng 2–3: sửa và lập báo cáo")
     if not finished(done_events):
         stalled.append(("Chặng 2–3", clock.steps[-1][1]))
-    if "verify" in expected or "tamper" in expected:
+    offered = lambda ev: any(save_label in (e.get("labels") or []) for e in ev if e.get("event") == "choices")  # noqa: E731
+    if "verify" in expected or "tamper" in expected or (do_save and offered(checks.read_log(log))):
         say("   Chờ Clicky lưu, mở lại file và đối chiếu")
         verified = lambda ev: any(e.get("event") == "verify" for e in ev)  # noqa: E731
         if not verified(wait_log(log, verified, expected.get("verify_seconds", 120), quiet=4.0)):
@@ -525,6 +556,8 @@ def _main(argv=None) -> int:
     result.checks.append(checks.stage_check(stalled))
     result.checks += [checks.Check(n, ok, d, blocking=b)
                       for n, ok, d, b in columns.check_lines(events, expected.get("columns"), answerer)]
+    if do_save and "verify" not in expected and "tamper" not in expected:
+        result.checks.append(checks.saved_check(events, save_label))
     result.checks.append(checks.receipt_reached_check(events, data_files, expected.get("stop_before_receipt_ok", False)))
     network = net.stop()
     egress_text = None

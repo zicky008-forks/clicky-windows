@@ -503,3 +503,31 @@ def test_turn_usage_is_sampled_once_per_turn(monkeypatch):
     assert rehearse.TURN_USAGE == [{"turn": 1, "text": "làm báo cáo tháng", "ws_mb": 200, "handles": 1800},
                                    {"turn": 2, "text": "Đúng rồi, làm tiếp", "ws_mb": 200, "handles": 1800}]
     rehearse.TURN_USAGE.clear()
+
+
+def test_settled_waits_for_the_story_that_ends_the_work():
+    import rehearse
+    receipt = [{"event": "turn", "text": "làm báo cáo tháng"}, {"event": "intake"},
+               {"event": "choices", "labels": ["Đúng rồi, làm tiếp", "Để tôi xem"]},
+               {"event": "story_end", "choices": ["Đúng rồi, làm tiếp", "Để tôi xem"]}]
+    press = {"Đúng rồi, làm tiếp"}
+    assert not rehearse.settled(receipt, press)                 # the robot is about to confirm
+    clicked = receipt + [{"event": "chosen", "label": "Đúng rồi, làm tiếp"}]
+    # Case 05 on ebffea4: ~50 s writing sheets with no event at all. Not settled however long it is quiet.
+    assert not rehearse.settled(clicked, press)
+    work = clicked + [{"event": "beat", "text": "Báo cáo"}, {"event": "story_end", "choices": []}]
+    assert rehearse.settled(work, press)
+    offer = clicked + [{"event": "story_end", "choices": ["Lưu và kiểm tra", "Để tôi tự lưu"]}]
+    assert rehearse.settled(offer, press)                       # saving is waited for on its own
+    stop = receipt[:-1] + [{"event": "story_end", "choices": ["Để tôi xem"]}]
+    assert rehearse.settled(stop, press)                        # an early stop with nothing to press: done
+
+
+def test_saved_check_only_fails_a_save_that_was_not_reopened():
+    c = checks.saved_check([{"event": "story_end"}])
+    assert c.ok and not c.blocking
+    asked = [{"event": "choices", "labels": ["Lưu và kiểm tra", "Để tôi tự lưu"]}]
+    assert not checks.saved_check(asked).ok
+    assert checks.saved_check(asked + [{"event": "verify", "ok": True, "diffs": []}]).ok
+    bad = checks.saved_check(asked + [{"event": "verify", "ok": False, "diffs": [{"cell": "A1"}]}])
+    assert not bad.ok and bad.blocking and "1 ô" in bad.detail
