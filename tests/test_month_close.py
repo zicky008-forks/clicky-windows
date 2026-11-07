@@ -509,8 +509,9 @@ def test_fix_runs_behind_a_still_screen_and_ends_on_the_profit_card(folder):
     bridge = Recording(folder)
     pq = FakePQ(bridge, folder)
     _begin(bridge, pq, sources.DAY_FIRST)
+    assert bridge.screen == [False, True]                    # the check after "Đúng rồi, làm tiếp" runs frozen too
     beats = month_close.approve(bridge, pq)
-    assert bridge.screen == [False, True]                    # frozen while sheets are added, released after
+    assert bridge.screen == [False, True] * 2                # frozen while sheets are added, released after
     # The warning, then how 556 becomes 436, then what to check before the boss sees it, then the save line.
     assert beats[-4].text.startswith("Lợi nhuận thực là")
     assert beats[-3].graphic["kind"] == "bridge" and beats[-2].graphic["kind"] == "notes"
@@ -1131,3 +1132,80 @@ def test_a_beat_without_a_range_still_keeps_the_card_in_a_story_that_wants_it(mo
     asyncio.run(month_close.play(m, [month_close.Beat("Lệch.", "'Doi chieu'!C7", "Lệch", "bad", "−1 tỷ"),
                                      month_close.Beat("Em sửa giúp anh nhé?", choices=("Sửa giúp tôi", "Để tôi xem"))]))
     assert "sig_clear_drawings" not in [n for n, _ in _between_says(m.log)[1]]
+
+
+def test_confirm_logs_where_its_time_goes(folder, tmp_path, monkeypatch):
+    # PC gate on 0b88545: the first "Đúng rồi, làm tiếp" after install took 11.8 s to its first card.
+    # Each part of the step logs its own time, so the slow one on the PC is named, not guessed.
+    import json
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    bridge = FakeBridge(folder)
+    _begin(bridge, FakePQ(bridge, folder), sources.DAY_FIRST)
+    events = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
+    parts = {e["part"]: e["ms"] for e in events if e.get("event") == "close_step" and e.get("step") == "timing"}
+    assert {"keep_original", "read_files", "find_query", "check_sheet", "reconcile", "audit_sheet"} <= set(parts)
+    assert all(isinstance(ms, int) and ms >= 0 for ms in parts.values())
+    assert parts["reconcile"] >= parts["check_sheet"]
+
+
+def test_a_failing_check_still_releases_the_screen(folder):
+    class Recording(FakeBridge):
+        def __init__(self, f):
+            super().__init__(f)
+            self.screen = []
+
+        def screen_updating(self, on):
+            self.screen.append(on)
+
+    class Broken(FakePQ):
+        def load(self, name):
+            raise RuntimeError("COM went away")
+    bridge = Recording(folder)
+    with pytest.raises(RuntimeError):
+        _begin(bridge, Broken(bridge, folder), sources.DAY_FIRST)
+    assert bridge.screen == [False, True]
+
+
+def _recording(folder):
+    class Recording(FakeBridge):
+        def __init__(self, f):
+            super().__init__(f)
+            self.screen = []
+
+        def screen_updating(self, on):
+            self.screen.append(on)
+    return Recording(folder)
+
+
+def test_a_failing_bien_ban_never_leaves_the_screen_frozen(folder, monkeypatch):
+    # Excel rejects a call (the user clicked into a cell) while the Biên bản is rewritten: the screen must
+    # still be released, in the check after "Đúng rồi, làm tiếp" and in the fix after "Sửa giúp tôi".
+    bridge = _recording(folder)
+    pq = FakePQ(bridge, folder)
+    real = month_close._write_audit
+
+    def rejected(_bridge):
+        raise RuntimeError("Call was rejected by callee")
+    monkeypatch.setattr(month_close, "_write_audit", rejected)
+    with pytest.raises(RuntimeError, match="rejected"):
+        _begin(bridge, pq, sources.DAY_FIRST)
+    assert bridge.screen == [False, True]
+
+
+def test_the_step_s_own_error_is_not_hidden_by_a_failing_bien_ban(folder, monkeypatch):
+    bridge = _recording(folder)
+    pq = FakePQ(bridge, folder)
+    _begin(bridge, pq, sources.DAY_FIRST)
+    bridge.screen.clear()
+
+    def broken(*_a):
+        raise ValueError("the fix itself failed")
+
+    def rejected(_bridge):
+        raise RuntimeError("Call was rejected by callee")
+    monkeypatch.setattr(month_close, "_approve", broken)
+    monkeypatch.setattr(month_close, "_write_audit", rejected)
+    with pytest.raises(ValueError, match="fix itself"):
+        month_close.approve(bridge, pq)
+    assert bridge.screen == [False, True]

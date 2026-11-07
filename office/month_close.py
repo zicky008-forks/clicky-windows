@@ -621,9 +621,10 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     _tbs, aside, conflict = _tb_groups(folder)
     if conflict:
         return _ask_which(folder, conflict, machine_order)
-    tbs, ledger = _ledger(folder)
-    period = sources.period_of(tbs[-1][1]) if tbs else None
-    truth = sources.truth(files, period)
+    with _timed("read_files"):
+        tbs, ledger = _ledger(folder)
+        period = sources.period_of(tbs[-1][1]) if tbs else None
+        truth = sources.truth(files, period)
     ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
     receipt = intake_mod.build(folder, files, tbs, truth, ledger, _workbook_name(bridge),
                                set_aside=[(name, f"bản sổ cân đối T{p[1]:02d} khác; anh đã chọn dùng {_CHOSEN[p]}"
@@ -710,16 +711,22 @@ def confirm(bridge, pq) -> list:
         return []
     receipt = job["intake"]
     _step("confirmed")
-    _AUDIT = audit.AuditLog(period=job.get("period", ""), original=_keep_original(bridge),
+    with _timed("keep_original"):
+        original = _keep_original(bridge)
+    _AUDIT = audit.AuditLog(period=job.get("period", ""), original=original,
                             dropped=intake_mod.dropped_rows(receipt), coverage=intake_mod.coverage_rows(receipt))
     for what, chosen, others, agreed in job.get("picked", []):
         _AUDIT.add("—", f"Chọn nguồn: {what}", others, chosen,
                    "Hai file cùng vai trò Số chính thức cho cùng kỳ; người dùng chọn bản dùng", agreed, "Thư mục dữ liệu")
     before = set(bridge.sheet_names())
-    beats = _reconcile(bridge, pq, job["order"])
-    _note_new_sheets(bridge, before)
-    _write_audit(bridge)
-    return beats
+    # As in approve: adding and styling the check sheets with the screen frozen is faster (Excel does not
+    # repaint after every call) and does not flash sheets past the user; the result shows when it is ready.
+    _try(bridge, "screen_updating", False)
+
+    def step():
+        with _timed("reconcile"):
+            return _reconcile(bridge, pq, job["order"])
+    return _guarded(bridge, before, step)
 
 
 def wrong() -> list:
@@ -727,6 +734,36 @@ def wrong() -> list:
     global _PENDING
     _PENDING = None
     return [Beat("Anh nói giúp em chỗ nào chưa đúng nhé. Em chưa sửa gì trong file.")]
+
+
+def _close_out(bridge, before: set, quiet: bool = False) -> None:
+    """Record the sheets Clicky added and rewrite the Biên bản.
+
+    After a step that failed (quiet), a failure here (Excel rejecting a call while the user clicks into a
+    cell) is only logged, so it never hides the step's own error. After a step that worked it is raised:
+    changes with no Biên bản must not be handed over as done."""
+    try:
+        _note_new_sheets(bridge, before)
+        with _timed("audit_sheet"):
+            _write_audit(bridge)
+    except Exception:
+        if not quiet:
+            raise
+        log.warning("updating the Bien ban sheet failed after the step itself failed", exc_info=True)
+
+
+def _guarded(bridge, before: set, step):
+    """Run step, then the Biên bản; the screen is released last whatever happens."""
+    try:
+        try:
+            result = step()
+        except BaseException:
+            _close_out(bridge, before, quiet=True)
+            raise
+        _close_out(bridge, before)
+        return result
+    finally:
+        _try(bridge, "screen_updating", True)      # always last: a frozen screen must never stay frozen
 
 
 def _note_new_sheets(bridge, before: set) -> None:
@@ -812,6 +849,24 @@ def _step(step: str, **data) -> None:
     scene_log.record("close_step", step=step, **data)
 
 
+class _timed:
+    """Logs how long one part of a step took ("close_step" step="timing"), so a slow turn on the PC shows
+    where its time went: Excel saving the original, Power Query, writing sheets, or Clicky's own code."""
+
+    def __init__(self, part: str):
+        self.part = part
+
+    def __enter__(self):
+        import time
+        self.t0 = time.monotonic()
+        return self
+
+    def __exit__(self, *exc):
+        import time
+        _step("timing", part=self.part, ms=int(round((time.monotonic() - self.t0) * 1000)))
+        return False
+
+
 def _load(pq, name: str):
     """pq.load with its start, end and outcome in the scene log."""
     import time
@@ -839,9 +894,10 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
     files = sources.find_order_files(folder)
     if not files:
         return [Beat(f"Em không thấy file đơn hàng CSV nào trong thư mục {folder.name}.")]
-    tbs, ledger = _ledger(folder)
-    period = sources.period_of(tbs[-1][1]) if tbs else None
-    truth = sources.truth(files, period)
+    with _timed("read_files"):
+        tbs, ledger = _ledger(folder)
+        period = sources.period_of(tbs[-1][1]) if tbs else None
+        truth = sources.truth(files, period)
     ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
     beats, notes = [], []
     if truth.outside:
@@ -876,7 +932,8 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
         notes.append(["Kiểu ngày trong file gốc", "", "", "",
                       "; ".join(f"{f.name}: {_order_vi(f.date_order)}" for f in files)])
 
-    name, formula, origin = _query_to_check(pq, folder)
+    with _timed("find_query"):
+        name, formula, origin = _query_to_check(pq, folder)
     keys = _dedup_key(files, truth)
     if truth.invoice_lines:
         lines = ", ".join(sorted(truth.invoice_lines)[:5])
@@ -945,7 +1002,8 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
     why = diagnose(truth, loaded, read_order) if not clean else {"date": [], "distinct": [], "other": [], "excel_dups": []}
     cause_beats, cause_rows = _cause_beats(why, read_order, 0, f"Query ghi cứng {culture}, nên đọc" if culture else "Máy này đọc",
                                            None if clean else loaded.amount - truth.amount)
-    check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, cause_rows + notes, "ok" if clean else "bad")
+    with _timed("check_sheet"):
+        check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, cause_rows + notes, "ok" if clean else "bad")
     ref = f"{_q(check_sheet)}!C7" if check_sheet and ledger else None
     if clean:
         beats.append(Beat(f"Excel khớp sổ cái đến từng đồng: doanh thu {spoken(loaded.amount)}.",
@@ -985,13 +1043,12 @@ def approve(bridge, pq) -> list:
     # Reloading the query and adding the report sheets would flash a dozen sheets past the user;
     # the screen stays still and the result is shown when it is ready.
     _try(bridge, "screen_updating", False)
-    before = set(bridge.sheet_names())
     try:
-        return _approve(bridge, pq, job)
-    finally:
-        _note_new_sheets(bridge, before)
-        _write_audit(bridge)
+        before = set(bridge.sheet_names())
+    except BaseException:
         _try(bridge, "screen_updating", True)
+        raise
+    return _guarded(bridge, before, lambda: _approve(bridge, pq, job))
 
 
 def load_error_vi(raw: str) -> str:
