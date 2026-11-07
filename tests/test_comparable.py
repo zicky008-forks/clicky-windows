@@ -411,3 +411,26 @@ def test_change_columns_stay_empty_when_the_prior_period_is_on_another_basis():
     assert all(r[4:8] == ["", "", "", ""] and str(r[2]).startswith("=") and str(r[3]).startswith("=") for r in lines)
     same = build.build(tb.t10_rows(), tb.t9_rows(), "T10", "T09").sheets["BC thang"]
     assert str(same[4][4]).startswith("=C")
+
+
+@pytest.mark.parametrize("header", [["Mã TK cũ", "Tên TK cũ", "Ghép vào TK", "Tên TK mới"],
+                                    ["Tên tài khoản cũ", "Số hiệu cũ", "Chuyển sang", "Tên tài khoản mới"]])
+def test_the_code_column_is_the_one_holding_codes_not_the_name_beside_it(header):
+    code_first = header[0].startswith("Mã")
+    data = [("4111", "Vốn góp", "4118", "Vốn khác"), ("4112", "Thặng dư vốn", "4118", "Vốn khác"),
+            ("1561", "Giá mua", "1568", "Hàng hóa")]
+    rows = [header] + [[o, n_old, new, n_new] if code_first else [n_old, o, new, n_new] for o, n_old, new, n_new in data]
+    assert comparable.read_mapping(rows) == {"4111": "4118", "4112": "4118", "1561": "1568"}
+
+
+def test_what_is_still_off_after_the_mapping_stays_an_error():
+    cur = _set_opening(_renumber(tb.t10_rows(), "156", "158"), "158", 6705 * tb.M)    # 5 triệu more than T9 closed
+    g = _gate(tb.t9_rows(), cur, {"156": "158"})
+    assert [x.account for x in g.broken] == ["158"] and g.broken[0].diff == 5 * tb.M and not g.ok
+
+
+def test_several_equity_codes_mapped_into_one_bridge_by_their_sum():
+    prev = _split(tb.t9_rows(), "411", [("4111", 0.7), ("4112", 0.3)])
+    cur = _renumber(tb.t10_rows(), "411", "4118")
+    g = _gate(prev, cur, {"4111": "4118", "4112": "4118"})
+    assert g.broken == [] and g.moved == [], [(x.account, x.diff) for x in g.gaps]

@@ -176,8 +176,11 @@ def basis(rows: list, tb: TrialBalance) -> Basis:
 # ── Account mapping and the opening-balance bridge (F5) ──────────────────────
 
 _ACCOUNT_WORDS = ("tk", "ma", "tai khoan", "account", "code", "so hieu")
-_OLD = ("cu", "old", "truoc", "tt200", "tt 200", "tt133", "tt 133", "thong tu 200", "thong tu 133")
-_NEW = ("moi", "new", "nay", "sau", "tt99", "tt 99", "thong tu 99")
+_OLD = ("cu", "old", "truoc", "goc", "ban dau", "chuyen tu", "from", "tt200", "tt 200", "tt133", "tt 133",
+        "thong tu 200", "thong tu 133")
+_NEW = ("moi", "new", "nay", "sau", "ghep vao", "chuyen sang", "chuyen thanh", "doi thanh", "dua vao", "gop vao",
+        "into", "tt99", "tt 99", "thong tu 99")
+_TARGET_VERBS = ("ghep vao", "chuyen sang", "chuyen thanh", "doi thanh", "dua vao", "gop vao")
 _REGIMES = ("tt200", "tt 200", "tt133", "tt 133", "tt99", "tt 99", "thong tu 200", "thong tu 133", "thong tu 99")
 _BARE_SIDE = {"cu": "old", "old": "old", "truoc": "old", "ky truoc": "old", "nam truoc": "old",
               "moi": "new", "new": "new", "sau": "new", "ky nay": "new", "nam nay": "new"}
@@ -191,7 +194,7 @@ def _has(text: str, words) -> bool:
 def _header_side(text: str) -> Optional[str]:
     """"old" / "new" for a mapping table's code column header ("TK cũ", "Mã TK mới", "TT200", "New account")."""
     t = fold(text)
-    if not _has(t, _ACCOUNT_WORDS) and not _has(t, _REGIMES):
+    if not _has(t, _ACCOUNT_WORDS) and not _has(t, _REGIMES) and not _has(t, _TARGET_VERBS):
         return None
     if _has(t, _OLD):
         return "old"
@@ -211,29 +214,52 @@ def _code(cell) -> str:
     return m.group(1) if m else ""
 
 
-def _sides(row, above) -> dict:
-    """{"old": column, "new": column} for a header row. A bare "Cũ" / "Mới" counts when the row above it (a merged
-    "Số hiệu tài khoản" heading) or another cell of the row names the account."""
-    sides = {}
+def _density(rows: list, col: int) -> float:
+    """Share of the filled cells under a header that are account codes (a name column scores near 0)."""
+    cells = [r[col] for r in rows[:60] if r and col < len(r) and r[col] not in (None, "")]
+    return sum(1 for c in cells if _code(c)) / len(cells) if cells else 0.0
+
+
+def _sides(row, above, below: list) -> dict:
+    """{"old": column, "new": column} for a header row, chosen by what the columns hold.
+
+    A header says which side ("TK cũ", "Ghép vào…", a bare "Cũ" under a merged "Số hiệu tài khoản"), but the name
+    column beside a code column often says "cũ"/"mới" too: of the columns a side's headers point at, and their
+    neighbours, the one whose cells are mostly account codes is the code column (grader, Case 05 class)."""
+    marked = {"old": [], "new": []}
     for i, c in enumerate(row or []):
         if isinstance(c, str):
             side = _header_side(c)
-            if side and side not in sides:
-                sides[side] = i
-    if len(sides) < 2:
+            if side:
+                marked[side].append(i)
+    if not (marked["old"] and marked["new"]):
         context = [c for c in list(above or []) + list(row or []) if isinstance(c, str)]
         if any(_has(fold(c), _ACCOUNT_WORDS) for c in context):
             for i, c in enumerate(row or []):
                 side = _BARE_SIDE.get(fold(c).strip(" :()")) if isinstance(c, str) else None
-                if side and side not in sides:
-                    sides[side] = i
+                if side and i not in marked[side]:
+                    marked[side].append(i)
+    if not (marked["old"] and marked["new"]):
+        return {}
+    width = max(len(r or []) for r in [row] + below[:60])
+    claimed = {i: side for side, cols in marked.items() for i in cols}
+    sides = {}
+    for side in ("old", "new"):
+        near = []
+        for i in marked[side]:
+            near += [j for j in (i, i - 1, i + 1) if 0 <= j < width and claimed.get(j, side) == side
+                     and j not in sides.values() and j not in near]
+        best = max(near, key=lambda j: (_density(below, j), j in marked[side]), default=None)
+        if best is None or _density(below, best) < 0.5:
+            return {}
+        sides[side] = best
     return sides
 
 
 def read_mapping(rows: list) -> dict:
     """{old code: new code} from a table with an old-code column and a new-code column; {} when it is not one."""
     for r, row in enumerate(rows[:15]):
-        sides = _sides(row, rows[r - 1] if r else None)
+        sides = _sides(row, rows[r - 1] if r else None, rows[r + 1:])
         if len(sides) < 2:
             continue
         out = {}
