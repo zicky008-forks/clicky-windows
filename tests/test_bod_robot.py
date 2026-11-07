@@ -128,12 +128,28 @@ def test_a_card_left_up_when_the_next_cell_is_not_found_fails():
 
 def test_source_files_opened_to_point_must_be_closed_unsaved(tmp_path, monkeypatch):
     events, answers = _run(tmp_path, monkeypatch)
-    name = "File nguồn mở để chỉ ô đã đóng, không lưu"
-    opened = events + [{"event": "show_book", "i": 9, "ref": "'KH'!C5", "ok": True}]
-    assert name not in {l.name for l in bod_robot.grade(opened, True, answers).lines}   # older build: not graded
-    lines = {l.name: l for l in bod_robot.grade(opened + [{"event": "close_book", "saved": False}], True, answers).lines}
-    assert lines[name].ok
-    lines = {l.name: l for l in bod_robot.grade(opened + [{"event": "close_book", "saved": True}], True, answers).lines}
-    assert not lines[name].ok and "có lưu" in lines[name].detail
-    two = opened + [{"event": "show_book", "i": 10, "ref": "'TG'!B2", "ok": True}, {"event": "close_book", "saved": False}]
-    assert not {l.name: l for l in bod_robot.grade(two, True, answers).lines}[name].ok
+    name = bod_robot.SOURCE_CLOSED
+
+    def line(extra):
+        return {l.name: l for l in bod_robot.grade(events + extra, True, answers).lines}[name]
+
+    pack = [{"event": "show_book", "i": n, "ref": f"'BOD'!C{n}", "ok": True, "book": "p1", "pack": True} for n in range(11)]
+    plan = [{"event": "show_book", "i": 11, "ref": "'KH'!C5", "ok": True, "book": "k1", "pack": False}]
+    # An older build without close_book: said out loud, does not fail, never shown as ĐẠT.
+    old = line([{"event": "show_book", "i": 9, "ref": "'KH'!C5", "ok": True}])
+    assert old.unchecked and "close_book" in old.detail
+    assert "CHƯA KIỂM ĐƯỢC" in bod_robot.grade(events + [{"event": "show_book", "ok": True}], True, answers).markdown("x")
+    # Run 5 shape: the pack shown 11 times and left open, the plan file shown once and closed: ĐẠT.
+    ok = line(pack + plan + [{"event": "close_book", "book": "k1", "pack": False, "saved": False}])
+    assert ok.ok and not ok.unchecked
+    # The plan file left open.
+    assert not line(pack + plan + [{"event": "close_book", "book": "p1", "pack": True, "saved": False}]).ok
+    # Closed with a save.
+    bad = line(pack + plan + [{"event": "close_book", "book": "k1", "pack": False, "saved": True}])
+    assert not bad.ok and "lưu" in bad.detail
+    # close_book logged but no file id yet: cannot tell the pack apart.
+    assert line(plan[:1] + [{"event": "close_book", "saved": False}]).unchecked
+    # Nothing opened at all.
+    assert line([]).ok
+
+
