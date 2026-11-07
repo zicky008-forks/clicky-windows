@@ -139,6 +139,23 @@ def call_with_timeout(obj, method: str, args: tuple = (), timeout: float = None,
     return None, result.get("value")
 
 
+def same_m(a, b) -> bool:
+    """The same M text, whatever line endings Excel or a text file used."""
+    def norm(x):
+        return str(x or "").replace("\r\n", "\n").replace("\r", "\n")
+    return norm(a) == norm(b)
+
+
+def _part(part: str, t0: float, **extra) -> None:
+    """One timing line in the rehearsal log ("close_step" step="timing"), like month_close._timed: where the time
+    of adding a query goes (finding it, the backup, Excel taking the M)."""
+    try:
+        import scene_log
+        scene_log.record("close_step", step="timing", part=part, ms=int(round((time.monotonic() - t0) * 1000)), **extra)
+    except Exception:                         # noqa: BLE001 - timing never breaks the step
+        pass
+
+
 class PowerQuery:
     def __init__(self, bridge):
         self.bridge = bridge          # office.excel_com.ExcelBridge (or a fake in tests)
@@ -160,14 +177,25 @@ class PowerQuery:
         return [f for name, formula in self.list() for f in m_code.lint(name, formula)]
 
     def replace(self, name: str, formula: str) -> bool:
-        """Replace one query's M after saving the old text to the backup log."""
+        """Replace one query's M after saving the old text to the backup log. The same M (line endings aside)
+        is not written again: there is nothing to back up or change."""
+        t0 = time.monotonic()
         qs = self._queries()
         if not qs:
             return False
         try:
             query = qs.Item(name)
-            self._backup(name, query.Formula)
+            old = query.Formula
+            _part("pq_read", t0)
+            if same_m(old, formula):
+                _part("formula_write", time.monotonic(), skipped=True)
+                return True
+            t0 = time.monotonic()
+            self._backup(name, old)
+            _part("pq_backup", t0)
+            t0 = time.monotonic()
             query.Formula = formula
+            _part("formula_write", t0, skipped=False)
             return True
         except Exception as exc:
             log.warning("Power Query replace failed for %s: %s", name, scrub(exc))
@@ -186,13 +214,18 @@ class PowerQuery:
 
     def add(self, name: str, formula: str) -> bool:
         """Add a query, or replace its M (with a backup) when one with that name exists."""
+        t0 = time.monotonic()
         qs = self._queries()
         if qs is None:                                  # not "if not qs": an empty COM collection is falsy
             return False
-        if any(qs.Item(i + 1).Name == name for i in range(qs.Count)):
+        found = any(qs.Item(i + 1).Name == name for i in range(qs.Count))
+        _part("pq_find", t0, found=found)
+        if found:
             return self.replace(name, formula)
         try:
+            t0 = time.monotonic()
             qs.Add(name, formula)
+            _part("formula_write", t0, skipped=False, new=True)
             return True
         except Exception as exc:
             log.warning("Power Query add failed for %s: %s", name, scrub(exc))
