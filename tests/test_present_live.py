@@ -531,3 +531,29 @@ def test_describe_reads_the_text_bounds_from_powerpoint():
     info = describe(shape, 3)
     assert info.text == "0,5 tỷ" and info.text_box == (70.0, 330.0, 120.0, 50.0)
     assert (info.framed.top, info.framed.height) == (330.0, 50.0)
+
+
+def test_hwnd_given_as_a_callable_stub_is_read_as_a_property(monkeypatch):
+    """Test PC 07/11: late-bound HWND is a stub that raises 'Member not found' when called; the property get works."""
+    import sys
+    import types
+    from present.deck import show_hwnd
+    fake = types.ModuleType("pythoncom")
+    fake.DISPATCH_PROPERTYGET = 2
+    monkeypatch.setitem(sys.modules, "pythoncom", fake)
+
+    class Ole:
+        def GetIDsOfNames(self, name):
+            assert name == "HWND"
+            return 7
+
+        def Invoke(self, dispid, lcid, flags, result):
+            assert (dispid, flags, result) == (7, 2, True)
+            return 0x1234
+
+    def stub():
+        raise RuntimeError("Member not found")
+
+    win = type("W", (), {"HWND": staticmethod(stub), "_oleobj_": Ole()})()
+    assert show_hwnd(win) == 0x1234
+    assert show_hwnd(type("W", (), {"HWND": 99})()) == 99

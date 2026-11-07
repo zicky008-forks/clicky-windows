@@ -147,6 +147,22 @@ def system_dpi() -> int:
     return 96
 
 
+def show_hwnd(window) -> int:
+    """SlideShowWindow.HWND. Late-bound win32com can hand HWND back as a callable stub that fails with
+    'Member not found' when called (test PC, 07/11): then ask COM for it as a property. Raises when neither
+    works, and the caller falls back to PowerPoint's points; never a guess by window class."""
+    h = window.HWND
+    if isinstance(h, int) and not isinstance(h, bool):
+        return h
+    try:
+        import pythoncom
+        ole = window._oleobj_
+        return int(ole.Invoke(ole.GetIDsOfNames("HWND"), 0, pythoncom.DISPATCH_PROPERTYGET, True))
+    except Exception:                       # noqa: BLE001 - try it as a method
+        pass
+    return int(h())
+
+
 def _full_key(path: str) -> str:
     return fold(str(path)).replace("/", "\\").rstrip("\\")
 
@@ -307,7 +323,7 @@ class PowerPointBridge:
             import ctypes
             from ctypes import wintypes
             rect = wintypes.RECT()
-            if ctypes.windll.user32.GetWindowRect(int(self.show.HWND), ctypes.byref(rect)):
+            if ctypes.windll.user32.GetWindowRect(show_hwnd(self.show), ctypes.byref(rect)):
                 return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
         except Exception:                   # noqa: BLE001 - fall back to PowerPoint's points
             pass
@@ -330,7 +346,7 @@ class PowerPointBridge:
         """Give the keyboard back to the slide show, so Space and the clicker move slides again."""
         try:
             import ctypes
-            ctypes.windll.user32.SetForegroundWindow(int(self.show.HWND))
+            ctypes.windll.user32.SetForegroundWindow(show_hwnd(self.show))
         except Exception:                   # noqa: BLE001
             pass
 
