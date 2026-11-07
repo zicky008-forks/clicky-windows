@@ -118,6 +118,16 @@ def wait_log(log: Path, done, timeout: float, quiet: float = 0.0) -> list:
     return events
 
 
+def story_ended(events, target: str) -> bool:
+    """After the beat titled `target`, Clicky has asked its closing question or put the story away."""
+    at = next((i for i, e in enumerate(events)
+               if e.get("event") == "beat" and target in (e.get("title") or "")), None)
+    if at is None:
+        return False
+    return any((e.get("event") == "beat" and e.get("choices")) or (e.get("event") == "guided" and not e.get("active"))
+               or e.get("event") == "turn" for e in events[at + 1:])
+
+
 def file_hash(path: Path) -> str:
     import hashlib
     try:
@@ -415,6 +425,11 @@ def main(argv=None) -> int:
         or (not target and len(ev) > 0)  # noqa: E731
     limit = expected.get("second_stage_seconds", 300)
     done_events = wait_log(log, finished, limit, quiet=6.0)
+    if target and finished(done_events) and not story_ended(done_events, target):
+        # Without a voice each scene stays up for its reading time, often longer than the quiet window:
+        # the scenes after the final card (bridge, sticky notes, save question) are still to come.
+        say("   Chờ Clicky kể hết các cảnh sau thẻ cuối")
+        wait_log(log, lambda ev: story_ended(ev, target), expected.get("story_end_seconds", 90), quiet=2.0)
     clock.lap("Chặng 2–3: sửa và lập báo cáo")
     if not finished(done_events):
         stalled.append(("Chặng 2–3", clock.steps[-1][1]))

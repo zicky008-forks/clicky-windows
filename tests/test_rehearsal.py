@@ -360,3 +360,19 @@ def test_old_robot_copies_leave_the_case_folder_before_a_run(tmp_path):
     assert not any(f.exists() for f in old)
     assert sorted(p.name for p in dest.iterdir()) == sorted(f.name for f in old)
     assert rehearse.park_old_copies(src, dest) == []
+
+
+def test_story_is_not_over_at_the_final_card_while_scenes_remain():
+    """lan3-v2, 07/11: the robot graded 6 s after the profit card, while Clicky was still showing it
+    (no voice, long reading time), and the bridge and sticky notes never came on screen."""
+    import rehearse
+    t = "Lợi nhuận sau thuế"
+    ev = [{"event": "turn"}, {"event": "beat", "title": "Báo cáo tháng đã lập"},
+          {"event": "beat", "title": "Lợi nhuận sau thuế thực"}, {"event": "spoken", "i": 3}]
+    assert not rehearse.story_ended(ev, t)
+    more = ev + [{"event": "beat", "title": "", "graphic": {"kind": "bridge"}},
+                 {"event": "beat", "title": "", "graphic": {"kind": "notes"}}]
+    assert not rehearse.story_ended(more, t)
+    assert rehearse.story_ended(more + [{"event": "beat", "title": "", "choices": ["Lưu và kiểm tra"]}], t)
+    assert rehearse.story_ended(ev + [{"event": "guided", "active": False}], t)
+    assert not rehearse.story_ended([{"event": "beat", "title": "Lệch", "choices": ["Sửa giúp tôi"]}], t)
