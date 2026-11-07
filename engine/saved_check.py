@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -32,21 +33,28 @@ def _number(value):
         return None
 
 
-def tamper_from_env(path: Path) -> None:
-    """Test hook for the rehearsal robot: change one saved cell so the re-read must catch it.
+def tamper_from_env(path: Path) -> Path:
+    """Test hook for the rehearsal robot: the file the re-read must check, with one cell changed.
 
-    Only runs when CLICKY_TEST_TAMPER is set, on practice data: the file is rewritten with values only.
+    Only acts when CLICKY_TEST_TAMPER is set, on practice data. The saved file is never touched: Excel
+    still holds it open (on Windows a write to it fails), so the changed copy goes to a temp folder and
+    its path is returned. Without the variable the saved path comes back as it is.
     """
     spec = os.environ.get(TAMPER_ENV, "").strip()
     if not spec or "=" not in spec:
-        return
+        return path
     ref, delta = spec.rsplit("=", 1)
     sheet, cell = split(ref)
     from openpyxl import load_workbook
     wb = load_workbook(path, data_only=True)
     ws = wb[sheet]
     ws[cell] = float((_number(ws[cell].value) or Decimal(0)) + Decimal(delta.strip()))
-    wb.save(path)
+    folder = Path(tempfile.gettempdir()) / "clicky-tamper"
+    folder.mkdir(parents=True, exist_ok=True)
+    copy = folder / f"{Path(path).stem}_tamper.xlsx"
+    wb.save(copy)
+    wb.close()
+    return copy
 
 
 def check(path: Path, expect: dict) -> tuple:

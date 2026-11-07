@@ -1115,8 +1115,8 @@ def verify_saved(bridge) -> list:
     if not path or not _EXPECT:
         return [Beat("Em chưa có số nào để đối chiếu với file đã lưu. Anh chạy báo cáo tháng trước nhé.")]
     try:
-        saved_check.tamper_from_env(Path(path))
-        ok, diffs = saved_check.check(Path(path), _EXPECT)
+        # The robot's tamper hook hands back a changed copy; without it this is the saved file itself.
+        ok, diffs = saved_check.check(saved_check.tamper_from_env(Path(path)), _EXPECT)
     except Exception as exc:
         log.warning("re-reading the saved workbook failed: %s", exc)
         ok, diffs = False, [{"cell": "", "want": None, "got": None}]
@@ -1247,8 +1247,8 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
                           f"{spoken(overstated)} hàng bán bị trả lại đang ghi thẳng vào Nợ TK 511. "
                           f"Cần chuyển sang TK 521 trước khi gửi sếp.{change}",
                           was=spoken(pat), roll=(int(pat), int(real))))
-        bridge = visuals.profit_bridge(pat, [("Hàng trả lại ghi Nợ 511", -overstated)], real)
-        beats.append(Beat(visuals.bridge_sentence(bridge), pat_ref, graphic={"kind": "bridge", **bridge}))
+        chart = visuals.profit_bridge(pat, [("Hàng trả lại ghi Nợ 511", -overstated)], real)
+        beats.append(Beat(visuals.bridge_sentence(chart), pat_ref, graphic={"kind": "bridge", **chart}))
     else:
         beats.append(Beat(summary, pat_ref, "Lợi nhuận sau thuế", "", spoken(pat)))
     # Every trap the engine found gets a note beside the line it touches; they stay up while the save is asked.
@@ -1495,6 +1495,10 @@ async def play(manager, beats: list) -> None:
         if box:
             manager.sig_point_release.emit()
             last_card = beat
+    # The story is over: the rehearsal robot waits for this, not for a quiet spell (a card read without
+    # a voice can sit still for ten seconds while scenes are still to come).
+    scene_log.record("story_end", beats=len(beats), last=beats[-1].text[:80] if beats else "",
+                     choices=list(beats[-1].choices or []) if beats else [])
     if beats and not beats[-1].choices:
         def fade():
             if getattr(manager, "_month_close_run", None) is run:
