@@ -109,3 +109,11 @@ def test_window_handle_reads_hwnd_as_property_or_method():
     import types
     sys.modules.setdefault("pythoncom", types.SimpleNamespace(DISPATCH_PROPERTYGET=2))
     assert robot.window_handle(Late()) == 4343
+
+
+def test_screenshot_waits_until_every_frame_is_drawn():
+    assert robot.draw_seconds([], 1.2) == 1.2
+    assert robot.draw_seconds([[0, 0, 1, 1]], 1.2) == 0.5 + 2.2
+    assert robot.draw_seconds([[0, 0, 1, 1], [2, 2, 3, 3]], 1.2) == 0.5 + 4.4
+    assert robot.frames_settle({"event": "present_slide", "rects": [[0, 0, 1, 1]] * 2}, 1.2) == 0.5 + 4.4
+    assert robot.frames_settle(None, 1.2) == 1.2
