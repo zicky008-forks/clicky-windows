@@ -93,10 +93,10 @@ def lat(**kw):
 def test_code_turn_too_slow_fails_only_on_a_build_that_tags_the_mode():
     spec = {"layout": {"latency": SPEC["layout"]["latency"]}}
     rows = by_name(layout_checks.evaluate(lat(mode="code", first_feedback=1800, ready=900, first_point=1200), spec))
-    c = rows["Lượt chạy bằng code: phản hồi đầu ≤ 1500 ms mọi lượt"]
+    c = rows["Lượt chạy bằng code: phản hồi đầu ≤ 1000 ms mọi lượt"]
     assert not c.ok and c.blocking
     old = by_name(layout_checks.evaluate(lat(first_feedback=1800), spec))
-    assert not old["Lượt chạy bằng code: phản hồi đầu ≤ 1500 ms mọi lượt"].blocking
+    assert not old["Lượt chạy bằng code: phản hồi đầu ≤ 1000 ms mọi lượt"].blocking
 
 
 def test_pointer_must_fly_within_1500_ms_of_the_answer():
@@ -140,3 +140,38 @@ def test_robot_waits_until_every_turn_has_its_latency_line():
     assert not layout_checks.turns_measured([{"event": "turn"}, {"event": "latency"}, {"event": "turn"}])
     assert layout_checks.turns_measured([{"event": "turn"}, {"event": "latency"}])
     assert layout_checks.turns_measured([])
+
+
+READY = "Lượt chạy bằng code: tính xong ≤ 5000 ms (lượt nạp Power Query đầu ≤ 7000 ms, có dòng chữ báo chờ)"
+
+
+def _confirm(ready, caption=True, load=True):
+    ev = [{"t": 1, "event": "turn", "label": "Đúng rồi, làm tiếp"}]
+    if load:
+        ev.append({"t": 2, "event": "close_step", "step": "query_load", "status": "ok"})
+    e = {"t": 3, "event": "latency", "source": "typed", "mode": "code", "label": "Đúng rồi, làm tiếp",
+         "first_feedback": 0, "ready": ready, "first_point": ready + 150}
+    if caption:
+        e["first_caption"] = 0
+    return ev + [e]
+
+
+def test_ready_gates_from_the_lead():
+    """84603e7 on the PC: cold 6828 ms with the caption up passes; warm 3563 passes; 7.5 s or no caption fails."""
+    spec = {"layout": {"latency": SPEC["layout"]["latency"]}}
+    assert by_name(layout_checks.evaluate(_confirm(6828), spec))[READY].ok
+    assert by_name(layout_checks.evaluate(_confirm(3563), spec))[READY].ok
+    assert not by_name(layout_checks.evaluate(_confirm(7500), spec))[READY].ok
+    bad = by_name(layout_checks.evaluate(_confirm(6828, caption=False), spec))[READY]
+    assert not bad.ok and "báo đang chờ" in bad.detail
+    # Only the first query-loading turn gets the longer limit; a turn with no Power Query must be ≤ 5 s.
+    assert not by_name(layout_checks.evaluate(_confirm(6000, load=False), spec))[READY].ok
+    two = _confirm(6828) + [dict(e, t=e["t"] + 10) for e in _confirm(6000)]
+    assert not by_name(layout_checks.evaluate(two, spec))[READY].ok
+
+
+def test_unmeasured_first_feedback_is_not_a_zero():
+    spec = {"layout": {"latency": SPEC["layout"]["latency"]}}
+    c = by_name(layout_checks.evaluate(lat(mode="code", ready=900, first_point=1000), spec))[
+        "Lượt chạy bằng code: phản hồi đầu ≤ 1000 ms mọi lượt"]
+    assert "1 lượt chưa đo" in c.detail
