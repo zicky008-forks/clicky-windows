@@ -30,6 +30,18 @@ class ShapeInfo:
     is_chart: bool = False
     is_table: bool = False
     chart_type: Optional[int] = None
+    text_box: Optional[tuple] = None    # (left, top, width, height) of the text itself, points: what a frame wraps
+
+    @property
+    def framed(self) -> "ShapeInfo":
+        """The rectangle to frame: the text's own bounds for a text shape (a box anchored at the bottom, or
+        taller than its text, would leave the number outside a frame drawn on the shape), else the shape."""
+        if not self.text_box or self.is_chart or self.is_table:
+            return self
+        l, t, w, h = self.text_box
+        if w <= 0 or h <= 0:
+            return self
+        return ShapeInfo(self.index, self.name, l, t, w, h, self.text, self.is_title)
 
     @property
     def area(self) -> float:
@@ -37,10 +49,15 @@ class ShapeInfo:
 
 
 def describe(shape, index: int) -> ShapeInfo:
-    text = ""
+    text, text_box = "", None
     try:
         if shape.HasTextFrame and shape.TextFrame.HasText:
-            text = str(shape.TextFrame.TextRange.Text)
+            rng = shape.TextFrame.TextRange
+            text = str(rng.Text)
+            try:
+                text_box = (float(rng.BoundLeft), float(rng.BoundTop), float(rng.BoundWidth), float(rng.BoundHeight))
+            except Exception:               # noqa: BLE001 - frame the shape instead
+                text_box = None
     except Exception:                       # noqa: BLE001 - some shapes refuse TextFrame
         pass
     is_title = False
@@ -66,7 +83,7 @@ def describe(shape, index: int) -> ShapeInfo:
         except Exception:                   # noqa: BLE001
             pass
     return ShapeInfo(index, str(shape.Name), float(shape.Left), float(shape.Top), float(shape.Width),
-                     float(shape.Height), text, is_title, is_chart, is_table, chart_type)
+                     float(shape.Height), text, is_title, is_chart, is_table, chart_type, text_box)
 
 
 def find(shapes: list, kind: Optional[str] = None, contains: Optional[str] = None) -> Optional[ShapeInfo]:
@@ -108,6 +125,28 @@ def to_screen(shape: ShapeInfo, slide_w: float, slide_h: float, win_left: float,
     return (round(x), round(y), round(shape.width * scale * px), round(shape.height * scale * px))
 
 
+def system_dpi() -> int:
+    """Windows' DPI for this process (144 at 150 %). PowerPoint gives window positions in points, so points
+    to pixels is dpi / 72, never a fixed 96."""
+    try:
+        import ctypes
+        dpi = int(ctypes.windll.user32.GetDpiForSystem())
+        if dpi > 0:
+            return dpi
+    except Exception:                       # noqa: BLE001 - before Windows 10 1607, or not Windows
+        pass
+    try:
+        import ctypes
+        hdc = ctypes.windll.user32.GetDC(0)
+        dpi = int(ctypes.windll.gdi32.GetDeviceCaps(hdc, 88))     # LOGPIXELSX
+        ctypes.windll.user32.ReleaseDC(0, hdc)
+        if dpi > 0:
+            return dpi
+    except Exception:                       # noqa: BLE001
+        pass
+    return 96
+
+
 def _full_key(path: str) -> str:
     return fold(str(path)).replace("/", "\\").rstrip("\\")
 
@@ -128,6 +167,7 @@ class PowerPointBridge:
         self.how = ""                       # how the show window was confirmed: path / name / presentation
         self.show_is_theirs = False          # the presenter's own show, found by attach(): never closed by Clicky
         self.shows_seen, self.same_name = 0, 0
+        self.rect_from = ""                  # where the last frame came from: window (HWND) or points
 
     def app(self):
         if self._app is None:
@@ -277,9 +317,12 @@ class PowerPointBridge:
         """Physical (left, top, right, bottom) of a shape on the show, ready for physical_to_logical."""
         ps = self.pres.PageSetup
         win = self.window_pixels()
-        if win is None:
+        shape = shape.framed
+        if win is None:                     # no HWND from this PowerPoint: its window points × real DPI
+            self.rect_from = "points"
             x, y, w, h = self.screen_rect(shape)
         else:
+            self.rect_from = "window"
             x, y, w, h = to_screen(shape, float(ps.SlideWidth), float(ps.SlideHeight), *win, dpi=72)
         return (x, y, x + w, y + h)
 
@@ -306,11 +349,13 @@ class PowerPointBridge:
         t = find(self.slide_shapes(number), kind="tiêu đề")
         return t.text.strip() if t else ""
 
-    def screen_rect(self, shape: ShapeInfo, dpi: int = 96) -> tuple:
+    def screen_rect(self, shape: ShapeInfo, dpi: Optional[int] = None) -> tuple:
+        """Physical pixels from PowerPoint's own points. PC run fb08855 at 150 %: a fixed 96 dpi put the
+        frame a third too small and above the number."""
         ps = self.pres.PageSetup
         w = self.show
-        return to_screen(shape, float(ps.SlideWidth), float(ps.SlideHeight), float(w.Left), float(w.Top),
-                         float(w.Width), float(w.Height), dpi)
+        return to_screen(shape.framed, float(ps.SlideWidth), float(ps.SlideHeight), float(w.Left), float(w.Top),
+                         float(w.Width), float(w.Height), dpi or system_dpi())
 
     def end(self):
         try:

@@ -204,7 +204,7 @@ class PresentMode(QObject):
             boxes.append(box)
             self.manager.sig_draw.emit({"kind": "rect", "x1": l - 6, "y1": t - 6, "x2": r + 6, "y2": b + 6,
                                         "color": "blue", "ttl": None})
-        scene_log.record("present_frames", boxes=boxes)
+        scene_log.record("present_frames", boxes=boxes, rect_from=getattr(self.bridge, "rect_from", ""))
         if boxes:
             self.manager.sig_point_hold.emit(True)
             self.manager.sig_point_at.emit(*pointer_spot(boxes[0]), NO_BUBBLE)
