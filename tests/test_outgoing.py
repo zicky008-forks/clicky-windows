@@ -321,6 +321,9 @@ def _month_close_through_the_manager(case_dir, monkeypatch, local):
 
 
 def test_local_only_month_close_numbers_and_beats_are_identical(case, tmp_path, monkeypatch):
+    # The Biên bản stamps HH:MM; two runs that straddle a minute (CI, 12:43 → 12:44) must still compare equal.
+    from engine import audit
+    monkeypatch.setattr(audit, "now", lambda: "09:30")
     other = tmp_path.parent / (tmp_path.name + "-copy")   # beside the case, not inside it: the receipt lists every file
     shutil.copytree(case, other)
     off_replies, off_sheets, off_queries, off_llm, off_rec = _month_close_through_the_manager(case, monkeypatch, local=False)
