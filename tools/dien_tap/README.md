@@ -216,3 +216,13 @@ Không cần bản cài vẫn chạy được phần tính: `python -m engine.bo
 Clicky ghi các sự kiện: `bod_start` (`folder` là mã thư mục, không phải tên), `bod_receipt` (mọi file, vai trò, dòng dùng, dòng bỏ), `bod_finding` (nhóm, mã kiểm, ô, số đúng, số bộ BOD ghi), `bod_done` (số lỗi, đường dẫn kết quả, `verified`), cùng `beat`, `locate`, `spoken` như lúc chốt tháng.
 
 `show_book` và `close_book` mang `book` (8 ký tự hex của sha1 đường dẫn, không bao giờ là tên file) và `pack` (đúng khi là bộ BOD). Dòng kiểm "File nguồn mở để chỉ ô đã đóng, không lưu" đếm theo từng file: bộ BOD được phép để mở, mọi file khác đã `show_book` phải có `close_book` cùng `book`, và không lần đóng nào có `saved` đúng. Bản cài chưa ghi `close_book` hoặc `book` thì dòng này hiện CHƯA KIỂM ĐƯỢC, không tính là đạt.
+
+### Power Query khởi động trong lúc đọc phiếu (bản 82a0f2f trở đi)
+
+Trong lúc phiếu nhận file chờ chị bấm, Clicky mở một sổ ẩn của riêng nó ở chế độ chỉ đọc, `%LOCALAPPDATA%\Clicky\khoi-dong\clicky-khoi-dong.xlsx`, để Power Query khởi động sẵn. Robot không tính sổ này là file của người dùng. Robot chỉ hỏi Excel đúng tên này và không đọc tên file nào khác.
+
+- "Khởi động Power Query trong lúc đọc phiếu (chỉ đo)": thời gian open / add / load / total / wait (ms). Dòng này chỉ ghi nhận, không chặn.
+- "Sổ khởi động Power Query của Clicky đã đóng": dòng chặn. Lúc chấm mà sổ còn mở là KHÔNG ĐẠT.
+- `--doc-phieu-giay 8`: robot chờ 8 giây rồi mới bấm nút của phiếu, giống người thật đọc phiếu. Mặc định robot bấm ngay.
+- Muốn so sánh khi tắt khởi động sẵn thì đặt `CLICKY_PQ_WARMUP=0` trước khi chạy robot. Clicky do robot mở sẽ nhận biến này.
+- Dòng "Máy:" có thêm "máy mở được N phút". Ngay sau khi khởi động máy, Excel và Power Query chậm hơn vì đĩa còn nguội.

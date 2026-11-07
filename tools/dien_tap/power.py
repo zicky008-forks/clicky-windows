@@ -12,6 +12,14 @@ import subprocess
 MIN_CPU_PCT = 90          # if even the fastest sample of a run is below this, the clock was capped: void
 
 
+def _boot_s():
+    """Seconds since Windows started: right after a boot Excel and Power Query load from a cold disk cache."""
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    k32.GetTickCount64.restype = ctypes.c_ulonglong
+    return int(k32.GetTickCount64() // 1000)
+
+
 def _ac_battery():
     import ctypes
 
@@ -53,9 +61,9 @@ def _cpu_pct():
 
 
 def snapshot() -> dict:
-    """{"ac", "battery_pct", "plan", "cpu_pct"}; any part that cannot be read is None."""
-    snap = {"ac": None, "battery_pct": None, "plan": None, "cpu_pct": None}
-    for key, read in (("ac", None), ("plan", _plan), ("cpu_pct", _cpu_pct)):
+    """{"ac", "battery_pct", "plan", "cpu_pct", "boot_s"}; any part that cannot be read is None."""
+    snap = {"ac": None, "battery_pct": None, "plan": None, "cpu_pct": None, "boot_s": None}
+    for key, read in (("ac", None), ("plan", _plan), ("cpu_pct", _cpu_pct), ("boot_s", _boot_s)):
         try:
             if key == "ac":
                 snap["ac"], snap["battery_pct"] = _ac_battery()
@@ -108,7 +116,8 @@ def worst(*snaps, cpu_samples=None) -> dict:
     cpus = list(cpu_samples or []) or [s.get("cpu_pct") for s in snaps if s.get("cpu_pct") is not None]
     pcts = [s.get("battery_pct") for s in snaps if s.get("battery_pct") is not None]
     return {"ac": (all(acs) if acs else None), "battery_pct": (min(pcts) if pcts else None),
-            "plan": snaps[-1].get("plan") or snaps[0].get("plan"), "cpu_pct": (max(cpus) if cpus else None)}
+"plan": snaps[-1].get("plan") or snaps[0].get("plan"), "cpu_pct": (max(cpus) if cpus else None),
+            "boot_s": snaps[0].get("boot_s")}
 
 
 def void_reason(snap: dict, min_cpu: int = MIN_CPU_PCT):
@@ -131,4 +140,6 @@ def describe(snap: dict) -> str:
         bits.append(f"chế độ nguồn {snap['plan']}")
     if snap.get("cpu_pct") is not None:
         bits.append(f"CPU {snap['cpu_pct']}% tốc độ tối đa")
+    if snap.get("boot_s") is not None:
+        bits.append(f"máy mở được {snap['boot_s'] // 60} phút")
     return ", ".join(bits)
