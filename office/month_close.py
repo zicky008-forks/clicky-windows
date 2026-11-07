@@ -667,13 +667,15 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     folder = _data_folder(bridge)
     if folder is None:
         return [Beat(f"File Excel này chưa được lưu. {you(True)} lưu nó vào thư mục có các file đơn hàng và file cân đối tài khoản, rồi gọi lại em.")]
+    book = _workbook_name(bridge)       # the last Excel call of stage 0: the rest reads files only
+    _warm_early(bridge)
     _load_columns()
     files = sources.find_order_files(folder)
     unknown = sources.unexplained_order_files(folder, {f.name for f in files})
     if unknown:                                     # an order-like file under column names Clicky does not know
         return _ask_columns(folder, unknown[0], machine_order)
     if not files:
-        return _stop_no_orders(folder, _workbook_name(bridge))
+        return _stop_no_orders(folder, book)
     _tbs, aside, conflict = _tb_groups(folder)
     if conflict:
         return _ask_which(folder, conflict, machine_order)
@@ -682,7 +684,7 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
         period = sources.period_of(tbs[-1][1]) if tbs else None
         truth = sources.truth(files, period)
     ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
-    receipt = intake_mod.build(folder, files, tbs, truth, ledger, _workbook_name(bridge),
+    receipt = intake_mod.build(folder, files, tbs, truth, ledger, book,
                                set_aside=[(name, f"bản sổ cân đối T{p[1]:02d} khác; {you()} đã chọn dùng {intake_mod.file_name(folder, _CHOSEN[p])}"
                                            if p in _CHOSEN else "bản cũ hơn của cùng kỳ")
                                           for name, p in aside])
@@ -1944,6 +1946,8 @@ async def play(manager, beats: list, keep_card: bool = True) -> None:
             manager.sig_response_chunk.emit("\n\n")
             if BEAT_GAP_S:
                 await asyncio.sleep(BEAT_GAP_S)
+        if beat.ref or beat.graphic:
+            await _excel_free()
         if beat.book and beat.ref:
             shown = await asyncio.to_thread(getattr(manager._excel, "show_workbook", lambda p: False), beat.book)
             from office.excel_com import book_id
@@ -2139,12 +2143,28 @@ async def _busy(manager, step: str, work):
         from office import pq_warmup
 
         def run():
-            pq_warmup.wait()            # Excel serves one caller at a time; the warm-up workbook closes first
+            pq_warmup.wait(by=step)     # Excel serves one caller at a time; the warm-up workbook closes first
             return work()
         return await asyncio.to_thread(run)
     finally:
         _PROGRESS = None
         busy.stop()
+
+
+async def _excel_free() -> None:
+    """A card that points at Excel waits for a running Power Query warm-up to close its workbook first:
+    Excel serves one caller at a time. Without a warm-up running this returns at once."""
+    from office import pq_warmup
+    if pq_warmup.running():
+        await asyncio.to_thread(pq_warmup.wait, pq_warmup.WAIT_S, "play")
+
+
+def _warm_early(bridge) -> None:
+    """Stage 0 has made its last Excel call: start Power Query (office.pq_warmup) now, while the files are read
+    and the receipt is shown, so the first press does not pay for Excel starting its engine. Anything that
+    needs Excel before the warm-up ends waits for it first (_busy, play)."""
+    from office import pq_warmup
+    pq_warmup.start(bridge)
 
 
 def warm_while_reading(manager) -> None:

@@ -1,5 +1,6 @@
 """Cold Excel (first run after boot): the first query write cost ~6 s and the first refresh ~4 s on the press after the
-receipt. Clicky now pays that while the receipt is read, in a hidden workbook of its own, never in the user's."""
+receipt. Clicky now pays that while the files and the receipt are read, in a hidden workbook of its own, never in the
+user's."""
 import asyncio
 import threading
 import time
@@ -208,3 +209,95 @@ def test_a_press_goes_ahead_after_the_cap_and_the_warm_up_still_closes_later(mon
     release.set()
     pq_warmup._thread.join(2)
     assert events[-1][0] == "closed"
+
+
+class RecordingBridge:
+    """Stage 0's Excel calls, in order; every other call is recorded too."""
+    def __init__(self, folder, calls, saved=True):
+        self.folder, self.calls, self.saved = folder, calls, saved
+
+    def available(self):
+        self.calls.append("available")
+        return True
+
+    def workbook_folder(self):
+        self.calls.append("workbook_folder")
+        return str(self.folder) if self.saved else None
+
+    def workbook_path(self):
+        self.calls.append("workbook_path")
+        return str(self.folder / "BaoCao_T10.xlsx")
+
+    def __getattr__(self, name):
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return lambda *a, **k: self.calls.append(name)
+
+
+def _stage0(folder, monkeypatch, saved=True):
+    from engine import sources
+    calls = []
+    monkeypatch.setattr(pq_warmup, "start", lambda bridge: calls.append("warm-up"))
+    monkeypatch.setattr(mc, "_PENDING", None)
+    monkeypatch.setattr(mc, "_CHOSEN", {})
+    beats = mc.start(RecordingBridge(folder, calls, saved), None, sources.DAY_FIRST)
+    return calls, beats
+
+
+def test_the_warm_up_starts_while_the_files_are_read_and_excel_is_not_called_after(tmp_path, monkeypatch):
+    """Cold lap 1 (7fbe0e1): started after the receipt's story, the warm-up still held the press 4.7 s."""
+    import order_exports as ox
+    ox.write_html_xls(tmp_path / "DonHang_MISA_T10.xls")
+    (tmp_path / "DonHang_cu.xls").write_bytes(b"\x00garbage\x00" * 64)
+    calls, beats = _stage0(tmp_path, monkeypatch)
+    assert mc.intake_pending() and beats[-1].intake
+    assert calls[-1] == "warm-up" and calls.count("warm-up") == 1, calls     # stage 0's Excel calls all came first
+
+
+def test_a_stopped_stage_0_never_calls_excel_after_the_warm_up_either(tmp_path, monkeypatch):
+    (tmp_path / "DonHang_cu.xls").write_bytes(b"\x00garbage\x00" * 64)
+    calls, _ = _stage0(tmp_path, monkeypatch)
+    assert calls[-1] == "warm-up", calls
+    calls, _ = _stage0(tmp_path, monkeypatch, saved=False)
+    assert "warm-up" not in calls                                    # unsaved workbook: nothing to warm for
+
+
+def _manager(excel):
+    class Sig:
+        def emit(self, *a):
+            pass
+
+    class Manager:
+        _excel = excel
+
+        def __init__(self):
+            for name in ("sig_guided", "sig_clear_drawings", "sig_draw", "sig_point_hold", "sig_point_at",
+                         "sig_point_release", "sig_choices", "sig_response_chunk", "sig_intake", "sig_caption"):
+                setattr(self, name, Sig())
+
+        def _physical_to_logical_bbox(self, rect):
+            return None
+
+        async def _reply_local(self, _text):
+            return True
+    return Manager()
+
+
+def test_the_receipt_plays_beside_the_warm_up_and_a_pointing_card_waits_for_it(monkeypatch):
+    order, release = [], threading.Event()
+    monkeypatch.setattr(mc, "BEAT_GAP_S", 0)
+    monkeypatch.setattr(mc.scene_log, "record", lambda *a, **k: None)
+
+    def warming():
+        release.wait(2)
+        order.append("warm-up closed")
+    monkeypatch.setattr(pq_warmup, "_thread", threading.Thread(target=warming))
+    pq_warmup._thread.start()
+    excel = SimpleNamespace(activate=lambda sheet: order.append("excel"),
+                            screen_rect=lambda ref, scroll: order.append("excel"))
+    receipt = mc.Beat("Em đọc được 2 sổ cân đối.", choices=mc.INTAKE_CHOICES, intake={"card": {}, "log": {}})
+    asyncio.run(mc.play(_manager(excel), [receipt]))
+    assert order == [] and pq_warmup.running()                       # no Excel call: no wait
+    threading.Timer(0.2, release.set).start()
+    asyncio.run(mc.play(_manager(excel), [mc.Beat("Ô này.", "Sheet1!B2")]))
+    assert order[0] == "warm-up closed" and "excel" in order

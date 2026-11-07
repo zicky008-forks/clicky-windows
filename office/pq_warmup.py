@@ -1,8 +1,9 @@
-"""Warm Excel's Power Query engine while the user reads the receipt, so the first press is not the slow one.
+"""Warm Excel's Power Query engine while the files and the receipt are read, so the first press is not the slow one.
 
 On a cold Excel (often the first run after the PC boots) the first query written into a workbook costs ~6 s
 (Excel loads its Power Query engine) and the first refresh ~4 s more (it starts the engine's container). Warm,
-both take well under a second. The user spends that time reading the receipt anyway, so Clicky pays it then.
+both take well under a second. Clicky pays it while it reads the files and the user reads the receipt: it starts
+right after stage 0's last Excel call (month_close.start), and anything needing Excel before it ends waits for it.
 
 The user's workbook is never touched: nothing may change in it before "Đúng rồi, làm tiếp". The warm-up opens a
 blank workbook of Clicky's own whose window is saved hidden (so no window appears and it never becomes the active
@@ -161,13 +162,18 @@ def start(bridge) -> bool:
         return True
 
 
-def wait(timeout: float = WAIT_S) -> None:
+def running() -> bool:
+    thread = _thread
+    return thread is not None and thread.is_alive()
+
+
+def wait(timeout: float = WAIT_S, by: str = "") -> None:
     """Block until a running warm-up is done: Excel serves one caller at a time, and the warm-up must be closed
-    before Clicky works on the user's workbook."""
+    before Clicky works on the user's workbook. by names who waited (a step such as "confirm", or "play")."""
     thread = _thread
     if thread is not None and thread.is_alive():
         t0 = time.monotonic()
         thread.join(timeout)
         # Past the cap (Excel stuck for half a minute) the step goes ahead and meets the same stuck Excel with the
         # usual plain error card and "Thử lại" (errors_vi); the warm-up still closes its own workbook when it ends.
-        _part("pq_warm_wait", t0, timed_out=thread.is_alive())
+        _part("pq_warm_wait", t0, timed_out=thread.is_alive(), **({"by": by} if by else {}))
