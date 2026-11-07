@@ -25,6 +25,14 @@ _t0 = time.monotonic()
 _failed = False
 
 
+def book_id(path) -> str:
+    """A short id for a file path, the same for Excel's FullName and Clicky's own spelling of it. Logs carry
+    this, never the name: a client's file and folder names are their data too."""
+    import hashlib
+    key = os.path.normcase(os.path.normpath(str(path or ""))).replace("/", "\\").lower()
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
+
+
 def path() -> Path | None:
     value = os.environ.get(ENV, "").strip()
     return Path(value) if value else None

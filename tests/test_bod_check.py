@@ -100,6 +100,19 @@ def test_scene_log_records_each_finding(tmp_path, monkeypatch):
     events = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
     kinds = [e["event"] for e in events]
     assert kinds.count("bod_finding") == 9 and "bod_receipt" in kinds and kinds[-1] == "bod_done"
+    # no client file or folder name in the log: ids instead (the results file is where names belong)
+    raw = log.read_text(encoding="utf-8")
+    names = [p.name for p in (tmp_path / "case").iterdir()] + ["Pack_BOD", "KeHoach", str(tmp_path)]
+    leaked = [n for n in names if n in raw and n not in ("Clicky_soat_BOD",)]
+    assert not leaked, leaked
+    import scene_log
+    pack_id = scene_log.book_id(tmp_path / "case" / "Pack_BOD_T10_ban_nhap.xlsx")
+    assert {e["pack"] for e in events if e["event"] == "bod_finding"} == {pack_id}
+    assert all(e["in_pack"] and e["book"] == pack_id for e in events if e["event"] == "bod_finding")
+    receipt = next(e for e in events if e["event"] == "bod_receipt")
+    assert pack_id in {f["book"] for f in receipt["files"]} and all("name" not in f for f in receipt["files"])
+    done = events[-1]
+    assert done["md"] == "ket-qua.md" and done["xlsx"].startswith("Clicky_soat_BOD_")
 
 
 # ── readers ─────────────────────────────────────────────────────────────────────

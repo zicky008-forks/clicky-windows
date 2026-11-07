@@ -1116,7 +1116,9 @@ def test_a_cell_in_another_file_is_lit_in_that_file_and_no_card_outlives_its_mis
     shows = [json.loads(l) for l in (tmp_path / "scene.jsonl").read_text(encoding="utf-8").splitlines() if '"show_book"' in l]
     assert [(e["book"], e["pack"]) for e in shows] == [(book_id("C:/case/pack.xlsx"), True),
                                                       (book_id("C:/case/KeHoach_AOPR1.xlsx"), False)]
-    assert not any("KeHoach" in json.dumps(e) or "pack.xlsx" in json.dumps(e) for e in shows)
+    raw = (tmp_path / "scene.jsonl").read_text(encoding="utf-8")
+    assert "KeHoach" not in raw and "pack.xlsx" not in raw          # the card says the name; the log never does
+    assert f"[file {book_id('C:/case/KeHoach_AOPR1.xlsx')}]" in raw
     per = _between_says(m.log)
     third = [n for n, _ in per[2]]
     assert third.index("sig_clear_drawings") < third.index("sig_draw")          # old card gone, then the new frame

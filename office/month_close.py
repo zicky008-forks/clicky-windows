@@ -1556,8 +1556,10 @@ async def play(manager, beats: list, keep_card: bool = True) -> None:
             # It stops beside the range, never on it: it must not hide the figure being explained.
             manager.sig_point_at.emit(*pointer_spot(box), NO_BUBBLE)
         graphic = await _graphic_shape(manager, beat.graphic, box) if beat.graphic else None
+        # the card names a source file for the user; the log carries its id instead
+        hide = (lambda t: t.replace(Path(beat.book).name, f"[file {scene_log.book_id(beat.book)}]")) if beat.book else (lambda t: t)
         scene_log.record("beat", i=i, ref=beat.ref, box=box, title=beat.label, value=beat.value, was=beat.was,
-                         note=beat.note, mark=beat.mark, text=beat.text, choices=list(beat.choices or []),
+                         note=hide(beat.note), mark=beat.mark, text=hide(beat.text), choices=list(beat.choices or []),
                          **({"graphic": graphic_log(beat.graphic)} if beat.graphic else {}))
         loose = None
         if not box and not graphic and (beat.ref or not keep_card):
