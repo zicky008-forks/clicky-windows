@@ -121,6 +121,16 @@ Khi một file giống file đơn hàng mà tên cột lạ, Clicky hỏi cột 
 
 Clicky nhớ câu trả lời trong `cot_da_nho.json` ở thư mục dữ liệu. Robot cất file này sang `cot_da_nho.json.truoc-dien-tap` trước mỗi lượt và trả lại sau lượt, nên lượt nào cũng bắt đầu khi chưa nhớ gì và câu trả lời của người thử máy vẫn còn.
 
+### Thẻ "bớt được bao lâu"
+
+Sau khi báo cáo trên file của khách đã lưu, mở lại và khớp, Clicky hiện một thẻ riêng hỏi "bớt được bao lâu". Robot bấm "Để sau" để thẻ đóng mà không ghi câu trả lời nào (`first_feedback.py`). Báo cáo có ba dòng:
+
+- "Hỏi \"bớt được bao lâu\" sau báo cáo đã lưu và khớp": chỉ ghi nhận, không chặn.
+- "Thẻ góp ý đóng bằng \"Để sau\"": chặn. Thẻ hiện mà không đóng được là lỗi.
+- Với `--sample`: "Bản mẫu không hỏi \"bớt được bao lâu\"": chặn. Bản mẫu không bao giờ được hỏi.
+
+Clicky đếm số lần đã hỏi trong `settings.json` (`feedback_asked`, `feedback_done`, tối đa ba lần). Robot xoá hai khoá này trước mỗi lượt để thẻ luôn đến hạn, rồi trả lại đúng giá trị của người thử máy sau lượt. Các khoá khác trong `settings.json` giữ nguyên. Robot chờ thẻ đóng tối đa `feedback_seconds` giây (mặc định 45).
+
 ## 6 việc giao diện trước beta 16/11
 
 Đặc tả: `/mnt/project-files/thiet-ke/giao-dien-5-sao/6 viec truoc beta 16-11.md`. Bước kiểm nằm trong `beta_checks.py`, chỉ chạy khi file đáp án có mục tương ứng:

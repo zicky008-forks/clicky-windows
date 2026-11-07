@@ -37,6 +37,7 @@ import beta_checks     # noqa: E402
 import layout_checks   # noqa: E402
 import columns         # noqa: E402
 import power           # noqa: E402
+import first_feedback  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 COMPOSER = "Tin nhắn cho Clicky"
@@ -85,8 +86,9 @@ def match_label(part: str, labels) -> str | None:
 
 def _auto_press(events) -> None:
     for driver, labels, done in AUTO_PRESS:
+        kind = getattr(labels, "event", "choices")    # the feedback card is its own window, not a choices card
         for i, e in enumerate(events):
-            if e.get("event") != "choices" or i in done:
+            if e.get("event") != kind or i in done:
                 continue
             if getattr(labels, "needs_context", False):
                 hit = labels(e, before=events[:i])
@@ -335,13 +337,16 @@ def _sheet_values(wb, max_rows: int, max_cols: int) -> dict:
 
 
 def main(argv=None) -> int:
-    """One run. Clicky's remembered column answers are set aside for the run and put back after it."""
+    """One run. Clicky's remembered column answers and its feedback-card counts are set aside for the run and
+    put back after it."""
     data_dir = Path(os.environ.get("CLICKY_DATA_DIR") or Path(os.environ.get("LOCALAPPDATA", "")) / "Clicky")
-    restore = columns.isolate_memory(data_dir) if data_dir.is_dir() else (lambda: None)
+    restores = [columns.isolate_memory(data_dir), first_feedback.isolate_settings(data_dir)] \
+        if data_dir.is_dir() else []
     try:
         return _main(argv)
     finally:
-        restore()
+        for restore in restores:
+            restore()
 
 
 def _main(argv=None) -> int:
@@ -489,6 +494,7 @@ def _main(argv=None) -> int:
         AUTO_PRESS.append((driver, chooser, set()))
     answerer = columns.Answerer(expected.get("columns"))
     AUTO_PRESS.append((driver, answerer, set()))     # unknown column names: answered from the key, never guessed
+    AUTO_PRESS.append((driver, first_feedback.Later(), set()))   # "bớt được bao lâu": closed with "Để sau"
     if "intake" in expected:
         confirm = expected["intake"].get("confirm_label", "Đúng rồi, làm tiếp")
         asked = lambda ev: any(confirm in (e.get("labels") or []) for e in ev if e.get("event") == "choices")  # noqa: E731
@@ -539,6 +545,9 @@ def _main(argv=None) -> int:
         verified = lambda ev: any(e.get("event") == "verify" for e in ev)  # noqa: E731
         if not verified(wait_log(log, verified, expected.get("verify_seconds", 120), quiet=4.0)):
             stalled.append(("Lưu và đối chiếu lại", expected.get("verify_seconds", 120)))
+        else:
+            # After a matching re-check Clicky asks "bớt được bao lâu" on its own card: closed with "Để sau".
+            wait_log(log, first_feedback.settled, expected.get("feedback_seconds", 45), quiet=3.0)
         clock.lap("Lưu và đối chiếu lại")
 
     say("6/6 Đọc số trong file và chấm")
@@ -562,6 +571,8 @@ def _main(argv=None) -> int:
                       for n, ok, d, b in columns.check_lines(events, expected.get("columns"), answerer)]
     if do_save and "verify" not in expected and "tamper" not in expected:
         result.checks.append(checks.saved_check(events, save_label))
+    result.checks += [checks.Check(n, ok, d, blocking=b)
+                      for n, ok, d, b in first_feedback.check_lines(events, sample=bool(args.sample))]
     result.checks.append(checks.receipt_reached_check(events, data_files, expected.get("stop_before_receipt_ok", False)))
     network = net.stop()
     egress_text = None
