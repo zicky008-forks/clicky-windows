@@ -13,7 +13,10 @@ import re
 _EXT = r"(?:xlsx|xlsm|xlsb|xls|csv|txt|tsv|json|xml|pbix|pbip|pptx|docx|pdf|zip|eml|png|jpe?g)"
 # An opening quote never follows a letter ("couldn't" is not a quote); the closing one never precedes one.
 _QUOTED = re.compile(r"(?<![^\W\d_])(['\"“‘])([^'\"”’\r\n]*?)(['\"”’])(?![^\W\d_])")
-_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\)[^\s'\"<>|*?]*")
+# An unquoted path starts at a drive, a UNC share or a URL. Everything up to the last \ or / on the line is
+# folder (folder names may have spaces); the last piece runs to a known extension, else to the first space.
+_START = r"(?:https?://|[A-Za-z]:[\\/]|\\\\)"
+_PATH = re.compile(rf"{_START}(?:[^\r\n'\"]*[\\/])?(?:[^\\/\r\n'\"]*?\.{_EXT}\b|[^\s\\/'\"]*)", re.IGNORECASE)
 _FILE = re.compile(rf"(?<![\w<])[\w\-.]+\.{_EXT}\b", re.IGNORECASE)
 
 
@@ -22,7 +25,13 @@ def shape(name: str) -> str:
     text = name.strip()
     root = ""
     m = re.match(r"^([A-Za-z]:)[\\/]", text)
-    if m:
+    url = re.match(r"^(https?)://", text, re.IGNORECASE)
+    if url:
+        root = url.group(1).lower() + "://<…>/"         # the tenant and the user name never stay
+        text = text[url.end():]
+        if "/" not in text.rstrip("/"):
+            return root.rstrip("/")
+    elif m:
         root = m.group(1) + "\\…\\"
     elif text.startswith("\\\\"):
         root = "\\\\…\\"
