@@ -147,6 +147,31 @@ class PowerQuery:
         app = self.bridge._excel()
         return app.ActiveWorkbook.Queries if app is not None and app.ActiveWorkbook is not None else None
 
+    def prime(self, path: str) -> bool:
+        """Read only: ask the workbook at `path` how many queries it has, nothing else.
+
+        Excel loads its Power Query object model the first time a session touches Workbook.Queries; on the
+        PC that took about 2.2 s inside the first query add (84603e7: query_add 2235 ms cold, 32 ms warm).
+        Done while the user reads the receipt, that wait is gone before "Đúng rồi". Only the workbook the
+        receipt is about, found by its path (never whatever happens to be active), and only Queries.Count:
+        no add, no change, no refresh, nothing activated. Any error is ignored; the log keeps only its kind.
+        """
+        from office.excel_com import _same_path, _why
+        try:
+            app = self.bridge._excel()
+            if app is None or not path:
+                return False
+            books = app.Workbooks
+            for i in range(1, books.Count + 1):
+                wb = books(i)
+                if _same_path(str(wb.FullName or ""), path):
+                    wb.Queries.Count
+                    return True
+            return False
+        except Exception as exc:              # noqa: BLE001 - priming is a head start, never a step
+            log.debug("Power Query prime failed: %s", _why(exc))
+            return False
+
     def list(self) -> list:
         """[(name, formula)] for every query in the active workbook."""
         try:

@@ -18,6 +18,7 @@ returns Beats (sentence + cell to point at) that the app speaks and points at.
 import asyncio
 import logging
 import re
+import threading
 from collections import Counter
 from dataclasses import dataclass
 from decimal import Decimal
@@ -606,9 +607,44 @@ def _workbook_name(bridge) -> Optional[str]:
     return Path(path).name if path else None
 
 
+_PRIMING: Optional[threading.Thread] = None
+PRIME_WAIT_S = 5.0        # the most confirm() waits for the head start before it goes on anyway
+
+
+def _prime_queries(pq, workbook: Optional[str]) -> None:
+    """Give Excel's Power Query a head start while the user reads the receipt: a read-only touch of the
+    receipt's own workbook (PowerQuery.prime), on its own thread, so the card is never held up by it."""
+    global _PRIMING
+    prime = getattr(pq, "prime", None)
+    if prime is None or not workbook:
+        return
+
+    def work():
+        import time
+        t0 = time.monotonic()
+        try:
+            ok = bool(prime(workbook))
+        except Exception:                     # noqa: BLE001 - prime already swallows errors; never raise here
+            ok = False
+        _step("timing", part="prime_queries", ms=int(round((time.monotonic() - t0) * 1000)), ok=ok)
+
+    _PRIMING = threading.Thread(target=work, name="clicky-pq-prime", daemon=True)
+    _PRIMING.start()
+
+
+def _wait_prime() -> None:
+    """Never two threads talking to Excel at once: a step that uses Excel waits for the head start first."""
+    global _PRIMING
+    worker, _PRIMING = _PRIMING, None
+    if worker is not None and worker.is_alive():
+        with _timed("prime_wait"):
+            worker.join(PRIME_WAIT_S)
+
+
 def start(bridge, pq, machine_order: Optional[str]) -> list:
     """Stage 0: read every file in the folder and say what was read. Nothing in the workbook changes yet."""
     global _PENDING, _AUDIT
+    _wait_prime()
     _PENDING, _AUDIT = None, None
     _step("read_folder")
     _EXPECT.clear()
@@ -638,6 +674,7 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
             "em chưa sửa gì trong file.")
     _PENDING = {"stage": "intake", "order": machine_order, "intake": receipt, "folder": str(folder),
                 "period": f"{period[1]:02d}/{period[0]}" if period else "", "picked": list(_PICKS)}
+    _prime_queries(pq, _try(bridge, "workbook_path"))     # while the user reads the receipt
     return [Beat(text, choices=INTAKE_CHOICES,
                  intake={"card": intake_mod.card(receipt), "log": intake_mod.log_fields(receipt, text)})]
 
@@ -711,6 +748,7 @@ def confirm(bridge, pq) -> list:
     job, _PENDING = _PENDING, None
     if not job or job.get("stage") != "intake":
         return []
+    _wait_prime()
     receipt = job["intake"]
     _step("confirmed")
     with _timed("keep_original"):
