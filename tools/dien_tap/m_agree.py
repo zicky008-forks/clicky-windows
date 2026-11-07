@@ -10,7 +10,9 @@ SpreadsheetML saved as .xls, and an English-header sales CSV, each in its own fo
 
 For each format, one query from m_code.order_files_query (the one Clicky builds in the month close) is loaded in
 a new workbook this script adds and shows; its rows are compared with sources.query_rows (the receipt's own
-reading): same number of rows, same total, same values row for row. ĐẠT only when every format agrees.
+reading): same number of rows, same total, same values row for row. ĐẠT only when every format agrees. On a
+Python without xlrd the real .xls is compared with the five orders written into it instead (Excel still reads
+the real file).
 
 Safety: it refuses to run while Excel or PowerPoint has any other file open; it never saves the workbook it adds
 and closes it at the end (Excel itself is closed only if this script started it); no folder path is printed or
@@ -150,6 +152,25 @@ def write_ole2_with_excel(app, path: Path) -> Path:
     return path
 
 
+def known(folder: Path, param: str) -> dict:
+    """plan() for the real Excel 97-2003 .xls, built from the orders order_exports wrote into it (ORDERS, TOTAL)
+    instead of the receipt's reading, for a Python without xlrd (the robot's). Excel still reads the real file, so
+    the OLE2 path is proven either way; with xlrd the two plans are the same (tests/test_m_agree.py)."""
+    import order_exports as ox
+    from engine import m_code, sources
+    (path,) = [p for p in folder.iterdir() if p.suffix.lower() == ".xls"]
+    columns = sources.find_columns(ox.VI_HEADER)
+    roles = sorted(set(columns) | {"doc", "date", "amount"})
+    order = [r for r in m_code.CANON if r in roles]
+    field = {"doc": 0, "date": 1, "customer": 2, "item": 3, "amount": 5, "cost": 6}
+    rows = [[o[field[r]] if r in ("date", "amount", "cost") else str(o[field[r]]) for r in order] + [path.name]
+            for o in ox.ORDERS]
+    params = {path.name: {"order": sources.DAY_FIRST, "encoding": sources.file_encoding(path)}}
+    return {"m": m_code.order_files_query(param, params, roles, None),
+            "header": [m_code.CANON[r] for r in order] + [m_code.SOURCE_COLUMN], "rows": rows, "roles": order,
+            "receipt_rows": len(ox.ORDERS), "receipt_total": ox.TOTAL}
+
+
 def missing_readers() -> list:
     out = []
     for mod in ("xlrd",):
@@ -201,9 +222,11 @@ def main(argv=None) -> int:
     wb = None
     try:
         app.Visible = True
-        if missing_readers():
-            res.add("Bộ đọc file .xls cũ (xlrd) của Clicky", False,
-                    "Python của robot thiếu xlrd nên phiếu nhận không đọc được file .xls thật; các dạng khác vẫn chạy")
+        no_xlrd = bool(missing_readers())
+        if no_xlrd:
+            res.unchecked("Thông tin: Python này thiếu xlrd",
+                          "Clicky.exe có sẵn xlrd; ở đây file .xls 97-2003 thật được so với đúng 5 đơn đã ghi vào nó "
+                          "(dữ liệu giả lập), còn Excel vẫn đọc chính file .xls đó")
         try:
             import xlwt  # noqa: F401 - the practice .xls is written by xlwt when it is there, else by Excel
             excel_writes = False
@@ -223,7 +246,7 @@ def main(argv=None) -> int:
         pq = PowerQuery(ExcelBridge(app=app))
         for i, label, folder in folders:
             param, query = f"ThuMuc{i}", f"DonHang{i}"
-            want = plan(folder, param)
+            want = known(folder, param) if no_xlrd and "97-2003" in label else plan(folder, param)
             say(f"{i}/{len(formats())} {label}: phiếu nhận {want['receipt_rows']} đơn, {int(want['receipt_total']):,} đ")
             pq.add(param, m_code.parameter_query(str(folder)))
             t0 = time.monotonic()

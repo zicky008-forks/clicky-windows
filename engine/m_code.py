@@ -487,8 +487,15 @@ _ORDER_M = r"""let
                        else (if List.Max(ba) > 0 then {"#(tab)", ";", ","}{List.PositionOf(ba, List.Max(ba))} else ","),
             tach = Splitter.SplitTextByDelimiter(phanCach, QuoteStyle.Csv)
         in {List.Transform(dong, each List.Transform(tach(_), (x) => Text.Trim(x, KhoangTrang)))},
+    // An .xlsx lists sheets, tables and names with a Kind. A real .xls (Excel 97-2003) comes back with no Kind
+    // column on some PCs (robot 07/11): its sheets are the names ending in "$", any other row is a defined name.
     DocExcel = (b as binary) as list =>
-        let so = Excel.Workbook(b, null, true) in List.Transform(Table.SelectRows(so, each [Kind] = "Sheet")[Data], Table.ToRows),
+        let
+            so = Excel.Workbook(b, null, true),
+            to = if Table.HasColumns(so, "Kind") then Table.SelectRows(so, each [Kind] = "Sheet")
+                 else let la = Table.SelectRows(so, each Text.EndsWith(Text.From([Name]), "$"))
+                      in if Table.IsEmpty(la) then so else la
+        in List.Transform(to[Data], Table.ToRows),
     // HTML as engine.tabular._Tables: every <table>, rows <tr>, cells <td>/<th>, colspan as blank cells after.
     Cat = (t as text, the as text) as list =>
         let

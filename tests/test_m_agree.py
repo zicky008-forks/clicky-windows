@@ -57,3 +57,24 @@ def test_a_missing_or_changed_row_is_named():
 @pytest.mark.skipif(sys.platform == "win32", reason="on Windows main() drives the real Excel; CI has none")
 def test_it_will_not_run_off_windows():
     assert m_agree.main([]) == 2
+
+
+def test_without_xlrd_the_real_xls_is_checked_against_the_orders_written_into_it(tmp_path):
+    """Robot 07/11: the robot's Python had no xlrd, so the receipt read the real .xls as 0 orders. The known orders
+    (order_exports.ORDERS) must be exactly what the receipt reads from that .xls with xlrd: rows, header and M."""
+    pytest.importorskip("xlrd")
+    label, name, write = m_agree.formats()[0]
+    assert "97-2003" in label
+    write(tmp_path / name)
+    a, b = m_agree.plan(tmp_path, "ThuMuc1"), m_agree.known(tmp_path, "ThuMuc1")
+    assert len(a["rows"]) == 5 and a == b
+
+
+def test_a_real_xls_without_a_kind_column_still_reads_its_sheets():
+    """Robot 07/11, m_agree on the PC: Excel.Workbook gave a real .xls back with no Kind column and the query
+    stopped on "The field 'Kind' of the record wasn't found". Kind is read only when the column is there."""
+    from engine import m_code
+    m = m_code.order_files_query("ThuMuc", {"x.xls": {"order": "dmy", "encoding": 65001}}, ["amount", "date", "doc"], None)
+    reader = m[m.index("DocExcel ="):m.index("in List.Transform(to[Data], Table.ToRows)")]
+    assert 'Table.HasColumns(so, "Kind")' in reader and 'Text.EndsWith(Text.From([Name]), "$")' in reader
+    assert reader.index('Table.HasColumns(so, "Kind")') < reader.index('[Kind] = "Sheet"')
