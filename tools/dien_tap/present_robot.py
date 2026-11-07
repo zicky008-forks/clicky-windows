@@ -222,6 +222,12 @@ def show_outcome(log: Path, timeout: float = 40.0) -> str:
     return "failed" if e.get("event") == "present_failed" else "attached"
 
 
+def window_handle(win) -> int:
+    """SlideShowWindow.HWND: a property on early-bound COM, a method on late-bound dispatch (PC, 07/11)."""
+    h = win.HWND
+    return int(h() if callable(h) else h)
+
+
 def show_window(wait: float = 20.0, app=None):
     """The running slide show's window. Clicky logs present_start as it asks PowerPoint to start the
     show; the window can take a few seconds to exist (bhc_e2e stage 4 on the PC, 07/11)."""
@@ -342,7 +348,7 @@ def main(argv=None) -> int:
                     say("   " + json.dumps({k: v for k, v in e.items() if k != "ts"}, ensure_ascii=False))
         else:
             win = show_window()
-            hwnd = int(win.HWND)
+            hwnd = window_handle(win)
             projector = monitor_index(window_rect(hwnd), mons)
             say("2/4 Bấm PageDown qua từng slide, chụp màn hình, tìm khung")
             want = expected_targets(script)
