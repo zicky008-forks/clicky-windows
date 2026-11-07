@@ -396,6 +396,7 @@ def _main(argv=None) -> int:
 
     power_before = power.snapshot()
     say(f"   Nguồn điện: {power.describe(power_before)}")
+    cpu_watch = power.CpuWatch().start()
     if drivers.pids_of("Clicky.exe"):
         say("Clicky đang chạy. Thoát Clicky (khay hệ thống → Thoát) rồi chạy lại, để robot mở bản có nhật ký cảnh.")
         return 2
@@ -572,7 +573,7 @@ def _main(argv=None) -> int:
         egress_text = ""
     result.checks += beta_checks.evaluate(events, sheets, expected, untouched_before_confirm=untouched,
                                           workbook=copy, egress_text=egress_text, network=network)
-    power_state = power.worst(power_before, power.snapshot())
+    power_state = power.worst(power_before, power.snapshot(), cpu_samples=cpu_watch.stop())
     void = power.void_reason(power_state)
     if void and "latency" in (expected.get("layout") or {}):
         say(f"   Thời gian đo được không tính: {void}")

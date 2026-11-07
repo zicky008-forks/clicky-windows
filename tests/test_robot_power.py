@@ -13,16 +13,19 @@ def test_void_reason_names_battery_and_slow_cpu():
     # DN-LAP-231 on 07/11 at 19:55.
     evening = {"ac": False, "battery_pct": 11, "plan": "Balanced", "cpu_pct": 67}
     why = power.void_reason(evening)
-    assert why == "máy chạy pin (11%), CPU chỉ chạy 67% tốc độ tối đa"
+    assert why == "máy chạy pin (11%), CPU nhanh nhất chỉ 67% tốc độ tối đa"
     assert power.void_reason({"ac": True, "battery_pct": 100, "plan": "Balanced", "cpu_pct": 104}) is None
     assert power.void_reason({"ac": None, "cpu_pct": None}) is None            # unknown: not voided
     assert "cắm sạc" in power.describe({"ac": True, "battery_pct": 80, "plan": "Balanced", "cpu_pct": 99})
 
 
 def test_worst_of_before_and_after():
-    w = power.worst({"ac": True, "battery_pct": 40, "plan": "Balanced", "cpu_pct": 101},
-                    {"ac": False, "battery_pct": 35, "plan": "Balanced", "cpu_pct": 88})
-    assert w == {"ac": False, "battery_pct": 35, "plan": "Balanced", "cpu_pct": 88}
+    w = power.worst({"ac": True, "battery_pct": 40, "plan": "Balanced", "cpu_pct": 41},
+                    {"ac": False, "battery_pct": 35, "plan": "Balanced", "cpu_pct": 38}, cpu_samples=[40, 67, 52])
+    assert w == {"ac": False, "battery_pct": 35, "plan": "Balanced", "cpu_pct": 67}
+    # An idle Balanced CPU is slow on purpose: the fastest sample of the run is what counts.
+    busy = power.worst({"ac": True, "cpu_pct": 35}, cpu_samples=[35, 112, 60])
+    assert busy["cpu_pct"] == 112 and power.void_reason(busy) is None
     assert power.worst() == {}
 
 

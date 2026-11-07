@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 import subprocess
 
-MIN_CPU_PCT = 90          # below this share of top speed the clock is throttled: timings are void
+MIN_CPU_PCT = 90          # if even the fastest sample of a run is below this, the clock was capped: void
 
 
 def _ac_battery():
@@ -66,16 +66,49 @@ def snapshot() -> dict:
     return snap
 
 
-def worst(*snaps) -> dict:
-    """Combine samples taken before and after a run: on battery if any was, the lowest CPU speed seen."""
+class CpuWatch:
+    """CPU speed sampled every few seconds while the run goes on. An idle CPU on Balanced runs slow on purpose,
+    so one idle sample says little; the fastest sample of the run shows whether the clock could go to full
+    speed when Clicky and Excel were busy."""
+
+    def __init__(self, every: float = 5.0):
+        import threading
+        self.samples: list = []
+        self._stop = threading.Event()
+        self._every = every
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                v = _cpu_pct()
+                if v is not None:
+                    self.samples.append(v)
+            except Exception:                  # noqa: BLE001 - no counter on this PC
+                return
+            self._stop.wait(self._every)
+
+    def start(self):
+        self._thread.start()
+        return self
+
+    def stop(self) -> list:
+        self._stop.set()
+        self._thread.join(timeout=25)
+        return list(self.samples)
+
+
+def worst(*snaps, cpu_samples=None) -> dict:
+    """Combine the power samples taken before and after a run (on battery if any was) with the CPU speed seen
+    during it (the fastest sample; without samples, the fastest snapshot)."""
     snaps = [s for s in snaps if s]
     if not snaps:
         return {}
     acs = [s.get("ac") for s in snaps if s.get("ac") is not None]
-    cpus = [s.get("cpu_pct") for s in snaps if s.get("cpu_pct") is not None]
+    cpus = list(cpu_samples or []) or [s.get("cpu_pct") for s in snaps if s.get("cpu_pct") is not None]
     pcts = [s.get("battery_pct") for s in snaps if s.get("battery_pct") is not None]
     return {"ac": (all(acs) if acs else None), "battery_pct": (min(pcts) if pcts else None),
-            "plan": snaps[-1].get("plan") or snaps[0].get("plan"), "cpu_pct": (min(cpus) if cpus else None)}
+            "plan": snaps[-1].get("plan") or snaps[0].get("plan"), "cpu_pct": (max(cpus) if cpus else None)}
 
 
 def void_reason(snap: dict, min_cpu: int = MIN_CPU_PCT):
@@ -85,7 +118,7 @@ def void_reason(snap: dict, min_cpu: int = MIN_CPU_PCT):
         pct = snap.get("battery_pct")
         why.append("máy chạy pin" + (f" ({pct}%)" if pct is not None else ""))
     if snap.get("cpu_pct") is not None and snap["cpu_pct"] < min_cpu:
-        why.append(f"CPU chỉ chạy {snap['cpu_pct']}% tốc độ tối đa")
+        why.append(f"CPU nhanh nhất chỉ {snap['cpu_pct']}% tốc độ tối đa")
     return ", ".join(why) or None
 
 
