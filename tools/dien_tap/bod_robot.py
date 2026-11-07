@@ -110,6 +110,12 @@ def grade(events: list, pack_unchanged: bool, answers: list | None = None) -> Re
     res.add("Không còn thẻ cũ khi sang lỗi mới", not stale,
             "; ".join(f"thẻ beat {a} còn trên màn hình khi đọc beat {b}" for a, b in stale[:4]))
     res.add("Bộ BOD không bị sửa", pack_unchanged)
+    shown = [e for e in events if e.get("event") == "show_book" and e.get("ok")]
+    closed = [e for e in events if e.get("event") == "close_book"]
+    if shown and closed:                      # graded only on a build that logs close_book (grader, 07/11)
+        saved = [e for e in closed if e.get("saved")]
+        res.add("File nguồn mở để chỉ ô đã đóng, không lưu", len(closed) >= len(shown) and not saved,
+                f"mở {len(shown)} lần, đóng {len(closed)} lần" + (f", {len(saved)} lần có lưu" if saved else ""))
     if answers is not None:
         hit, wrong_number = 0, []
         for a in answers:

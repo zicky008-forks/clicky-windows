@@ -124,3 +124,16 @@ def test_a_card_left_up_when_the_next_cell_is_not_found_fails():
     ok = ev[:3] + [{"event": "clear"}] + ev[3:]
     assert bod_robot.stale_cards(ok) == []
     assert bod_robot.stale_cards(ev[:3] + [{"event": "beat", "i": 9, "ref": "'A'!C3", "box": [1, 2, 3, 4]}]) == []
+
+
+def test_source_files_opened_to_point_must_be_closed_unsaved(tmp_path, monkeypatch):
+    events, answers = _run(tmp_path, monkeypatch)
+    name = "File nguồn mở để chỉ ô đã đóng, không lưu"
+    opened = events + [{"event": "show_book", "i": 9, "ref": "'KH'!C5", "ok": True}]
+    assert name not in {l.name for l in bod_robot.grade(opened, True, answers).lines}   # older build: not graded
+    lines = {l.name: l for l in bod_robot.grade(opened + [{"event": "close_book", "saved": False}], True, answers).lines}
+    assert lines[name].ok
+    lines = {l.name: l for l in bod_robot.grade(opened + [{"event": "close_book", "saved": True}], True, answers).lines}
+    assert not lines[name].ok and "có lưu" in lines[name].detail
+    two = opened + [{"event": "show_book", "i": 10, "ref": "'TG'!B2", "ok": True}, {"event": "close_book", "saved": False}]
+    assert not {l.name: l for l in bod_robot.grade(two, True, answers).lines}[name].ok
