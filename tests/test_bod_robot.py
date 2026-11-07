@@ -160,3 +160,12 @@ def test_source_files_opened_to_point_must_be_closed_unsaved(tmp_path, monkeypat
     assert line([]).ok
 
 
+
+
+def test_robot_waits_for_close_book_after_the_story():
+    shown = [{"event": "show_book", "ok": True, "book": "p1", "pack": True},
+             {"event": "show_book", "ok": True, "book": "k1", "pack": False}]
+    assert not bod_robot.sources_settled(shown)
+    assert bod_robot.sources_settled(shown + [{"event": "close_book", "book": "k1", "closed": True}])
+    assert bod_robot.sources_settled(shown[:1])
+    assert bod_robot.sources_settled([{"event": "show_book", "ok": True, "ref": "'KH'!C5"}])   # older build

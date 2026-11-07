@@ -89,9 +89,23 @@ def test_window_handle_reads_hwnd_as_property_or_method():
     class Early:
         HWND = 4242
 
-    class Late:
-        def HWND(self):
-            return 4242
-
     assert robot.window_handle(Early()) == 4242
-    assert robot.window_handle(Late()) == 4242
+
+    class Ole:
+        def GetIDsOfNames(self, name):
+            assert name == "HWND"
+            return 7
+
+        def Invoke(self, dispid, lcid, flags, result):
+            assert dispid == 7 and flags == 2          # DISPATCH_PROPERTYGET
+            return 4343
+
+    class Late:                                 # PC 07/11: HWND() as a method raised 'Member not found'
+        _oleobj_ = Ole()
+
+        def HWND(self):
+            raise RuntimeError("Member not found.")
+
+    import types
+    sys.modules.setdefault("pythoncom", types.SimpleNamespace(DISPATCH_PROPERTYGET=2))
+    assert robot.window_handle(Late()) == 4343

@@ -223,9 +223,28 @@ def show_outcome(log: Path, timeout: float = 40.0) -> str:
 
 
 def window_handle(win) -> int:
-    """SlideShowWindow.HWND: a property on early-bound COM, a method on late-bound dispatch (PC, 07/11)."""
+    """SlideShowWindow.HWND. Late-bound win32com hands back HWND as a callable that fails with 'Member not
+    found' when called as a method (PC, 07/11), so ask for it as a property; the show window's class
+    "screenClass" is the last resort."""
     h = win.HWND
-    return int(h() if callable(h) else h)
+    if isinstance(h, int):
+        return h
+    try:
+        import pythoncom
+        ole = win._oleobj_
+        dispid = ole.GetIDsOfNames("HWND")
+        return int(ole.Invoke(dispid, 0, pythoncom.DISPATCH_PROPERTYGET, True))
+    except Exception:                         # noqa: BLE001 - try the next way
+        pass
+    try:
+        return int(h())
+    except Exception:                         # noqa: BLE001
+        pass
+    import win32gui
+    hwnd = win32gui.FindWindow("screenClass", None)
+    if not hwnd:
+        raise RuntimeError("không lấy được cửa sổ trình chiếu (HWND)")
+    return int(hwnd)
 
 
 def show_window(wait: float = 20.0, app=None):
