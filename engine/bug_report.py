@@ -106,8 +106,8 @@ def _tail(path: Path, limit: int = TAIL_BYTES) -> str:
 
 def _version() -> str:
     try:
-        from updates import VERSION
-        return VERSION
+        from updates import current_version
+        return current_version()
     except Exception:
         return "?"
 

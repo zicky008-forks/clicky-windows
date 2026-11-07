@@ -202,8 +202,8 @@ class SettingsWindow(QWidget):
         tabs.addTab(guide,"Bắt đầu")
         updates = QWidget()
         update_layout = QVBoxLayout(updates)
-        from updates import VERSION
-        self.update_status = QLabel(f"Bản đang dùng: {VERSION}. Clicky tự cập nhật lúc rảnh và báo một dòng khi mở lần sau.")
+        from updates import current_version
+        self.update_status = QLabel(f"Bản đang dùng: {current_version()}. Clicky tự cập nhật lúc rảnh và báo một dòng khi mở lần sau.")
         self.update_status.setWordWrap(True)
         update_layout.addWidget(self.update_status)
         check = QPushButton('Kiểm tra bản mới')

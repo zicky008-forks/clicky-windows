@@ -54,8 +54,8 @@ def card(run_s: Optional[float]) -> dict:
 
 def _version() -> str:
     try:
-        from updates import VERSION
-        return VERSION
+        from updates import current_version
+        return current_version()
     except Exception:
         return "?"
 
