@@ -1029,3 +1029,43 @@ def test_book_ids_match_across_spellings_and_never_hold_the_name():
     a = book_id(r"C:\Case\KeHoach_AOPR1.xlsx")
     assert a == book_id("c:/case/kehoach_aopr1.xlsx") and len(a) == 10 and "KeHoach" not in a
     assert a != book_id(r"C:\Case\Pack.xlsx")
+
+
+def test_the_pack_path_never_reaches_clicky_log_when_excel_cannot_open_it(caplog):
+    # clicky.log goes into bug reports: Excel's error quotes the path, and the pack's name is the client's.
+    import logging
+    from office import bod_skill
+    caplog.set_level(logging.WARNING)
+    secret = Path("C:/Users/chi/Documents/AgriS/BOD_AgriS_T10.xlsx")
+
+    class Bridge:
+        def workbook_path(self): return None
+        def open_workbook(self, p): raise OSError(f"Could not open '{p}'")
+
+    bod_skill._open_pack(Bridge(), secret)
+    assert "cannot open the pack" in caplog.text
+    assert "AgriS" not in caplog.text and "Users" not in caplog.text
+
+
+def test_bod_start_logs_the_folder_as_an_id_never_its_name(tmp_path, monkeypatch):
+    import asyncio
+    import json
+    from office import bod_skill, month_close as mc
+    from office.excel_com import book_id
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    folder = tmp_path / "AgriS_BOD_T10"
+    folder.mkdir()
+    make_case(folder, plant=True)
+
+    async def fake_play(manager, beats, keep_card=True):
+        pass
+
+    class M:
+        _excel = None
+
+    monkeypatch.setattr(mc, "play", fake_play)
+    asyncio.run(bod_skill.run(M(), folder))
+    start = next(e for e in map(json.loads, log.read_text(encoding="utf-8").splitlines()) if e["event"] == "bod_start")
+    assert start["folder"] == book_id(str(folder))
+    assert "AgriS" not in json.dumps(start)
