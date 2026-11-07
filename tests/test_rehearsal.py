@@ -375,4 +375,33 @@ def test_story_is_not_over_at_the_final_card_while_scenes_remain():
     assert not rehearse.story_ended(more, t)
     assert rehearse.story_ended(more + [{"event": "beat", "title": "", "choices": ["Lưu và kiểm tra"]}], t)
     assert rehearse.story_ended(ev + [{"event": "guided", "active": False}], t)
+    assert rehearse.story_ended(more + [{"event": "story_end", "beats": 6, "choices": []}], t)   # PR #25
     assert not rehearse.story_ended([{"event": "beat", "title": "Lệch", "choices": ["Sửa giúp tôi"]}], t)
+
+
+def test_busy_excel_is_retried_not_a_robot_crash(monkeypatch):
+    """Run (c), 07/11: reading the sheets right after Clicky saved got 'Call was rejected by callee'."""
+    import rehearse
+    monkeypatch.setattr(rehearse.time, "sleep", lambda s: None)
+
+    class Rejected(Exception):
+        pass
+
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 3:
+            raise Rejected(-2147418111, "Call was rejected by callee.", None, None)
+        return "ok"
+
+    assert rehearse.com_retry(flaky) == "ok" and len(calls) == 3
+
+    def broken():
+        raise Rejected(-2147352567, "Exception occurred.", None, None)
+
+    import pytest
+    with pytest.raises(Rejected):
+        rehearse.com_retry(broken)
+    with pytest.raises(Rejected):
+        rehearse.com_retry(lambda: (_ for _ in ()).throw(Rejected(-2147418111, "busy")), tries=2)

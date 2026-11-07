@@ -125,7 +125,7 @@ def story_ended(events, target: str) -> bool:
     if at is None:
         return False
     return any((e.get("event") == "beat" and e.get("choices")) or (e.get("event") == "guided" and not e.get("active"))
-               or e.get("event") == "turn" for e in events[at + 1:])
+               or e.get("event") in ("turn", "story_end") for e in events[at + 1:])
 
 
 def file_hash(path: Path) -> str:
@@ -253,7 +253,27 @@ def open_chat(shortcut: str) -> None:
         say(f"   Không bấm được phím tắt mở chat: {exc}")
 
 
+BUSY = (-2147418111, -2147417846)      # RPC_E_CALL_REJECTED, RPC_E_SERVERCALL_RETRYLATER: Excel is busy
+
+
+def com_retry(fn, tries: int = 30, wait: float = 1.0):
+    """Call fn(); while Excel rejects the call because it is busy (saving, re-opening), wait and try again."""
+    for n in range(tries):
+        try:
+            return fn()
+        except Exception as exc:
+            code = getattr(exc, "hresult", None) or (exc.args[0] if exc.args else None)
+            if code not in BUSY or n == tries - 1:
+                raise
+            time.sleep(wait)
+
+
 def sheet_values(wb, max_rows: int = 200, max_cols: int = 12) -> dict:
+    """Every sheet's values; retried as a whole while Excel is busy (run c: Clicky had just saved)."""
+    return com_retry(lambda: _sheet_values(wb, max_rows, max_cols))
+
+
+def _sheet_values(wb, max_rows: int, max_cols: int) -> dict:
     out = {}
     for ws in wb.Worksheets:
         rng = ws.Range(ws.Cells(1, 1), ws.Cells(max_rows, max_cols))
@@ -442,8 +462,8 @@ def main(argv=None) -> int:
 
     say("6/6 Đọc số trong file và chấm")
     if wb is None:                     # the sample: read the workbook Clicky opened itself
-        wb = excel.ActiveWorkbook
-        copy = Path(wb.FullName) if wb is not None else None
+        wb = com_retry(lambda: excel.ActiveWorkbook)
+        copy = Path(com_retry(lambda: wb.FullName)) if wb is not None else None
     sheets = sheet_values(wb) if wb is not None else {}
     if "latency" in (expected.get("layout") or {}):
         # The last turn's latency line is written when that turn ends, often after its final scene.
