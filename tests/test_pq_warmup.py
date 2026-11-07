@@ -35,18 +35,31 @@ class FakeSheet:
 class FakeBook:
     def __init__(self, name, log, fail_add=False):
         self.FullName, self.log, self.fail_add = name, log, fail_add
+        self._saved = True
         self.Queries = SimpleNamespace(Add=self._add_query)
+
+    @property
+    def Saved(self):
+        return self._saved
+
+    @Saved.setter
+    def Saved(self, value):
+        self._saved = value
+        self.log.append(("saved", self.FullName, value))
 
     def _add_query(self, name, formula):
         if self.fail_add:
             raise RuntimeError("Excel is busy")
+        self._saved = False                       # Excel marks the book changed
         self.log.append(("query", self.FullName, name))
 
     def Worksheets(self, i):
         return FakeSheet(self.log)
 
     def Close(self, save):
-        self.log.append(("close", self.FullName, save))
+        if getattr(self, "gone", False):
+            raise RuntimeError("The RPC server is unavailable. (0x800706BA)")
+        self.log.append(("close", self.FullName, save, self._saved))
 
     def Activate(self):
         self.log.append(("activate", self.FullName))
@@ -95,8 +108,9 @@ def test_power_query_is_started_in_clickys_own_workbook_and_the_users_is_never_t
     assert not [e for e in app.log if user in e]            # no query, no sheet, no close on the user's workbook
     assert app.log[0] == ("open", True, 0, True)            # read-only, no link updates
     assert app.log[1] == ("query", app.log[1][1], pq_warmup.QUERY) and app.log[1][1] != user
+    assert app.log[2] == ("saved", app.log[1][1], True)      # quitting Excel never asks to save Clicky's book
     assert ("refresh", False, f"SELECT * FROM [{pq_warmup.QUERY}]") in app.log
-    assert app.log[-1][0] == "close" and app.log[-1][2] is False     # closed without saving
+    assert app.log[-1][:3] == ("close", app.log[1][1], False) and app.log[-1][3] is True   # unsaved, no prompt
     assert app.DisplayAlerts is True and app.ActiveWorkbook is app.user
 
 
@@ -149,3 +163,48 @@ def test_a_press_waits_for_the_warm_up_to_close_before_working_on_the_users_work
     t0 = time.monotonic()
     assert asyncio.run(mc._busy(manager, "confirm", lambda: order.append("confirm") or ["done"])) == ["done"]
     assert order == ["warm-up closed", "confirm"] and time.monotonic() - t0 >= 0.15
+
+
+class ClosingApp(FakeApp):
+    """The user quits Excel while the warm-up holds its hidden workbook: every later call fails."""
+    def _open(self, *args):
+        book = super()._open(*args)
+        book.Worksheets = self._quit
+        self.book = book
+        return book
+
+    def _quit(self, i):
+        self.book.gone = True
+        raise RuntimeError("The RPC server is unavailable. (0x800706BA)")
+
+
+def test_excel_closed_during_the_warm_up_leaves_nothing_and_raises_nothing():
+    app = ClosingApp()
+    assert not pq_warmup.warm(_bridge(app)) and not pq_warmup._warm
+    assert ("saved", app.book.FullName, True) in app.log     # marked saved before Excel went: no save prompt
+    assert app.DisplayAlerts is True
+
+
+def test_a_stuck_warm_up_load_gives_up_and_still_closes(monkeypatch):
+    from office import power_query
+    monkeypatch.setattr(power_query, "refresh_with_timeout", lambda table, timeout: power_query.LoadTimeout("x"))
+    app = FakeApp()
+    assert not pq_warmup.warm(_bridge(app)) and not pq_warmup._warm
+    assert app.log[-1][0] == "close" and app.DisplayAlerts is True
+
+
+def test_a_press_goes_ahead_after_the_cap_and_the_warm_up_still_closes_later(monkeypatch):
+    events, release = [], threading.Event()
+    monkeypatch.setattr(pq_warmup, "_part", lambda part, t0, **extra: events.append((part, extra)))
+
+    def stuck():
+        release.wait(5)
+        events.append(("closed", {}))
+    monkeypatch.setattr(pq_warmup, "_thread", threading.Thread(target=stuck))
+    pq_warmup._thread.start()
+    t0 = time.monotonic()
+    pq_warmup.wait(timeout=0.2)
+    assert time.monotonic() - t0 < 2 and ("pq_warm_wait", {"timed_out": True}) in events
+    release.set()
+    pq_warmup._thread.join(2)
+    assert events[-1][0] == "closed"

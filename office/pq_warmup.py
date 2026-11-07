@@ -27,6 +27,7 @@ ENV = "CLICKY_PQ_WARMUP"
 QUERY = "ClickyKhoiDong"
 FORMULA = 'let\n    Nguon = #table({"a"}, {{1}})\nin\n    Nguon'
 WAIT_S = 30.0                  # a press never waits longer than this for the warm-up
+LOAD_S = 20.0                  # the warm-up's own refresh gives up before that
 
 _thread: Optional[threading.Thread] = None
 _lock = threading.Lock()
@@ -63,7 +64,7 @@ def warm(bridge) -> bool:
     """Do the warm-up now, on this thread. True when Power Query was started; False when skipped or failed."""
     global _warm
     t_all = time.monotonic()
-    book = None
+    app = book = alerts = None
     try:
         app = bridge._excel() if bridge is not None else None
         if app is None:
@@ -73,45 +74,58 @@ def warm(bridge) -> bool:
             return False
         path = str(warm_file())
         alerts = app.DisplayAlerts
-        app.DisplayAlerts = False
-        try:
-            t0 = time.monotonic()
-            book = app.Workbooks.Open(path, 0, True)          # UpdateLinks=0, ReadOnly=True
-            _part("pq_warm_open", t0)
-            if app.ActiveWorkbook.FullName != active.FullName:
-                active.Activate()                              # never leave the user on Clicky's workbook
-            t0 = time.monotonic()
-            book.Queries.Add(QUERY, FORMULA)
-            _part("pq_warm_add", t0)
-            t0 = time.monotonic()
-            ws = book.Worksheets(1)
-            source = (f'OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;'
-                      f'Location="{QUERY}";Extended Properties=""')
-            lo = ws.ListObjects.Add(0, source, True, 1, ws.Range("$A$1"))
-            lo.QueryTable.CommandType = 2                      # xlCmdSql
-            lo.QueryTable.CommandText = f"SELECT * FROM [{QUERY}]"
-            lo.QueryTable.Refresh(False)
-            _part("pq_warm_load", t0)
-        finally:
-            try:
-                app.DisplayAlerts = alerts
-            except Exception:  # noqa: BLE001
-                pass
+        app.DisplayAlerts = False       # off until the workbook is closed: no dialog may wait behind the overlay
+        t0 = time.monotonic()
+        book = app.Workbooks.Open(path, 0, True)              # UpdateLinks=0, ReadOnly=True
+        _part("pq_warm_open", t0)
+        if app.ActiveWorkbook.FullName != active.FullName:
+            active.Activate()                                  # never leave the user on Clicky's workbook
+        t0 = time.monotonic()
+        book.Queries.Add(QUERY, FORMULA)
+        _unchanged(book)
+        _part("pq_warm_add", t0)
+        t0 = time.monotonic()
+        ws = book.Worksheets(1)
+        source = (f'OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;'
+                  f'Location="{QUERY}";Extended Properties=""')
+        lo = ws.ListObjects.Add(0, source, True, 1, ws.Range("$A$1"))
+        lo.QueryTable.CommandType = 2                          # xlCmdSql
+        lo.QueryTable.CommandText = f"SELECT * FROM [{QUERY}]"
+        from office.power_query import refresh_with_timeout
+        late = refresh_with_timeout(lo.QueryTable, LOAD_S)
+        _unchanged(book)
+        _part("pq_warm_load", t0, late=late is not None)
+        if late is not None:
+            return False
         _warm = True
         return True
-    except Exception as exc:   # noqa: BLE001 - a busy Excel only means the first press is slower
+    except Exception as exc:   # noqa: BLE001 - a busy or closed Excel only means the first press is slower
         from office.excel_com import _why
         log.info("Power Query warm-up skipped: %s", _why(exc))
         return False
     finally:
         if book is not None:
             try:
+                _unchanged(book)
                 book.Close(False)
-            except Exception as exc:   # noqa: BLE001
+            except Exception as exc:   # noqa: BLE001 - Excel was closed meanwhile: the workbook went with it
                 from office.excel_com import _why
-                log.warning("closing the warm-up workbook failed: %s", _why(exc))
-        if book is not None:
+                log.info("closing the warm-up workbook failed: %s", _why(exc))
             _part("pq_warm_total", t_all, warm=_warm)
+        if app is not None and alerts is not None:
+            try:
+                app.DisplayAlerts = alerts
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _unchanged(book) -> None:
+    """Mark Clicky's hidden workbook as saved, so Excel never asks to save it, even if the user quits Excel
+    while it is open."""
+    try:
+        book.Saved = True
+    except Exception:          # noqa: BLE001 - Excel gone or busy: Close(False) or Excel's exit handles it
+        pass
 
 
 def _run(bridge) -> None:
@@ -154,4 +168,6 @@ def wait(timeout: float = WAIT_S) -> None:
     if thread is not None and thread.is_alive():
         t0 = time.monotonic()
         thread.join(timeout)
-        _part("pq_warm_wait", t0)
+        # Past the cap (Excel stuck for half a minute) the step goes ahead and meets the same stuck Excel with the
+        # usual plain error card and "Thử lại" (errors_vi); the warm-up still closes its own workbook when it ends.
+        _part("pq_warm_wait", t0, timed_out=thread.is_alive())
