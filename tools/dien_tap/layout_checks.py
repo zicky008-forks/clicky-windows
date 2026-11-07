@@ -114,6 +114,52 @@ def turns_measured(events) -> bool:
     return sum(e.get("event") == "latency" for e in events) >= turns
 
 
+def _code_turns(events):
+    """(latency line, whether its turn loaded a query) for each code turn, in order. The close_step events
+    of a turn sit between its turn event and its latency line."""
+    out, loaded = [], False
+    for e in events:
+        kind = e.get("event")
+        if kind == "turn":
+            loaded = False
+        elif kind == "close_step" and e.get("step") == "query_load":
+            loaded = True
+        elif kind == "latency":
+            if e.get("source") != "voice" and e.get("mode", "code") == "code":
+                out.append((e, loaded))
+            loaded = False
+    return out
+
+
+def ready_checks(events, spec, tagged) -> list:
+    """Beta gates (lead, 07/11): a code turn has its answer within ready_ms; the first turn of the session that
+    loads a query (Excel's first Power Query start) may take up to first_excel_ready_ms, but only while the
+    caption tells the user what it is waiting for."""
+    limit, first_limit = spec.get("ready_ms"), spec.get("first_excel_ready_ms")
+    if limit is None:
+        return []
+    turns = [(e, q) for e, q in _code_turns(events) if isinstance(e.get("ready"), (int, float))]
+    if not turns:
+        return []
+    first_q = next((i for i, (_, q) in enumerate(turns) if q), None)
+    slow, notes = [], []
+    for i, (e, _) in enumerate(turns):
+        name = e.get("label") or e.get("source", "?")
+        if i == first_q and first_limit is not None:
+            ok = e["ready"] <= first_limit and "first_caption" in e
+            notes.append(f"lượt nạp Power Query đầu '{name}': {e['ready']} ms"
+                         + ("" if "first_caption" in e else ", không có dòng chữ báo đang chờ"))
+            if not ok:
+                slow.append(notes[-1])
+        elif e["ready"] > limit:
+            slow.append(f"'{name}': {e['ready']} ms")
+    title = f"Lượt chạy bằng code: tính xong ≤ {limit} ms" + (
+        f" (lượt nạp Power Query đầu ≤ {first_limit} ms, có dòng chữ báo chờ)" if first_limit is not None else "")
+    return [Check(title, not slow, "; ".join(slow[:4]) or
+                  f"chậm nhất {max(e['ready'] for e, _ in turns)} ms" + (" · " + notes[0] if notes else ""),
+                  blocking=tagged)]
+
+
 def latency_checks(events, spec) -> list:
     """Code turns must answer fast; voice turns are measured only. Limits block only on a build that tags
     each turn with its mode (PR #16): an older build's numbers are shown but cannot fail the run."""
@@ -135,11 +181,16 @@ def latency_checks(events, spec) -> list:
                  blocking=tagged)]
     limit = spec.get("first_feedback_ms")
     if limit is not None and code:
-        slow = [e for e in code if (e.get("first_feedback") or 0) > limit]
+        # A mark Clicky did not measure has no key at all; 0 is a real 0 ms (build thread, 07/11).
+        timed = [e for e in code if isinstance(e.get("first_feedback"), (int, float))]
+        slow = [e for e in timed if e["first_feedback"] > limit]
+        untimed = len(code) - len(timed)
         out.append(Check(f"Lượt chạy bằng code: phản hồi đầu ≤ {limit} ms mọi lượt", not slow,
                          "; ".join(line(e) for e in slow[:4]) or
-                         f"chậm nhất {max(e.get('first_feedback') or 0 for e in code)} ms",
+                         (f"chậm nhất {max(e['first_feedback'] for e in timed)} ms" if timed else "")
+                         + (f" · {untimed} lượt chưa đo phản hồi đầu" if untimed else ""),
                          blocking=tagged))
+    out += ready_checks(events, spec, tagged)
     limit = spec.get("point_after_ready_ms")
     pairs = [(e, _gap(e, "ready", "first_point")) for e in code]
     pairs = [(e, g) for e, g in pairs if g is not None]
