@@ -113,3 +113,14 @@ def test_a_group_checked_in_part_and_said_so_is_not_a_failure(tmp_path, monkeypa
     done["not_checked"] = [6]
     line = {l.name: l for l in bod_robot.grade(events, True, answers).lines}["Đủ 7 nhóm đều kiểm được"]
     assert not line.ok and "chưa kiểm được nhóm 6" in line.detail
+
+
+def test_a_card_left_up_when_the_next_cell_is_not_found_fails():
+    """Case 07 run 3 (grader, 07/11): beat 8's card stayed on screen while beat 9 was read."""
+    ev = [{"event": "beat", "i": 8, "ref": "'A'!B2", "box": [1, 2, 3, 4]}, {"event": "card", "title": "x"},
+          {"event": "spoken", "i": 8},
+          {"event": "beat", "i": 9, "ref": "AOPR1!174", "box": None}, {"event": "spoken", "i": 9}]
+    assert bod_robot.stale_cards(ev) == [(8, 9)]
+    ok = ev[:3] + [{"event": "clear"}] + ev[3:]
+    assert bod_robot.stale_cards(ok) == []
+    assert bod_robot.stale_cards(ev[:3] + [{"event": "beat", "i": 9, "ref": "'A'!C3", "box": [1, 2, 3, 4]}]) == []
