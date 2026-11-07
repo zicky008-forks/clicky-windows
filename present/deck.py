@@ -108,12 +108,26 @@ def to_screen(shape: ShapeInfo, slide_w: float, slide_h: float, win_left: float,
     return (round(x), round(y), round(shape.width * scale * px), round(shape.height * scale * px))
 
 
+def _full_key(path: str) -> str:
+    return fold(str(path)).replace("/", "\\").rstrip("\\")
+
+
+def _name_key(path: str) -> str:
+    """The file name of a path or a web address ('BOD%20T10.pptx' -> 'bod t10.pptx'), folded."""
+    from urllib.parse import unquote
+    return fold(unquote(re.split(r"[\\/]", str(path).rstrip("/\\"))[-1]))
+
+
 class PowerPointBridge:
-    def __init__(self, app=None):
+    def __init__(self, app=None, launch=None):
         self._app = app
+        self._launch = launch or (lambda argv: __import__("subprocess").Popen(argv, close_fds=True))
         self.pres = None
         self.show = None
         self.last_error = ""
+        self.how = ""                       # how the show window was confirmed: path / name / presentation
+        self.show_is_theirs = False          # the presenter's own show, found by attach(): never closed by Clicky
+        self.shows_seen, self.same_name = 0, 0
 
     def app(self):
         if self._app is None:
@@ -126,6 +140,10 @@ class PowerPointBridge:
         return self.pres.Slides.Count
 
     def start(self, first: int = 1):
+        try:
+            self.app().Visible = -1         # msoTrue: a PowerPoint that COM started stays hidden, so would its show
+        except Exception:                   # noqa: BLE001 - already visible, or this PowerPoint will not say
+            pass
         settings = self.pres.SlideShowSettings
         settings.StartingSlide = first
         self.show = settings.Run()
@@ -134,49 +152,104 @@ class PowerPointBridge:
     def attach(self, path: str) -> bool:
         """Follow the presenter's own slide show of this deck when one is running (True); else open the deck
         read-only without starting a show (False), so pre-checks can read it before anything is shown."""
-        want = fold(str(path)).replace("/", "\\")
-        app = self.app()
         try:
-            for i in range(1, int(app.SlideShowWindows.Count) + 1):
-                window = app.SlideShowWindows(i)
-                if fold(str(window.Presentation.FullName)).replace("/", "\\") == want:
-                    self.pres, self.show = window.Presentation, window
-                    return True
+            window, how = self._show_of(path, own=False)
+            if window is not None:
+                self.pres, self.show, self.how = window.Presentation, window, how
+                self.show_is_theirs = True
+                return True
         except Exception:                   # noqa: BLE001 - no show running is the normal case
             pass
         self.open(path)
         return False
 
     def find_show(self, path: str) -> bool:
-        """A slide show of this deck already on screen (PowerPoint may hand back the show window only once
-        it exists): follow it."""
-        want = fold(str(path)).replace("/", "\\")
+        """A slide show of this deck on screen, confirmed through PowerPoint itself, never by a window class
+        name (it differs between versions): follow it. self.how says which way it was found."""
         try:
-            app = self.app()
-            for i in range(1, int(app.SlideShowWindows.Count) + 1):
-                window = app.SlideShowWindows(i)
-                if fold(str(window.Presentation.FullName)).replace("/", "\\") == want:
-                    self.pres, self.show = window.Presentation, window
-                    return True
+            window, how = self._show_of(path)
         except Exception as exc:            # noqa: BLE001 - kept as the reason if the show never comes
             self.last_error = f"{type(exc).__name__}"
-        return False
+            return False
+        if window is None:
+            return False
+        try:
+            self.pres = window.Presentation
+        except Exception:                   # noqa: BLE001 - keep the copy Clicky opened
+            pass
+        self.show, self.how = window, how
+        return True
 
-    def restart(self, path: str) -> bool:
-        """Open the deck again over COM (read-only, with a window) when the first copy is gone, and start
-        the show. False, with last_error, when PowerPoint refuses."""
+    def _show_of(self, path: str, own: bool = True) -> tuple:
+        """(slide-show window, how) for this deck, or (None, ""). In order:
+        'path'  a show whose deck has this full path;
+        'name'  the one show whose deck has this file name: PowerPoint gives a OneDrive or SharePoint
+                deck's full name as a web address, and a mapped drive or short path reads differently;
+        'presentation'  the deck Clicky opened says it has a show (Presentation.SlideShowWindow)."""
+        want, name = _full_key(path), _name_key(path)
+        app = self.app()
+        count = int(app.SlideShowWindows.Count)
+        self.shows_seen, self.same_name, named = count, 0, []
+        for i in range(1, count + 1):
+            window = app.SlideShowWindows(i)
+            deck = window.Presentation
+            if _full_key(str(deck.FullName)) == want:
+                return window, "path"
+            if _name_key(str(getattr(deck, "Name", "") or deck.FullName)) == name:
+                named.append(window)
+        self.same_name = len(named)
+        if len(named) == 1:
+            return named[0], "name"
+        if own and count and self.pres is not None:
+            try:
+                window = self.pres.SlideShowWindow
+                _ = window.View.State
+                return window, "presentation"
+            except Exception:               # noqa: BLE001 - this copy has no show yet
+                pass
+        return None, ""
+
+    def restart(self, path: str, attempt: int = 1) -> bool:
+        """Start the show again when none came. True only when PowerPoint then reports a show of this deck
+        (SlideShowWindows), not merely because the call returned; last_error says why when it refused.
+        Attempt 1: bring PowerPoint and the deck's window forward, then Run again (robot 07/11 on a cold
+        PowerPoint: Run returned, no show ever appeared, the deck sat in editing view).
+        Attempt 2: PowerPoint's own command line, POWERPNT /S, which opens the deck straight into a show."""
         try:
             try:
                 _ = self.pres.FullName
             except Exception:               # noqa: BLE001 - no copy open, or it was closed
                 self.pres = None
-            if self.pres is None:
-                self.open(path)
-            self.start(1)
-            return True
+            if attempt >= 2:
+                self._command_line_show(path)
+            else:
+                if self.pres is None:
+                    self.open(path)
+                try:
+                    self.pres.Windows(1).Activate()
+                except Exception:           # noqa: BLE001 - no document window to bring forward
+                    pass
+                self.start(1)
         except Exception as exc:            # noqa: BLE001 - said to the presenter, never a traceback
             self.last_error = f"{type(exc).__name__}"
             return False
+        return self.find_show(path)
+
+    def _command_line_show(self, path: str) -> None:
+        """Close the read-only copy Clicky opened (never saved: it was only read), then ask PowerPoint to
+        show the deck from its command line. The show is followed through SlideShowWindows as usual."""
+        import os
+        if self.pres is not None and not self.show_is_theirs:
+            try:
+                self.pres.Close()
+            except Exception:               # noqa: BLE001 - already gone
+                pass
+            self.pres = None
+        exe = os.path.join(str(self.app().Path), "POWERPNT.EXE")
+        if os.path.exists(exe):
+            self._launch([exe, "/S", str(path)])
+        else:
+            os.startfile(str(path), "show")  # the deck's own "Show" verb runs the same command
 
     def count(self) -> int:
         return int(self.pres.Slides.Count)

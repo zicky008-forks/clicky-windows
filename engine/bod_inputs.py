@@ -633,6 +633,7 @@ def load(folder: Path, fy_start: int = 7) -> Bundle:
     fy = b.config.rule("thang bat dau") or b.config.rule("nien do")
     fy_start = int(num(fy)) if num(fy) is not None and 1 <= int(num(fy)) <= 12 else fy_start
     pending = []                                                # (plan rows, prior?) whose year comes from the detail
+    sales_sources = []                                          # (path, sheet, named as sales?, rows, receipt entry)
     for p in rest:
         k = name_key(p.stem)
         hint = hint_of(p.stem)
@@ -687,15 +688,43 @@ def load(folder: Path, fy_start: int = 7) -> Bundle:
                 else:
                     got = _try_sales(rows, sheet, fy_start)
                     if got:
-                        b.sales += got[1]
-                        b.receipt.append((p.name, "Bán hàng", len(got[0].rows), got[0].skipped))
+                        entry = (p.name, "Bán hàng", len(got[0].rows), got[0].skipped)
+                        sales_sources.append((p, sheet, hint == "sales", got[1], entry))
+                        b.receipt.append(entry)
                 if got:
                     used = True
                     break
         if not used:
             b.unused.append((p.name, _unused_reason(hint, sheets)))
+    b.sales = _drop_sales_copies(b, sales_sources)
     _resolve_years(b, pending, fy_start)
     return b
+
+
+def _sale_key(s: Sale) -> tuple:
+    return s.month, s.net, key(s.site), key(s.division), key(s.channel)
+
+
+def _drop_sales_copies(b: Bundle, sources: list) -> list:
+    """Sales rows, each source counted once. A table whose every row already sits in another table is a copy,
+    for example the order table Clicky's month close loads into the report workbook from the same export.
+    Counting it again would double every revenue base. The copy is named in the receipt with its reason."""
+    from collections import Counter
+    # Bigger tables first; between equal ones, keep the file whose name says sales, then a csv export.
+    order = sorted(sources, key=lambda x: (-len(x[3]), not x[2], x[0].suffix.lower() != ".csv", x[0].name, x[1]))
+    kept, out = [], []
+    for p, sheet, _, rows, entry in order:
+        mine = Counter(_sale_key(r) for r in rows)
+        home = next(((q, qs) for q, qs, c in kept if not mine - c), None)
+        if home is not None:
+            b.receipt = [e for e in b.receipt if e is not entry]
+            there = f"sheet '{home[1]}' cùng file" if home[0] == p else f"file {home[0].name}"
+            b.unused.append((p.name, f"sheet '{sheet}' có {len(rows)} dòng bán hàng, dòng nào cũng đã có trong {there}: "
+                                     "đây là bản sao, em không cộng doanh thu lần hai"))
+            continue
+        kept.append((p, sheet, mine))
+        out += rows
+    return out
 
 
 def _unused_reason(hint: str, sheets: dict) -> str:

@@ -786,7 +786,8 @@ def check_lines(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Covera
                     if pct is None and value:
                         out.append(Finding(3, "missing_pct", _cell(s, r, cur.pct),
                                            f"{r.label}: có giá trị {fmt_vnd(value)} đ nhưng thiếu %DTT"
-                                           + (f", phải là {fmt_pct(want)}" if want is not None else ""), want, None))
+                                           + (f", phải là {fmt_pct(want)}" if want is not None else
+                                              _no_pct_why(base_label)), want, None))
             # 3. comparisons: gap in money and in points
             for g in groups[1:]:
                 out += _check_compare(s, cur, g, pct_scale, cov, fill)
@@ -826,6 +827,14 @@ def _rule_votes(f: Facts, s: Sheet, cur: Group, months: list, pct_scale: Decimal
 
 
 UNSURE = "?"
+
+
+def _no_pct_why(base_label: tuple) -> str:
+    """Why a missing %DTT comes without the figure it should be: said, never a bare blank."""
+    if base_label[1] == "unsure":
+        return f". Em chưa tính được con số đúng: quy tắc mẫu số '{base_label[0]}' chưa nói rõ khối nào"
+    return (". Em chưa tính được con số đúng: các %DTT khác trên sheet không khớp doanh thu nào em đọc được "
+            "trong thư mục, nên em chưa biết mẫu số")
 
 
 def _want_pct(f: Facts, r: Row, value: Decimal, months: list, default: Optional[str], override: dict = None) -> tuple:

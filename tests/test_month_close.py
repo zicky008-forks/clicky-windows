@@ -1302,3 +1302,24 @@ def test_a_total_row_at_the_end_of_the_export_is_dropped_before_dates_are_typed_
     _, items = intake._order_lines([order], truth, (2026, 10))
     footer = [d for d in items if d.what.startswith('Dòng "Tổng"')]
     assert len(footer) == 1 and footer[0].reason.startswith("dòng tổng cuối file") and footer[0].file == order.name
+
+
+def test_the_receipt_counts_rows_used_and_left_out_for_every_file(tmp_path):
+    """bhc_e2e 84603e7, stages 1–2: the intake event gave amounts per file but not rows. Rule 4 is in rows too:
+    rows used + rows left out = rows the file holds, for the order export and each trial balance."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "dien_tap"))
+    import bhc_case
+    from engine import intake
+    bhc_case.make(tmp_path)
+    files = sources.find_order_files(tmp_path)
+    tbs, ledger = month_close._ledger(tmp_path)
+    truth = sources.truth(files, sources.period_of(tbs[-1][1]))
+    receipt = intake.build(tmp_path, files, tbs, truth, month_close._net_of_returns(ledger, truth),
+                           "BaoCao_QuanTri_T10.xlsx")
+    logged = intake.log_fields(receipt, "")["files"]
+    sales = next(f for f in logged if f["kind"] == "Bán hàng")
+    assert (sales["rows_total"], sales["rows_used"], sales["rows_dropped"]) == (97, 24, 73)   # 72 outside + 'Tổng'
+    for f in logged:
+        if f["kind"] in ("Bán hàng",) or f["kind"].startswith("Sổ cân đối"):
+            assert f["rows_total"] == f["rows_used"] + f["rows_dropped"] and f["rows_total"] > 0, f

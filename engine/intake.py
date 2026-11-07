@@ -40,6 +40,9 @@ class FileLine:
     used: Decimal = ZERO
     dropped: Decimal = ZERO
     shown: str = ""                  # the file's name on disk when `name` is a sheet-style stem (TB_T10 → TB_T10.xlsx)
+    rows_total: int = 0              # data rows Clicky looked at: rows_used + rows_dropped (rule 4, in rows)
+    rows_used: int = 0
+    rows_dropped: int = 0
 
 
 @dataclass
@@ -136,6 +139,7 @@ def _tb_line(name: str, rows, tb, previous=None) -> tuple:
         items.append(Dropped(f"Dòng \"{label}\" cuối sổ (dòng {i + 1})", name, None,
                              f"không phải tài khoản, ghi phát sinh Nợ {spoken(t_dr)} / Có {spoken(t_cr)}; dùng làm mốc kiểm: "
                              + ("khớp tổng các tài khoản chi tiết" if same else "lệch tổng các tài khoản chi tiết")))
+    total_lines = sum(1 for it in items if it.what.startswith("Dòng \""))
     new = []
     if previous is not None:
         before = {l.account for l in previous.leaves}
@@ -145,7 +149,9 @@ def _tb_line(name: str, rows, tb, previous=None) -> tuple:
         checks += f" · {len(new)} tài khoản mới so với kỳ trước"
     line = FileLine(name=name, kind=f"Sổ cân đối{month}", period=_period_text(period), unit=_unit(rows),
                     rows=len(tb.lines), rows_label=f"{len(tb.lines)} tài khoản", checks=checks, ok=balanced,
-                    total=dr + dropped, used=dr, dropped=dropped)
+                    total=dr + dropped, used=dr, dropped=dropped,
+                    rows_total=len(tb.lines) + len(tb.skipped) + total_lines, rows_used=len(tb.lines),
+                    rows_dropped=len(tb.skipped) + total_lines)
     return line, items
 
 
@@ -174,7 +180,9 @@ def _order_lines(files: list, truth, period: Optional[tuple]) -> tuple:
                                  ("" if blank else f", ghi {spoken(value)}, dùng làm mốc kiểm: {check}")))
         lines.append(FileLine(name=f.name, kind="Bán hàng", period=_period_text(period), unit="đồng",
                               rows=used_rows, rows_label=f"{used_rows} đơn",
-                              checks=f"tổng {spoken(used)}", total=total, used=used, dropped=dropped))
+                              checks=f"tổng {spoken(used)}", total=total, used=used, dropped=dropped,
+                              rows_total=len(f.rows) + len(f.footers), rows_used=used_rows,
+                              rows_dropped=len(dups) + len(outside) + len(f.footers)))
     return lines, items
 
 
@@ -354,7 +362,8 @@ def summarize_dropped(items: list, limit: int = 4) -> list:
 def log_fields(intake: Intake, text: str) -> dict:
     """The scene-log record the rehearsal robot checks (tools/dien_tap/beta_checks.py)."""
     return {"files": [{"name": f.name, "kind": f.kind, "period": f.period, "unit": f.unit, "rows": f.rows,
-                       "checks": f.checks, "total": int(f.total), "used": int(f.used), "dropped": int(f.dropped)}
+                       "checks": f.checks, "total": int(f.total), "used": int(f.used), "dropped": int(f.dropped),
+                       "rows_total": f.rows_total, "rows_used": f.rows_used, "rows_dropped": f.rows_dropped}
                       for f in intake.files],
             "dropped": [{"what": d.what, "amount": None if d.amount is None else int(d.amount), "reason": d.reason,
                          "file": d.file} for d in intake.dropped],

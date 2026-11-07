@@ -241,6 +241,8 @@ class _Settings:
         self.app.runs += 1
         if self.app.refuse:
             raise RuntimeError("PowerPoint busy")
+        if self.app.ignore_run:             # cold PowerPoint, PC 07/11: the call returns, no show ever comes
+            return _Stale()
         window = _ShowWindow(self.pres)
         if self.app.late:                   # the show window exists only from the second look on
             self.app.pending.append(window)
@@ -255,10 +257,33 @@ class _Stale:
         raise RuntimeError("not ready")
 
 
+class _DocWindow:
+    def __init__(self, app):
+        self.app = app
+
+    def Activate(self):
+        self.app.activated += 1
+
+
 class _Pres:
+    def Close(self):
+        self.app.closed += 1
+
+    def Windows(self, i):
+        return _DocWindow(self.app)
+
     def __init__(self, app, path):
-        self.FullName, self.Slides = path, type("S", (), {"Count": 4})()
+        self.app = app
+        self.FullName, self.Slides = app.reported(path), type("S", (), {"Count": 4})()
+        self.Name = app.reported_name(path)
         self.SlideShowSettings = _Settings(app, self)
+
+    @property
+    def SlideShowWindow(self):
+        mine = [w for w in self.app.windows if w.Presentation is self]
+        if not mine:
+            raise RuntimeError("no slide show")
+        return mine[0]
 
 
 class _Windows:
@@ -286,19 +311,23 @@ class _Presentations:
 
 
 class _PowerPoint:
-    def __init__(self, late=False, refuse=False):
-        self.late, self.refuse = late, refuse
-        self.windows, self.pending, self.runs, self.opened = [], [], 0, 0
+    """A fake PowerPoint over COM. It has no window classes at all: a show exists only as SlideShowWindows."""
+    def __init__(self, late=False, refuse=False, reported=None, reported_name=None, ignore_run=False):
+        self.late, self.refuse, self.ignore_run = late, refuse, ignore_run
+        self.Path, self.Visible, self.closed = "", 0, 0
+        self.reported = reported or (lambda path: path)
+        self.reported_name = reported_name or (lambda path: path.replace("/", "\\").rsplit("\\", 1)[-1])
+        self.windows, self.pending, self.runs, self.opened, self.activated = [], [], 0, 0, 0
         self.Presentations, self.SlideShowWindows = _Presentations(self), _Windows(self)
 
 
-def _mode_with(app, monkeypatch, tmp_path):
+def _mode_with(app, monkeypatch, tmp_path, launch=None):
     from present.deck import PowerPointBridge
     from ui import present_mode
     monkeypatch.setenv("CLICKY_SCENE_LOG", str(tmp_path / "scene.jsonl"))
     manager = FakeManager()
     mode = present_mode.PresentMode(manager, "spec", "a.xlsx", r"C:\case\deck.pptx")
-    bridge = PowerPointBridge(app)
+    bridge = PowerPointBridge(app, launch=launch)
     mode.attached = bridge.attach(mode.deck_path)
     mode.bridge = bridge
     try:
@@ -351,3 +380,75 @@ def test_when_powerpoint_will_not_show_the_presenter_gets_a_card_never_a_silent_
     failed = [e for e in _events(tmp_path) if e.get("event") == "present_failed"]
     assert failed and failed[0]["stage"] == "show" and failed[0]["why"] == "RuntimeError"
     assert [e["ok"] for e in _events(tmp_path) if e.get("event") == "present_retry"] == [False]
+
+
+def test_a_onedrive_deck_whose_full_name_is_a_web_address_is_followed_by_its_file_name(qt_app, monkeypatch, tmp_path):
+    """bhc_e2e 84603e7 stage 4: the show was started (retry ok) yet never found. PowerPoint gives a deck in a
+    synced folder a web address as FullName, so the full-path match missed. SlideShowWindows.Count = 1 and the
+    deck's own file name confirm it through COM, with no window class anywhere."""
+    app = _PowerPoint(late=True, reported=lambda path: "https://d.docs.live.net/4f1c/case/deck.pptx")
+    mode, manager, clock = _mode_with(app, monkeypatch, tmp_path)
+    assert not mode.attached
+    mode._tick()
+    assert mode.live is not None and mode.bridge.running() and int(app.SlideShowWindows.Count) == 1
+    attached = [e for e in _events(tmp_path) if e.get("event") == "present_attached"]
+    assert attached and attached[0]["how"] == "name"
+    assert not any(e.get("event") == "present_failed" for e in _events(tmp_path))
+
+
+def test_the_deck_clicky_opened_confirms_its_own_show_when_no_name_matches(qt_app, monkeypatch, tmp_path):
+    """A show whose deck reads under another name and path (short path, renamed copy): Presentation.SlideShowWindow
+    of the copy Clicky opened still says the show is this deck's."""
+    app = _PowerPoint(late=True, reported=lambda path: r"C:\\PROGRA~1\\x\\DECK~1.PPT",
+                      reported_name=lambda path: "DECK~1.PPT")
+    mode, manager, clock = _mode_with(app, monkeypatch, tmp_path)
+    mode._tick()
+    attached = [e for e in _events(tmp_path) if e.get("event") == "present_attached"]
+    assert attached and attached[0]["how"] == "presentation" and mode.live is not None
+
+
+def test_a_failed_show_logs_how_many_shows_powerpoint_had_and_never_a_deck_name(qt_app, monkeypatch, tmp_path):
+    import json
+    from ui import present_mode
+    app = _PowerPoint(refuse=True)
+    mode, manager, clock = _mode_with(app, monkeypatch, tmp_path)
+    clock[0] += present_mode.START_GRACE_S
+    mode._tick()
+    failed = [e for e in _events(tmp_path) if e.get("event") == "present_failed"]
+    assert failed and failed[0]["shows"] == 0 and failed[0]["same_name"] == 0
+    assert "deck" not in json.dumps(failed[0])
+
+
+def test_a_cold_powerpoint_that_ignores_run_gets_its_own_command_line_show(qt_app, monkeypatch, tmp_path):
+    """bhc_e2e 84603e7 stage 4 on the PC: PowerPoint was not running, the deck opened read-only in editing view,
+    Run() returned (the retry said ok=true) and no show ever appeared. Now: ok only when SlideShowWindows says
+    so; Run once more with the deck's window forward; then POWERPNT /S; the show it opens is followed."""
+    import os
+    from ui import present_mode
+    app = _PowerPoint(ignore_run=True)
+    app.Path = str(tmp_path)
+    (tmp_path / "POWERPNT.EXE").write_bytes(b"")
+    launched = []
+
+    def launch(argv):
+        launched.append(argv)
+        app.windows.append(_ShowWindow(_Pres(app, argv[-1])))   # PowerPoint opens the deck straight into a show
+
+    mode, manager, clock = _mode_with(app, monkeypatch, tmp_path, launch)
+    assert app.Visible == -1                                     # a COM-started PowerPoint is made visible
+    mode._tick()
+    clock[0] += present_mode.RETRY_AFTER_S
+    mode._tick()
+    retry = [e for e in _events(tmp_path) if e.get("event") == "present_retry"]
+    assert app.runs == 2 and app.activated == 1 and [e["ok"] for e in retry] == [False]   # not a false ok
+    clock[0] += present_mode.COMMAND_LINE_AFTER_S - present_mode.RETRY_AFTER_S
+    mode._tick()
+    assert launched == [[os.path.join(str(tmp_path), "POWERPNT.EXE"), "/S", r"C:\case\deck.pptx"]]
+    assert app.closed == 1                                       # Clicky's read-only copy, closed unsaved
+    retry = [e for e in _events(tmp_path) if e.get("event") == "present_retry"]
+    assert [(e["attempt"], e["how"], e["ok"]) for e in retry] == [(1, "run", False), (2, "command_line", True)]
+    attached = [e for e in _events(tmp_path) if e.get("event") == "present_attached"]
+    assert attached and attached[0]["how"] == "path" and mode.live is not None and mode.bridge.running()
+    clock[0] += present_mode.START_GRACE_S
+    mode._tick()
+    assert not any(e.get("event") == "present_failed" for e in _events(tmp_path)) and mode.live is not None

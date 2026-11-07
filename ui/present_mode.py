@@ -25,8 +25,9 @@ from present import hotkeys
 log = logging.getLogger(__name__)
 
 POLL_MS = 300
-START_GRACE_S = 12.0                   # PowerPoint may need seconds before the show window answers
-RETRY_AFTER_S = 3.0
+START_GRACE_S = 15.0                   # PowerPoint may need seconds before the show window answers
+RETRY_AFTER_S = 3.0                     # then Run again with the deck's window brought forward
+COMMAND_LINE_AFTER_S = 7.0              # then PowerPoint's own POWERPNT /S
 NO_SHOW = ("Em chưa mở được PowerPoint để trình chiếu bộ slide này. File slide của anh chị vẫn nguyên. "
            "Anh chị mở PowerPoint, bấm Trình chiếu (F5), rồi gọi lại em.")
 FORCE_PANEL = "CLICKY_PRESENT_FORCE_PANEL"     # robot on a one-screen PC: show the box anyway
@@ -90,7 +91,7 @@ class PresentMode(QObject):
         self.total = 0
         self._started = 0.0
         self._seen_running = False
-        self._retried = False
+        self._retried = 0
 
     # ---- start ----------------------------------------------------------------------------
     def start(self) -> bool:
@@ -130,7 +131,7 @@ class PresentMode(QObject):
             except Exception as exc:        # noqa: BLE001 - one retry from _tick before it is called failed
                 log.warning("starting the slide show failed: %s", type(exc).__name__)
                 self.bridge.last_error = type(exc).__name__
-        self._started, self._seen_running, self._retried = time.monotonic(), False, False
+        self._started, self._seen_running, self._retried = time.monotonic(), False, 0
         try:
             self.total = self.bridge.count()
         except Exception as exc:            # noqa: BLE001
@@ -143,7 +144,8 @@ class PresentMode(QObject):
         failed = self.keys.start()
         if failed:
             self.panel.set_warning(f"Phím {', '.join(failed)} đang bị chương trình khác giữ. Anh chị bấm vào ô hỏi để hỏi.")
-        scene_log.record("present_start", attached=self.attached, slides=self.total, mode=self.layout.mode,
+        scene_log.record("present_start", attached=self.attached, how=self.bridge.how, slides=self.total,
+                         mode=self.layout.mode,
                          keys_failed=failed)
         self.timer.start(POLL_MS)
         self._tick()
@@ -255,12 +257,20 @@ class PresentMode(QObject):
             # start). Follow a show window of this deck when it appears, start once more, then say why.
             waited = time.monotonic() - self._started
             if self.bridge.find_show(self.deck_path) and self.bridge.running():
-                scene_log.record("present_attached", after=round(waited, 1))
+                scene_log.record("present_attached", after=round(waited, 1), how=getattr(self.bridge, "how", ""))
             elif waited < START_GRACE_S:
-                if waited >= RETRY_AFTER_S and not self._retried:
-                    self._retried = True
-                    ok = self.bridge.restart(self.deck_path)
-                    scene_log.record("present_retry", ok=ok, why=getattr(self.bridge, "last_error", ""))
+                due = 2 if waited >= COMMAND_LINE_AFTER_S else 1 if waited >= RETRY_AFTER_S else 0
+                if due > self._retried:
+                    self._retried = attempt = self._retried + 1           # in order, even after a slow tick
+                    ok = self.bridge.restart(self.deck_path, attempt)     # ok = PowerPoint reports the show
+                    scene_log.record("present_retry", attempt=attempt, how=("run" if attempt == 1 else "command_line"),
+                                     ok=ok, why=getattr(self.bridge, "last_error", ""),
+                                     shows=getattr(self.bridge, "shows_seen", 0))
+                    if ok and self.bridge.running():
+                        scene_log.record("present_attached", after=round(waited, 1),
+                                         how=getattr(self.bridge, "how", ""))
+                        self._seen_running = True
+                        self.live.poll()
                 return
             else:
                 self._fail("show", getattr(self.bridge, "last_error", "") or "không thấy cửa sổ trình chiếu")
@@ -271,7 +281,9 @@ class PresentMode(QObject):
     def _fail(self, stage: str, why: str) -> bool:
         """The show could not start: a plain card for the presenter, a log line, and the robot's event."""
         log.warning("present mode: no slide show (%s: %s)", stage, why)
-        scene_log.record("present_failed", stage=stage, why=str(why)[:200])
+        b = self.bridge
+        scene_log.record("present_failed", stage=stage, why=str(why)[:200],          # counts only, never deck names
+                         shows=getattr(b, "shows_seen", 0), same_name=getattr(b, "same_name", 0))
         self.timer.stop()
         if self.keys is not None:
             self.keys.stop()
