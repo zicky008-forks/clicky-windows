@@ -80,6 +80,17 @@ def test_print_time_pages_users_and_month_names_never_make_a_different_basis(pre
     assert g.notes == []
 
 
+def test_the_same_regulation_written_two_ways_is_the_same_regime():
+    """Lead's probe: the full ministry wording and the short form name the same Thông tư."""
+    g = _gate(_with_header(tb.t9_rows(), "BẢNG CÂN ĐỐI TÀI KHOẢN",
+                           "Ban hành theo Thông tư số 200/2014/TT-BTC ngày 22/12/2014 của Bộ Tài chính"),
+              _with_header(tb.t10_rows(), "BẢNG CÂN ĐỐI TÀI KHOẢN", "(Ban hành theo TT 200/2014/TT-BTC ngày 22/12/2014)"))
+    assert g.same_basis and g.notes == [], g.basis
+    g = _gate(_with_header(tb.t9_rows(), "BẢNG CÂN ĐỐI TÀI KHOẢN", "Theo Quyết định 48/2006/QĐ-BTC"),
+              _with_header(tb.t10_rows(), "BẢNG CÂN ĐỐI TÀI KHOẢN", "Chế độ kế toán: Thông tư 133/2016/TT-BTC"))
+    assert not g.same_basis
+
+
 def test_a_regime_line_stated_in_one_period_only_is_a_soft_note_not_a_block():
     g = _gate(_with_header(tb.t9_rows(), "BẢNG CÂN ĐỐI TÀI KHOẢN", "Ban hành theo Thông tư 200/2014/TT-BTC"),
               _with_header(tb.t10_rows(), "BẢNG CÂN ĐỐI TÀI KHOẢN"))

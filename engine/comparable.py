@@ -81,6 +81,23 @@ def _unit_of(text: str) -> str:
     return v
 
 
+_REGULATION = re.compile(r"(?:(thong tu|tt|quyet dinh|qd)\s*(?:so\s*)?)?(?<!\d)(\d{1,3})\s*/\s*((?:19|20)\d{2})"
+                         r"(?:\s*/\s*(tt|qd)\s*-?\s*btc)?")
+
+
+def _regime_of(t: str) -> str:
+    """The regulations a regime line names, as ids ("tt 200/2014"), so "Ban hành theo Thông tư số 200/2014/TT-BTC
+    ngày 22/12/2014 của Bộ Tài chính" equals "(Ban hành theo TT 200/2014/TT-BTC)". Falls back to the line's text."""
+    ids = set()
+    for m in _REGULATION.finditer(t):
+        kind = m.group(4) or m.group(1) or ""
+        if not kind:
+            continue                                    # a bare date-like n/yyyy is not a regulation
+        kind = "qd" if kind.startswith(("q", "quyet")) else "tt"
+        ids.add(f"{kind} {m.group(2)}/{m.group(3)}")
+    return " | ".join(sorted(ids)) if ids else _strip_period(t)
+
+
 def _has_word(t: str, words) -> bool:
     return any(re.search(rf"(^|[^a-z0-9]){re.escape(w)}($|[^a-z0-9])", t) for w in words)
 
@@ -137,7 +154,7 @@ def basis(rows: list, tb: TrialBalance) -> Basis:
                 sig.lines["title"] = (shown, value)
             for kind, words in _BASIS:
                 if _has_word(t, words):
-                    value = _unit_of(t) if kind == "unit" else _strip_period(t)
+                    value = _unit_of(t) if kind == "unit" else _regime_of(t) if kind == "regime" else _strip_period(t)
                     found.setdefault(kind, []).append((shown, value))
     for kind, items in found.items():
         sig.lines[kind] = (" · ".join(x for x, _ in items), " | ".join(sorted(v for _, v in items)))
