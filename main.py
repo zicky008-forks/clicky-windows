@@ -221,7 +221,25 @@ def main():
     panel.on_jobs_requested.connect(work_window.show)
     from ui.settings_window import SettingsWindow
     settings_window = SettingsWindow(manager)
-    panel.on_settings_requested.connect(settings_window.show)
+    def _open_settings():
+        # Holding Shift while opening Cài đặt shows the "Kỹ thuật" tab (tech_mode.py).
+        shift = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
+        settings_window.present(shift)
+    panel.on_settings_requested.connect(_open_settings)
+    tray.on_settings.connect(_open_settings)
+
+    def _tray_local_only(value: bool):
+        manager.set_local_only(value)
+        settings_window.local_only.blockSignals(True)
+        settings_window.local_only.setChecked(manager.local_only)
+        settings_window.local_only.blockSignals(False)
+    tray.on_toggle_local_only.connect(_tray_local_only)
+    settings_window.local_only.toggled.connect(lambda _v: tray.rebuild_menu())
+
+    def _tech_mode_changed(_on: bool):
+        tray.rebuild_menu()
+        panel.apply_tech_mode()
+    settings_window.tech_mode_changed.connect(_tech_mode_changed)
     settings_window.show_sketch.connect(lambda: _show_scene(example_scene()))
     settings_window.show_work.connect(work_window.show)
     from ui.connections_window import ConnectionsWindow
@@ -248,7 +266,7 @@ def main():
             connections_window.shared_text.appendPlainText('Shared question: '+value['q']+'\nShared answer: '+value['a']+'\n')
         else:_show_scene(value['scene'])
     manager.sig_collab_message.connect(_shared_message)
-    settings_window.preview_voice.connect(lambda: manager._submit(manager._reply_local("Hello, I'm Clicky. This is my current voice.")))
+    settings_window.preview_voice.connect(lambda: manager._submit(manager._reply_local("Chào chị, em là Clicky. Đây là giọng em đang dùng.")))
 
     from PyQt6.QtWidgets import QLabel
     caption = QLabel()
@@ -371,6 +389,21 @@ def main():
     choice_card.chosen.connect(lambda _label: overlay.clear_annotations())
     choice_card.dismissed.connect(overlay.clear_annotations)
     manager.sig_turn_started.connect(lambda _q: choice_card.hide())
+    # Job 13: after the first report on the user's own files, "bớt được bao lâu" (kept on this PC only).
+    from ui.feedback_card import FeedbackCard
+    feedback_card = FeedbackCard()
+    manager.sig_feedback.connect(feedback_card.ask)
+
+    def _feedback_sent(choice: str, note: str, run_s):
+        from engine import feedback
+        try:
+            feedback.record(choice, note, run_s)
+        except (OSError, ValueError) as exc:
+            import logging
+            logging.getLogger("clicky.feedback").warning("feedback not kept: %s", type(exc).__name__)
+            return
+        manager._submit(manager._reply_local(feedback.thanks()))
+    feedback_card.sent.connect(_feedback_sent)
     # Rehearsals only (CLICKY_SCENE_LOG set): log every card, box and sentence for the robot to check.
     import scene_log
     scene_log.connect(manager, choice_card)
@@ -467,9 +500,9 @@ def main():
     def _on_doc_dropped(path: str):
         ok = manager.attach_document(path)
         tray.show_notification(
-            "Document Attached" if ok else "Attach failed",
-            f"{path}\nAsk Clicky about it now." if ok else
-            "Couldn't read that file."
+            "Đã đính kèm tài liệu" if ok else "Chưa đính kèm được",
+            f"{os.path.basename(path)}\nChị hỏi Clicky về tài liệu này nhé." if ok else
+            "Em chưa đọc được file này."
         )
     panel.on_document_dropped.connect(_on_doc_dropped)
 

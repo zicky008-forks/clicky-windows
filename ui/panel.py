@@ -27,11 +27,11 @@ class AppState(Enum):
 
 
 def _advanced() -> bool:
-    """Model picker, provider badge and power-user buttons show only when the setting
-    "advanced_panel" is on; everyone else sees a plain chat with Vietnamese labels."""
+    """Model picker, provider badge and power-user buttons show only in technical mode (tech_mode.py);
+    everyone else sees a plain chat with Vietnamese labels."""
     try:
-        from storage import setting
-        return bool(setting("advanced_panel", False))
+        import tech_mode
+        return tech_mode.on()
     except Exception:
         return False
 
@@ -225,7 +225,7 @@ class CompanionPanel(QWidget):
         header.addStretch()
         provider = cfg.llm_provider()
         self._badge = ProviderBadge(provider)
-        self._badge.setVisible(_advanced())      # model names mean nothing to an accountant
+        self._tech_widgets = [self._badge]      # model names mean nothing to an accountant
         header.addWidget(self._badge)
 
         # Minimize button — hides the panel back to tray
@@ -299,8 +299,8 @@ class CompanionPanel(QWidget):
         for label, signal in (("Việc định kỳ", self.on_jobs_requested), ("Bảng vẽ", self.on_sketch_requested)):
             button = QPushButton(label)
             button.clicked.connect(signal.emit)
-            button.setVisible(_advanced())
             work.addWidget(button)
+            self._tech_widgets.append(button)
         root.addLayout(work)
 
         # Push-to-talk button
@@ -332,9 +332,15 @@ class CompanionPanel(QWidget):
         )
         footer.addWidget(lbl)
         footer.addWidget(self._model_combo, stretch=1)
-        for widget in (lbl, self._model_combo):
-            widget.setVisible(_advanced())
+        self._tech_widgets += [lbl, self._model_combo]
         root.addLayout(footer)
+        self.apply_tech_mode()
+
+    def apply_tech_mode(self):
+        """Show or hide the provider badge, model picker and power-user buttons (tech_mode.py)."""
+        shown = _advanced()
+        for widget in self._tech_widgets:
+            widget.setVisible(shown)
 
     def _populate_models(self):
         self._set_models_for(cfg.llm_provider())

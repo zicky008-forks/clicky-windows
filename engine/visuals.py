@@ -151,6 +151,14 @@ def _note_words(issue, line, account) -> tuple:
         return (f"Dòng {issue.row}: mã TK không đọc được", "Sửa mã TK trong sổ cân đối", None)
     if code == "duplicate":
         return (f"TK {account} có hai dòng", "Gộp hoặc bỏ dòng lặp trong sổ cân đối", None)
+    if code == "basis_differs":
+        return ("Kỳ trước khác cơ sở lập, chưa so được", "Xuất lại kỳ trước cùng cơ sở", None)
+    if code == "opening_bridge":
+        return ("Số dư đầu kỳ khác cuối kỳ trước", "Kiểm số dư hai kỳ trước khi giải thích", None)
+    if code == "renumbered":
+        return ("Tài khoản đổi mã, chưa có bảng ghép", "Thêm bảng ghép mã cũ → mã mới", None)
+    if code == "bridge_unchecked":
+        return ("Chưa nối được số dư hai kỳ", "Xuất sổ cân đối có cột số dư", None)
     if code in ("rollforward", "parent_sum"):
         return (f"TK {account}: số dư không cộng đúng", "Kiểm lại dòng này trong sổ cân đối", None)
     return (issue.message.split(":")[0][:60], "Xem sheet Kiem tra", None)

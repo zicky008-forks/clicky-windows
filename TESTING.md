@@ -149,6 +149,8 @@ python main.py
 
 ## 11. Panel UI
 
+Provider badge, model dropdown and the provider, key, model and Ollama items of the tray menu show only in technical mode (`tech_mode.py`). Start Clicky with `CLICKY_TECH_MODE=1`, or hold Shift while opening Cài đặt and tick the switch on the Kỹ thuật tab. Without it, the tray and Cài đặt are plain Vietnamese.
+
 1. Right-click tray â†’ **Show Panel**
 
 âœ… Panel appears bottom-right  

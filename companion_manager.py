@@ -314,6 +314,7 @@ class CompanionManager(QObject):
     sig_intake              = pyqtSignal(dict)            # the receipt ("Em đọc được những gì") shown with the next choices
     sig_open_chat           = pyqtSignal()                # bring the chat panel up so the user can type
     sig_drop_zone           = pyqtSignal()                # show the one drop place for the user's own files
+    sig_feedback            = pyqtSignal(dict)            # job 13: "bớt được bao lâu" after the first own report (engine.feedback.card)
     sig_guided              = pyqtSignal(bool)            # True while Clicky walks through the screen step by step
     sig_recording_state     = pyqtSignal(bool, str)       # (is_recording, output_dir)
     sig_turn_started        = pyqtSignal(str)

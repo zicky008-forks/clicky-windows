@@ -190,7 +190,7 @@ def test_settings_microphone_test_releases_input(qt_app, microphones, monkeypatc
     assert not calls
     settings.test_microphone()
     settings.finish_microphone_test()
-    assert 'Audio received' in settings.mic_status.text()
+    assert 'Đã nghe được tiếng' in settings.mic_status.text()
     assert settings._mic_listener is None
     Listener.stop.assert_called_once()
     settings.close()
