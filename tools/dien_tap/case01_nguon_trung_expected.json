@@ -1,0 +1,12 @@
+{
+  "case": "Case 01 biến thể: thêm sổ cân đối T10 cũ + ảnh có số (việc 5)",
+  "first_stage_seconds": 240,
+  "second_stage_seconds": 300,
+  "roles": {
+    "ask_contains": "sổ cân đối",
+    "numbers_absent": [],
+    "_note": "Chép thư mục Case 01, thêm một bản sổ cân đối T10 cũ (ngày sửa sớm hơn) và một ảnh chụp có một con số lạ; điền con số đó vào numbers_absent. choose: phần tên bản cần bấm, ví dụ [\"TB_T10.xlsx\"].",
+    "choose": []
+  },
+  "voice": "text_ok"
+}

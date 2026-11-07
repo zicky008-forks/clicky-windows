@@ -147,7 +147,7 @@ def test_skill_builds_report_inside_open_workbook():
     report = bridge.written["'BC thang 2'!A1"]
     assert "'TB ky nay'" in next(r for r in report if r and r[0] == "Giá vốn hàng bán")[2]
     assert "'T09'!A" in bridge.written["'TB ky truoc'!A1"][1][-1]
-    assert run(FakeWorkbookBridge({"T10": t10_rows()}, "T10")).startswith("Anh mở file Excel")
+    assert run(FakeWorkbookBridge({"T10": t10_rows()}, "T10")).startswith("Chị mở file Excel")
 
 
 def test_cli_writes_one_self_contained_workbook(tmp_path):

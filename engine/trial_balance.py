@@ -165,9 +165,13 @@ def read_trial_balance(rows, sheet: str = "TB") -> TrialBalance:
                 text_amounts.append((r + 1, key))
             setattr(line, key, amount)
         lines.append(line)
-    codes = {l.account for l in lines}
+    # A code is a parent when another code starts with it. Codes that start with it sort straight after it, so
+    # only the next distinct code needs a look: n log n, not n² (a ledger with thousands of sub-accounts took
+    # seconds per read, and the month close reads each trial balance several times).
+    codes = sorted({l.account for l in lines})
+    parents = {a for a, b in zip(codes, codes[1:]) if b.startswith(a)}
     for l in lines:
-        l.leaf = not any(other != l.account and other.startswith(l.account) for other in codes)
+        l.leaf = l.account not in parents
     return TrialBalance(sheet=sheet, lines=lines, header_row=header + 1,
                         columns={k: v + 1 for k, v in columns.items()}, text_amounts=text_amounts,
                         skipped=skipped)

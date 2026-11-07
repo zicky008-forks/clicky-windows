@@ -22,6 +22,23 @@ _stop_event = threading.Event()
 _pcm_observer = None
 
 
+_start_listeners: list = []
+
+
+def on_play_start(callback) -> None:
+    """Call callback() each time sound actually starts (after synthesis and decoding): the turn clock's
+    "first_voice" is when the user hears Clicky, not when speaking was asked for."""
+    _start_listeners.append(callback)
+
+
+def _started() -> None:
+    for callback in list(_start_listeners):
+        try:
+            callback()
+        except Exception:
+            pass
+
+
 def observe_pcm(callback):
     global _pcm_observer
     _pcm_observer = callback
@@ -122,4 +139,5 @@ async def play_mp3_async(mp3_bytes: bytes) -> None:
     if _stop_event.is_set():
         return  # cancelled while we were decoding
 
+    _started()
     await loop.run_in_executor(None, _blocking_play_chunked, pcm, sr)

@@ -1,5 +1,8 @@
 import json
 import re
+import sys
+
+import pytest
 
 from engine.m_code import add_culture, lint, steps
 from office.power_query import PowerQuery, format_for_prompt
@@ -100,7 +103,7 @@ def test_fix_skill_backs_up_then_rewrites(tmp_path, monkeypatch):
     assert bridge.queries.Item("KhachHang").Formula == CLEAN_QUERY
     backup = json.loads((tmp_path / "power_query_backups.json").read_text(encoding="utf-8"))
     assert backup[0]["query"] == "Ban hang HN" and backup[0]["formula"] == BRANCH_QUERY
-    assert pq_skill.run_fix(bridge, "sửa query giúp anh").startswith("Anh nói rõ")
+    assert pq_skill.run_fix(bridge, "sửa query giúp anh").startswith("Chị nói rõ")
 
 
 def test_prompt_context_lists_steps_and_findings():
@@ -124,3 +127,118 @@ def test_add_creates_new_or_replaces_with_backup(tmp_path, monkeypatch):
     assert bridge.queries.Item("KhachHang").Formula == BRANCH_QUERY
     backup = json.loads((tmp_path / "power_query_backups.json").read_text(encoding="utf-8"))
     assert backup[-1]["formula"] == CLEAN_QUERY
+
+
+def test_a_refresh_is_waited_for_at_most_the_timeout_and_names_the_dialog_excel_shows():
+    import time
+    from office.power_query import LoadTimeout, refresh_with_timeout
+
+    class Table:
+        def __init__(self, seconds, error=None):
+            self.seconds, self.error, self.done = seconds, error, False
+
+        def Refresh(self, background):
+            assert background is False
+            time.sleep(self.seconds)
+            if self.error:
+                raise self.error
+            self.done = True
+    fast = Table(0)
+    assert refresh_with_timeout(fast, timeout=5, poll=0.05, dialogs=list) is None and fast.done
+    seen = []
+    late = refresh_with_timeout(Table(2), timeout=0.3, poll=0.05, dialogs=lambda: ["Truy cập Nội dung Web"],
+                                step=lambda event, **data: seen.append((event, data["dialog"])))
+    assert isinstance(late, LoadTimeout) and late.dialog == "Truy cập Nội dung Web" and late.seconds == 0.3
+    assert seen == [("pq_dialog", "Truy cập Nội dung Web")]
+    quiet = refresh_with_timeout(Table(2), timeout=0.2, poll=0.05, dialogs=list)
+    assert isinstance(quiet, LoadTimeout) and quiet.dialog == ""
+    try:
+        refresh_with_timeout(Table(0, ValueError("DataFormat.Error")), timeout=5, poll=0.05, dialogs=list)
+    except ValueError as exc:
+        assert "DataFormat" in str(exc)
+    else:
+        raise AssertionError("a refresh error must reach the caller, as before")
+
+
+def test_load_returns_the_timeout_and_puts_excel_alerts_back(monkeypatch):
+    import time
+    from office import power_query
+    from office.power_query import LoadTimeout, PowerQuery
+
+    class QT:
+        CommandText = 'SELECT * FROM [DonHang]'
+
+        def Refresh(self, background):
+            time.sleep(1)
+
+    class LO:
+        QueryTable = QT()
+
+    class Objects:
+        Count = 1
+
+        def __call__(self, i):
+            return LO()
+
+    class Sheet:
+        ListObjects = Objects()
+
+    class Sheets:
+        Count = 1
+
+        def __call__(self, i):
+            return Sheet()
+
+    class Book:
+        Worksheets = Sheets()
+
+    class App:
+        ActiveWorkbook = Book()
+        DisplayAlerts = True
+
+    class Bridge:
+        app = App()
+
+        def _excel(self):
+            return self.app
+    monkeypatch.setattr(power_query, "excel_dialogs", list)
+    bridge = Bridge()
+    out = PowerQuery(bridge).load("DonHang", timeout=0.2, step=lambda *a, **k: None)
+    assert isinstance(out, LoadTimeout) and bridge.app.DisplayAlerts is True
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="COM marshalling exists on Windows only")
+def test_a_real_com_object_is_marshalled_to_the_worker_thread():
+    """Runs on the Windows CI runner, which has no Excel: a COM object every Windows has proves the
+    CoMarshalInterThreadInterfaceInStream path the Power Query refresh takes."""
+    import pythoncom
+    import win32com.client
+    from office.power_query import call_with_timeout
+    pythoncom.CoInitialize()
+    fso = win32com.client.Dispatch("Scripting.FileSystemObject")
+    late, name = call_with_timeout(fso, "GetTempName", (), timeout=20, poll=0.1, dialogs=list)
+    assert late is None and str(name).lower().endswith(".tmp")
+
+
+def test_adding_a_query_logs_where_its_time_goes_and_skips_an_unchanged_m(tmp_path, monkeypatch):
+    # PC 9ea1aa4: the first query add of an Excel session took 3.6 s. Split it: finding the query, the backup,
+    # and Excel taking the M. The same M (line endings aside) is not written again and logs skipped=true.
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    monkeypatch.setenv("CLICKY_DATA_DIR", str(tmp_path))
+    bridge = FakeBridge([("DonHang", BRANCH_QUERY.replace("\n", "\r\n"))])
+    added = []
+    bridge.queries.Add = lambda name, formula: added.append(FakeQuery(name, formula))
+    pq = PowerQuery(bridge)
+    assert pq.add("DonHang", BRANCH_QUERY)                         # same M, Excel's CRLF: nothing written
+    assert bridge.queries.Item("DonHang").Formula == BRANCH_QUERY.replace("\n", "\r\n")
+    assert not (tmp_path / "power_query_backups.json").exists()
+    assert pq.add("DonHang", CLEAN_QUERY)                          # a real change: backed up, then written
+    assert bridge.queries.Item("DonHang").Formula == CLEAN_QUERY
+    assert pq.add("KhachHang", CLEAN_QUERY) and added[0].Name == "KhachHang"
+    parts = [(e["part"], e.get("skipped"), e.get("found"), e.get("new")) for e in map(json.loads, log.read_text(encoding="utf-8").splitlines())
+             if e.get("step") == "timing"]
+    assert parts == [("pq_find", None, True, None), ("pq_read", None, None, None), ("formula_write", True, None, None),
+                     ("pq_find", None, True, None), ("pq_read", None, None, None), ("pq_backup", None, None, None),
+                     ("formula_write", False, None, None),
+                     ("pq_find", None, False, None), ("formula_write", False, None, True)]

@@ -1,2 +1,4 @@
 -r requirements.txt
 pytest>=8.0
+# Tests write synthetic Excel 97-2003 (.xls) exports to read back (BSD licence)
+xlwt==1.3.0

@@ -28,4 +28,4 @@ def test_addin_plan_matches_desktop_report_and_leaves_user_sheets_alone():
 
 def test_addin_plan_explains_when_two_periods_are_missing():
     result = json.loads(workbook_plan.plan(snapshot({"T10": t10_rows()}, "T10")))
-    assert result["ops"] == [] and result["summary"].startswith("Anh mở file Excel")
+    assert result["ops"] == [] and result["summary"].startswith("Chị mở file Excel")

@@ -6,6 +6,7 @@ after saving the old M. Only the user's own command triggers a change.
 """
 import asyncio
 import re
+from engine.address import you  # the one word for the user (CLAUDE.md rule 8)
 
 CHECK_TRIGGER = (r"(ki[ểe]m\s*tra|r[àa]\s*so[áa]t|soi|check|review)\b.{0,25}"
                  r"(power\s*query|query|truy\s*v[ấa]n)")
@@ -36,7 +37,7 @@ def summary(queries: list, findings: list) -> str:
     text = (f"Em kiểm tra {len(queries)} query, thấy {len(findings)} điểm cần xem, trong đó {len(errors)} lỗi. "
             f"Đáng lo nhất là query {worst.query}, bước {worst.step}: {worst.message}")
     if any(f.fix == "culture" for f in findings):
-        text += " Nếu file nguồn dùng ngày kiểu Mỹ, anh nói: sửa query theo kiểu Mỹ."
+        text += f" Nếu file nguồn dùng ngày kiểu Mỹ, {you()} nói: sửa query theo kiểu Mỹ."
     return text + f" Chi tiết ở sheet {FINDINGS_SHEET}."
 
 
@@ -45,7 +46,7 @@ def run_check(bridge) -> str:
     from engine.report_sheet import quote
     from office.power_query import PowerQuery
     if not bridge.available():
-        return "Anh mở file Excel có Power Query rồi gọi lại em."
+        return f"{you(True)} mở file Excel có Power Query rồi gọi lại em."
     pq = PowerQuery(bridge)
     queries = pq.list()
     findings = [f for name, formula in queries for f in m_code.lint(name, formula)]
@@ -71,9 +72,9 @@ def run_fix(bridge, transcript: str) -> str:
     from office.power_query import PowerQuery
     culture = culture_from(transcript)
     if not culture:
-        return "Anh nói rõ file nguồn dùng định dạng nào, ví dụ: sửa query theo kiểu Mỹ, hoặc theo kiểu Việt Nam."
+        return f"{you(True)} nói rõ file nguồn dùng định dạng nào, ví dụ: sửa query theo kiểu Mỹ, hoặc theo kiểu Việt Nam."
     if not bridge.available():
-        return "Anh mở file Excel có Power Query rồi gọi lại em."
+        return f"{you(True)} mở file Excel có Power Query rồi gọi lại em."
     pq = PowerQuery(bridge)
     fixed = []
     for name, formula in pq.list():
@@ -83,7 +84,7 @@ def run_fix(bridge, transcript: str) -> str:
     if not fixed:
         return "Không có bước đổi kiểu nào thiếu định dạng nguồn, em không sửa gì."
     return (f"Em đã thêm định dạng {culture} vào {len(fixed)} query: {'; '.join(fixed)}. "
-            "Bản M cũ được lưu trong power_query_backups.json. Anh bấm Refresh All để tải lại và kiểm tra số dòng.")
+            f"Bản M cũ được lưu trong power_query_backups.json. {you(True)} bấm Refresh All để tải lại và kiểm tra số dòng.")
 
 
 async def handle_check(manager, transcript: str) -> str:

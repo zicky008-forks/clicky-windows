@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(//mnt/project-files/cham-doc-lap/**)",
+      "Read(**/*_khoa.zip)",
+      "Read(**/Dap_an_kin*)",
+      "Read(**/Robot_expected_khoa*)",
+      "Edit(//mnt/project-files/cham-doc-lap/**)",
+      "Edit(//mnt/project-files/thuc-chien/**)"
+    ]
+  }
+}
