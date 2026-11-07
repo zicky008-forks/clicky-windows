@@ -44,6 +44,23 @@ PCT_CODES = {"wrong_base", "missing_pct", "missing_pp", "wrong_pp"}
 OUT_DIR = "Clicky_soat_BOD"
 
 
+def review_finished(events: list) -> bool:
+    """Clicky has written its result AND walked through every finding on screen.
+
+    bod_done is logged before the walk-through starts, so it alone is not the end (Case 07, 07/11:
+    the robot stopped after 2 of 12 cards). The end is story_end (builds with PR #25), or one card
+    with a cell per finding that has a cell, each read out."""
+    if not any(e.get("event") == "bod_done" for e in events):
+        return False
+    if any(e.get("event") == "story_end" for e in events):
+        return True
+    beats = [e for e in events if e.get("event") == "beat"]
+    spoken = sum(1 for e in events if e.get("event") == "spoken")
+    want = sum(1 for e in events if e.get("event") == "bod_finding" and e.get("where"))
+    cards = sum(1 for e in beats if e.get("ref"))
+    return bool(beats) and spoken >= len(beats) and cards >= want
+
+
 def grade(events: list, pack_unchanged: bool, answers: list | None = None) -> Result:
     """Pure: the scene log of one run (and, for a made-up case, its planted mistakes) -> ĐẠT/KHÔNG ĐẠT lines."""
     res = Result()
@@ -54,8 +71,14 @@ def grade(events: list, pack_unchanged: bool, answers: list | None = None) -> Re
         res.add("Bộ BOD không bị sửa", pack_unchanged)
         return res
     res.add("Mở lại file kết quả thấy khớp", bool(done.get("verified")))
-    gaps = sorted(set(done.get("not_checked") or []) | set(done.get("partly") or []))
-    res.add("Đủ 7 nhóm đều kiểm được", not gaps, f"chưa kiểm được nhóm {', '.join(str(g) for g in gaps)}" if gaps else "")
+    # A group checked in part, with what is missing said out loud, is the right behaviour (grader rule);
+    # only a group not checked at all fails. The part-checked ones are named in the line.
+    gaps = sorted(set(done.get("not_checked") or []))
+    partly = sorted(set(done.get("partly") or []) - set(gaps))
+    res.add("Đủ 7 nhóm đều kiểm được", not gaps,
+            "; ".join(filter(None, [f"chưa kiểm được nhóm {', '.join(str(g) for g in gaps)}" if gaps else "",
+                                    f"nhóm {', '.join(str(g) for g in partly)} kiểm một phần, Clicky đã nêu phần thiếu"
+                                    if partly else ""])))
     findings = [e for e in events if e.get("event") == "bod_finding"]
     refs = [e.get("ref") for e in events if e.get("event") == "beat" and e.get("ref")]
     res.add("Mỗi lỗi một thẻ chỉ vào ô", sorted(refs) == sorted(f.get("where") for f in findings),
@@ -162,9 +185,7 @@ def main(argv=None) -> int:
                     time.sleep(0.8)
                     screenshot(shots / f"loi-{int(e.get('i', 0)):02d}.png")
             seen = len(beats)
-            done = any(e.get("event") == "bod_done" for e in events)
-            spoken = sum(1 for e in events if e.get("event") == "spoken")
-            if done and beats and spoken >= len(beats):
+            if review_finished(events):
                 break
             if any(e.get("event") == "bod_error" for e in events):
                 break
