@@ -13,6 +13,7 @@ import re
 from decimal import Decimal
 
 from engine.monthly_report import spoken
+from engine.address import you  # the one word for the user (CLAUDE.md rule 8)
 
 TOLERANCE = Decimal(1)
 COST_KEYS = ("cogs", "selling", "admin", "fin_exp", "oth_exp", "tax")
@@ -166,7 +167,7 @@ def cause_notes(rows: list) -> list:
         money = spoken(Decimal(amount)) if isinstance(amount, (int, Decimal)) and amount else ""
         detail = " · ".join(x for x in (size, money) if x)
         out.append({"codes": [str(cause)], "warn": f"{cause}" + (f": {detail}" if detail else ""),
-                    "action": "Anh xem bảng chi tiết trước khi dùng số" if "chưa rõ" in str(cause).lower()
+                    "action": f"{you(True)} xem bảng chi tiết trước khi dùng số" if "chưa rõ" in str(cause).lower()
                     else "Em sửa trong query, bản cũ vẫn giữ", "row": i})
     return out
 

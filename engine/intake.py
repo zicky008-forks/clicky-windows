@@ -19,6 +19,7 @@ from typing import Optional
 from engine import roles as roles_mod, sources
 from engine.monthly_report import fmt, spoken
 from engine.trial_balance import ZERO, _is_total, fold, parse_amount
+from engine.address import you  # the one word for the user (CLAUDE.md rule 8)
 
 TOLERANCE = Decimal(1)
 DATA_SUFFIXES = {".csv", ".xlsx", ".xlsm", ".xls", ".txt", ".m", ".pq", ".pdf", ".png", ".jpg", ".jpeg", ".docx", ".doc",
@@ -226,7 +227,7 @@ def _order_lines(files: list, truth, period: Optional[tuple]) -> tuple:
         if getattr(f, "remembered", False):
             told = " · ".join(f"{label} là cột \"{f.header[f.columns[role]]}\"" for role, label in
                               (("date", "ngày"), ("amount", "số tiền")) if role in f.columns)
-            note = "; ".join(x for x in (note, f"{told} (chị đã chỉ)") if x)
+            note = "; ".join(x for x in (note, f"{told} ({you()} đã chỉ)") if x)
         lines.append(FileLine(name=f.name, kind="Bán hàng", period=_period_text(period), unit=_unit(preamble) or "đồng",
                               rows=used_rows, rows_label=f"{used_rows} đơn",
                               checks=f"tổng {spoken(used)}" + (f" · {note}" if note else ""), total=total, used=used,
@@ -295,7 +296,7 @@ def _unused_files(folder: Path, used: set, workbook: Optional[str], roles: dict)
             why = "ảnh, vai trò Ghi chú: em không bao giờ lấy số từ ảnh"
         elif suffix in sources.ORDER_SUFFIXES and sources.declined_file(p):
             out.append(Dropped(f"File {p.name}", p.name, None,
-                               "chị đã chỉ đây không phải file đơn hàng, em không lấy số từ file này", rows=0,
+                               f"{you()} đã chỉ đây không phải file đơn hàng, em không lấy số từ file này", rows=0,
                                kind="declined"))
             continue
         elif suffix == ".xls":
@@ -424,7 +425,7 @@ def _impact(intake: Intake, truth, ledger: dict) -> tuple:
     names = f"file {left[0]}" if len(left) == 1 else f"{len(left)} file {', '.join(left[:2])}" + ("…" if len(left) > 2 else "")
     told = sorted({d.file for d in intake.dropped if d.kind == "declined"})
     if told:                                        # chị said "không phải đơn hàng": she sees what that leaves out
-        names += f" ({'file này' if len(left) == 1 else ', '.join(told[:2])} chị đã chỉ không phải đơn hàng)"
+        names += f" ({'file này' if len(left) == 1 else ', '.join(told[:2])} {you()} đã chỉ không phải đơn hàng)"
     if not ledger:
         return f"Thiếu {names} nên doanh thu em tính chưa gồm phần trong {'file' if len(left) == 1 else 'các file'} này.", False
     acct = f"Có TK {ledger['rev_acct']}" + (" − Nợ TK 521" if ledger.get("net") else "")
@@ -465,8 +466,8 @@ def card(intake: Intake) -> dict:
     if sales:
         where = f"{intake.branches} chi nhánh" if intake.branches > 1 else f"{len(sales)} file"
         detail = f"Tổng {spoken(intake.orders_total)}" + (f", {intake.revenue_note}" if intake.revenue_note else "")
-        if any("(chị đã chỉ)" in f.checks for f in sales):
-            detail += " · cột ngày, số tiền theo chị đã chỉ"
+        if any(f"({you()} đã chỉ)" in f.checks for f in sales):
+            detail += f" · cột ngày, số tiền theo {you()} đã chỉ"
         rows.append({"ok": intake.revenue_ok is not False, "title": f"Bán hàng · {where}",
                      "count": f"{intake.orders_rows} đơn", "detail": detail, "role": roles_mod.DETAIL})
     for f in intake.files:
@@ -521,7 +522,7 @@ def summarize_dropped(items: list, limit: int = 4) -> list:
             out.append(f"{len(ds)} file em chưa đọc được: " + "; ".join(f"{d.file} {d.reason}" for d in ds[:2])
                        + ("…" if len(ds) > 2 else ""))
         elif key == "declined":
-            out.append(f"{len(ds)} file chị chỉ không phải đơn hàng: " + ", ".join(d.file for d in ds[:2])
+            out.append(f"{len(ds)} file {you()} chỉ không phải đơn hàng: " + ", ".join(d.file for d in ds[:2])
                        + ("…" if len(ds) > 2 else ""))
         else:
             out.append(f"{len(ds)} file không dùng: " + ", ".join(d.file for d in ds[:2]) + ("…" if len(ds) > 2 else ""))
