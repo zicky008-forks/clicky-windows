@@ -392,7 +392,7 @@ def write_pack(folder: Path, plant: bool, style: str = "a") -> list:
         p = plan(ly_version, d, ytd)
         sn.append([f"{d} - {DEPTS[d]}", v, p, v - p])
     if plant:
-        answers.append({"group": 4, "code": "wrong_version", "where": "'So nam truoc'!C4",
+        answers.append({"group": 4, "code": "wrong_version", "where": "'So nam truoc'!C5",   # the wrong figure, not the column header
                         "expected": plan("AOPR", "P01", ytd)})
 
     # AOPR theo thang

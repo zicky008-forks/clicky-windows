@@ -76,7 +76,7 @@ def test_outputs_are_written_reopened_and_the_pack_is_untouched(planted, tmp_pat
     assert res["verified"] and res["findings"] == 9
     md = res["md"].read_text(encoding="utf-8")
     for a in answers:
-        assert a["where"] in md
+        assert f"File `Pack_BOD_T10_ban_nhap.xlsx`, ô `{a['where']}`" in md       # file, sheet and cell
     assert "SƠ BỘ" in md and "Phiếu nhận file" in md
     from openpyxl import load_workbook
     wb = load_workbook(res["xlsx"], data_only=True)
@@ -158,12 +158,13 @@ def test_run_writes_results_and_plays(tmp_path):
         def workbook_folder(self): return None
         def workbook_path(self): return None
         def open_workbook(self, p): played.append(("open", p)); return True
+        def close_opened(self, back_to=None): played.append(("close", back_to)); return 0
 
     class M:
         _excel = Bridge()
 
-    async def fake_play(manager, beats):
-        played.append(("play", len(beats)))
+    async def fake_play(manager, beats, keep_card=True):
+        played.append(("play", len(beats), keep_card))
 
     orig = mc.play
     mc.play = fake_play
@@ -173,7 +174,8 @@ def test_run_writes_results_and_plays(tmp_path):
         mc.play = orig
     assert (tmp_path / "Clicky_soat_BOD" / "ket-qua.md").exists()
     assert played[0][0] == "open" and played[0][1].endswith("Pack_BOD_T10_ban_nhap.xlsx")
-    assert played[-1] == ("play", 12)
+    assert played[-2] == ("play", 12, False)               # separate mistakes: no card outlives its own
+    assert played[-1][0] == "close" and played[-1][1].endswith("Pack_BOD_T10_ban_nhap.xlsx")
 
 
 @pytest.mark.parametrize("plant", [True, False])
@@ -794,7 +796,7 @@ def test_last_year_month_columns_and_the_version_written_in_the_rows(tmp_path, u
     review = bod_check.review(tmp_path)[0]
     g4 = [x for x in review.findings if x.group == 4]
     if used == "AOP":
-        assert len(g4) == 1 and g4[0].where == "'So nam truoc'!D3" and close("wrong_version", right, g4[0].expected), \
+        assert len(g4) == 1 and g4[0].where == "'So nam truoc'!D4" and close("wrong_version", right, g4[0].expected), \
             [(x.where, x.message) for x in g4]
     else:
         assert not g4 and _group(review, 4)[2] == "ok", (_group(review, 4), [x.message for x in g4])
@@ -884,7 +886,7 @@ def test_last_year_indicator_rows_take_the_division_the_table_names_once(tmp_pat
     got = [x for x in review.findings if x.group == 4]
     _, _, state, text = _group(review, 4)
     if plant:
-        assert [x.where for x in got] == ["'So nam truoc'!C4"], (text, got)
+        assert [x.where for x in got] == ["'So nam truoc'!C5"], (text, got)     # the wrong figure, not the header
         assert got[0].expected == sum(amount["AOPR"][m] for m in LOCKED), got[0].message
     else:
         assert not got and state == "ok", text
@@ -911,3 +913,51 @@ def test_a_last_year_table_of_another_division_is_not_compared_with_this_one(tmp
     review = bod_check.review(tmp_path)[0]
     _, _, state, text = _group(review, 4)
     assert not [x for x in review.findings if x.group == 4] and "CHƯA KIỂM ĐƯỢC" in text, text
+
+
+def test_a_mistake_in_the_aopr_file_names_its_file_sheet_and_amount_cell(tmp_path):
+    """Grading round 8 (AA): a locked month left at plan in the AOPR file came out as 'Data!174', a row with
+    no column and no file, so Clicky could not point at it. It must be the amount cell, in a named file."""
+    from openpyxl import load_workbook
+    from tests.bod_case import plan_amount, TM
+    make_case(tmp_path, plant=False)
+    path = tmp_path / "KeHoach_AOPR1_FY2627.xlsx"
+    wb = load_workbook(path)
+    ws = wb["Data"]
+    head = [c.value for c in ws[1]]
+    col = {h: i for i, h in enumerate(head)}
+    row = next(r for r in ws.iter_rows(min_row=2) if r[col["Thang"]].value == 7 and r[col["Khoi"]].value == TM
+               and r[col["Phong_ban_ma"]].value == "P01" and r[col["Cost_element_ma"]].value == "CE01")
+    cell = row[col["So_tien_VND"]]
+    cell.value = int(plan_amount("AOP", TM, "P01", "CE01", "2026-07"))
+    wb.save(path)
+    review = bod_check.review(tmp_path)[0]
+    got = [x for x in review.findings if x.code == "locked_month_plan_file"]
+    assert len(got) == 1, [(x.code, x.where) for x in review.findings]
+    assert got[0].where == f"Data!{cell.coordinate}" and got[0].file == "KeHoach_AOPR1_FY2627.xlsx", got[0]
+    res = bod_check.write_outputs([review], tmp_path / "kq")
+    md = res["md"].read_text(encoding="utf-8")
+    assert f"File `KeHoach_AOPR1_FY2627.xlsx`, ô `Data!{cell.coordinate}`" in md
+    out = load_workbook(res["xlsx"], data_only=True)["Ket qua soat"]
+    rows = [r for r in out.iter_rows(min_row=5, values_only=True) if r[0] is not None]
+    assert out["I4"].value == "File chứa ô" and (f"Data!{cell.coordinate}", "KeHoach_AOPR1_FY2627.xlsx") in \
+        {(r[2], r[8]) for r in rows}
+    assert res["verified"]
+
+
+def test_card_titles_name_the_kind_of_mistake_and_a_source_file_cell_says_where_it_is(tmp_path):
+    """Grading round 8: AB, a missing %DTT was titled 'Thiếu hoặc sai điểm %'; AA, a cell in the AOPR file."""
+    from office import bod_skill
+    from engine.bod_review import Finding
+    r = bod_check.Review(tmp_path, "Pack.xlsx", "2026-10")
+    r.findings = [Finding(3, "missing_pct", "'Tong hop'!C9", "Thiếu %DTT", Decimal("0.05"), None, file="Pack.xlsx"),
+                  Finding(3, "missing_pp", "'Tong hop'!G9", "Thiếu điểm %", Decimal("0.01"), None, file="Pack.xlsx"),
+                  Finding(5, "locked_month_plan_file", "Data!I174", "Tháng 7 còn số AOP", Decimal(5), Decimal(7),
+                          file="KeHoach_AOPR1_FY2627.xlsx")]
+    beats = [b for b in bod_skill.beats_for([r], None) if b.ref]
+    assert [b.label for b in beats] == ["Thiếu %DTT", "Thiếu điểm %", "File AOPR: tháng khoá còn số kế hoạch"]
+    assert beats[0].book == str(tmp_path / "Pack.xlsx") and beats[0].note == "Nhóm 3"
+    aopr = beats[2]
+    assert aopr.book == str(tmp_path / "KeHoach_AOPR1_FY2627.xlsx")
+    assert aopr.note == "Nhóm 5 · file KeHoach_AOPR1_FY2627.xlsx, ô Data!I174" and aopr.was and aopr.value
+    assert set(bod_skill.TITLES) >= {"missing_pct", "missing_pp", "wrong_pp", "wrong_base", "locked_month_plan_file"}

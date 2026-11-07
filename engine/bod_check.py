@@ -191,7 +191,8 @@ class Facts:
         return {"version": v, "period": p.month, "fy": fiscal_year(p.month, self.fy_start) if p.month else None,
                 "amount": p.amount, "division": division, "dept": p.dept, "element": p.element, "site": p.site,
                 "approved": p.approved,
-                "dong": p.line or dong, "nhom": nhom, "channel": p.channel, "rate": p.rate, "where": p.where}
+                "dong": p.line or dong, "nhom": nhom, "channel": p.channel, "rate": p.rate, "where": p.where,
+                "file": getattr(p, "file", "")}
 
     # matching a printed label to records
     def matcher(self, label: str, section: str = "") -> Optional[Callable]:
@@ -1024,7 +1025,7 @@ def check_versions(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Cov
                     continue
                 main = next((w for w in wrong if w[0].total), wrong[0])
                 fy_text = f"FY{col_fy % 100:02d}/{(col_fy + 1) % 100:02d}"
-                out.append(Finding(4, "wrong_version", s.addr(s.header_row, col.index),
+                out.append(Finding(4, "wrong_version", _cell(s, main[0], col),
                                    f"Cột '{col.text}' ({fy_text}): {why}. {main[0].label} phải là {fmt_vnd(main[2])} đ, "
                                    f"bộ BOD ghi {fmt_vnd(main[1])} đ", main[2], main[1],
                                    [(_cell(s, r, col), want - v) for r, v, want in wrong]))
@@ -1151,7 +1152,7 @@ def check_months(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Cover
     cov.ran(5, len(rows))
     out += _locked_findings(rows, lambda p, c: p["where"],
                             lambda p: f"File AOPR, {' '.join(x for x in (p['site'], p['dept'], p['element'], p['dong']) if x)}",
-                            code="locked_month_plan_file")
+                            code="locked_month_plan_file", file=lambda p: p.get("file", ""))
     if no_source:
         revenue = sorted(x for x in no_source if _is_revenue(x))
         need = ("file doanh thu theo tháng (bán hàng hoặc sổ cái 511) cho các dòng doanh thu" if revenue else
@@ -1167,7 +1168,7 @@ def check_months(f: Facts, pack: Pack, period: str, fy: int, cov: Optional[Cover
     return out
 
 
-def _locked_findings(cells: list, where, label, code: str = "locked_month_plan") -> list:
+def _locked_findings(cells: list, where, label, code: str = "locked_month_plan", file=lambda r: "") -> list:
     """cells: [(row, col, month, printed, (actual, actual without the detail's own traps), AOP or None)]."""
     out = []
     fits = lambda v, acts: any(abs(v - a) <= VND_TOLERANCE for a in acts)
@@ -1179,7 +1180,7 @@ def _locked_findings(cells: list, where, label, code: str = "locked_month_plan")
             continue                       # not the plan: a different actual (late entries) is not called wrong here
         what = f"đang là số kế hoạch AOP {fmt_vnd(v)} đ"
         out.append(Finding(5, code, where(r, c), f"{label(r)}, tháng {m[5:]}/{m[:4]} đã khoá sổ: AOPR phải là số thực tế "
-                           f"{fmt_vnd(act)} đ, {what}", act, v))
+                           f"{fmt_vnd(act)} đ, {what}", act, v, file=file(r)))
     return out
 
 
@@ -1509,7 +1510,8 @@ def review(folder: Path, fy_start: int = 7) -> list:
             rv_.findings = _merge(found + fx)
             rv_.notes = data_notes(f, period, fy) + fx_notes
         for x in rv_.findings:
-            scene_log.record("bod_finding", pack=path.name, group=x.group, code=x.code, where=x.where,
+            x.file = x.file or path.name
+            scene_log.record("bod_finding", pack=path.name, file=x.file, group=x.group, code=x.code, where=x.where,
                              expected=None if x.expected is None else str(x.expected),
                              actual=None if x.actual is None else str(x.actual), message=x.message)
         for g, title, state, text in rv_.groups():
@@ -1551,7 +1553,7 @@ def markdown(reviews: list) -> str:
             xs = [x for x in r.findings if x.group == g]
             lines.append(f"### Nhóm {g}. {title}: {text}")
             for i, x in enumerate(xs, 1):
-                lines.append(f"{i}. Ô `{x.where}`: {x.message}.")
+                lines.append(f"{i}. {where_text(x, r.pack)}: {x.message}.")
                 lines.append(f"   - Số đúng: {_num_text(x.expected, x.code)}; bộ BOD ghi: {_num_text(x.actual, x.code)}")
                 for label, amount in x.causes:
                     lines.append(f"   - {label}: {fmt_vnd(D(amount))} đ" if amount is not None else f"   - {label}")
@@ -1568,7 +1570,13 @@ def markdown(reviews: list) -> str:
     return "\n".join(lines)
 
 
-FINDING_HEADER = ["#", "Nhóm", "Ô trên bộ BOD", "Lỗi", "Số đúng", "Bộ BOD ghi", "Chênh", "Mã kiểm"]
+FINDING_HEADER = ["#", "Nhóm", "Ô (sheet!ô)", "Lỗi", "Số đúng", "Bộ BOD ghi", "Chênh", "Mã kiểm", "File chứa ô"]
+
+
+def where_text(x, pack: str = "") -> str:
+    """"File `AOPR1.xlsx`, ô `AOPR1!F174`": every finding names its file and its sheet!cell, so a cell in a
+    source file (an AOPR row) is never mistaken for one on the pack. The ref stays as Excel's Go To takes it."""
+    return f"File `{x.file or pack}`, ô `{x.where}`"
 
 
 def _cellval(x: Optional[Decimal]):
@@ -1598,7 +1606,8 @@ def write_outputs(reviews: list, out_dir: Path) -> dict:
     for r in reviews:
         for x in r.findings:
             n += 1
-            ws.append([n, x.group, x.where, x.message, _cellval(x.expected), _cellval(x.actual), _cellval(x.diff), x.code])
+            ws.append([n, x.group, x.where, x.message, _cellval(x.expected), _cellval(x.actual), _cellval(x.diff), x.code,
+                       x.file or r.pack])
             row = ws.max_row
             if x.expected is not None:
                 expect[f"'Ket qua soat'!E{row}"] = x.expected
@@ -1608,7 +1617,7 @@ def write_outputs(reviews: list, out_dir: Path) -> dict:
     ws["A1"].font = Font(bold=True, size=14)
     for cell in ws[4]:
         cell.font = Font(bold=True)
-    for col, width in zip("ABCDEFGH", (5, 7, 22, 90, 18, 18, 16, 20)):
+    for col, width in zip("ABCDEFGHI", (5, 7, 22, 90, 18, 18, 16, 20, 34)):
         ws.column_dimensions[col].width = width
     log = audit.AuditLog(period=f"{period[5:]}/{period[:4]}" if period else "")
     for r in reviews:

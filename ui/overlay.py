@@ -795,7 +795,7 @@ class CursorOverlay(QWidget):
                              covers_words=sum(1 for f in ann.get("soft") or [] if overlap(rect, [f]) > 0),
                              covers_range=overlap(rect, [anchor]) > 0)
         x, y, h, parts = layout
-        line = stem(ann["anchor"], (x, y, x + CARD_WIDTH, y + h))
+        line = () if ann.get("free") else stem(ann["anchor"], (x, y, x + CARD_WIDTH, y + h))   # free: no cell to tie to
         x, y = x - self.x(), y - self.y() + (1.0 - u) * 8
         card = QRectF(x, y, CARD_WIDTH, h)
         if line:

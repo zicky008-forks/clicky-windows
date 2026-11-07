@@ -35,6 +35,7 @@ class Finding:
     expected: Optional[Decimal] = None
     actual: Optional[Decimal] = None
     causes: list = field(default_factory=list)    # [(label, amount)] adding up to actual - expected
+    file: str = ""              # the workbook the cell is in: the pack, or a source file (an AOPR file row)
 
     @property
     def diff(self) -> Optional[Decimal]:

@@ -333,6 +333,51 @@ class ExcelBridge:
             log.warning("Opening %s in Excel failed: %s", _shape(path), _why(exc))
             return False
 
+    def show_workbook(self, path: str) -> bool:
+        """Bring a workbook to the front so a cell in it can be lit: the open one with that file, else the file
+        opened read-only (a source file such as the AOPR plan is never changed). Files opened here are
+        remembered, so close_opened() puts Excel back as it was."""
+        app = self._excel()
+        if app is None:
+            return False
+        try:
+            for i in range(1, app.Workbooks.Count + 1):
+                wb = app.Workbooks(i)
+                if _same_path(str(wb.FullName or ""), path):
+                    wb.Activate()
+                    return True
+            alerts = app.DisplayAlerts
+            app.DisplayAlerts = False           # no "update links?" or "read-only?" window over the story
+            try:
+                wb = app.Workbooks.Open(path, UpdateLinks=0, ReadOnly=True, AddToMru=False)
+            finally:
+                app.DisplayAlerts = alerts
+            wb.Activate()
+            self.__dict__.setdefault("_opened", []).append(str(wb.FullName))
+            return True
+        except Exception as exc:
+            log.warning("Showing %s in Excel failed: %s", _shape(path), _why(exc))
+            return False
+
+    def close_opened(self, back_to: Optional[str] = None) -> int:
+        """Close, without saving, the read-only files show_workbook opened; then show back_to again."""
+        app, closed = self._excel(), 0
+        opened, self._opened = list(getattr(self, "_opened", [])), []
+        if app is None:
+            return 0
+        for name in opened:
+            try:
+                for i in range(app.Workbooks.Count, 0, -1):
+                    wb = app.Workbooks(i)
+                    if _same_path(str(wb.FullName or ""), name):
+                        wb.Close(SaveChanges=False)
+                        closed += 1
+            except Exception as exc:
+                log.warning("Closing a source file failed: %s", _why(exc))
+        if back_to:
+            self.show_workbook(back_to)
+        return closed
+
     def save(self, path: Optional[str] = None) -> bool:
         """Save the active workbook (only when the user asked Clicky to); never shows a window.
 

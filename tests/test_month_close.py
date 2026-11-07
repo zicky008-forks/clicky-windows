@@ -1022,3 +1022,112 @@ def test_the_query_names_the_columns_exactly_as_power_query_reads_the_header(tmp
     assert not set(needed) <= set(gl_head)                     # the cost ledger is left out of the combine
     if variant == "crlf_footer":
         assert "each [Ngay HD ] <> null" not in m and "<> null" in m and len(order.footers) == 1
+
+
+class _PlaySig:
+    def __init__(self, log, name):
+        self.log, self.name = log, name
+
+    def emit(self, *a):
+        self.log.append((self.name, a))
+
+
+class _PlayExcel:
+    """Two workbooks: the pack (shown) and a source file Clicky has to bring forward to light a cell in it."""
+    def __init__(self, on_screen=True):
+        self.front, self.shown, self.on_screen = "pack", [], on_screen
+
+    def show_workbook(self, path):
+        self.shown.append(path)
+        self.front = path
+        return True
+
+    def activate(self, sheet):
+        pass
+
+    def screen_rect(self, ref, reveal):
+        if ref.startswith("Data!") and (self.front != "C:/case/KeHoach_AOPR1.xlsx" or not self.on_screen):
+            return None                        # that cell is in the source file, not on the pack
+        return (100.0, 50.0, 200.0, 70.0)
+
+
+class _PlayManager:
+    def __init__(self, excel):
+        self.log, self._excel = [], excel
+        for n in ("sig_clear_drawings", "sig_response_chunk", "sig_draw", "sig_point_hold",
+                  "sig_point_at", "sig_point_release", "sig_choices", "sig_guided"):
+            setattr(self, n, _PlaySig(self.log, n))
+
+    def _physical_to_logical_bbox(self, rect):
+        return rect
+
+    async def _reply_local(self, text):
+        self.log.append(("say", (text,)))
+        return True
+
+
+def _between_says(log):
+    """The screen events of each beat: [[names before say 1], [between say 1 and 2], ...]."""
+    out, cur = [], []
+    for n, a in log:
+        if n == "say":
+            out.append(cur)
+            cur = []
+        else:
+            cur.append((n, a))
+    return out
+
+
+def test_a_cell_in_another_file_is_lit_in_that_file_and_no_card_outlives_its_mistake(monkeypatch, tmp_path):
+    """Grading round 8 (AA): a mistake in the AOPR file had no box; the previous mistake's card stayed up for
+    14 s while the new one was read. Now the source file comes forward (read-only) and its cell is lit."""
+    import asyncio
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(tmp_path / "scene.jsonl"))
+    monkeypatch.setattr(month_close, "BEAT_GAP_S", 0)
+    excel = _PlayExcel()
+    m = _PlayManager(excel)
+    beats = [month_close.Beat("Có 2 chỗ cần sửa."),
+             month_close.Beat("Tổng lệch sổ.", "'Tong hop'!B13", "Tổng chi phí lệch sổ", "bad", "10 đ", book="C:/case/pack.xlsx"),
+             month_close.Beat("Tháng 7 còn số AOP.", "Data!I174", "File AOPR: tháng khoá còn số kế hoạch", "bad", "5 đ",
+                              note="Nhóm 5 · file KeHoach_AOPR1.xlsx, ô Data!I174", book="C:/case/KeHoach_AOPR1.xlsx"),
+             month_close.Beat("Em đã ghi kết quả.", mark="ok")]
+    asyncio.run(month_close.play(m, beats, keep_card=False))
+    assert excel.shown == ["C:/case/pack.xlsx", "C:/case/KeHoach_AOPR1.xlsx"]
+    per = _between_says(m.log)
+    third = [n for n, _ in per[2]]
+    assert third.index("sig_clear_drawings") < third.index("sig_draw")          # old card gone, then the new frame
+    spot = next(a[0] for n, a in per[2] if n == "sig_draw")
+    assert spot["kind"] == "spotlight" and (spot["x1"], spot["y1"]) == (100.0, 50.0)
+    assert "sig_clear_drawings" in [n for n, _ in per[3]]                        # the closing line keeps no card
+
+
+def test_a_cell_that_cannot_be_shown_gets_its_own_card_without_a_pointer(monkeypatch, tmp_path):
+    import asyncio
+    import json
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    monkeypatch.setattr(month_close, "BEAT_GAP_S", 0)
+    m = _PlayManager(_PlayExcel(on_screen=False))
+    beats = [month_close.Beat("Tổng lệch sổ.", "'Tong hop'!B13", "Tổng chi phí lệch sổ", "bad", "10 đ"),
+             month_close.Beat("Tháng 7 còn số AOP.", "Data!I174", "File AOPR: tháng khoá còn số kế hoạch", "bad", "5 đ",
+                              was="7 đ", note="Nhóm 5 · file KeHoach_AOPR1.xlsx, ô Data!I174")]
+    asyncio.run(month_close.play(m, beats))                  # even when a story keeps cards up, not this one
+    second = _between_says(m.log)[1]
+    names = [n for n, _ in second]
+    assert names.index("sig_clear_drawings") < names.index("sig_draw") and "sig_point_at" not in names
+    card = next(a[0] for n, a in second if n == "sig_draw")
+    assert card["kind"] == "card" and card["free"] and card["value"] == "5 đ" and card["was"] == "7 đ"
+    assert "KeHoach_AOPR1.xlsx" in card["note"] and "Data!I174" in card["note"]
+    events = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
+    assert {"event": "clear", "i": 1, "ref": "Data!I174", "free_card": True}.items() <= \
+        next(e for e in events if e.get("event") == "clear").items()
+
+
+def test_a_beat_without_a_range_still_keeps_the_card_in_a_story_that_wants_it(monkeypatch, tmp_path):
+    import asyncio
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(tmp_path / "scene.jsonl"))
+    monkeypatch.setattr(month_close, "BEAT_GAP_S", 0)
+    m = _PlayManager(_PlayExcel())
+    asyncio.run(month_close.play(m, [month_close.Beat("Lệch.", "'Doi chieu'!C7", "Lệch", "bad", "−1 tỷ"),
+                                     month_close.Beat("Em sửa giúp anh nhé?", choices=("Sửa giúp tôi", "Để tôi xem"))]))
+    assert "sig_clear_drawings" not in [n for n, _ in _between_says(m.log)[1]]

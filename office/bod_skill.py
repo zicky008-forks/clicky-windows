@@ -25,6 +25,14 @@ OUT_DIR = "Clicky_soat_BOD"
 PCT_CODES = {"wrong_base", "missing_pct", "missing_pp", "wrong_pp"}
 SHORT = {1: "Tổng chi phí lệch sổ", 2: "Sai mẫu số %DTT", 3: "Thiếu hoặc sai điểm %", 4: "Sai phiên bản so sánh",
          5: "Tháng khoá còn số kế hoạch", 6: "Cắt giảm 3 bước", 7: "Sai loại tỷ giá"}
+# A card's title names the kind of mistake: a missing %DTT is not a wrong percentage point (grading round 8).
+TITLES = {"total_vs_detail": "Tổng chi phí lệch sổ", "wrong_base": "Sai mẫu số %DTT", "no_base": "Thiếu doanh thu để tính %DTT",
+          "missing_pct": "Thiếu %DTT", "missing_diff": "Thiếu chênh lệch bằng tiền", "missing_pp_column": "Thiếu cột điểm %",
+          "missing_pp": "Thiếu điểm %", "wrong_pp": "Sai điểm %", "wrong_version": "Sai phiên bản so sánh",
+          "wrong_scenario": "Sai kịch bản so sánh", "wrong_version_value": "Số không đúng phiên bản",
+          "locked_month_plan": "Tháng khoá còn số kế hoạch", "locked_month_plan_file": "File AOPR: tháng khoá còn số kế hoạch",
+          "no_cut_touched": "Cắt vào khoản không được cắt", "levers_vs_gap": "Cắt giảm không khớp mức cần cắt",
+          "fx_rate_type": "Sai loại tỷ giá"}
 
 
 def _figure(x, code: str) -> str:
@@ -38,6 +46,10 @@ def _sentence(f) -> str:
     """One short sentence for the chat and the voice: the first clause of the finding."""
     text = f.message.split(". ")[0]
     return text if len(text) <= 160 else text[:157].rsplit(" ", 1)[0] + "…"
+
+
+def title_of(f) -> str:
+    return TITLES.get(f.code) or SHORT.get(f.group, "Cần sửa")
 
 
 def beats_for(reviews: list, out: Optional[dict]) -> list:
@@ -58,10 +70,14 @@ def beats_for(reviews: list, out: Optional[dict]) -> list:
         beats.append(Beat(f"Em đã soát bộ BOD {period}: có {total} chỗ cần sửa trước khi trình. Em chỉ từng chỗ."))
     for r in reviews:
         for f in r.findings:
-            beats.append(Beat(_sentence(f), ref=f.where, label=SHORT.get(f.group, "Cần sửa"), mark="bad",
+            book = getattr(f, "file", "") or r.pack
+            other = book != r.pack
+            beats.append(Beat(_sentence(f), ref=f.where, label=title_of(f), mark="bad",
                               value=_figure(f.expected, f.code) if f.expected is not None else "",
                               was=_figure(f.actual, f.code) if f.actual is not None and f.expected is not None else "",
-                              note=f"Nhóm {f.group}"))
+                              # a cell in a source file: the card says which file, sheet and cell
+                              note=f"Nhóm {f.group} · file {book}, ô {f.where}" if other else f"Nhóm {f.group}",
+                              book=str(Path(r.folder) / book) if r.folder else book))
         if r.notes:
             beats.append(Beat(f"Sổ chi tiết còn {len(r.notes)} điểm cần hỏi kế toán, không phải lỗi của bộ BOD. "
                               "Em ghi trong file kết quả.", mark="warn"))
@@ -115,10 +131,15 @@ async def run(manager, folder: Optional[Path] = None) -> None:
                                      "Chị bấm Báo lỗi để em gửi nhật ký đã che số.", mark="bad")])
         return
     beats = beats_for(reviews, out)
-    if bridge is not None and reviews:
-        pack = folder / reviews[0].pack
+    pack = folder / reviews[0].pack if reviews else None
+    if bridge is not None and pack is not None:
         await asyncio.to_thread(_open_pack, bridge, pack)
-    await mc.play(manager, beats)
+    try:
+        await mc.play(manager, beats, keep_card=False)       # separate mistakes: no card outlives its own
+    finally:
+        if bridge is not None and pack is not None and hasattr(bridge, "close_opened"):
+            # source files opened read-only to show a cell are closed unsaved; the pack is shown again
+            await asyncio.to_thread(bridge.close_opened, str(pack))
 
 
 async def handle(manager, transcript: str) -> str:

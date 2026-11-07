@@ -74,6 +74,7 @@ class Beat:
     roll: tuple = ()                # (from, to) in đồng: the big figure counts from one to the other
     intake: Optional[dict] = None   # the receipt card ({"card": ..., "log": ...}) shown with this beat's buttons
     graphic: Optional[dict] = None  # leader tags, sticky notes or a profit bridge (engine.visuals), drawn beside the range
+    book: str = ""                  # the workbook the ref is in, brought to the front first (read-only when Clicky opens it)
 
 
 def stage() -> Optional[str]:
@@ -1432,11 +1433,32 @@ async def _graphic_shape(manager, graphic: dict, box):
     return shape
 
 
-async def play(manager, beats: list) -> None:
+def free_card(beat: Beat, screen: tuple) -> dict:
+    """A card with no range to point at (the cell could not be shown): top right of the screen, no stem, no
+    spotlight. Its note says where the cell is, so the figure is never tied to the wrong cells."""
+    from ui.card_layout import tone_of
+    sl, st, sr, sb = screen
+    return {"kind": "card", "anchor": [sr - 24, st + 96, sr - 20, st + 100], "free": True, "title": beat.label,
+            "was": beat.was, "value": beat.value, "note": beat.note, "tone": tone_of(beat.mark), "roll": []}
+
+
+def _screen() -> tuple:
+    try:
+        from PyQt6.QtWidgets import QApplication
+        g = QApplication.primaryScreen().availableGeometry()
+        return g.left(), g.top(), g.right(), g.bottom()
+    except Exception:
+        return 0, 0, 1920, 1040
+
+
+async def play(manager, beats: list, keep_card: bool = True) -> None:
     """One idea at a time: light up the beat's range, show its card, say its one sentence, pause, next.
 
-    A beat without a range keeps the previous card up, so the screen never goes blank mid-story.
-    When the sentence cannot be read aloud (no Vietnamese voice), it stays up long enough to read.
+    With keep_card, a beat without a range keeps the previous card up, so the screen never goes blank
+    mid-story. A beat whose range cannot be shown never keeps another beat's card: the old card goes, and its
+    own card shows without pointing (free_card). keep_card=False (a list of separate mistakes): every beat
+    clears the card before it. When the sentence cannot be read aloud (no Vietnamese voice), it stays up long
+    enough to read.
     """
     from ui.card_layout import NO_BUBBLE, pointer_spot, reading_seconds
     run = object()
@@ -1456,6 +1478,9 @@ async def play(manager, beats: list) -> None:
             manager.sig_response_chunk.emit("\n\n")
             if BEAT_GAP_S:
                 await asyncio.sleep(BEAT_GAP_S)
+        if beat.book and beat.ref:
+            shown = await asyncio.to_thread(getattr(manager._excel, "show_workbook", lambda p: False), beat.book)
+            scene_log.record("show_book", i=i, ref=beat.ref, ok=bool(shown))
         box = await _locate(manager, beat.ref) if beat.ref else None
         if box:
             manager.sig_point_hold.emit(True)
@@ -1466,6 +1491,14 @@ async def play(manager, beats: list) -> None:
         scene_log.record("beat", i=i, ref=beat.ref, box=box, title=beat.label, value=beat.value, was=beat.was,
                          note=beat.note, mark=beat.mark, text=beat.text, choices=list(beat.choices or []),
                          **({"graphic": graphic_log(beat.graphic)} if beat.graphic else {}))
+        loose = None
+        if not box and not graphic and (beat.ref or not keep_card):
+            # Never leave another mistake's card up while this one is read out (grading round 8).
+            manager.sig_clear_drawings.emit()
+            if beat.ref and (beat.label or beat.value or beat.note):
+                loose = free_card(beat, _screen())
+                manager.sig_draw.emit(loose)
+            scene_log.record("clear", i=i, ref=beat.ref, free_card=loose is not None)
         if box or graphic:
             manager.sig_clear_drawings.emit()
             figures, words = await _figures(manager)

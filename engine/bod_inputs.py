@@ -340,6 +340,14 @@ class PlanRow:
     fy: Optional[int] = None            # first year of the fiscal year, when the file or header says it
     approved: str = ""                  # 'YYYY-MM-DD' the version was approved, when the file says it
     table_division: str = ""            # folded words after 'khối' the table names once for every row (header, title)
+    file: str = ""                      # the file the row was read from, so a finding on it names file, sheet and cell
+
+
+def cell_ref(sheet: str, col: int, row: int) -> str:
+    """'Sheet!F24' (quoted when the name needs it) for a 0-based column and a sheet row number."""
+    from openpyxl.utils import get_column_letter
+    name = sheet if re.fullmatch(r"[A-Za-z0-9_]+", sheet or "") else "'" + str(sheet).replace("'", "''") + "'"
+    return f"{name}!{get_column_letter(col + 1)}{row}"
 
 
 def day_of(value) -> str:
@@ -405,7 +413,7 @@ def read_plan(t: Table, default_version: str = "", fy_start: int = 7, rows: Opti
                 continue
             month, month_no, fy = _plan_month(t.get(v, "thang"), t.get(v, "nam"), fy_start)
             out.append(PlanRow(str(t.get(v, "phien_ban", default_version) or default_version).strip(), month, amount,
-                               rate=num(t.get(v, "ty_gia")), where=f"{t.sheet}!{n}", month_no=month_no,
+                               rate=num(t.get(v, "ty_gia")), where=cell_ref(t.sheet, t.columns["tien"], n), month_no=month_no,
                                fy=fy or file_fy, table_division=td, **_dims(t, v)))
         return out
     from engine.bod_pack import fy_of, month_of, version_of
@@ -433,7 +441,7 @@ def read_plan(t: Table, default_version: str = "", fy_start: int = 7, rows: Opti
             thang = mon if mon is not None else t.get(v, "thang")
             month, month_no, fy = _plan_month(thang, t.get(v, "nam"), fy_start)
             out.append(PlanRow(version, month, amount, rate=num(t.get(v, "ty_gia")),
-                               where=f"{t.sheet}!{get_column_letter(c + 1)}{n}", month_no=month_no,
+                               where=cell_ref(t.sheet, c, n), month_no=month_no,
                                fy=fy or col_fy or file_fy, table_division=td, **dims))
         if not hit:
             t.skipped.append((n, "không có số tiền"))
@@ -668,6 +676,8 @@ def load(folder: Path, fy_start: int = 7) -> Bundle:
                     got = _try_plan(rows, sheet, "LY" if prior and version == "" else version, fy_start, file_fy)
                     if got:
                         t, plan_rows = got
+                        for r in plan_rows:
+                            r.file = p.name
                         if prior:
                             for r in plan_rows:
                                 r.version = r.version if r.version and r.version != "LY" else "thuc te"
