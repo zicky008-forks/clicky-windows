@@ -1466,9 +1466,10 @@ def review(folder: Path, fy_start: int = 7) -> list:
     b = load(folder, fy_start)
     fy_rule = num(b.config.rule("thang bat dau")) or num(b.config.rule("nien do"))
     fy_start = int(fy_rule) if fy_rule is not None and 1 <= int(fy_rule) <= 12 else fy_start
-    scene_log.record("bod_receipt", files=[{"name": n, "role": role, "rows": used, "skipped": len(sk)}
-                                           for n, role, used, sk in b.receipt],
-                     unused=[{"name": n, "why": w} for n, w in b.unused])
+    # ids, never names: on a real run these are the client's files (the results file shows the names)
+    scene_log.record("bod_receipt", files=[{"book": scene_log.book_id(folder / n), "role": role, "rows": used,
+                                            "skipped": len(sk)} for n, role, used, sk in b.receipt],
+                     unused=[{"book": scene_log.book_id(folder / n)} for n, w in b.unused])
     out = []
     for path in b.packs:
         pack = read_pack(path)
@@ -1509,13 +1510,22 @@ def review(folder: Path, fy_start: int = 7) -> list:
             fx, fx_notes = check_fx_sheets(f, b, pack, period, fy, cov)
             rv_.findings = _merge(found + fx)
             rv_.notes = data_notes(f, period, fy) + fx_notes
+        names = sorted({n for n, *_ in b.receipt} | {n for n, _ in b.unused} | {path.name}, key=len, reverse=True)
+
+        def scrub(text: str) -> str:
+            """A message as logged: every file name of the folder replaced by its id."""
+            for n in names:
+                text = str(text).replace(n, f"[file {scene_log.book_id(folder / n)}]")
+            return text
         for x in rv_.findings:
             x.file = x.file or path.name
-            scene_log.record("bod_finding", pack=path.name, file=x.file, group=x.group, code=x.code, where=x.where,
+            scene_log.record("bod_finding", pack=scene_log.book_id(path), book=scene_log.book_id(folder / x.file),
+                             in_pack=x.file == path.name, group=x.group, code=x.code, where=x.where,
                              expected=None if x.expected is None else str(x.expected),
-                             actual=None if x.actual is None else str(x.actual), message=x.message)
+                             actual=None if x.actual is None else str(x.actual), message=scrub(x.message))
         for g, title, state, text in rv_.groups():
-            scene_log.record("bod_group", pack=path.name, group=g, title=title, state=state, text=text)
+            scene_log.record("bod_group", pack=scene_log.book_id(path), group=g, title=title, state=state,
+                             text=scrub(text))
         out.append(rv_)
     return out
 
@@ -1654,7 +1664,7 @@ def write_outputs(reviews: list, out_dir: Path) -> dict:
     rows = sum(1 for row in got.iter_rows(min_row=5, values_only=True) if row[0] is not None)
     verified = verified and rows == n
     wb2.close()
-    scene_log.record("bod_done", findings=n, md=str(md), xlsx=str(xlsx), verified=verified,
+    scene_log.record("bod_done", findings=n, md=md.name, xlsx=xlsx.name, verified=verified,     # Clicky's own names
                      notes=sum(len(r.notes) for r in reviews),
                      not_checked=[g for r in reviews for g, _, state, _ in r.groups() if state == "chua"],
                      partly=[g for r in reviews for g, _, state, text in r.groups()
