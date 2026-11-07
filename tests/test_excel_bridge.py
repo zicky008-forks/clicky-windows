@@ -269,3 +269,25 @@ def test_a_workbook_with_no_file_is_saved_as_the_exact_file_clicky_made():
     assert book.saves == 0 and book.saved_as == (target, 51, False) and app.DisplayAlerts is True
     app = _saving_app(full=target, path=target.rsplit("\\", 1)[0])
     assert ExcelBridge(app=app).save(target) is True and app.ActiveWorkbook.saves == 1
+
+
+def test_save_logs_never_carry_a_workbook_name_or_folder(caplog):
+    # clicky.log goes into bug reports: a company file's name or folder must never be in it, even when
+    # Excel's own error text quotes them.
+    import logging
+    caplog.set_level(logging.WARNING)
+    secret = "C:\\Users\\chi\\Documents\\AgriS\\BCTC_Q3_mat.xlsx"
+    app = _saving_app(full="BCTC_Q3_mat", path="")
+    ExcelBridge(app=app).save()
+    app = _saving_app(full=secret, path="C:\\Users\\chi\\Documents\\AgriS", renames_to="C:\\Users\\chi\\AgriS\\65302810")
+    ExcelBridge(app=app).save()
+
+    def boom(*a, **k):
+        raise PermissionError(13, "Permission denied", secret)
+    app = _saving_app(full=secret, path="C:\\Users\\chi\\Documents\\AgriS")
+    app.ActiveWorkbook.Save = boom
+    ExcelBridge(app=app).save()
+    ExcelBridge(app=app).save_copy(secret.replace(".xlsx", "_ban-goc.xlsx"))
+    text = caplog.text
+    assert "AgriS" not in text and "BCTC" not in text and "Users" not in text
+    assert "Excel's temporary name" in text and "PermissionError 0x0000000D" in text and "a .xlsx file" in text

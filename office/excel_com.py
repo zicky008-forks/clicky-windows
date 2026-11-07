@@ -133,6 +133,36 @@ def _same_path(a: str, b: str) -> bool:
     return bool(a) and bool(b) and os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
 
+def _shape(name, wb=None) -> str:
+    """What a workbook name looks like, never the name: clicky.log must not carry a company's file names.
+
+    Enough to tell the cases apart: no file, Excel's temporary name (no extension, as "65302810"),
+    or a normal file, plus whether it sits in Clicky's own folder and whether Excel holds it read-only."""
+    name = str(name or "")
+    if not name:
+        return "a workbook with no name"
+    ext = os.path.splitext(name.replace("\\", "/").rsplit("/", 1)[-1])[1].lower()
+    kind = f"a {ext} file" if ext else "a name with no extension (Excel's temporary name?)"
+    has_path = bool(str(getattr(wb, "Path", "") or "")) if wb is not None else ("\\" in name or "/" in name)
+    try:
+        from storage import data_dir
+        inside = os.path.normcase(os.path.abspath(name)).startswith(os.path.normcase(str(data_dir())))
+    except Exception:
+        inside = False
+    where = "inside" if inside else "outside"
+    flags = ("with a folder" if has_path else "with no folder") + (
+        ", read-only" if wb is not None and bool(getattr(wb, "ReadOnly", False)) else "")
+    return f"{kind} ({flags}, {where} the Clicky folder)"
+
+
+def _why(exc) -> str:
+    """An Excel error without its text: COM messages quote the file's name and folder."""
+    code = next((a for a in getattr(exc, "args", ()) if isinstance(a, int)), None)
+    if code is None and isinstance(exc, OSError):
+        code = exc.errno
+    return type(exc).__name__ + (f" 0x{code & 0xFFFFFFFF:08X}" if isinstance(code, int) else "")
+
+
 class ExcelBridge:
     def __init__(self, app=None, dpi: Optional[int] = None):
         self._app = app        # injected in tests; otherwise attach to the running Excel
@@ -300,7 +330,7 @@ class ExcelBridge:
             app.WindowState = -4137            # xlMaximized
             return True
         except Exception as exc:
-            log.warning("Opening %s in Excel failed: %s", path, exc)
+            log.warning("Opening %s in Excel failed: %s", _shape(path), _why(exc))
             return False
 
     def save(self, path: Optional[str] = None) -> bool:
@@ -321,7 +351,7 @@ class ExcelBridge:
             before = str(wb.FullName or "")
             has_file = bool(str(wb.Path or "")) and not bool(getattr(wb, "ReadOnly", False))
             if path is None and not has_file:
-                log.warning("Not saving %r: no writable file behind it (Excel would open Save As)", before)
+                log.warning("Not saving %s: no writable file behind it (Excel would open Save As)", _shape(before, wb))
                 return False
             target = str(path) if path else before
             alerts = app.DisplayAlerts
@@ -335,11 +365,11 @@ class ExcelBridge:
                 app.DisplayAlerts = alerts
             after = str(wb.FullName or "")
             if not _same_path(after, target):
-                log.warning("Saving %r did not finish: Excel now calls it %r", target, after)
+                log.warning("Saving %s did not finish: Excel now holds %s", _shape(target), _shape(after, wb))
                 return False
             return True
         except Exception as exc:
-            log.warning("Saving the workbook failed: %s", exc)
+            log.warning("Saving the workbook failed: %s", _why(exc))
             return False
 
     def save_copy(self, path: str) -> bool:
@@ -354,7 +384,7 @@ class ExcelBridge:
                 app.DisplayAlerts = alerts
             return True
         except Exception as exc:
-            log.warning("Saving a copy to %s failed: %s", path, exc)
+            log.warning("Saving a copy to %s failed: %s", _shape(path), _why(exc))
             return False
 
     def sheet_names(self) -> list:
