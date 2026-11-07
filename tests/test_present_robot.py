@@ -83,3 +83,15 @@ def test_show_outcome_reads_clickys_attach_or_failure(tmp_path, monkeypatch):
     assert present_robot.show_outcome(log, timeout=0.01) == "failed"
     log.write_text(json.dumps({"event": "present_attached", "hwnd": 5}) + "\n", encoding="utf-8")
     assert present_robot.show_outcome(log, timeout=0.01) == "attached"
+
+
+def test_window_handle_reads_hwnd_as_property_or_method():
+    class Early:
+        HWND = 4242
+
+    class Late:
+        def HWND(self):
+            return 4242
+
+    assert robot.window_handle(Early()) == 4242
+    assert robot.window_handle(Late()) == 4242
