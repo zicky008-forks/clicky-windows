@@ -12,7 +12,7 @@
     {
       "name": "Hàng trả lại 120 triệu",
       "sheet": "BC",
-      "label": "hàng trả lại",
+      "label": "trả lại",
       "value": 120000000,
       "tolerance": 1000000,
       "abs": true
