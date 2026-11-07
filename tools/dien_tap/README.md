@@ -34,6 +34,8 @@ Giữa các lượt, robot ghi tình trạng Excel vào `excel-giua-cac-luot.jso
 
 Mỗi lượt chạy, robot ghi nguồn điện của máy vào đầu `ket-qua.md` và `meta.power` trong `ket-qua.json`: cắm sạc hay chạy pin, % pin, chế độ nguồn, và tốc độ CPU. Robot đọc nguồn điện trước và sau lượt chạy, và đọc tốc độ CPU mỗi 5 giây trong suốt lượt chạy. Ở chế độ Balanced, CPU lúc rảnh cố ý chạy chậm, nên robot lấy mẫu nhanh nhất. Nếu máy chạy pin, hoặc mẫu CPU nhanh nhất vẫn dưới 90% tốc độ tối đa, các dòng chấm thời gian vẫn hiện nhưng có chữ "KHÔNG TÍNH" và không làm lượt chạy đạt hay trượt. Lý do: tối 07/11, máy DN-LAP-231 chạy pin còn 11%, CPU 67%, và mọi lượt chậm gấp 2–3 lần trên cả hai bản build.
 
+Robot cũng đo, ở mỗi lượt, quãng lâu nhất không có gì mới hiện ra, tính từ lúc bắt đầu lượt tới cảnh hay câu hỏi đầu tiên. Chữ báo từng chặng (`close_step` `caption`, có từ #52), thẻ, nét vẽ và con trỏ đều tính là có hiện ra. Mục tiêu là dưới 2 giây. Dòng này hiện giờ chỉ để đo; đặt `"silent_blocking": true` trong `layout.latency` thì nó thành dòng chặn. `"silent_max_ms"` đổi ngưỡng.
+
 ## Robot bấm bằng gì
 
 - Mặc định thử **agent-desktop** (Vercel Labs, Apache-2.0): tải bản Windows x64 từ

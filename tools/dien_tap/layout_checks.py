@@ -206,6 +206,48 @@ def latency_checks(events, spec) -> list:
     return out
 
 
+_SHOWN = ("beat", "choices", "notice", "card", "choice_card", "draw", "point")
+
+
+def silent_gaps(events) -> list:
+    """(turn label, longest silence in s) per turn: from the turn's start to its first scene or question,
+    the longest stretch with nothing new on screen. Stage captions (close_step "caption", #52) count as
+    something new. The reading time between two scenes is not silence, so only the wait before the first
+    scene is measured (Case 05 on ebffea4: ~50 s of nothing after the receipt was confirmed)."""
+    out = []
+    starts = [i for i, e in enumerate(events) if e.get("event") == "turn"]
+    for n, i in enumerate(starts):
+        end = starts[n + 1] if n + 1 < len(starts) else len(events)
+        t0 = events[i].get("t")
+        if not isinstance(t0, (int, float)):
+            continue
+        marks = [t0]
+        for e in events[i + 1:end]:
+            t = e.get("t")
+            if not isinstance(t, (int, float)):
+                continue
+            if e.get("event") == "close_step" and e.get("step") == "caption":
+                marks.append(t)
+            elif e.get("event") in _SHOWN:
+                marks.append(t)
+                break
+        gaps = [b - a for a, b in zip(marks, marks[1:])]
+        if gaps:
+            out.append(((events[i].get("text") or "?")[:40], round(max(gaps), 1)))
+    return out
+
+
+def silence_check(events, spec) -> list:
+    limit = spec.get("silent_max_ms", 2000)
+    gaps = silent_gaps(events)
+    if not gaps:
+        return []
+    slow = [(label, g) for label, g in gaps if g * 1000 > limit]
+    detail = "; ".join(f"{label}: {g} s" for label, g in (slow or gaps)[:6])
+    return [Check(f"Không lượt nào im quá {limit / 1000:g} s trước cảnh đầu (chỉ đo)", not slow, detail,
+                  blocking=bool(spec.get("silent_blocking")))]
+
+
 def void_timing(checks_: list, why) -> list:
     """Timing gates measured on a throttled PC (on battery, CPU under 90%): shown, never failed or passed."""
     if not why:
@@ -229,5 +271,5 @@ def evaluate(events, expected, void=None) -> list:
     if "notes" in spec:
         out += notes_checks(events, spec["notes"])
     if "latency" in spec:
-        out += void_timing(latency_checks(events, spec["latency"]), void)
+        out += void_timing(latency_checks(events, spec["latency"]) + silence_check(events, spec["latency"]), void)
     return out

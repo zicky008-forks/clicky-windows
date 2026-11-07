@@ -46,7 +46,7 @@ def by_name(rows):
 def test_good_story_passes_every_layout_check():
     out = layout_checks.evaluate(story(), SPEC)
     assert all(c.ok for c in out), [c for c in out if not c.ok]
-    assert len(out) == 9
+    assert len(out) == 10
 
 
 def test_card_over_a_figure_fails_and_names_the_rect():
@@ -176,3 +176,22 @@ def test_unmeasured_first_feedback_is_not_a_zero():
     c = by_name(layout_checks.evaluate(lat(mode="code", ready=900, first_point=1000), spec))[
         "Lượt chạy bằng code: phản hồi đầu ≤ 1000 ms mọi lượt"]
     assert "1 lượt chưa đo" in c.detail
+
+
+def test_silent_gaps_measure_the_wait_before_the_first_scene():
+    import layout_checks as lc
+    ev = [{"t": 10.0, "event": "turn", "text": "Đúng rồi, làm tiếp"},
+          {"t": 10.2, "event": "close_step", "step": "caption", "stage": "query_load", "still": False},
+          {"t": 12.4, "event": "close_step", "step": "caption", "stage": "query_load", "still": True},
+          {"t": 13.0, "event": "close_step", "step": "timing", "part": "check_sheet", "ms": 500},
+          {"t": 13.5, "event": "beat", "i": 0, "title": "Lệch"},
+          {"t": 25.0, "event": "beat", "i": 1},                       # reading time: not silence
+          {"t": 40.0, "event": "turn", "text": "Sửa giúp tôi"},
+          {"t": 41.0, "event": "beat", "i": 0}]
+    assert lc.silent_gaps(ev) == [("Đúng rồi, làm tiếp", 2.2), ("Sửa giúp tôi", 1.0)]
+    c = lc.silence_check(ev, {})[0]
+    assert not c.ok and not c.blocking and "Đúng rồi, làm tiếp: 2.2 s" in c.detail
+    # Case 05 on ebffea4: ~50 s with nothing after the confirm.
+    old = [{"t": 0.0, "event": "turn", "text": "Đúng rồi, làm tiếp"}, {"t": 50.0, "event": "beat"}]
+    assert lc.silent_gaps(old) == [("Đúng rồi, làm tiếp", 50.0)]
+    assert lc.silence_check(old, {"silent_blocking": True})[0].blocking
