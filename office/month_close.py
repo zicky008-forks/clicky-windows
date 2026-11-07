@@ -690,6 +690,8 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     missed = "" if not unread else (
         f" File {unread[0].file} em chưa đọc được: {unread[0].reason}." if len(unread) == 1 else
         f" Còn {len(unread)} file em chưa đọc được, lý do ghi trong phiếu bên dưới.")
+    if receipt.impact_short:                        # said before "Đúng rồi, làm tiếp", not found after it
+        missed += " " + receipt.impact
     text = (f"Em đọc được {n_tb} sổ cân đối và {truth.unique_rows} đơn bán hàng"
             + (f" từ {len(files)} trên {len(files) + len(unread)} file đơn hàng" if unread else "") + "." + missed
             + " Anh xem giúp em có đúng không, em chưa sửa gì trong file.")

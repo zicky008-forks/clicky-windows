@@ -183,6 +183,9 @@ def test_an_early_stop_still_shows_the_receipt_with_one_line_per_file(tmp_path, 
     titles = [r["title"] for r in card["rows"]]
     assert titles[0].startswith("TB_T10.xlsx · Sổ cân đối")
     lines = {r["title"].split(" · ")[0]: r for r in card["rows"][1:]}
+    impact = lines.pop("Ảnh hưởng")                                  # last: what the two files leave out
+    assert card["rows"][-1]["title"].startswith("Ảnh hưởng") and "thiếu" in impact["detail"]
+    assert "so với sổ cái" in impact["detail"] and impact["ok"] is False
     assert set(lines) == {"DonHang_MISA.xls", "Shopee_T10.csv", "anh_chup.png"}
     assert "chưa đọc được định dạng" in lines["DonHang_MISA.xls"]["detail"]
     assert "thiếu cột ngày" in lines["Shopee_T10.csv"]["detail"]
@@ -518,5 +521,5 @@ def test_the_remembered_header_in_m_matches_the_engines_signature():
     assert sources.header_signature(header) == "maphieu|thoidiem|sl|giatri|phi"
     m = m_code.order_files_query("P", {}, ["doc", "date", "amount"], None, None,
                                  {sources.header_signature(header): {"date": "thoidiem", "amount": "giatri"}})
-    assert 'Text.Combine(List.Range(k, dau, List.Count(k) - dau - duoi), "|")' in m
+    assert 'Text.Combine(List.Range(k0, dau, List.Count(k0) - dau - duoi), "|")' in m
     assert m_code.order_files_query("P", {}, ["doc", "date", "amount"], None).count("Nho = []") == 1

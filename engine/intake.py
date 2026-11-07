@@ -67,6 +67,8 @@ class Intake:
     revenue_ok: Optional[bool] = None
     revenue_note: str = ""
     roles: dict = field(default_factory=dict)           # file name → role (engine.roles)
+    impact: str = ""                 # what a left-out order-like file does to the revenue, said before "làm tiếp"
+    impact_short: bool = False       # True when the revenue is short of the ledger because of it
 
     @property
     def balanced(self) -> bool:
@@ -292,7 +294,10 @@ def _unused_files(folder: Path, used: set, workbook: Optional[str], roles: dict)
         elif suffix in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".heic"):
             why = "ảnh, vai trò Ghi chú: em không bao giờ lấy số từ ảnh"
         elif suffix in sources.ORDER_SUFFIXES and sources.declined_file(p):
-            why = "chị đã chỉ đây không phải file đơn hàng, em không lấy số từ file này"
+            out.append(Dropped(f"File {p.name}", p.name, None,
+                               "chị đã chỉ đây không phải file đơn hàng, em không lấy số từ file này", rows=0,
+                               kind="declined"))
+            continue
         elif suffix == ".xls":
             why, kind = _xls_why(p)
             out.append(Dropped(f"File {p.name}", p.name, None, why, rows=0, kind=kind))
@@ -406,7 +411,31 @@ def build(folder: Path, files: list, tbs: list, truth, ledger: dict, workbook: O
     used_names = set(query_files(folder)) | {f.path.name for f in files} | {p.name for name in stems
                                                                            for p in folder.glob(f"{name}.xls*")}
     intake.dropped += _unused_files(folder, used_names, workbook, intake.roles)
+    intake.impact, intake.impact_short = _impact(intake, truth, ledger)
     return intake
+
+
+def _impact(intake: Intake, truth, ledger: dict) -> tuple:
+    """(sentence, short) for the order-like files Clicky could not use (grader, Case 05 class): the user must see
+    what leaving them out does to the revenue before "Đúng rồi, làm tiếp", from the numbers already read."""
+    left = sorted({d.file for d in intake.dropped if d.kind in ("unread", "declined")})
+    if not left:
+        return "", False
+    names = f"file {left[0]}" if len(left) == 1 else f"{len(left)} file {', '.join(left[:2])}" + ("…" if len(left) > 2 else "")
+    told = sorted({d.file for d in intake.dropped if d.kind == "declined"})
+    if told:                                        # chị said "không phải đơn hàng": she sees what that leaves out
+        names += f" ({'file này' if len(left) == 1 else ', '.join(told[:2])} chị đã chỉ không phải đơn hàng)"
+    if not ledger:
+        return f"Thiếu {names} nên doanh thu em tính chưa gồm phần trong {'file' if len(left) == 1 else 'các file'} này.", False
+    acct = f"Có TK {ledger['rev_acct']}" + (" − Nợ TK 521" if ledger.get("net") else "")
+    gap = ledger["revenue"] - truth.amount
+    if gap > TOLERANCE:
+        return (f"Thiếu {names} nên doanh thu đang tính thiếu {spoken(gap)} so với sổ cái "
+                f"({acct} {spoken(ledger['revenue'])}).", True)
+    if gap < -TOLERANCE:
+        return (f"{names[0].upper()}{names[1:]} chưa dùng; doanh thu các file còn lại đã cao hơn sổ cái {spoken(-gap)}, "
+                "em đối chiếu ở bước sau.", False)
+    return f"{names[0].upper()}{names[1:]} chưa dùng, nhưng doanh thu các file còn lại đã khớp sổ cái ({acct}).", False
 
 
 UNUSED_KIND = "Chưa dùng"
@@ -449,6 +478,9 @@ def card(intake: Intake) -> dict:
         if f.kind == UNUSED_KIND:                   # the early stop: each file Clicky did not use, on its own line
             rows.append({"ok": False, "title": f"{f.name} · {f.kind}", "count": "", "detail": f.checks,
                          "role": intake.roles.get(f.name, "")})
+    if intake.impact:                               # before the button: what the left-out files cost the revenue
+        rows.append({"ok": not intake.impact_short, "title": "Ảnh hưởng · file chưa dùng", "count": "",
+                     "detail": intake.impact, "role": ""})
     left = summarize_dropped([d for d in intake.dropped if not (d.file in own_line and d.what == f"File {d.file}")])
     return {"eyebrow": "TRƯỚC KHI TÍNH", "title": "Em đọc được những gì", "rows": rows,
             "left_out": left, "left_out_title": "Em đã bỏ ra ngoài" if left else "Em không bỏ dòng nào"}
@@ -488,6 +520,9 @@ def summarize_dropped(items: list, limit: int = 4) -> list:
         elif key == "unread":
             out.append(f"{len(ds)} file em chưa đọc được: " + "; ".join(f"{d.file} {d.reason}" for d in ds[:2])
                        + ("…" if len(ds) > 2 else ""))
+        elif key == "declined":
+            out.append(f"{len(ds)} file chị chỉ không phải đơn hàng: " + ", ".join(d.file for d in ds[:2])
+                       + ("…" if len(ds) > 2 else ""))
         else:
             out.append(f"{len(ds)} file không dùng: " + ", ".join(d.file for d in ds[:2]) + ("…" if len(ds) > 2 else ""))
     return out[:limit] + ([f"và {len(out) - limit} nhóm khác, xem sheet Bien ban Clicky"] if len(out) > limit else [])
@@ -501,7 +536,7 @@ def log_fields(intake: Intake, text: str) -> dict:
                       for f in intake.files],
             "dropped": [{"what": d.what, "amount": None if d.amount is None else int(d.amount), "reason": d.reason,
                          "file": d.file} for d in intake.dropped],
-            "text": text}
+            "impact": intake.impact, "text": text}
 
 
 def dropped_rows(intake: Intake) -> list:

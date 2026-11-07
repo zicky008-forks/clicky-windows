@@ -40,7 +40,11 @@ MORE_COLS = {
     "date": ("orderdate", "createdat", "createddate", "transactiondate", "saledate", "paidat", "ngayban",
              "ngaydathang", "ngaydonhang", "ngaytao", "ngaygiaodich", "ngayxuathoadon", "created"),
     "amount": ("linetotal", "lineamount", "netsales", "subtotal", "thanhtientruocthue", "doanhthuthuan",
-               "tongtienhang", "sales", "totalsales", "grosssales", "totalamount", "tongtien", "total"),
+               "tongtienhang", "sales", "totalsales", "grosssales", "totalamount", "tongtien", "total",
+               # accounting-software exports (grader, Case 05 class): longer names for the amount before VAT
+               "doanhsobanchuathue", "doanhsochuathue", "doanhthuchuathue", "doanhthubanchuathue",
+               "thanhtienchuathue", "tienhangchuathue", "tongtienhangchuathue", "thanhtienhang", "doanhthubanhang",
+               "doanhthuban", "doanhsoban", "sotienhang", "sotienban"),
     "cost": ("costofgoodssold", "costofgoods", "giavonhangban", "linecost", "totalcost"),
     "branch": ("location", "storename", "shopname", "cuahangban"),
     "customer": ("customername", "customercode", "tenkhachhang", "tenkh", "buyer"),
@@ -62,6 +66,19 @@ def _key(header) -> str:
     return re.sub(r"[\s_\-./]", "", fold(header))
 
 
+# A unit written after a column name: "Số tiền (VND)", "Thành tiền (đ)". Taken off before the names are looked up
+# (not in header_signature); m_code's BoDonVi does the same, in the same order.
+UNIT_SUFFIXES = ("(vnd)", "(dong)", "(d)", "vnd")
+
+
+def _role_key(header) -> str:
+    k = _key(header)
+    for unit in UNIT_SUFFIXES:
+        if k.endswith(unit) and len(k) > len(unit):
+            return k[:-len(unit)]
+    return k
+
+
 def find_columns(header: list) -> dict:
     """Role → 0-based column index for the roles present in this header.
 
@@ -69,13 +86,13 @@ def find_columns(header: list) -> dict:
     none of them filled, best-ranked name first."""
     roles = {}
     for i, h in enumerate(header):
-        k = _key(h)
+        k = _role_key(h)
         for role, names in (("doc", DOC_COLS), ("date", DATE_COLS), ("amount", AMOUNT_COLS),
                             ("cost", COST_COLS), ("branch", BRANCH_COLS), ("customer", CUSTOMER_COLS),
                             ("item", ITEM_COLS)):
             if k in names and role not in roles:
                 roles[role] = i
-    keys = [_key(h) for h in header]
+    keys = [_role_key(h) for h in header]
     for role, names in MORE_COLS.items():
         if role in roles:
             continue

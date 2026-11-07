@@ -433,9 +433,15 @@ _ORDER_M = r"""let
     Nho = @@REMEMBERED@@,
     Ten1 = @@TIER1@@,
     Ten2 = @@TIER2@@,
+    // sources._role_key: a unit after the name ("Số tiền (VND)") is taken off before the names are looked up.
+    DonVi = @@UNITS@@,
+    BoDonVi = (k as text) as text =>
+        let u = List.Select(DonVi, each Text.EndsWith(k, _) and Text.Length(k) > Text.Length(_))
+        in if List.IsEmpty(u) then k else Text.Start(k, Text.Length(k) - Text.Length(u{0})),
     TimCot = (tieuDe as list) as record =>
         let
-            k = List.Transform(tieuDe, each Khoa(Chu(_))),
+            k0 = List.Transform(tieuDe, each Khoa(Chu(_))),
+            k = List.Transform(k0, BoDonVi),
             mot = List.Accumulate(Record.FieldNames(Ten1), [], (st, r) =>
                 let i = List.PositionOfAny(k, Record.Field(Ten1, r)) in if i >= 0 then Record.AddField(st, r, i) else st),
             hai = List.Accumulate(Record.FieldNames(Ten2), mot, (st, r) =>
@@ -443,12 +449,12 @@ _ORDER_M = r"""let
                 let hit = List.Select(List.Transform(Record.Field(Ten2, r), each List.PositionOf(k, _)), each _ >= 0)
                 in if List.IsEmpty(hit) then st else Record.AddField(st, r, hit{0})),
             // sources.columns_of: when no name gives a date and an amount, the columns chị named for this header.
-            dau = List.Count(List.FirstN(k, each _ = "")),
-            duoi = List.Count(List.FirstN(List.Reverse(k), each _ = "")),
-            chuKy = if dau = List.Count(k) then "" else Text.Combine(List.Range(k, dau, List.Count(k) - dau - duoi), "|"),
+            dau = List.Count(List.FirstN(k0, each _ = "")),
+            duoi = List.Count(List.FirstN(List.Reverse(k0), each _ = "")),
+            chuKy = if dau = List.Count(k0) then "" else Text.Combine(List.Range(k0, dau, List.Count(k0) - dau - duoi), "|"),
             nho = Record.FieldOrDefault(Nho, chuKy, []),
             them = List.Accumulate(Record.FieldNames(nho), hai, (st, r) =>
-                let i = List.PositionOf(k, Record.Field(nho, r)) in if i >= 0 then Record.Combine({st, Record.AddField([], r, i)}) else st)
+                let i = List.PositionOf(k0, Record.Field(nho, r)) in if i >= 0 then Record.Combine({st, Record.AddField([], r, i)}) else st)
         in if Record.HasFields(hai, {"date", "amount"}) or not Record.HasFields(them, {"date", "amount"}) then hai else them,
     O = (r as list, c as record, vai as text) => let i = Record.FieldOrDefault(c, vai, null) in
         if i = null or i >= List.Count(r) then null else r{i},
@@ -628,7 +634,7 @@ def order_files_query(folder_parameter: str, file_params: dict, roles: list, ded
         f"Chu(O(r, c, {_m_text(r)}))" for r in out_roles)
     m = _ORDER_M
     for token, value in (("@@FOLD@@", _fold_table()), ("@@CANCELLED@@", _m_list(sorted(sources.CANCELLED))),
-                         ("@@TIER1@@", tier1), ("@@TIER2@@", tier2), ("@@SCAN@@", str(sources.HEADER_SCAN)),
+                         ("@@TIER1@@", tier1), ("@@TIER2@@", tier2), ("@@UNITS@@", _m_list(sources.UNIT_SUFFIXES)), ("@@SCAN@@", str(sources.HEADER_SCAN)),
                          ("@@CELLS@@", cells), ("@@PARAMS@@", params), ("@@FOLDER@@", folder_parameter),
                          ("@@ROWTYPE@@", row_type), ("@@SSNS@@", _m_text(_SS_NS)), ("@@QUOTE@@", '""""'),
                          ("@@REMEMBERED@@", told)):
