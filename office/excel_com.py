@@ -166,6 +166,112 @@ def _why(exc) -> str:
     return type(exc).__name__ + (f" 0x{code & 0xFFFFFFFF:08X}" if isinstance(code, int) else "")
 
 
+DEFAULT_NUMBERS = '#,##0;(#,##0);"-"'
+_UNION_CHARS = 255        # Excel's limit for one Range("A1,B3:C4,...") address
+_HALIGN = {"left": -4131, "center": -4108, "right": -4152}
+# The order style() sets things in; a row height goes last, after wrapping, as in style().
+_STYLE_KINDS = ("bold", "italic", "size", "color", "fill", "wrap", "halign", "border_bottom", "valign", "height")
+
+
+def _overlap(a: CellRef, b: CellRef) -> bool:
+    return a.col1 <= b.col2 and b.col1 <= a.col2 and a.row1 <= b.row2 and b.row1 <= a.row2
+
+
+def paint_plan(ops: list) -> list:
+    """(sheet, kind, address, value) for a run of ("numbers", ...) and ("style", ...) ops: the property sets that
+    leave every cell as the ops one by one would, with ranges that take the same value joined into one Excel
+    address (at most _UNION_CHARS long). A range joins the latest group with its value unless a later group gave
+    an overlapping cell another value, so the last word on each cell stays the same. Borders are never joined:
+    an edge belongs to its own block."""
+    groups = {}                                          # (sheet, kind) → [[value, [refs]], ...] in order
+    order = []
+    for op in ops:
+        ref = parse_ref(op[1])
+        if ref is None:
+            continue
+        if op[0] == "numbers":
+            sets = [("numbers", op[2] or DEFAULT_NUMBERS)]
+        else:
+            opts = op[2]
+            sets = [(k, opts[k]) for k in _STYLE_KINDS if k != "valign" and opts.get(k) is not None] + [("valign", "center")]
+        for kind, value in sets:
+            key = (ref.sheet, kind)
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            runs = groups[key]
+            if kind == "border_bottom":
+                runs.append([(value, ref.row2 > ref.row1), [ref]])
+                continue
+            target = None
+            for run in reversed(runs):
+                if run[0] == value:
+                    target = run
+                    break
+                if any(_overlap(ref, r) for r in run[1]):
+                    break
+            if target is None:
+                runs.append([value, [ref]])
+            else:
+                target[1].append(ref)
+    out = []
+    rank = {k: i for i, k in enumerate(("numbers",) + _STYLE_KINDS)}
+    for key in sorted(order, key=lambda k: rank[k[1]]):
+        name, kind = key
+        for value, refs in groups[key]:
+            chunk = ""
+            for r in refs:
+                if chunk and len(chunk) + 1 + len(r.address) > _UNION_CHARS:
+                    out.append((name, kind, chunk, value))
+                    chunk = ""
+                chunk = f"{chunk},{r.address}" if chunk else r.address
+            out.append((name, kind, chunk, value))
+    return out
+
+
+class _Cells:
+    """A range and its Font and Interior, each asked of Excel once however many formats are set on them."""
+    def __init__(self, rng):
+        self.range, self._parts = rng, {}
+
+    def part(self, name: str):
+        if name not in self._parts:
+            self._parts[name] = getattr(self.range, name)
+        return self._parts[name]
+
+
+def _set_format(cells: "_Cells", kind: str, value) -> None:
+    """One property set of paint_plan on a range, the way style() and format_numbers() set it."""
+    rng = cells.range
+    if kind == "numbers":
+        rng.NumberFormat = value
+    elif kind == "bold":
+        cells.part("Font").Bold = value
+    elif kind == "italic":
+        cells.part("Font").Italic = value
+    elif kind == "size":
+        cells.part("Font").Size = value
+    elif kind == "color":
+        cells.part("Font").Color = _bgr(value)
+    elif kind == "fill":
+        cells.part("Interior").Color = _bgr(value)
+    elif kind == "wrap":
+        rng.WrapText = value
+    elif kind == "halign":
+        rng.HorizontalAlignment = _HALIGN[value]
+    elif kind == "valign":
+        rng.VerticalAlignment = -4108                    # xlCenter, as style() leaves every range it touches
+    elif kind == "height":
+        rng.RowHeight = value
+    elif kind == "border_bottom":
+        color, inside = value
+        for index in ((9, 12) if inside else (9,)):     # xlEdgeBottom, xlInsideHorizontal
+            edge = rng.Borders(index)
+            edge.LineStyle = 1
+            edge.Weight = 2
+            edge.Color = _bgr(color)
+
+
 class ExcelBridge:
     def __init__(self, app=None, dpi: Optional[int] = None):
         self._app = app        # injected in tests; otherwise attach to the running Excel
@@ -243,7 +349,14 @@ class ExcelBridge:
         """Write a 2-D block starting at a cell; strings starting with '=' become formulas."""
         ref = parse_ref(text)
         app = self._excel()
-        if ref is None or app is None or not rows or not all(isinstance(r, list) for r in rows):
+        if ref is None or app is None:
+            return False
+        return self._put(lambda: self._sheet(app, ref), ref, text, rows)
+
+    @staticmethod
+    def _put(sheet, ref: CellRef, text: str, rows: list) -> bool:
+        """One Range.Formula for the whole block (sheet() gives the worksheet)."""
+        if not rows or not all(isinstance(r, list) for r in rows):
             return False
         height, width = len(rows), max(len(r) for r in rows)
         if height * width > MAX_WRITE_CELLS:
@@ -254,13 +367,75 @@ class ExcelBridge:
             return float(v) if isinstance(v, Decimal) else v
         grid = tuple(tuple(cell(r[i]) if i < len(r) else "" for i in range(width)) for r in rows)
         try:
-            target = self._sheet(app, ref).Range(
+            target = sheet().Range(
                 f"{col_letters(ref.col1)}{ref.row1}:{col_letters(ref.col1 + width - 1)}{ref.row1 + height - 1}")
             target.Formula = grid
             return True
         except Exception as exc:
             log.warning("Excel write failed: %s", exc)
             return False
+
+    def paint(self, ops: list) -> bool:
+        """Fill and format Clicky's own sheets in one go: ops are ("clear", ref), ("write", ref, rows),
+        ("numbers", ref, format or None), ("style", ref, {style()'s options}) and ("layout", sheet, widths,
+        gridlines), in order. The cells end up exactly as the same calls one by one would leave them, with far
+        fewer trips to Excel: one Excel handle and one worksheet object per sheet, and each format between two
+        writes set once on all the ranges that share it (paint_plan). Formatting that fails is skipped, as
+        with style()."""
+        app = self._excel()
+        if app is None:
+            return False
+        sheets = {}
+
+        def sheet(name):
+            if name not in sheets:
+                sheets[name] = app.ActiveWorkbook.Worksheets(name) if name else app.ActiveSheet
+            return sheets[name]
+
+        def formats(batch):
+            ranges = {}                                  # one Range (and its Font) per address, for every format
+            for name, kind, address, value in paint_plan(batch):
+                try:
+                    if (name, address) not in ranges:
+                        ranges[(name, address)] = _Cells(sheet(name).Range(address))
+                    _set_format(ranges[(name, address)], kind, value)
+                except Exception as exc:
+                    log.debug("Excel format %s failed: %s", kind, exc)
+
+        batch = []
+        for op in ops:
+            if op[0] in ("numbers", "style"):
+                batch.append(op)
+                continue
+            formats(batch)
+            batch = []
+            if op[0] == "write":
+                ref = parse_ref(op[1])
+                if ref is not None:
+                    self._put(lambda: sheet(ref.sheet), ref, op[1], op[2])
+            elif op[0] == "clear":
+                ref = parse_ref(op[1])
+                if ref is None:
+                    continue
+                if scene_log is not None:
+                    scene_log.record("write", ref=op[1], clear=True)
+                try:
+                    sheet(ref.sheet).Range(ref.address).Clear()
+                except Exception as exc:
+                    log.debug("Excel clear failed: %s", exc)
+            elif op[0] == "layout":
+                _, name, widths, gridlines = op
+                try:
+                    ws = sheet(name)
+                    for col, width in widths.items():
+                        ws.Columns(col).ColumnWidth = width
+                    if not gridlines:
+                        ws.Activate()
+                        app.ActiveWindow.DisplayGridlines = False
+                except Exception as exc:
+                    log.debug("Excel layout failed: %s", exc)
+        formats(batch)
+        return True
 
     def add_sheet(self, name: str) -> Optional[str]:
         """Add a sheet at the end; returns the name used (suffixed when taken), or None."""
@@ -573,7 +748,7 @@ class ExcelBridge:
         except Exception:
             pass
 
-    def format_numbers(self, text: str, number_format: str = '#,##0;(#,##0);"-"') -> None:
+    def format_numbers(self, text: str, number_format: str = DEFAULT_NUMBERS) -> None:
         ref = parse_ref(text)
         app = self._excel()
         if ref is None or app is None:
@@ -615,7 +790,7 @@ class ExcelBridge:
         if wrap is not None:
             rng.WrapText = wrap
         if halign is not None:
-            rng.HorizontalAlignment = {"left": -4131, "center": -4108, "right": -4152}[halign]
+            rng.HorizontalAlignment = _HALIGN[halign]
         if border_bottom is not None:
             edge = rng.Borders(9)            # xlEdgeBottom
             edge.LineStyle = 1               # xlContinuous

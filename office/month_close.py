@@ -333,6 +333,49 @@ def _try(bridge, method: str, *args, **kwargs):
         return None
 
 
+class _Sheets:
+    """The writes and formats for Clicky's own sheets, collected and then sent to Excel in one go
+    (ExcelBridge.paint): one Excel handle, and each format set once on all the ranges that share it, instead
+    of a trip to Excel for every call. It takes the bridge calls the writers always made, so the cells come out
+    the same (tests/test_sheet_batch.py)."""
+
+    def __init__(self):
+        self.ops = []
+
+    def clear(self, ref: str) -> None:
+        self.ops.append(("clear", ref))
+
+    def write(self, ref: str, rows: list) -> bool:
+        self.ops.append(("write", ref, rows))
+        return True
+
+    def format_numbers(self, ref: str, number_format: Optional[str] = None) -> None:
+        self.ops.append(("numbers", ref, number_format))
+
+    def style(self, ref: str, **opts) -> None:
+        self.ops.append(("style", ref, opts))
+
+    def layout_sheet(self, name: str, widths: dict, gridlines: bool = True) -> None:
+        self.ops.append(("layout", name, widths, gridlines))
+
+    def send(self, bridge) -> None:
+        """To Excel in one go when the bridge can; otherwise call by call, as before."""
+        if hasattr(bridge, "paint"):
+            bridge.paint(self.ops)
+            return
+        for op in self.ops:
+            if op[0] == "write":
+                bridge.write(op[1], op[2])
+            elif op[0] == "numbers":
+                bridge.format_numbers(op[1], *([op[2]] if op[2] else []))
+            elif op[0] == "clear":
+                _try(bridge, "clear", op[1])
+            elif op[0] == "style":
+                _try(bridge, "style", op[1], **op[2])
+            elif op[0] == "layout":
+                _try(bridge, "layout_sheet", op[1], op[2], gridlines=op[3])
+
+
 def _write_check_sheet(bridge, loaded: Optional[Loaded], truth, ledger: dict,
                        details: Optional[list] = None, gap_state: Optional[str] = None) -> Optional[str]:
     """The reconciliation as a small, formatted table (rows 3-7) and the reasons below it (row 9 on).
@@ -369,10 +412,12 @@ def _write_check_sheet(bridge, loaded: Optional[Loaded], truth, ledger: dict,
     if details:
         grid += [["", "", "", "", ""], ["Chi tiết kiểm tra", "Chứng từ", "Doanh thu (đ)", "", "Giải thích"]]
         grid += [list(r) + [""] * (5 - len(r)) for r in details]
-    _try(bridge, "clear", f"{_q(sheet)}!A1:F60")
-    bridge.write(f"{_q(sheet)}!A1", grid)
-    bridge.format_numbers(f"{_q(sheet)}!B4:D7", ZERO_SHOWN)
-    _style_check_sheet(bridge, sheet, len(details or []), gap_state if loaded else None)
+    out = _Sheets()
+    out.clear(f"{_q(sheet)}!A1:F60")
+    out.write(f"{_q(sheet)}!A1", grid)
+    out.format_numbers(f"{_q(sheet)}!B4:D7", ZERO_SHOWN)
+    _style_check_sheet(out, sheet, len(details or []), gap_state if loaded else None)
+    out.send(bridge)
     return sheet
 
 
@@ -1045,35 +1090,43 @@ def _write_audit(bridge) -> Optional[str]:
         return None
     rows, at = audit.grid(_AUDIT)
     s = _q(sheet)
-    _try(bridge, "clear", f"{s}!A1:I200")
-    bridge.write(f"{s}!A1", rows)
+    out = _Sheets()
+    out.clear(f"{s}!A1:I200")
+    out.write(f"{s}!A1", rows)
     first, last = at["changes"]
-    bridge.format_numbers(f"{s}!E{first}:F{last}")
-    bridge.format_numbers(f"{s}!C{at['dropped'] + 1}:C{at['coverage'] - 2}")
-    bridge.format_numbers(f"{s}!B{at['coverage'] + 1}:D{at['last']}")
-    _try(bridge, "layout_sheet", sheet, _AUDIT_COLUMNS, gridlines=False)
-    _try(bridge, "style", f"{s}!A1", bold=True, size=15, color=_INK)
-    _try(bridge, "style", f"{s}!A2", italic=True, size=9, color=_MUTED)
+    out.format_numbers(f"{s}!E{first}:F{last}")
+    out.format_numbers(f"{s}!C{at['dropped'] + 1}:C{at['coverage'] - 2}")
+    out.format_numbers(f"{s}!B{at['coverage'] + 1}:D{at['last']}")
+    out.layout_sheet(sheet, _AUDIT_COLUMNS, gridlines=False)
+    out.style(f"{s}!A1", bold=True, size=15, color=_INK)
+    out.style(f"{s}!A2", italic=True, size=9, color=_MUTED)
     for row in (4, at["dropped"], at["coverage"]):
-        _try(bridge, "style", f"{s}!A{row}:I{row}", bold=True, color="#FFFFFF", fill="#1E3A5F", height=22)
-    _try(bridge, "style", f"{s}!A{first}:I{last}", border_bottom=_LINE, wrap=True)
-    _try(bridge, "style", f"{s}!F{first}:F{last}", bold=True, color=_FINAL_INK)
+        out.style(f"{s}!A{row}:I{row}", bold=True, color="#FFFFFF", fill="#1E3A5F", height=22)
+    out.style(f"{s}!A{first}:I{last}", border_bottom=_LINE, wrap=True)
+    out.style(f"{s}!F{first}:F{last}", bold=True, color=_FINAL_INK)
     fill, ink = (_FINAL_FILL, _FINAL_INK) if _AUDIT.status == audit.FINAL else (_DRAFT_FILL, _DRAFT_INK)
-    _try(bridge, "style", f"{s}!A{at['status']}", bold=True, color=_INK)
-    _try(bridge, "style", f"{s}!B{at['status']}", bold=True, color=ink, fill=fill)
-    _show_status_on_report(bridge, _AUDIT.status)
+    out.style(f"{s}!A{at['status']}", bold=True, color=_INK)
+    out.style(f"{s}!B{at['status']}", bold=True, color=ink, fill=fill)
+    _show_status_on_report(bridge, _AUDIT.status, out, names)
+    out.send(bridge)
     scene_log.record("status", label=_AUDIT.status)
     return sheet
 
 
-def _show_status_on_report(bridge, status: str) -> None:
+def _show_status_on_report(bridge, status: str, out=None, names: Optional[list] = None) -> None:
+    """SƠ BỘ or CHÍNH THỨC in I1 of the report; into out (a _Sheets) when given, else straight to Excel."""
     from engine.build import SHEET_NAMES
-    report = next((n for n in bridge.sheet_names() if n.startswith(SHEET_NAMES["report"])), None)
+    report = next((n for n in (names if names is not None else bridge.sheet_names())
+                   if n.startswith(SHEET_NAMES["report"])), None)
     if not report:
         return
     fill, ink = (_FINAL_FILL, _FINAL_INK) if status == audit.FINAL else (_DRAFT_FILL, _DRAFT_INK)
-    bridge.write(f"{_q(report)}!I1", [[status]])
-    _try(bridge, "style", f"{_q(report)}!I1", bold=True, color=ink, fill=fill, halign="center")
+    if out is None:
+        bridge.write(f"{_q(report)}!I1", [[status]])
+        _try(bridge, "style", f"{_q(report)}!I1", bold=True, color=ink, fill=fill, halign="center")
+        return
+    out.write(f"{_q(report)}!I1", [[status]])
+    out.style(f"{_q(report)}!I1", bold=True, color=ink, fill=fill, halign="center")
 
 
 def make_final(bridge) -> list:
