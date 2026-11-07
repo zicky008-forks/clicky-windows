@@ -128,6 +128,7 @@ async def run(manager) -> str:
         if not beats:
             break
         await mc.play(manager, beats)
+        mc.warm_while_reading(manager)
         if not (beats[-1].choices and mc.stage()):
             break                               # the run stopped on its own (an error, or nothing left to ask)
         await _press(manager, beats[-1].choices[0])

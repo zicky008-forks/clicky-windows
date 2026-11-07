@@ -2134,10 +2134,23 @@ async def _busy(manager, step: str, work):
     busy.say(step)
     _PROGRESS = busy.say
     try:
-        return await asyncio.to_thread(work)
+        from office import pq_warmup
+
+        def run():
+            pq_warmup.wait()            # Excel serves one caller at a time; the warm-up workbook closes first
+            return work()
+        return await asyncio.to_thread(run)
     finally:
         _PROGRESS = None
         busy.stop()
+
+
+def warm_while_reading(manager) -> None:
+    """The receipt is on screen and nothing runs until the user presses: start Power Query now (office.pq_warmup),
+    so the first press does not pay for Excel starting its engine."""
+    if stage() == "intake":
+        from office import pq_warmup
+        pq_warmup.start(manager._excel)
 
 
 async def run_from(manager, folder: Optional[Path]) -> None:
@@ -2148,6 +2161,7 @@ async def run_from(manager, folder: Optional[Path]) -> None:
     order = machine_date_order()
     beats = await _busy(manager, "read", lambda: start(manager._excel, _pq(manager), order))
     await play(manager, beats)
+    warm_while_reading(manager)
 
 
 async def handle_approve(manager, transcript: str) -> str:
@@ -2237,12 +2251,14 @@ def save_pending() -> bool:
 async def handle_columns(manager, transcript: str) -> str:
     beats = await _busy(manager, "pick", lambda: answer_columns(manager._excel, _pq(manager), transcript))
     await play(manager, beats)
+    warm_while_reading(manager)
     return ""
 
 
 async def handle_pick(manager, transcript: str) -> str:
     beats = await _busy(manager, "pick", lambda: pick(manager._excel, _pq(manager), transcript))
     await play(manager, beats)
+    warm_while_reading(manager)
     return ""
 
 

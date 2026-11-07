@@ -14,6 +14,8 @@ import pytest
 @pytest.fixture(autouse=True)
 def isolated_data(tmp_path, monkeypatch):
     monkeypatch.setenv("CLICKY_DATA_DIR", str(tmp_path))
+    # The Power Query warm-up (office/pq_warmup.py) would run a background thread against each test's fake Excel.
+    monkeypatch.setenv("CLICKY_PQ_WARMUP", "0")
 
 
 @pytest.fixture(scope="session")
