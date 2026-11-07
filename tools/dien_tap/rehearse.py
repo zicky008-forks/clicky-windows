@@ -189,9 +189,12 @@ class NetWatch:
 def no_workbook(allow_others: bool):
     import win32com.client
     excel = win32com.client.Dispatch("Excel.Application")
-    others = [wb.Name for wb in excel.Workbooks]
+    try:
+        others = com_retry(lambda: excel.Workbooks.Count, tries=10)   # a count only: never the names
+    except Exception as exc:
+        raise SystemExit(EXCEL_STUCK + f" ({exc})")
     if others and not allow_others:
-        raise SystemExit(f"Excel đang mở file khác: {', '.join(others)}. Đóng hết rồi chạy lại.")
+        raise SystemExit(f"Excel đang mở {others} file khác. Đóng hết rồi chạy lại.")
     return excel, None, None
 
 
@@ -222,9 +225,12 @@ def park_old_copies(source: Path, dest: Path) -> list:
 def open_workbook(source: Path, allow_others: bool, zoom: int | None = None):
     import win32com.client
     excel = win32com.client.Dispatch("Excel.Application")
-    others = [wb.Name for wb in excel.Workbooks]
+    try:
+        others = com_retry(lambda: excel.Workbooks.Count, tries=10)   # a count only: never the names
+    except Exception as exc:
+        raise SystemExit(EXCEL_STUCK + f" ({exc})")
     if others and not allow_others:
-        raise SystemExit(f"Excel đang mở file khác: {', '.join(others)}. Đóng hết rồi chạy lại "
+        raise SystemExit(f"Excel đang mở {others} file khác. Đóng hết rồi chạy lại "
                          "(diễn tập chỉ dùng số giả lập).")
     stamp = time.strftime("%m%d_%H%M%S")
     copy = source.with_name(f"{source.stem}{COPY_TAG}{stamp}{source.suffix}")
@@ -253,6 +259,8 @@ def open_chat(shortcut: str) -> None:
         say(f"   Không bấm được phím tắt mở chat: {exc}")
 
 
+EXCEL_STUCK = ("Excel không trả lời robot: có thể đang mở một hộp thoại (Lưu thành…) hoặc bị treo từ lượt trước. "
+               "Xem màn hình, đóng hộp thoại hoặc tắt Excel (khi không còn file nào của chị) rồi chạy lại.")
 BUSY = (-2147418111, -2147417846)      # RPC_E_CALL_REJECTED, RPC_E_SERVERCALL_RETRYLATER: Excel is busy
 
 
@@ -462,9 +470,15 @@ def main(argv=None) -> int:
 
     say("6/6 Đọc số trong file và chấm")
     if wb is None:                     # the sample: read the workbook Clicky opened itself
-        wb = com_retry(lambda: excel.ActiveWorkbook)
-        copy = Path(com_retry(lambda: wb.FullName)) if wb is not None else None
-    sheets = sheet_values(wb) if wb is not None else {}
+        try:
+            wb = com_retry(lambda: excel.ActiveWorkbook)
+            copy = Path(com_retry(lambda: wb.FullName)) if wb is not None else None
+        except Exception as exc:
+            raise SystemExit(EXCEL_STUCK + f" ({exc})")
+    try:
+        sheets = sheet_values(wb) if wb is not None else {}
+    except Exception as exc:
+        raise SystemExit(EXCEL_STUCK + f" ({exc})")
     if "latency" in (expected.get("layout") or {}):
         # The last turn's latency line is written when that turn ends, often after its final scene.
         wait_log(log, layout_checks.turns_measured, expected.get("latency_wait_seconds", 15))

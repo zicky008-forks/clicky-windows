@@ -405,3 +405,39 @@ def test_busy_excel_is_retried_not_a_robot_crash(monkeypatch):
         rehearse.com_retry(broken)
     with pytest.raises(Rejected):
         rehearse.com_retry(lambda: (_ for _ in ()).throw(Rejected(-2147418111, "busy")), tries=2)
+
+
+def _fake_excel(monkeypatch, app):
+    import types
+    client = types.SimpleNamespace(Dispatch=lambda name: app)
+    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=client))
+    monkeypatch.setitem(sys.modules, "win32com.client", client)
+
+
+def test_other_workbooks_are_counted_never_named(monkeypatch):
+    import types
+    import pytest
+    import rehearse
+    named = types.SimpleNamespace(Name="So_cai_cong_ty_that.xlsx")
+    _fake_excel(monkeypatch, types.SimpleNamespace(Workbooks=types.SimpleNamespace(Count=2, __iter__=lambda: iter([named]))))
+    with pytest.raises(SystemExit) as exc:
+        rehearse.no_workbook(False)
+    assert "2 file khác" in str(exc.value) and "So_cai" not in str(exc.value)
+
+
+def test_excel_stuck_behind_a_dialog_is_said_plainly(monkeypatch):
+    """Run (e), 07/11: a Save As dialog held Excel; the next run crashed on excel.Workbooks."""
+    import types
+    import pytest
+    import rehearse
+    monkeypatch.setattr(rehearse.time, "sleep", lambda s: None)
+
+    class Stuck:
+        @property
+        def Workbooks(self):
+            raise AttributeError("Excel.Application.Workbooks")
+
+    _fake_excel(monkeypatch, Stuck())
+    with pytest.raises(SystemExit) as exc:
+        rehearse.no_workbook(False)
+    assert "hộp thoại" in str(exc.value)
