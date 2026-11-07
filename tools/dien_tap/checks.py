@@ -121,6 +121,55 @@ def stage_check(stalled: list) -> Check:
                  else "mọi chặng xong trong giờ")
 
 
+DATA_EXT = {".xlsx", ".xlsm", ".xlsb", ".xls", ".csv"}
+
+
+def data_file_count(folder: Path, workbook: Path, robot_tag: str = "_dientap_") -> int:
+    """How many data files sit next to the case's blank workbook: names only, nothing is opened.
+
+    Left out: the workbook itself, its _ban-goc, Excel lock files and the robot's own copies."""
+    n = 0
+    for f in folder.iterdir():
+        if not f.is_file() or f.suffix.lower() not in DATA_EXT or f.name.startswith("~$"):
+            continue
+        if f.resolve() == workbook.resolve() or robot_tag in f.name or "_ban-goc" in f.stem:
+            continue
+        n += 1
+    return n
+
+
+def _last_said(events: list) -> str:
+    for e in reversed(events):
+        if e.get("event") in ("beat", "said"):
+            for key in ("text", "title"):
+                if isinstance(e.get(key), str) and e[key].strip():
+                    return e[key].strip()
+    return ""
+
+
+def receipt_reached_check(events: list, data_files, allowed: bool = False) -> Check:
+    """Any case: a folder with data files must reach the intake receipt.
+
+    Case 05 run 1: Clicky said it found no order file and stopped after one scene, and the
+    robot passed it because that case's answer key graded nothing else. This needs no key."""
+    name = "Thư mục có file dữ liệu thì Clicky phải tới phiếu nhận file"
+    if any(e.get("event") == "intake" for e in events):
+        return Check(name, True, "phiếu nhận file đã hiện")
+    if data_files is None:
+        return Check(name, True, "không có thư mục case để đếm file (chạy file mẫu)")
+    if not data_files:
+        return Check(name, True, "thư mục không có file dữ liệu nào")
+    if allowed:
+        return Check(name, True, "đáp án cho phép dừng trước phiếu nhận file")
+    beats = sum(1 for e in events if e.get("event") == "beat")
+    computed = any(e.get("event") == "draw" and (e.get("shape") or {}).get("kind") == "spotlight" for e in events)
+    last = _last_said(events)
+    how = ("Clicky tính luôn mà không hiện phiếu nhận file" if computed
+           else f"Clicky dừng ở chặng 1 sau {beats} cảnh, chưa hiện phiếu nhận file")
+    return Check(name, False, f"thư mục có {data_files} file dữ liệu nhưng {how}"
+                 + (f". Câu cuối: \u201c{last[:160]}\u201d" if last else ""))
+
+
 def evaluate(events: list, sheets: dict, expected: dict) -> Result:
     res = Result()
     add = res.checks.append

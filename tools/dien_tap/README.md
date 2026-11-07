@@ -83,6 +83,11 @@ có thể tự kiểm phần tính của cả 4 chặng: `python tools\dien_tap\
 `numbers`: `{"name", "label", "value", "tolerance", "sheet"}`. Robot tìm ô có nhãn rồi lấy số đầu tiên bên phải; một tiêu đề chỉ nhắc nhãn mà không có số thì bỏ qua và tìm tiếp.
 `texts`: `{"name", "text", "where": "sheets" | "said" | "any", "sheet", "must": true/false}`. Dùng để chấm cảnh báo phải có và báo động sai không được có, mà không lộ số.
 
+Hai dòng chặn chạy cho mọi case, kể cả case kín, không cần đáp án:
+
+- **Không chặng nào bị đứng quá giờ.**
+- **Thư mục có file dữ liệu thì Clicky phải tới phiếu nhận file.** Trước khi mở Clicky, robot đếm file `.xlsx/.xlsm/.xlsb/.xls/.csv` cạnh file Excel của case. Robot chỉ đếm tên, không mở file nào, và không tính chính file đó, bản `_ban-goc`, file khoá `~$` hay bản sao `_dientap_` của robot. Nếu có ít nhất 1 file mà nhật ký không có sự kiện `intake`, lượt chạy KHÔNG ĐẠT. Chi tiết ghi số cảnh và câu cuối Clicky nói. Case cố ý cho Clicky dừng trước phiếu thì đặt `"stop_before_receipt_ok": true` trong file đáp án.
+
 ## 6 việc giao diện trước beta 16/11
 
 Đặc tả: `/mnt/project-files/thiet-ke/giao-dien-5-sao/6 viec truoc beta 16-11.md`. Bước kiểm nằm trong `beta_checks.py`, chỉ chạy khi file đáp án có mục tương ứng:
