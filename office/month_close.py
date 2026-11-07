@@ -965,7 +965,7 @@ def cannot_load(files: list) -> Optional[tuple]:
     return None
 
 
-def _reader_query(files: list, truth, period) -> str:
+def _reader_query(files: list, truth, period, param: str = PARAM_NAME) -> str:
     """The per-file query for these files: each file's date order and code page, the roles any file has, and the
     same de-duplication rule as the receipt (sources.truth)."""
     params = {f.name: {"order": f.date_order or sources.DAY_FIRST, "encoding": sources.file_encoding(f.path)}
@@ -973,7 +973,7 @@ def _reader_query(files: list, truth, period) -> str:
     roles = sorted({r for f in files for r in f.columns} | {"doc", "date", "amount"})
     told = {sources.header_signature(f.header): sources.REMEMBERED[sources.header_signature(f.header)]
             for f in files if f.remembered and sources.header_signature(f.header) in sources.REMEMBERED}
-    return m_code.order_files_query(PARAM_NAME, params, roles, _dedup_roles(files, truth),
+    return m_code.order_files_query(param, params, roles, _dedup_roles(files, truth),
                                     period=period if truth.outside else None, remembered=told)
 
 
@@ -1189,7 +1189,9 @@ def _load(pq, name: str):
     if isinstance(result, LoadTimeout):
         _step("query_load", name=name, state="timeout", seconds=seconds, dialog=result.dialog)
     elif isinstance(result, str):
-        _step("query_load", name=name, state="error", seconds=seconds, why=load_error_vi(result))
+        # Excel's own message, paths and file names taken out, so a PC run says why (grader F4).
+        _step("query_load", name=name, state="error", seconds=seconds, why=load_error_vi(result),
+              detail=scrub(result)[:400])
     else:
         _step("query_load", name=name, state="ok", seconds=seconds, rows=len(result[2]))
     return result

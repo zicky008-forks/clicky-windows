@@ -78,3 +78,43 @@ def test_a_real_xls_without_a_kind_column_still_reads_its_sheets():
     reader = m[m.index("DocExcel ="):m.index("in List.Transform(to[Data], Table.ToRows)")]
     assert 'Table.HasColumns(so, "Kind")' in reader and 'Text.EndsWith(n, "$")' in reader and 'Text.EndsWith(n, "$\'")' in reader
     assert reader.index('Table.HasColumns(so, "Kind")') < reader.index('[Kind] = "Sheet"')
+
+
+@pytest.mark.parametrize("label", ["Ô ngày có giờ (.xlsx lưu tên .xls)", "CSV ngày có giờ dạng chữ",
+                                   "Cột lạ chị đã chỉ (nhớ cột)"])
+def test_dates_with_a_time_and_remembered_columns_go_through_the_per_file_query(tmp_path, label):
+    """Grader F4 (Case 05): the PQ load failed after chị named two columns and the dates carried a time. These
+    formats go through m_agree on the PC; here: the month close picks the per-file query for them, the receipt
+    reads all five orders on their own day, and the query carries the columns chị named."""
+    from engine import sources
+    from office import month_close
+    import order_exports as ox
+    _, name, write = next(f for f in m_agree.formats() if f[0] == label)
+    write(tmp_path / name)
+    want = m_agree.plan(tmp_path, "ThuMuc1")
+    days = [r[want["roles"].index("date")] for r in want["rows"]]
+    assert sorted(days) == [o[1] for o in ox.ORDERS] and want["receipt_total"] == ox.TOTAL
+    with m_agree.remembered(tmp_path):
+        files = sources.find_order_files(tmp_path)
+        assert month_close.needs_reader(files)
+    if "nhớ cột" in label:
+        assert files[0].remembered
+        assert '#"maphieu|thoidiem|khach|giatri|phi" = [#"amount" = "giatri", #"date" = "thoidiem"]' in want["m"]
+    assert not sources.REMEMBERED                      # nothing remembered outside the check
+
+
+def test_a_failed_load_logs_excel_s_reason_without_paths(tmp_path, monkeypatch):
+    import json
+    from office import month_close
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+
+    class PQ:
+        def load(self, name):
+            return ("[Expression.Error] The field 'Kind' of the record wasn't found. "
+                    "C:\\Users\\ke.toan\\Desktop\\T10\\SoChiTiet_T10.xls")
+    month_close._load(PQ(), "DonHang")
+    ev = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()]
+    err = next(e for e in ev if e.get("state") == "error")
+    assert "field 'Kind' of the record wasn't found" in err["detail"]
+    assert "ke.toan" not in err["detail"] and "SoChiTiet_T10" not in err["detail"]

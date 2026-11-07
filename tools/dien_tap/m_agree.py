@@ -6,7 +6,9 @@ format the way Clicky's receipt does, row for row?
 
 Practice data only: the five synthetic October orders of tests/order_exports.py, written in %TEMP% as a real
 Excel 97-2003 .xls, an HTML table saved as .xls (twice: signature date in the date column and beside it),
-SpreadsheetML saved as .xls, and an English-header sales CSV, each in its own folder.
+SpreadsheetML saved as .xls, an English-header sales CSV, date cells with a time (.xlsx saved as .xls), a CSV whose
+dates carry a time as text, and a POS CSV with column names only chị's answer explains (remembered in memory for the
+run), each in its own folder.
 
 For each format, one query from m_code.order_files_query (the one Clicky builds in the month close) is loaded in
 a new workbook this script adds and shows; its rows are compared with sources.query_rows (the receipt's own
@@ -27,6 +29,7 @@ import json
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -50,20 +53,40 @@ def formats() -> list:
             ("HTML lưu thành .xls (MISA)", "MISA_T10.xls", ox.write_html_xls),
             ("HTML .xls, ngày ký bên cạnh", "MISA_ky_T10.xls", lambda p: ox.write_html_xls(p, date_in_column=False)),
             ("SpreadsheetML lưu thành .xls", "BanHang_T10.xls", ox.write_spreadsheetml),
-            ("CSV tiếng Anh có dòng tiêu đề", "Shopee_T10.csv", ox.write_english_csv)]
+            ("CSV tiếng Anh có dòng tiêu đề", "Shopee_T10.csv", ox.write_english_csv),
+            ("Ô ngày có giờ (.xlsx lưu tên .xls)", "NgayGio_T10.xls", ox.write_datetime_xlsx),
+            ("CSV ngày có giờ dạng chữ", "NgayGio_T10.csv", ox.write_datetime_csv),
+            ("Cột lạ chị đã chỉ (nhớ cột)", "POS_T10.csv", ox.write_pos_csv)]
+
+
+@contextmanager
+def remembered(folder: Path):
+    """For the POS format: the columns chị named for its header, as Clicky remembers them after the column question
+    (in memory only: nothing is written to the PC's Clicky data folder). Other formats run with nothing remembered."""
+    import order_exports as ox
+    from engine import sources
+    saved = dict(sources.REMEMBERED)
+    sources.REMEMBERED.clear()
+    if any(p.name.startswith("POS_") for p in folder.iterdir()):
+        sources.REMEMBERED[sources.header_signature(ox.POS_HEADER)] = dict(ox.POS_REMEMBERED)
+    try:
+        yield
+    finally:
+        sources.REMEMBERED.clear()
+        sources.REMEMBERED.update(saved)
 
 
 def plan(folder: Path, param: str) -> dict:
-    """What Clicky would build for this folder and what the receipt says the query must return."""
+    """What Clicky builds for this folder (month_close._reader_query, the very query of the month close, remembered
+    columns included) and what the receipt says the query must return."""
     from engine import m_code, sources
     from office import month_close
-    files = sources.find_order_files(folder)
-    truth = sources.truth(files)
-    roles = sorted({r for f in files for r in f.columns} | {"doc", "date", "amount"})
-    params = {f.name: {"order": f.date_order or sources.DAY_FIRST, "encoding": sources.file_encoding(f.path)}
-              for f in files}
-    dedup = month_close._dedup_roles(files, truth)
-    m = m_code.order_files_query(param, params, roles, dedup)
+    with remembered(folder):
+        files = sources.find_order_files(folder)
+        truth = sources.truth(files)
+        roles = sorted({r for f in files for r in f.columns} | {"doc", "date", "amount"})
+        dedup = month_close._dedup_roles(files, truth)
+        m = month_close._reader_query(files, truth, None, param)
     order = [r for r in m_code.CANON if r in roles]
     return {"m": m, "header": [m_code.CANON[r] for r in order] + [m_code.SOURCE_COLUMN],
             "rows": sources.query_rows(files, roles, None, dedup), "roles": order, "receipt_rows": truth.unique_rows,

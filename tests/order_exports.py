@@ -6,12 +6,16 @@ report name, period, unit) and, below it, a "Tổng cộng" line and a signature
 * write_ole2_xls     a real Excel 97-2003 file (xlwt), dates as date cells, amounts as numbers;
 * write_html_xls     an HTML table saved as .xls, as MISA and many web exports do: 1.250.000, 21/10/2026, colspan;
 * write_spreadsheetml  SpreadsheetML 2003 XML saved as .xls (ss:Type DateTime / Number, ss:Index, MergeAcross);
-* write_english_csv  a sales-platform CSV: Order ID, Created at, SKU, Quantity, Line total, COGS, Status.
+* write_english_csv  a sales-platform CSV: Order ID, Created at, SKU, Quantity, Line total, COGS, Status;
+* write_datetime_xlsx  an .xlsx saved as .xls, date cells carrying a time (serial with a fraction);
+* write_datetime_csv   a Vietnamese CSV whose dates carry a time as text: 03/10/2026 14:35:20;
+* write_pos_csv        a POS export whose column names Clicky does not know (POS_HEADER): chị names them once
+                       (POS_REMEMBERED), and every later month is read with the columns she named.
 """
 from __future__ import annotations
 
 import csv
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from html import escape
 from pathlib import Path
@@ -29,6 +33,9 @@ ORDERS = [
 ]
 TOTAL = sum(o[5] for o in ORDERS)                                   # 12.480.500: every order, VN formats
 SALES_EN = sum(o[5] for o in ORDERS if o[7] != "Cancelled")         # 8.480.500: the cancelled one set aside
+TIMES = [(9, 15, 0), (14, 35, 20), (8, 0, 5), (17, 45, 0), (23, 59, 59)]      # one per order, for dates with a time
+POS_HEADER = ["Mã phiếu", "Thời điểm", "Khách", "Giá trị", "Phí"]
+POS_REMEMBERED = {"date": "thoidiem", "amount": "giatri"}           # what chị named: column keys (sources._key)
 TITLE = [[COMPANY], ["SỔ CHI TIẾT BÁN HÀNG"], ["Từ ngày 01/10/2026 đến ngày 31/10/2026"], ["Đơn vị tính: đồng"]]
 SIGN = [["", "", "", "Ngày 31 tháng 10 năm 2026"], ["Người lập biểu", "", "", "Kế toán trưởng", "", "Giám đốc"]]
 
@@ -134,4 +141,45 @@ def write_english_csv(path: Path, header=None) -> Path:
                    "Quantity": qty, "Line total": f"{amt:.2f}", "COGS": f"{cost:.2f}", "Status": status}
             w.writerow([row.get(h, "") for h in header])
         w.writerow(["Total", "", "", "", "", f"{SALES_EN:.2f}", "", ""][:len(header)])
+    return path
+
+
+def write_datetime_xlsx(path: Path) -> Path:
+    """Print layout in a real .xlsx saved under a .xls name: dates are datetime cells with a time of day."""
+    from openpyxl import Workbook
+    book = Workbook()
+    ws = book.active
+    ws.title = "Ban hang"
+    for line in TITLE:
+        ws.append(line)
+    ws.append([])
+    ws.append(VI_HEADER)
+    for (doc, d, kh, item, qty, amt, cost, _), (h, m, sec) in zip(ORDERS, TIMES):
+        ws.append([doc, datetime(d.year, d.month, d.day, h, m, sec), kh, item, qty, float(amt), float(cost)])
+        ws.cell(ws.max_row, 2).number_format = "dd/mm/yyyy hh:mm:ss"
+    ws.append(["Tổng cộng", None, None, None, None, float(TOTAL)])
+    ws.append([])
+    for line in SIGN:
+        ws.append(line)
+    book.save(str(path))
+    return path
+
+
+def write_datetime_csv(path: Path) -> Path:
+    """A Vietnamese CSV with the time after the date, as text, and Vietnamese amounts."""
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(VI_HEADER)
+        for (doc, d, kh, item, qty, amt, cost, _), (h, m, sec) in zip(ORDERS, TIMES):
+            w.writerow([doc, f"{vi_dmy(d)} {h:02d}:{m:02d}:{sec:02d}", kh, item, qty, vi_number(amt), vi_number(cost)])
+    return path
+
+
+def write_pos_csv(path: Path) -> Path:
+    """A POS export with column names no list knows (POS_HEADER); dates with a time, Vietnamese amounts."""
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(POS_HEADER)
+        for (doc, d, kh, item, qty, amt, cost, _), (h, m, _s) in zip(ORDERS, TIMES):
+            w.writerow([doc, f"{vi_dmy(d)} {h:02d}:{m:02d}", kh, vi_number(amt), vi_number(amt / 100)])
     return path

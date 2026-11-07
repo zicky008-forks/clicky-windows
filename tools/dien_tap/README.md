@@ -75,10 +75,11 @@ Trước 4 chặng, robot chạy chặng 0 (khoảng 30 giây): `pq_smoke.py` m�
 đúng đường làm mới của Clicky, rồi thử một query chậm để chắc Clicky dừng chờ đúng hạn. Chạy riêng được:
 `python tools\dien_tap\pq_smoke.py`.
 
-Đối chiếu query đọc từng file (khoảng 1 phút): `python tools\dien_tap\m_agree.py`. Robot ghi 5 file đơn hàng giả
-lập vào thư mục tạm (.xls thật, HTML lưu thành .xls hai kiểu, SpreadsheetML, CSV tiếng Anh có dòng tiêu đề), cho
-Excel tải từng file bằng đúng query Clicky dựng, rồi so từng dòng với phiếu nhận file. ĐẠT khi cả 5 dạng khớp số
-dòng, tổng tiền và từng dòng. Script từ chối chạy khi Excel/PowerPoint đang mở file khác, chỉ làm trong một
+Đối chiếu query đọc từng file (khoảng 2 phút): `python tools\dien_tap\m_agree.py`. Robot ghi 8 file đơn hàng giả
+lập vào thư mục tạm (.xls thật, HTML lưu thành .xls hai kiểu, SpreadsheetML, CSV tiếng Anh có dòng tiêu đề, ô ngày
+có giờ trong .xlsx lưu tên .xls, CSV ngày có giờ dạng chữ, file POS có tên cột lạ mà chị đã chỉ cột ngày và số tiền),
+cho Excel tải từng file bằng đúng query Clicky dựng, rồi so từng dòng với phiếu nhận file. ĐẠT khi cả 8 dạng khớp số
+dòng, tổng tiền và từng dòng. Cột chị đã chỉ chỉ được nhớ trong lúc chạy, không ghi vào dữ liệu Clicky trên máy. Script từ chối chạy khi Excel/PowerPoint đang mở file khác, chỉ làm trong một
 workbook nó tự thêm và hiện rõ, không lưu, đóng khi xong, không in đường dẫn thư mục nào.
 
 Kết quả: `dien-tap-4-chang-<giờ>\ket-qua-4-chang.md` và một thư mục con cho mỗi chặng. Không cần Excel,
