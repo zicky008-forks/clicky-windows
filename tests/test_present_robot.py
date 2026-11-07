@@ -49,3 +49,23 @@ def test_grade_preflight_failure_is_reported():
     events = [{"event": "present_preflight", "ok": False, "lines": ["KHÔNG ĐẠT  placeholder: {tq:d_cost_fy}"]}]
     res = robot.grade(events, SCRIPT, BANK, {}, [], False, False, True)
     assert not res.ok and "d_cost_fy" in res.lines[0].detail
+
+
+def test_robot_waits_for_the_slide_show_window(monkeypatch):
+    """bhc_e2e stage 4 on the PC, 07/11: SlideShowWindows(1) was asked for before the show had opened."""
+    import types
+    import present_robot
+    monkeypatch.setattr(present_robot.time, "sleep", lambda s: None)
+    state = {"polls": 0}
+
+    class Windows:
+        @property
+        def Count(self):
+            state["polls"] += 1
+            return 1 if state["polls"] >= 3 else 0
+
+        def __call__(self, i):
+            return "show-window"
+
+    app = types.SimpleNamespace(SlideShowWindows=Windows())
+    assert present_robot.show_window(app=app) == "show-window" and state["polls"] == 3

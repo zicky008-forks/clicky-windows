@@ -207,10 +207,22 @@ def wait_event(log: Path, kind: str, timeout: float, where=lambda e: True) -> di
     return None
 
 
-def show_window():
-    import win32com.client
-    app = win32com.client.GetActiveObject("PowerPoint.Application")
-    return app.SlideShowWindows(1)
+def show_window(wait: float = 20.0, app=None):
+    """The running slide show's window. Clicky logs present_start as it asks PowerPoint to start the
+    show; the window can take a few seconds to exist (bhc_e2e stage 4 on the PC, 07/11)."""
+    if app is None:
+        import win32com.client
+        app = win32com.client.GetActiveObject("PowerPoint.Application")
+    end = time.monotonic() + wait
+    while True:
+        try:
+            if int(app.SlideShowWindows.Count) >= 1:
+                return app.SlideShowWindows(1)
+        except Exception:                     # noqa: BLE001 - PowerPoint busy while the show opens
+            pass
+        if time.monotonic() >= end:
+            raise RuntimeError(f"PowerPoint chưa vào trình chiếu sau {wait:.0f} giây")
+        time.sleep(0.5)
 
 
 def window_rect(hwnd: int) -> tuple:
