@@ -97,6 +97,12 @@ def close_pack(name: str) -> None:
         pass
 
 
+def inside(path: Path, folder: Path) -> bool:
+    """path is folder itself or somewhere under it."""
+    p, f = path.resolve(), folder.resolve()
+    return p == f or f in p.parents
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     src = ap.add_mutually_exclusive_group(required=True)
@@ -114,9 +120,14 @@ def main(argv=None) -> int:
         return 2
     others = other_files_open()
     if others:
-        say(f"Robot không chạy vì Excel/PowerPoint đang mở file khác: {', '.join(others)}. Đóng hết rồi chạy lại.")
+        say(f"Robot không chạy vì Excel/PowerPoint đang mở {len(others)} file khác (robot không đọc tên). Đóng hết rồi chạy lại.")
         return 2
     out = Path(a.out) if a.out else Path.cwd() / f"dien-tap-soat-bod-{time.strftime('%Y%m%d-%H%M')}"
+    if a.thu_muc and inside(out, Path(a.thu_muc)):
+        # Case 07, 07/11: results inside the case folder were copied into themselves, level after level.
+        say(f"Thư mục kết quả {out} nằm trong thư mục case. Chọn --out ở ngoài, ví dụ "
+            f"{Path(a.thu_muc).resolve().parent / ('ket-qua-' + Path(a.thu_muc).name)}.")
+        return 2
     shots = out / "anh"
     shots.mkdir(parents=True, exist_ok=True)
     case = out / "case"

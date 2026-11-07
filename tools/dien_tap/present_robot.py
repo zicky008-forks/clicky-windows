@@ -278,7 +278,7 @@ def main(argv=None) -> int:
         return 2
     others = other_files_open()
     if others:
-        say(f"Robot không chạy vì PowerPoint/Excel đang mở file khác: {', '.join(others)}. Đóng hết rồi chạy lại.")
+        say(f"Robot không chạy vì PowerPoint/Excel đang mở {len(others)} file khác (robot không đọc tên). Đóng hết rồi chạy lại.")
         return 2
     out = Path(a.out) if a.out else Path(a.xlsx).resolve().parent / f"dien-tap-trinh-bay-{time.strftime('%Y%m%d-%H%M')}"
     shots = out / "anh"
