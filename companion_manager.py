@@ -975,7 +975,7 @@ class CompanionManager(QObject):
             return
         guided = self._guided and is_next(text)
         self.stop()
-        turn_clock.of(self).start("typed")
+        turn_clock.of(self).start("typed", text)
         self._guided = guided
         self._request_future = self._submit(self._process_query(text))
 

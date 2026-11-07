@@ -92,3 +92,38 @@ def test_every_slow_month_close_step_says_what_it_is_doing_at_once(monkeypatch):
     asyncio.run(mc.handle_confirm(m, "Đúng rồi, làm tiếp"))
     asyncio.run(mc.handle_save(m, "Lưu và kiểm tra"))
     assert shown == [mc.WORKING["read"], "<card>", mc.WORKING["confirm"], "<card>", mc.WORKING["save"], "<card>"]
+
+
+def test_code_turns_say_when_the_answer_was_ready_and_when_sound_started(monkeypatch):
+    now = _Now()
+    clock = turn_clock.TurnClock(now)
+    m = _Manager()
+    started = []
+    import types
+    import sys
+    fake = types.ModuleType("audio.playback")
+    fake.on_play_start = started.append
+    monkeypatch.setitem(sys.modules, "audio.playback", fake)
+    turn_clock.connect(m, clock)
+    clock.start("typed", "Đúng rồi, làm tiếp")
+    now.t += 4.0
+    clock.mark("ready")                     # the reconcile took 4 s
+    now.t += 0.3
+    m.sig_point_at.emit(1, 2, "")
+    now.t += 0.9
+    started[0]()                            # the voice is heard
+    result = clock.finish()
+    assert result["mode"] == "code" and result["label"] == "Đúng rồi, làm tiếp"
+    assert result["ready"] == 4000 and result["first_point"] == 4300 and result["first_voice"] == 5200
+    assert result["first_point"] - result["ready"] <= 1500    # the screen follows the answer at once
+
+
+def test_label_stays_out_of_clicky_log(caplog):
+    now = _Now()
+    clock = turn_clock.TurnClock(now)
+    clock.start("typed", "doanh thu Công ty ABC")
+    now.t += 1
+    with caplog.at_level("INFO", logger="clicky.latency"):
+        result = clock.finish()
+    assert result["label"] == "doanh thu Công ty ABC" and result["mode"] == "code"
+    assert "ABC" not in caplog.text and "mode=code" in caplog.text

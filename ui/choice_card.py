@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QApplication, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
-from ui.card_layout import BOARD, free_spot, overlap
+from ui.card_layout import BOARD, settle
 
 _CARD = ("QFrame#card { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 14px; }"
          "QLabel#question { color: #0F172A; }"
@@ -194,16 +194,11 @@ class ChoiceCard(QWidget):
             spot = (area.right() - self.width() - 28, area.bottom() - self.height() - 72)
         # ...unless figures or Clicky's explanation card are there: then the nearest free place instead.
         bounds = (area.left(), area.top(), area.right(), area.bottom())
-        size = (self.width(), self.height())
-        x, y = free_spot(spot, size, bounds, BOARD.figures + BOARD.others("choice"), BOARD.words)
-        rect = (x, y, x + size[0], y + size[1])
-        BOARD.take("choice", rect)
+        x, y, placed = settle("choice", spot, (self.width(), self.height()), bounds)
         self.move(int(x), int(y))
         try:
             import scene_log
-            scene_log.record("choice_card", rect=list(rect), screen=list(bounds), moved=(x, y) != spot,
-                             covers_figures=sum(1 for f in BOARD.figures if overlap(rect, [f]) > 0),
-                             covers_cards=sum(1 for f in BOARD.others("choice") if overlap(rect, [f]) > 0))
+            scene_log.record("choice_card", **placed)
         except Exception:
             pass
         self.show()

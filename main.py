@@ -258,15 +258,22 @@ def main():
     caption.setFixedWidth(620)
     def _caption(text):
         from storage import setting
+        from ui.card_layout import BOARD, record_widget, settle
         if not text or not setting('captions',True):
             caption.hide()
+            BOARD.release("caption")
             return
         from PyQt6.QtGui import QCursor
         screen = app.screenAt(QCursor.pos()) or app.primaryScreen()
         area = screen.availableGeometry()
         caption.setText(text)
         caption.adjustSize()
-        caption.move(area.center().x()-caption.width()//2,area.bottom()-caption.height()-30)
+        # Bottom centre, unless figures or a card are there (it is drawn over Excel, like the cards).
+        x, y, placed = settle("caption", (area.center().x()-caption.width()//2, area.bottom()-caption.height()-30),
+                              (caption.width(), caption.height()),
+                              (area.left(), area.top(), area.right(), area.bottom()))
+        caption.move(int(x), int(y))
+        record_widget("caption", placed)
         caption.show()
         try:
             from screen.privacy import exclude_window

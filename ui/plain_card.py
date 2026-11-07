@@ -9,6 +9,8 @@ from PyQt6.QtWidgets import (
     QApplication, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
+from ui.card_layout import BOARD, record_widget, settle
+
 BLUE = "#2563EB"
 INK = "#0F172A"
 MUTED = "#475569"
@@ -53,6 +55,10 @@ class CardWindow(QWidget):
     """A frameless, always-on-top window holding one white card; subclasses fill ``self.body``."""
 
     WIDTH = 460
+
+    def hideEvent(self, event):
+        BOARD.release(self.__class__.__name__)       # its place on screen is free again for cards
+        super().hideEvent(event)
 
     def __init__(self, title: str = "Clicky"):
         super().__init__()
@@ -99,8 +105,11 @@ class CardWindow(QWidget):
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         if screen is not None:
             area = screen.availableGeometry()
-            self.move(max(area.left(), area.right() - self.width() - 96),
-                      area.top() + max(120, int(area.height() * 0.16)))
+            spot = (max(area.left(), area.right() - self.width() - 96), area.top() + max(120, int(area.height() * 0.16)))
+            x, y, placed = settle(self.__class__.__name__, spot, (self.width(), self.height()),
+                                  (area.left(), area.top(), area.right(), area.bottom()))
+            self.move(int(x), int(y))
+            record_widget(self.__class__.__name__, placed)
         self.show()
         self.raise_()
         self.activateWindow()
