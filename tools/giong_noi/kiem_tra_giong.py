@@ -58,9 +58,12 @@ def main() -> int:
                 sec = time.perf_counter() - t
                 audio = to_16k(wav)
                 heard = tidy(stt.decode(audio))
-                ok = all(m.lower() in heard.lower() for m in must)
+                # Also with 0.5 s of pure digital silence after it: that used to make "TK 511" into "511 tỷ".
+                import numpy as np
+                heard_tail = tidy(stt.decode(np.concatenate([audio, np.zeros(8000, dtype=np.float32)])))
+                ok = all(m.lower() in h.lower() for m in must for h in (heard, heard_tail))
                 failed |= not ok
-                row["cau"].append({"doc": text, "nghe_lai": heard, "dung": ok, "giay": round(sec, 2),
+                row["cau"].append({"doc": text, "nghe_lai": heard, "nghe_lai_co_im_lang": heard_tail, "dung": ok, "giay": round(sec, 2),
                                    "rtf": round(sec / (len(audio) / 16000), 2)})
         except Exception as exc:
             row["loi"] = f"{type(exc).__name__}: {exc}"[:400]

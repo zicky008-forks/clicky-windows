@@ -112,6 +112,22 @@ def _recognizer(model: dict, threads: int):
         return rec
 
 
+DITHER = 1e-4          # about -80 dBFS: inaudible, but no frame is pure digital silence
+
+
+def dither(samples):
+    """Add a fixed, tiny noise floor before decoding.
+
+    On exact zeros (Piper pauses, or a mic driver whose noise suppression gates to 0) the recognizer
+    invents words: "tài khoản năm trăm mười một" + 0.5 s of zeros came back "... 511 tỷ" in 24/30 runs,
+    turning an account into an amount. With this floor it was 30/30 right. Seeded, so results repeat.
+    """
+    import numpy as np
+    x = np.asarray(samples, dtype=np.float32)
+    noise = np.random.default_rng(0).standard_normal(x.shape[0]).astype(np.float32) * DITHER
+    return x + noise
+
+
 def tidy(text: str) -> str:
     """Normalized sentence for people: digits, 'TK 511', first letter upper case."""
     from audio.vi_itn import normalize
@@ -142,7 +158,7 @@ class SherpaViSTT(BaseSTT):
         rec = _recognizer(self.model, self.threads)
         extra = "/".join(_hotword_line(w) for w in self.extra_hotwords if w.strip())
         stream = rec.create_stream(hotwords=extra) if extra and self.model.get("bpe_vocab") else rec.create_stream()
-        stream.accept_waveform(sample_rate, samples)
+        stream.accept_waveform(sample_rate, dither(samples))
         t = time.perf_counter()
         rec.decode_stream(stream)
         self.last_seconds = time.perf_counter() - t

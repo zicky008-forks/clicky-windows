@@ -150,3 +150,15 @@ def test_tai_vieneu_flatten_makes_snapshot_files_real(tmp_path):
     f = snap / "vieneu_backbone_shared.data"
     assert not f.is_symlink() and f.read_bytes() == b"weights"
     assert not (repo / "blobs").exists()
+
+
+def test_stt_dither_removes_pure_digital_silence():
+    # Pure zeros after "tài khoản năm trăm mười một" made the recognizer add "tỷ" (511 tỷ instead of TK 511).
+    import numpy as np
+    from audio.stt.sherpa_vi_stt import DITHER, dither
+    x = np.zeros(16000, dtype=np.float32)
+    y = dither(x)
+    assert y.shape == x.shape and y.dtype == np.float32
+    assert np.count_nonzero(y) == y.size
+    assert float(np.abs(y).max()) < DITHER * 10               # inaudible
+    assert np.array_equal(dither(x), y)                        # same input, same result
