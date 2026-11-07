@@ -1323,3 +1323,129 @@ def test_the_receipt_counts_rows_used_and_left_out_for_every_file(tmp_path):
     for f in logged:
         if f["kind"] in ("Bán hàng",) or f["kind"].startswith("Sổ cân đối"):
             assert f["rows_total"] == f["rows_used"] + f["rows_dropped"] and f["rows_total"] > 0, f
+
+
+# ── Power Query head start while the receipt is read (lead, 07/11) ───────────────
+
+class _Queries:
+    """Workbook.Queries that records what was asked of it: only Count is allowed."""
+    def __init__(self, calls, fail=False):
+        self.calls, self.fail = calls, fail
+
+    @property
+    def Count(self):
+        self.calls.append("Count")
+        if self.fail:
+            raise OSError("Could not load 'C:\\Users\\chi\\AgriS\\BCTC.xlsx'")
+        return 1
+
+    def __getattr__(self, name):              # Add, Item, Refresh, Delete...: never during priming
+        raise AssertionError(f"priming called Queries.{name}")
+
+
+class _Book:
+    def __init__(self, full, calls, fail=False):
+        self.FullName, self._q = full, _Queries(calls, fail)
+
+    @property
+    def Queries(self):
+        return self._q
+
+    def __getattr__(self, name):              # Activate, RefreshAll, Save...: never during priming
+        raise AssertionError(f"priming called Workbook.{name}")
+
+
+def _prime_app(books):
+    class Books:
+        Count = len(books)
+
+        def __call__(self, i):
+            return books[i - 1]
+
+    class App:
+        Workbooks = Books()
+
+        @property
+        def ActiveWorkbook(self):
+            raise AssertionError("priming must find the receipt's workbook by its path, not take the active one")
+    return App()
+
+
+def test_priming_only_counts_the_queries_of_the_receipts_own_workbook():
+    from office.power_query import PowerQuery
+    target, mine, other = "C:\\Thang10\\BaoCao_T10.xlsx", [], []
+    books = [_Book("C:\\Cong ty\\File_khac.xlsx", other), _Book(target, mine)]
+    bridge = type("B", (), {"_excel": lambda self: _prime_app(books)})()
+    assert PowerQuery(bridge).prime(target) is True
+    assert mine == ["Count"] and other == []
+    assert PowerQuery(bridge).prime("C:\\Thang10\\Khong_mo.xlsx") is False      # not open: nothing touched
+    assert mine == ["Count"] and other == []
+
+
+def test_a_failing_prime_is_ignored_and_logs_no_name(caplog):
+    import logging
+    from office.power_query import PowerQuery
+    caplog.set_level(logging.DEBUG)
+    target, calls = "C:\\Users\\chi\\AgriS\\BCTC.xlsx", []
+    bridge = type("B", (), {"_excel": lambda self: _prime_app([_Book(target, calls, fail=True)])})()
+    assert PowerQuery(bridge).prime(target) is False and calls == ["Count"]
+    assert "AgriS" not in caplog.text and "BCTC" not in caplog.text and "Users" not in caplog.text
+
+
+class _SavedBridge(FakeBridge):
+    def workbook_path(self):
+        return str(self.folder / "BaoCao_T10.xlsx")
+
+
+def _receipt(beats):
+    return [(b.text, b.choices, b.intake["card"] if b.intake else None) for b in beats]
+
+
+def test_a_failing_prime_leaves_the_receipt_as_it_was(folder, monkeypatch, tmp_path):
+    import json
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    bridge = _SavedBridge(folder)
+    plain = _receipt(month_close.start(bridge, FakePQ(bridge, folder), sources.DAY_FIRST))
+    month_close._wait_prime()
+
+    class Failing(FakePQ):
+        def prime(self, path):
+            raise OSError("Queries failed")
+    primed = _receipt(month_close.start(bridge, Failing(bridge, folder), sources.DAY_FIRST))
+    month_close._wait_prime()
+    assert primed == plain and month_close.intake_pending()
+    parts = [e for e in map(json.loads, log.read_text(encoding="utf-8").splitlines())
+             if e.get("step") == "timing" and e.get("part") == "prime_queries"]
+    assert len(parts) == 1 and parts[0]["ok"] is False
+
+
+def test_confirm_waits_for_the_head_start_before_it_talks_to_excel(folder, monkeypatch, tmp_path):
+    # Two threads must never call Excel at once: "Đúng rồi" pressed while priming still runs waits for it.
+    import json
+    import threading
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    release, done, seen = threading.Event(), threading.Event(), []
+
+    class Slow(FakePQ):
+        def prime(self, path):
+            seen.append(path)
+            release.wait(2)
+            done.set()
+            return True
+
+    class Watched(_SavedBridge):
+        def sheet_names(self):
+            assert done.is_set(), "confirm talked to Excel while priming was still running"
+            return super().sheet_names()
+
+    bridge = Watched(folder)
+    pq = Slow(bridge, folder)
+    month_close.start(bridge, pq, sources.DAY_FIRST)
+    assert seen == [str(folder / "BaoCao_T10.xlsx")]
+    threading.Timer(0.2, release.set).start()
+    month_close.confirm(bridge, pq)
+    events = list(map(json.loads, log.read_text(encoding="utf-8").splitlines()))
+    parts = [e["part"] for e in events if e.get("step") == "timing"]
+    assert parts.index("prime_queries") < parts.index("prime_wait") < parts.index("keep_original")
