@@ -331,3 +331,83 @@ def test_the_case_01_sample_bridges_and_keeps_its_basis():
     sample = Path(__file__).resolve().parents[1] / "assets" / "mau" / "Mau_SongHong_T10"
     g = _gate(read_rows(sample / "TB_T09.xlsx"), read_rows(sample / "TB_T10.xlsx"))
     assert g.ok and g.checked and g.notes == []
+
+
+# ── Grader, Case 05 class (F5): a code change is not a broken bridge ──────────────────────────────────────────────
+
+def _split(rows, account, parts):
+    """The same balance under several leaf codes of one parent: [(code, share)] with shares adding up to 1."""
+    out = []
+    for r in rows:
+        if r and r[0] == account:
+            out.append(list(r))
+            nums = r[2:8]
+            done = [0] * 6
+            for k, (code, share) in enumerate(parts):
+                last = k == len(parts) - 1
+                part = [n - d if last else int(n * share) for n, d in zip(nums, done)]
+                done = [d + p for d, p in zip(done, part)]
+                out.append([code, f"{r[1]} {k + 1}"] + part)
+        else:
+            out.append(r)
+    return out
+
+
+def test_a_code_moved_to_another_parent_with_its_balance_is_a_warning_not_an_error():
+    cur = _renumber(tb.t10_rows(), "156", "158")
+    g = _gate(tb.t9_rows(), cur)
+    assert {x.account for x in g.moved} == {"156", "158"} and g.broken == []
+    report = build.build(cur, tb.t9_rows(), "T10", "T09")
+    assert not any(i.code == "opening_bridge" for i in report.issues)
+    note = next(i for i in report.issues if i.code == "renumbered_balance")
+    assert note.severity == "warning" and "156" in note.message and "158" in note.message
+
+
+def test_several_old_codes_merged_into_one_new_code_bridge_by_their_sum():
+    prev = _split(tb.t9_rows(), "112", [("1121", 0.6), ("1122", 0.4)])
+    cur = _renumber(tb.t10_rows(), "112", "1128")
+    g = _gate(prev, cur)
+    assert g.broken == [], [(x.account, x.diff) for x in g.broken]
+    assert {x.account for x in g.moved} == {"1121", "1122", "1128"}
+
+
+def test_a_real_gap_next_to_a_code_change_is_still_the_only_error():
+    cur = _set_opening(_renumber(tb.t10_rows(), "156", "158"), "131", 999 * tb.M)
+    g = _gate(tb.t9_rows(), cur)
+    assert [x.account for x in g.broken] == ["131"]
+    report = build.build(cur, tb.t9_rows(), "T10", "T09")
+    issue = next(i for i in report.issues if i.code == "opening_bridge")
+    assert "TK 131" in issue.message and "158" not in issue.message and "1 tài khoản" in issue.message
+
+
+def test_a_mapping_table_is_found_on_any_sheet_of_any_file_with_a_merged_header(tmp_path):
+    openpyxl = pytest.importorskip("openpyxl")
+    from engine.cli import read_rows
+    wb = openpyxl.Workbook()
+    wb.active.title = "Ghi chu"
+    wb.active.append(["Danh mục dùng nội bộ"])
+    ws = wb.create_sheet("Ma TK")
+    ws.append(["Số hiệu tài khoản", None, "Diễn giải"])
+    ws.append(["Cũ", "Mới", None])
+    ws.append(["1561 - Giá mua hàng hóa", "TK 1568", "x"])
+    ws.append([6417.0, "64171", "y"])
+    ws.append(["Cộng", None, None])
+    wb.save(tmp_path / "Danh muc TT200 sang TT99.xlsx")
+    name, mapping = comparable.find_mapping(tmp_path, read_rows)
+    assert name == "Danh muc TT200 sang TT99.xlsx" and mapping == {"1561": "1568", "6417": "64171"}
+
+
+def test_a_two_column_list_in_a_file_not_named_as_a_mapping_needs_two_pairs(tmp_path):
+    with open(tmp_path / "ghi chu.csv", "w", newline="", encoding="utf-8") as fh:
+        csv.writer(fh).writerows([["TK cũ", "TK mới"], ["6417", "64171"]])
+    from engine.cli import read_rows
+    assert comparable.find_mapping(tmp_path, read_rows) == ("", {})
+
+
+def test_change_columns_stay_empty_when_the_prior_period_is_on_another_basis():
+    prev = _with_header(tb.t9_rows(), "BẢNG CÂN ĐỐI TÀI KHOẢN (SỔ QUẢN TRỊ)", "Tháng 9 năm 2026")
+    grid = build.build(tb.t10_rows(), prev, "T10", "T09").sheets["BC thang"]
+    lines = grid[4:4 + 5]
+    assert all(r[4:8] == ["", "", "", ""] and str(r[2]).startswith("=") and str(r[3]).startswith("=") for r in lines)
+    same = build.build(tb.t10_rows(), tb.t9_rows(), "T10", "T09").sheets["BC thang"]
+    assert str(same[4][4]).startswith("=C")

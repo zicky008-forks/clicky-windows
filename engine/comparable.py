@@ -176,8 +176,12 @@ def basis(rows: list, tb: TrialBalance) -> Basis:
 # ── Account mapping and the opening-balance bridge (F5) ──────────────────────
 
 _ACCOUNT_WORDS = ("tk", "ma", "tai khoan", "account", "code", "so hieu")
-_OLD = ("cu", "old", "truoc", "tt200", "tt 200", "tt133", "tt 133")
-_NEW = ("moi", "new", "nay", "tt99", "tt 99")
+_OLD = ("cu", "old", "truoc", "tt200", "tt 200", "tt133", "tt 133", "thong tu 200", "thong tu 133")
+_NEW = ("moi", "new", "nay", "sau", "tt99", "tt 99", "thong tu 99")
+_REGIMES = ("tt200", "tt 200", "tt133", "tt 133", "tt99", "tt 99", "thong tu 200", "thong tu 133", "thong tu 99")
+_BARE_SIDE = {"cu": "old", "old": "old", "truoc": "old", "ky truoc": "old", "nam truoc": "old",
+              "moi": "new", "new": "new", "sau": "new", "ky nay": "new", "nam nay": "new"}
+_CODE = re.compile(r"^\s*(?:tk|tai khoan|account)?\s*[:.]?\s*(\d{3,10}(?:[.\-]\d{1,6})*)(?:\s*$|\s*[-–:(]|\s+\D)", re.I)
 
 
 def _has(text: str, words) -> bool:
@@ -187,7 +191,7 @@ def _has(text: str, words) -> bool:
 def _header_side(text: str) -> Optional[str]:
     """"old" / "new" for a mapping table's code column header ("TK cũ", "Mã TK mới", "TT200", "New account")."""
     t = fold(text)
-    if not _has(t, _ACCOUNT_WORDS) and not _has(t, ("tt200", "tt 200", "tt133", "tt 133", "tt99", "tt 99")):
+    if not _has(t, _ACCOUNT_WORDS) and not _has(t, _REGIMES):
         return None
     if _has(t, _OLD):
         return "old"
@@ -196,50 +200,82 @@ def _header_side(text: str) -> Optional[str]:
     return None
 
 
+def _code(cell) -> str:
+    """The account code in a mapping cell: "6417", 6417.0, "TK 6417", "6417 - Dịch vụ mua ngoài"; "" otherwise."""
+    if cell is None:
+        return ""
+    text = re.sub(r"\.0$", "", str(cell).strip())
+    if ACCOUNT.fullmatch(text):
+        return text
+    m = _CODE.match(fold(text))
+    return m.group(1) if m else ""
+
+
+def _sides(row, above) -> dict:
+    """{"old": column, "new": column} for a header row. A bare "Cũ" / "Mới" counts when the row above it (a merged
+    "Số hiệu tài khoản" heading) or another cell of the row names the account."""
+    sides = {}
+    for i, c in enumerate(row or []):
+        if isinstance(c, str):
+            side = _header_side(c)
+            if side and side not in sides:
+                sides[side] = i
+    if len(sides) < 2:
+        context = [c for c in list(above or []) + list(row or []) if isinstance(c, str)]
+        if any(_has(fold(c), _ACCOUNT_WORDS) for c in context):
+            for i, c in enumerate(row or []):
+                side = _BARE_SIDE.get(fold(c).strip(" :()")) if isinstance(c, str) else None
+                if side and side not in sides:
+                    sides[side] = i
+    return sides
+
+
 def read_mapping(rows: list) -> dict:
     """{old code: new code} from a table with an old-code column and a new-code column; {} when it is not one."""
     for r, row in enumerate(rows[:15]):
-        sides = {}
-        for i, c in enumerate(row or []):
-            if isinstance(c, str):
-                side = _header_side(c)
-                if side and side not in sides:
-                    sides[side] = i
+        sides = _sides(row, rows[r - 1] if r else None)
         if len(sides) < 2:
             continue
         out = {}
         for data in rows[r + 1:]:
             data = data or []
-            old, new = (str(data[sides[k]]).strip() if sides[k] < len(data) and data[sides[k]] is not None else ""
-                        for k in ("old", "new"))
-            old, new = (re.sub(r"\.0$", "", x) for x in (old, new))
-            if ACCOUNT.fullmatch(old) and ACCOUNT.fullmatch(new) and old != new:
+            old, new = (_code(data[sides[k]]) if sides[k] < len(data) else "" for k in ("old", "new"))
+            if old and new and old != new:
                 out[old] = new
         if out:
             return out
     return {}
 
 
+_MAPPING_NAMES = ("ghep", "doi ma", "mapping", "map", "chuyen doi", "anh xa", "tuong ung", "doi chieu ma")
+
+
+def _tables(p: Path, read_rows) -> list:
+    """Every sheet's rows in a file (a mapping table is often the second sheet of a workbook)."""
+    if p.suffix.lower() == ".csv":
+        return [read_rows(p)]
+    from engine import tabular
+    return [rows for _name, rows in tabular.sheets(p, keep_blank=True)]
+
+
 def find_mapping(folder: Path, read_rows) -> tuple:
-    """(file name, {old: new}) for the first account-mapping table in the folder, or ("", {})."""
-    for p in sorted(folder.glob("*"), key=lambda p: p.name.lower()):
-        if not p.is_file() or p.name.startswith("~$") or p.suffix.lower() not in (".csv", ".xlsx", ".xls"):
-            continue
-        name = fold(p.stem).replace("_", " ").replace("-", " ")
-        if not any(w in name for w in ("ghep", "doi ma", "mapping", "map", "chuyen doi", "anh xa", "tuong ung")):
-            continue
+    """(file name, {old: new}) for the first account-mapping table in the folder, or ("", {}).
+
+    Files named like one ("Bảng ghép TK", "Mapping TT200-TT99") are read first, then the rest: a table with an
+    old-code and a new-code column is a mapping whatever the file is called (grader, Case 05 class). A file whose
+    name does not say so needs two pairs or more, so a stray two-column list is not taken for one."""
+    files = [p for p in sorted(folder.glob("*"), key=lambda p: p.name.lower())
+             if p.is_file() and not p.name.startswith("~$") and p.suffix.lower() in (".csv", ".xlsx", ".xls")]
+    named = [p for p in files if any(w in fold(p.stem).replace("_", " ").replace("-", " ") for w in _MAPPING_NAMES)]
+    for p in named + [p for p in files if p not in named]:
         try:
-            if p.suffix.lower() == ".xls":
-                from engine import tabular
-                found = tabular.sheets(p, keep_blank=True)
-                rows = found[0][1] if found else []
-            else:
-                rows = read_rows(p)
+            tables = _tables(p, read_rows)
         except Exception:
             continue
-        mapping = read_mapping(rows)
-        if mapping:
-            return p.name, mapping
+        for rows in tables:
+            mapping = read_mapping(rows)
+            if mapping and (p in named or len(mapping) >= 2):
+                return p.name, mapping
     return "", {}
 
 
@@ -296,15 +332,41 @@ def bridge(prev: TrialBalance, cur: TrialBalance, mapping: Optional[dict] = None
         b, n = before.get(account, ZERO), now.get(account, ZERO)
         if abs(b - n) > TOLERANCE:
             gaps.append(Gap(account, names.get(account, ""), b, n))
-    # A code that left and one that arrived under the same parent with the same balance: renumbered, not listed.
-    gone = {g.account: g for g in gaps if g.account not in now}
-    came = {g.account: g for g in gaps if g.account not in before}
-    for g in gone.values():
-        twin = next((c for c in came.values() if c.account[:3] == g.account[:3]
-                     and abs(c.opening_now - g.closing_before) <= TOLERANCE), None)
-        if twin:
-            g.renumbered = twin.renumbered = True
+    _mark_renumbered(gaps, before, now)
     return gaps, True
+
+
+def _mark_renumbered(gaps: list, before: dict, now: dict) -> None:
+    """Codes that left and codes that arrived with the same balance are a code change, not a broken bridge.
+
+    One old code to one new code with the same balance (same parent first, then anywhere when the balance is
+    unique), then several old codes of one parent whose balances add up to one new code, or one old code split
+    across new codes of one parent. Only what is left after this is an error."""
+    gone = [g for g in gaps if g.account not in now and abs(g.closing_before) > TOLERANCE]
+    came = [g for g in gaps if g.account not in before and abs(g.opening_now) > TOLERANCE]
+
+    def pair(old, new):
+        old.renumbered = new.renumbered = True
+        gone.remove(old)
+        came.remove(new)
+
+    for same_parent in (True, False):
+        for g in list(gone):
+            twins = [c for c in came if abs(c.opening_now - g.closing_before) <= TOLERANCE
+                     and (not same_parent or c.account[:3] == g.account[:3])]
+            alike = [o for o in gone if abs(o.closing_before - g.closing_before) <= TOLERANCE]
+            if len(twins) == 1 and (same_parent or len(alike) == 1):
+                pair(g, twins[0])
+    for many, one, side_many, side_one in ((gone, came, "closing_before", "opening_now"),
+                                           (came, gone, "opening_now", "closing_before")):
+        for x in list(one):
+            group = [m for m in many if m.account[:3] == x.account[:3]]
+            if len(group) >= 2 and abs(sum((getattr(m, side_many) for m in group), ZERO) - getattr(x, side_one)) <= TOLERANCE:
+                for m in group:
+                    m.renumbered = True
+                    many.remove(m)
+                x.renumbered = True
+                one.remove(x)
 
 
 def renumbered_pnl(prev: TrialBalance, cur: TrialBalance) -> list:
@@ -342,6 +404,16 @@ class Gate:
         return not self.basis
 
     @property
+    def broken(self) -> list:
+        """Gaps that are not a code change: the opening balance really is not last period's closing."""
+        return [g for g in self.gaps if not g.renumbered]
+
+    @property
+    def moved(self) -> list:
+        """Gaps that are a code change with the balance carried across (no mapping table lists them)."""
+        return [g for g in self.gaps if g.renumbered]
+
+    @property
     def blocked(self) -> set:
         """Accounts no explanation may use."""
         out = {g.account for g in self.gaps}
@@ -351,7 +423,7 @@ class Gate:
 
     @property
     def ok(self) -> bool:
-        return self.same_basis and not self.gaps and not self.renumbered
+        return self.same_basis and not self.broken and not self.renumbered
 
     def uses_blocked(self, variance) -> bool:
         blocked = self.blocked
@@ -378,11 +450,10 @@ class Gate:
         if self.basis:
             return (f"File kỳ trước lập trên cơ sở khác kỳ này ({self.basis_text()}), nên em chưa dùng biến động "
                     f"để giải thích. {you_word[0].upper()}{you_word[1:]} xuất lại kỳ trước cùng cơ sở rồi gọi em.")
-        if self.gaps:
-            g = self.gaps[0]
-            more = f" và {len(self.gaps) - 1} tài khoản khác" if len(self.gaps) > 1 else ""
-            hint = " (có thể là đổi mã, thêm vào bảng ghép tài khoản nếu đúng)" if g.renumbered else ""
-            return (f"Số dư đầu kỳ TK {g.account}{more} không khớp số dư cuối kỳ trước{hint}, nên em không dùng "
+        if self.broken:
+            g = self.broken[0]
+            more = f" và {len(self.broken) - 1} tài khoản khác" if len(self.broken) > 1 else ""
+            return (f"Số dư đầu kỳ TK {g.account}{more} không khớp số dư cuối kỳ trước, nên em không dùng "
                     "các tài khoản đó để giải thích biến động.")
         if self.renumbered:
             old, new = self.renumbered[0]
@@ -415,16 +486,23 @@ def issues(g: Gate, cur: TrialBalance) -> list:
         out.append(Issue("error", "basis_differs",
                          f"Kỳ trước lập trên cơ sở khác kỳ này ({g.basis_text()}); chưa dùng biến động để giải thích, "
                          "xuất lại kỳ trước cùng cơ sở", 0, "cơ sở lập", ZERO))
-    if g.gaps:
+    if g.broken:
         rows = {l.account: l.row for l in cur.lines}
         listed = "; ".join(f"TK {x.account}: đầu kỳ {fmt(x.opening_now)}, cuối kỳ trước {fmt(x.closing_before)}"
-                           + (" (có thể đổi mã)" if x.renumbered else "") for x in g.gaps[:5])
-        more = f"; còn {len(g.gaps) - 5} tài khoản khác" if len(g.gaps) > 5 else ""
+                           for x in g.broken[:5])
+        more = f"; còn {len(g.broken) - 5} tài khoản khác" if len(g.broken) > 5 else ""
         out.append(Issue("error", "opening_bridge",
-                         f"Số dư đầu kỳ không khớp số dư cuối kỳ trước ở {len(g.gaps)} tài khoản ({listed}{more}); "
+                         f"Số dư đầu kỳ không khớp số dư cuối kỳ trước ở {len(g.broken)} tài khoản ({listed}{more}); "
                          "chưa dùng các tài khoản này để giải thích biến động",
-                         next((rows[x.account] for x in g.gaps if x.account in rows), 0), "số dư hai kỳ",
-                         sum((abs(x.diff) for x in g.gaps), ZERO)))
+                         next((rows[x.account] for x in g.broken if x.account in rows), 0), "số dư hai kỳ",
+                         sum((abs(x.diff) for x in g.broken), ZERO)))
+    if g.moved:
+        old = [x.account for x in g.moved if x.opening_now == ZERO]
+        new = [x.account for x in g.moved if x.closing_before == ZERO]
+        out.append(Issue("warning", "renumbered_balance",
+                         f"Đổi mã tài khoản, số dư vẫn nối khớp (kỳ trước {', '.join(old[:5])}; kỳ này "
+                         f"{', '.join(new[:5])}); thêm vào bảng ghép tài khoản để so từng mã", 0, "đổi mã tài khoản",
+                         ZERO))
     if g.renumbered:
         pairs = ", ".join(f"{o} → {n}" for o, n in g.renumbered[:5])
         out.append(Issue("warning", "renumbered",

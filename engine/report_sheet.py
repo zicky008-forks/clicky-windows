@@ -39,8 +39,12 @@ def _sumifs(tb_sheet: str, prefixes) -> str:
     return "=" + "+".join(parts)
 
 
-def report_grid(current: list, variances: list, cur_sheet: str, prev_sheet: str, title: str) -> list:
-    """Chỉ tiêu | TK | Kỳ này | Kỳ trước | Chênh lệch | % | Thuận lợi/Bất lợi | Biến động chính | Khớp với code"""
+def report_grid(current: list, variances: list, cur_sheet: str, prev_sheet: str, title: str,
+                compared: bool = True) -> list:
+    """Chỉ tiêu | TK | Kỳ này | Kỳ trước | Chênh lệch | % | Thuận lợi/Bất lợi | Biến động chính | Khớp với code
+
+    compared=False (the prior period is on another basis, F8): the change columns stay empty, since a difference
+    between two bases is not a change anyone should read or explain (grader F9)."""
     from engine.questions import FAVOURABLE_UP
     rows = [[title], ["Số liệu lấy bằng công thức từ sheet " + cur_sheet + " và " + prev_sheet +
                       "; cột I so từng công thức với kết quả tính bằng code. Số liệu là TÍNH TOÁN; nguyên nhân xem sheet câu hỏi."], [],
@@ -62,6 +66,9 @@ def report_grid(current: list, variances: list, cur_sheet: str, prev_sheet: str,
         check = f'=IF(ABS(C{r}-({fig.value}))<=1,"✓","≠ code {fmt(fig.value)}")'
         good, bad = ("Thuận lợi", "Bất lợi") if key in FAVOURABLE_UP else ("Bất lợi", "Thuận lợi")
         verdict = f'=IF(E{r}=0,"",IF(E{r}>0,"{good}","{bad}"))'
+        if not compared:
+            rows.append([label, accounts, this, prev, "", "", "", "", check])
+            continue
         rows.append([label, accounts, this, prev, f"=C{r}-D{r}", f'=IF(D{r}=0,"",E{r}/ABS(D{r}))', verdict, drivers, check])
     return rows
 

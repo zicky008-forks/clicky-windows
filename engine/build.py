@@ -44,7 +44,8 @@ def build(cur_rows, prev_rows, cur_name="Kỳ này", prev_name="Kỳ trước", 
     report = report_sheet.report_grid(figures, variances, n["tb_cur"], n["tb_prev"],
                                       ("SỐ SƠ BỘ, CHƯA KHOÁ SỔ. " if preliminary else "")
                                       + ("KỲ TRƯỚC KHÁC CƠ SỞ LẬP, CHƯA SO SÁNH ĐƯỢC. " if not gate.same_basis else "")
-                                      + f"Báo cáo kết quả kinh doanh quản trị: {cur_name} so với {prev_name}")
+                                      + f"Báo cáo kết quả kinh doanh quản trị: {cur_name} so với {prev_name}",
+                                      compared=gate.same_basis)
     overstated = sources.returns_in_revenue(cur)
     if overstated > 0:
         # The corrected profit lives in the file, under the reported one, for anyone who opens it later.
