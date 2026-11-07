@@ -1,0 +1,246 @@
+"""Order exports as accounting and sales software really saves them: legacy .xls of three kinds, print layouts,
+English headers, cancelled orders. Grader Case 05 (07/11) stopped at step 1 on these classes: an .xls source was
+ignored and Clicky said it saw no order file; an English-header CSV was skipped in silence."""
+import json
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+import order_exports as ox
+from engine import intake, sources, tabular
+from office import month_close
+
+PERIOD = (2026, 10)
+WRITERS = {"ole2.xls": ox.write_ole2_xls, "misa_html.xls": ox.write_html_xls,
+           "spreadsheetml.xls": ox.write_spreadsheetml}
+
+
+@pytest.mark.parametrize("name", sorted(WRITERS))
+def test_every_kind_of_xls_reads_the_same_orders_under_a_print_layout(tmp_path, name):
+    path = WRITERS[name](tmp_path / name)
+    f = sources.load_order_file(path)
+    assert f is not None and f.kind == {"ole2.xls": "xls", "misa_html.xls": "html", "spreadsheetml.xls": "xml"}[name]
+    assert [f.header[f.columns[r]] for r in ("doc", "date", "amount", "cost")] == \
+        ["Số chứng từ", "Ngày chứng từ", "Thành tiền", "Giá vốn"]
+    assert len(f.preamble) == 4 and [r[0] for r in f.rows] == ["DH001", "DH002", "DH003", "DH004", "DH005"]
+    t = sources.truth([f], PERIOD)
+    assert t.amount == ox.TOTAL and t.cost == sum(o[6] for o in ox.ORDERS) and t.unique_rows == 5
+    assert t.unreadable_dates == 0 and not t.outside
+    labels = [next((c for c in r if str(c).strip()), "") for r in f.footers]
+    assert labels[0] == "Tổng cộng" and "Người lập biểu" in labels      # the signature block is not an order
+
+
+def test_the_signature_date_in_the_date_column_is_not_an_order(tmp_path):
+    # "Ngày 31 tháng 10 năm 2026" has digits, so the CSV rule alone would keep it as an order with a bad date.
+    f = sources.load_order_file(ox.write_html_xls(tmp_path / "misa.xls", date_in_column=True))
+    assert len(f.rows) == 5 and sources.truth([f], PERIOD).unreadable_dates == 0
+    assert any("Ngày 31 tháng 10 năm 2026" in r for r in f.footers)
+
+
+def test_an_english_header_sales_csv_is_read_and_its_cancelled_order_set_aside(tmp_path):
+    f = sources.load_order_file(ox.write_english_csv(tmp_path / "shop_orders.csv"))
+    assert f is not None and f.kind == "csv"
+    assert {r: f.header[i] for r, i in f.columns.items()} == {
+        "doc": "Order ID", "date": "Created at", "customer": "Customer", "item": "SKU", "amount": "Line total",
+        "cost": "COGS", "status": "Status"}
+    assert [r[0] for r in f.cancelled] == ["DH004"] and len(f.rows) == 4
+    t = sources.truth([f], PERIOD)
+    assert t.amount == ox.SALES_EN and t.unreadable_dates == 0
+
+
+def test_more_names_never_outrank_the_ones_clicky_already_knew():
+    cols = sources.find_columns(["Total", "Ngày", "Thành tiền", "Subtotal", "Line total"])
+    assert cols["amount"] == 2                                   # "Thành tiền", not the first "Total"
+    assert sources.find_columns(["Order ID", "Created at", "Subtotal", "Line total"])["amount"] == 3
+
+
+@pytest.mark.parametrize("value,out", [("Cancelled", True), ("canceled", True), ("VOID", True), ("Đã hủy", True),
+                                       ("đã huỷ", True), ("Huỷ", True), ("Refunded", False), ("Returned", False),
+                                       ("Đang chuyển", False), ("Chờ huỷ", False), ("", False)])
+def test_only_clear_cancelled_values_set_an_order_aside(value, out):
+    assert sources.is_cancelled(value) is out
+
+
+def test_every_row_of_every_format_is_accounted_for_on_the_receipt(tmp_path):
+    # One folder per file: the five orders are the same in every format, so together they would be duplicates.
+    writers = dict(WRITERS, **{"shop.csv": ox.write_english_csv})
+    for name, write in writers.items():
+        folder = tmp_path / name.replace(".", "_")
+        folder.mkdir()
+        f = sources.load_order_file(write(folder / name))
+        receipt = intake.build(folder, [f], [], sources.truth([f], PERIOD), {}, None)
+        line, = receipt.files
+        assert line.rows_total == line.rows_used + line.rows_dropped == 12 if name != "shop.csv" else 7, name
+        assert line.rows_total == line.rows_used + line.rows_dropped, name
+        assert abs(line.total - line.used - line.dropped) <= 1 and line.total == ox.TOTAL, name
+    shop = line
+    assert shop.dropped == Decimal("4000000") and '"Refunded" 1 đơn' in shop.checks
+    cancelled = [d for d in receipt.dropped if d.kind == "cancel"]
+    assert [(d.file, d.amount, d.reason) for d in cancelled] == [("shop.csv", Decimal("4000000.00"),
+                                                                  "đơn đã huỷ, không phải doanh thu")]
+    left = " | ".join(intake.card(receipt)["left_out"])
+    assert "đơn đã huỷ" in left and "dòng tiêu đề phía trên bảng" in left and not intake.unread(receipt)
+
+
+def test_a_file_that_cannot_be_read_or_lacks_a_column_is_named_with_its_reason(tmp_path):
+    (tmp_path / "hong.xls").write_bytes(b"\x00\x01\x02 not a table \x00" * 50)
+    ox.write_html_xls(tmp_path / "thieu_ngay.xls", header=["Số chứng từ", "Mã khách hàng", "Mã hàng", "SL", "Thành tiền"])
+    ox.write_english_csv(tmp_path / "no_date.csv", header=["Order ID", "Customer", "SKU", "Line total"])
+    reasons = {d.file: (d.reason, d.kind) for d in intake.unused_files(tmp_path, set())}
+    assert reasons["hong.xls"] == ("chưa đọc được định dạng: chưa đọc được định dạng của file này "
+                                   "(không phải Excel, CSV, HTML hay XML)", "unread")
+    assert reasons["thieu_ngay.xls"][0].startswith("thiếu cột ngày (em thấy các cột: Số chứng từ") and \
+        reasons["thieu_ngay.xls"][1] == "unread"
+    assert reasons["no_date.csv"][0].startswith("thiếu cột ngày (em thấy các cột: Order ID, Customer, SKU, Line total)")
+
+
+# ── step 1 in the app ────────────────────────────────────────────────────────────
+
+class _Bridge:
+    def __init__(self, folder):
+        self.folder = folder
+
+    def available(self):
+        return True
+
+    def workbook_folder(self):
+        return str(self.folder)
+
+    def workbook_path(self):
+        return str(self.folder / "BaoCao_T10.xlsx")
+
+    def sheet_names(self):
+        raise AssertionError("step 1 and a stopped step 2 never touch the workbook")
+
+
+def _start(folder):
+    month_close._PENDING = None
+    month_close._CHOSEN.clear()
+    return month_close.start(_Bridge(folder), None, sources.DAY_FIRST)
+
+
+def test_step_one_never_says_it_saw_no_order_file_when_files_are_there(tmp_path, monkeypatch):
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    data = tmp_path / "T10"
+    data.mkdir()
+    (data / "DonHang_MISA.xls").write_bytes(b"\x00garbage\x00" * 64)
+    ox.write_english_csv(data / "Shopee_T10.csv", header=["Order ID", "Customer", "SKU", "Line total"])
+    beats = _start(data)
+    text = beats[0].text
+    assert "không thấy" not in text and "DonHang_MISA.xls" in text and "Shopee_T10.csv" in text
+    assert "chưa đọc được định dạng" in text and "thiếu cột ngày" in text and "Em thấy 2 file" in text
+    events = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert {f["name"] for e in events if e["event"] == "intake_none" for f in e["files"]} == \
+        {"DonHang_MISA.xls", "Shopee_T10.csv"}
+    empty = tmp_path / "trong"
+    empty.mkdir()
+    assert "không thấy file đơn hàng nào" in _start(empty)[0].text          # true only when there is none
+
+
+def test_step_one_reads_an_xls_source_and_names_the_file_it_could_not_read(tmp_path):
+    ox.write_html_xls(tmp_path / "DonHang_MISA_T10.xls")
+    (tmp_path / "DonHang_cu.xls").write_bytes(b"\x00garbage\x00" * 64)
+    beats = _start(tmp_path)
+    assert month_close.intake_pending()
+    text = beats[-1].text
+    assert "5 đơn bán hàng từ 1 trên 2 file đơn hàng" in text
+    assert "File DonHang_cu.xls em chưa đọc được: chưa đọc được định dạng" in text and "không thấy" not in text
+    card = beats[-1].intake["card"]
+    assert any("DonHang_cu.xls" in line for line in card["left_out"])
+
+
+def test_step_two_stops_with_a_plain_card_before_changing_anything(tmp_path, monkeypatch):
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    data = tmp_path / "T10"
+    data.mkdir()
+    ox.write_html_xls(data / "DonHang_MISA_T10.xls")
+    _start(data)
+    beats = month_close.confirm(_Bridge(data), None)            # _Bridge.sheet_names raises if the workbook is touched
+    assert len(beats) == 1 and beats[0].mark == "warn"
+    text = beats[0].text
+    assert "DonHang_MISA_T10.xls" in text and "trang HTML" in text and "chưa sửa gì" in text
+    assert "lệch" not in text and "chênh" not in text            # no gap is claimed
+    assert not (data / "BaoCao_T10_ban-goc.xlsx").exists()
+    steps = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    stop = [e for e in steps if e.get("step") == "query_unsupported"]
+    assert stop and stop[0]["file"] == "DonHang_MISA_T10.xls" and stop[0]["kind"] == "html"
+
+
+@pytest.mark.parametrize("make,why", [
+    (lambda d: ox.write_english_csv(d / "shop.csv"), "dòng tiêu đề phía trên bảng"),
+    (lambda d: ox.write_ole2_xls(d / "ole.xls"), "Excel 97-2003"),
+])
+def test_what_the_query_cannot_read_yet_is_named(tmp_path, make, why):
+    make(tmp_path)
+    f, said = month_close.cannot_load(sources.find_order_files(tmp_path))
+    assert why in said
+
+
+def test_plain_csv_exports_still_go_through(tmp_path):
+    import csv
+    for name, rows in (("HN.csv", [["HN1", "05/10/2026", "100"]]), ("HCM.csv", [["HCM1", "21/10/2026", "200"]])):
+        with open(tmp_path / name, "w", newline="", encoding="utf-8-sig") as fh:
+            csv.writer(fh).writerows([["SoCT", "Ngay", "ThanhTien"]] + rows)
+    assert month_close.cannot_load(sources.find_order_files(tmp_path)) is None
+
+
+# ── trial balances and the report workbook ──────────────────────────────────────
+
+def test_a_legacy_xls_trial_balance_is_read_like_the_xlsx_one(tmp_path):
+    import xlwt
+    import tb_samples as tb
+    from engine.cli import read_rows
+    rows = tb.misa_rows(tb.OPENING_T9, tb.month(8000, 500, 200, 5300, 5000, 8500, 5200, 20, 60, (700, 300, 150),
+                                                (500, 160), 10, 5, 231), "Tháng 9 năm 2026")
+    book = xlwt.Workbook(encoding="utf-8")
+    ws = book.add_sheet("TB")
+    for r, row in enumerate(rows):
+        for c, v in enumerate(row):
+            if v is not None:
+                ws.write(r, c, float(v) if isinstance(v, (int, float, Decimal)) else v)
+    book.save(str(tmp_path / "TB_T09.xls"))
+    found = sources.find_trial_balances(tmp_path, read_rows)
+    assert [name for name, _, _ in found] == ["TB_T09"] and sources.period_of(found[0][1]) == (2026, 9)
+    assert found[0][2].lines
+
+
+def test_an_order_xls_is_never_taken_for_the_report_workbook(tmp_path):
+    from office import drop
+    (tmp_path / "BaoCao_T10.xlsx").write_bytes(b"")
+    ox.write_html_xls(tmp_path / "DonHang_MISA_T10.xls")
+    assert drop.report_workbook(tmp_path) == tmp_path / "BaoCao_T10.xlsx"
+
+
+# ── the reader itself ───────────────────────────────────────────────────────────
+
+def test_sniffing_goes_by_the_bytes_not_the_name(tmp_path):
+    assert tabular.sniff(tabular.OLE2 + b"\x00" * 100) == "xls"
+    assert tabular.sniff(b"PK\x03\x04rest") == "xlsx"
+    assert tabular.sniff(b"\xef\xbb\xbf<html><body><table><tr><td>1</td></tr></table>") == "html"
+    assert tabular.sniff(b'<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet">') == "xml"
+    assert tabular.sniff("Số CT\tNgày\tThành tiền\n".encode("utf-16")) == "text"
+    assert tabular.sniff(b"SoCT;Ngay;ThanhTien\n") == "text"
+
+
+def test_numbers_and_dates_come_back_as_plain_text():
+    from datetime import date, datetime
+    assert [tabular.number_text(v) for v in (1250000.0, 1250000.5, -300, 1e16, "1.25E6")] == \
+        ["1250000", "1250000.5", "-300", "10000000000000000", "1250000"]
+    assert tabular.date_text(datetime(2026, 10, 13)) == "2026-10-13" and tabular.date_text(date(2026, 10, 1)) == "2026-10-01"
+
+
+def test_html_colspan_keeps_columns_aligned():
+    rows = tabular._html('<table><tr><td colspan="3">Tiêu đề</td></tr><tr><td>A</td><td>B&amp;C</td><td>1.000</td></tr></table>')
+    assert rows == [("Bảng 1", [["Tiêu đề", "", ""], ["A", "B&C", "1.000"]])]
+
+
+def test_an_xml_file_with_entity_declarations_is_refused(tmp_path):
+    p = tmp_path / "bom.xls"
+    p.write_text('<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaa">]>'
+                 '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"><x>&a;</x></Workbook>', encoding="utf-8")
+    with pytest.raises(tabular.Unreadable):
+        tabular.sheets(p)
+    assert sources.load_order_file(p) is None

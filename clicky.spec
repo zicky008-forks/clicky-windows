@@ -85,6 +85,9 @@ hidden = [
     # Excel range that holds a date fails to read.
     "win32timezone",
 
+    # Legacy .xls order exports (engine.tabular imports it lazily)
+    "xlrd",
+
     # Indirect deps
     "tiktoken_ext",
     "tiktoken_ext.openai_public",

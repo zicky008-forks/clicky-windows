@@ -86,8 +86,10 @@ def report_workbook(folder: Path) -> Optional[Path]:
     from engine.intake import ORIGINAL_TAG
     from engine.tables import _split_camel, key
     tbs = {stem for stem, _, _ in sources.find_trial_balances(folder, read_rows)}
+    # An order export saved as .xls (MISA and other software) is a source, never the report.
     found = [p for p in sorted(folder.glob("*.xls*"))
-             if p.stem not in tbs and ORIGINAL_TAG not in p.stem and not p.name.startswith("~$")]
+             if p.stem not in tbs and ORIGINAL_TAG not in p.stem and not p.name.startswith("~$")
+             and not (p.suffix.lower() == ".xls" and sources.load_order_file(p))]
     if len(found) == 1:
         return found[0]
     named = [p for p in found if _REPORT_NAME.search(key(_split_camel(p.stem)))
