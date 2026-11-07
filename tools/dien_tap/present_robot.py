@@ -80,6 +80,7 @@ class Line:
     name: str
     ok: bool
     detail: str = ""
+    unchecked: bool = False     # could not be checked on this build: shown as such, never as ĐẠT
 
 
 @dataclass
@@ -93,9 +94,14 @@ class Result:
     def add(self, name: str, ok: bool, detail: str = "") -> None:
         self.lines.append(Line(name, ok, detail))
 
+    def unchecked(self, name: str, why: str) -> None:
+        """A check this build cannot feed yet. It does not fail the run, but it is never silent."""
+        self.lines.append(Line(name, True, why, unchecked=True))
+
     def markdown(self, title: str) -> str:
         out = [f"# {title}: {'ĐẠT' if self.ok else 'KHÔNG ĐẠT'}", ""]
-        out += [f"- {'ĐẠT' if l.ok else 'KHÔNG ĐẠT'}  {l.name}" + (f": {l.detail}" if l.detail else "") for l in self.lines]
+        out += [f"- {'CHƯA KIỂM ĐƯỢC' if l.unchecked else 'ĐẠT' if l.ok else 'KHÔNG ĐẠT'}  {l.name}"
+                + (f": {l.detail}" if l.detail else "") for l in self.lines]
         return "\n".join(out) + "\n"
 
 
