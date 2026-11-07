@@ -301,3 +301,42 @@ def test_the_receipt_plays_beside_the_warm_up_and_a_pointing_card_waits_for_it(m
     threading.Timer(0.2, release.set).start()
     asyncio.run(mc.play(_manager(excel), [mc.Beat("Ô này.", "Sheet1!B2")]))
     assert order[0] == "warm-up closed" and "excel" in order
+
+
+def test_a_folder_dropped_while_excel_had_no_workbook_in_front_still_warms(monkeypatch):
+    """Hidden cases 02–05 on 7fbe0e1: started from a folder, Excel had no active workbook and nothing warmed."""
+    events = []
+    monkeypatch.setattr(pq_warmup, "_part", lambda part, t0, **extra: events.append((part, extra)))
+    app = FakeApp()
+    app.ActiveWorkbook = None
+    assert pq_warmup.warm(_bridge(app)) and pq_warmup._warm
+    assert not [e for e in app.log if e[0] == "activate"]              # nothing to bring back
+    assert app.log[-1][:3] == ("close", app.log[1][1], False) and app.DisplayAlerts is True
+    assert ("pq_warm_open", {"active": False, "books": None}) in events
+    assert not [e for e in events if e[0] == "pq_warm_skip"]
+
+
+def test_every_skip_says_why_and_never_an_error_text(monkeypatch):
+    events = []
+    monkeypatch.setattr(pq_warmup, "_part", lambda part, t0, **extra: events.append((part, extra)))
+    assert not pq_warmup.warm(SimpleNamespace(_excel=lambda: None))
+    assert not pq_warmup.warm(_bridge(FakeApp(fail_add=True)))
+    monkeypatch.setenv(pq_warmup.ENV, "0")
+    assert not pq_warmup.start(_bridge(FakeApp()))
+    assert not pq_warmup.start(_bridge(FakeApp()), quiet=True)
+    skips = [extra for part, extra in events if part == "pq_warm_skip"]
+    assert skips == [{"why": "no_excel"}, {"why": "error", "error": "RuntimeError"}, {"why": "off"}]
+
+
+def test_the_warm_up_thread_is_handed_the_flows_own_excel(monkeypatch):
+    app = FakeApp()
+    calls = []
+    bridge = SimpleNamespace(_excel=lambda: calls.append("attach") or app)
+    handed = pq_warmup._SameExcel(bridge)
+    assert handed._excel() is app                                        # without COM: the bridge, asked again
+    handed.release()
+    seen = []
+    monkeypatch.setattr(pq_warmup, "warm", lambda b: seen.append(b) or False)
+    assert pq_warmup.start(bridge)
+    pq_warmup.wait()
+    assert isinstance(seen[0], pq_warmup._SameExcel)

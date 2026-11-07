@@ -2172,7 +2172,7 @@ def warm_while_reading(manager) -> None:
     so the first press does not pay for Excel starting its engine."""
     if stage() == "intake":
         from office import pq_warmup
-        pq_warmup.start(manager._excel)
+        pq_warmup.start(manager._excel, quiet=True)      # stage 0 already said why it would not run
 
 
 async def run_from(manager, folder: Optional[Path]) -> None:
