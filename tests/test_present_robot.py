@@ -69,3 +69,17 @@ def test_robot_waits_for_the_slide_show_window(monkeypatch):
 
     app = types.SimpleNamespace(SlideShowWindows=Windows())
     assert present_robot.show_window(app=app) == "show-window" and state["polls"] == 3
+
+
+def test_show_outcome_reads_clickys_attach_or_failure(tmp_path, monkeypatch):
+    import json
+    import present_robot
+    monkeypatch.setattr(present_robot.time, "sleep", lambda s: None)
+    log = tmp_path / "scene.jsonl"
+    log.write_text(json.dumps({"event": "present_start"}) + "\n", encoding="utf-8")
+    assert present_robot.show_outcome(log, timeout=0.01) == "unknown"
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"event": "present_retry"}) + "\n" + json.dumps({"event": "present_failed"}) + "\n")
+    assert present_robot.show_outcome(log, timeout=0.01) == "failed"
+    log.write_text(json.dumps({"event": "present_attached", "hwnd": 5}) + "\n", encoding="utf-8")
+    assert present_robot.show_outcome(log, timeout=0.01) == "attached"
