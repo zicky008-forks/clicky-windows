@@ -192,7 +192,12 @@ def main(argv=None) -> int:
         started = False
     except Exception:                         # noqa: BLE001 - not running: this script starts it, and closes it
         started = True
-    app = win32com.client.Dispatch("Excel.Application")
+    try:
+        app = win32com.client.Dispatch("Excel.Application")
+    except Exception:                         # noqa: BLE001 - no Excel on this PC (e.g. a CI runner)
+        say("Máy này không có Excel nên không chạy được bài đối chiếu.")
+        work.rmdir()
+        return 2
     wb = None
     try:
         app.Visible = True

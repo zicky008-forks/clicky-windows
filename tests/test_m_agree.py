@@ -54,5 +54,6 @@ def test_a_missing_or_changed_row_is_named():
     assert not ok and detail.startswith("cột khác")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="on Windows main() drives the real Excel; CI has none")
 def test_it_will_not_run_off_windows():
-    assert m_agree.main([]) == 2 or sys.platform == "win32"
+    assert m_agree.main([]) == 2
