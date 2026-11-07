@@ -135,9 +135,14 @@ def test_source_files_opened_to_point_must_be_closed_unsaved(tmp_path, monkeypat
 
     pack = [{"event": "show_book", "i": n, "ref": f"'BOD'!C{n}", "ok": True, "book": "p1", "pack": True} for n in range(11)]
     plan = [{"event": "show_book", "i": 11, "ref": "'KH'!C5", "ok": True, "book": "k1", "pack": False}]
-    # An older build without close_book: said out loud, does not fail, never shown as ĐẠT.
+    # An older build without file ids: said out loud, does not fail, never shown as ĐẠT.
     old = line([{"event": "show_book", "i": 9, "ref": "'KH'!C5", "ok": True}])
-    assert old.unchecked and "close_book" in old.detail
+    assert old.unchecked and "book" in old.detail
+    # fb08855 Case 07: only the pack was shown, so nothing had to be closed.
+    only_pack = line(pack)
+    assert only_pack.ok and not only_pack.unchecked and "chỉ mở bộ BOD" in only_pack.detail
+    # A source file shown and no close_book at all: left open.
+    assert not line(pack + plan).ok
     assert "CHƯA KIỂM ĐƯỢC" in bod_robot.grade(events + [{"event": "show_book", "ok": True}], True, answers).markdown("x")
     # Run 5 shape: the pack shown 11 times and left open, the plan file shown once and closed: ĐẠT.
     ok = line(pack + plan + [{"event": "close_book", "book": "k1", "pack": False, "saved": False}])
