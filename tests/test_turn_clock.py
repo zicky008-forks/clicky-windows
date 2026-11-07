@@ -66,6 +66,43 @@ def test_first_feedback_of_each_kind_and_the_end(monkeypatch):
     assert data["first_feedback"] == 1200 and "first_card" not in data
 
 
+def test_first_card_is_the_turns_first_card_not_its_first_question(monkeypatch):
+    # PC 84603e7: beat 0's figure card was up at +7 s, but first_card read 27.9 s (the save question's
+    # buttons, just before done). The frame around the cell comes first and is a draw, not a card.
+    records = []
+    monkeypatch.setattr("scene_log.record", lambda event, **data: records.append(data) if event == "latency" else None)
+    now, m = _Now(), _Manager()
+    clock = turn_clock.TurnClock(now)
+    turn_clock.connect(m, clock)
+    clock.start("button", "Đúng rồi, làm tiếp")
+    now.t += 6.9
+    m.sig_draw.emit({"kind": "spotlight", "x1": 1, "y1": 2, "x2": 3, "y2": 4})
+    now.t += 0.1
+    m.sig_draw.emit({"kind": "card", "title": "Chênh lệch", "value": "0 đ"})
+    now.t += 20.9
+    m.sig_draw.emit({"kind": "card", "title": "Lưu bản mới?"})
+    m.sig_choices.emit("Em lưu thành file mới nhé?", ["Lưu", "Để sau"])
+    now.t += 1.0
+    clock.finish()
+    data, = records
+    assert data["first_draw"] == 6900 and data["first_card"] == 7000 and data["done"] == 28900
+
+
+def test_a_question_with_buttons_and_no_figure_card_is_still_the_first_card(monkeypatch):
+    records = []
+    monkeypatch.setattr("scene_log.record", lambda event, **data: records.append(data) if event == "latency" else None)
+    now, m = _Now(), _Manager()
+    clock = turn_clock.TurnClock(now)
+    turn_clock.connect(m, clock)
+    clock.start("typed")
+    now.t += 0.5
+    m.sig_draw.emit({"kind": "sticky", "notes": []})
+    now.t += 0.3
+    m.sig_choices.emit("Phiếu nhận file", ["Đúng rồi, làm tiếp"])
+    clock.finish()
+    assert records[0]["first_draw"] == 500 and records[0]["first_card"] == 800
+
+
 def test_no_turn_no_line(monkeypatch):
     records = []
     monkeypatch.setattr("scene_log.record", lambda event, **data: records.append(event))
