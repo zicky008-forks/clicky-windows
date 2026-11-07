@@ -766,16 +766,31 @@ WARM_PARTS = ("pq_warm_open", "pq_warm_add", "pq_warm_load", "pq_warm_total", "p
 
 
 def warmup_checks(events, still_open) -> list:
-    """Info: the warm-up's own timings. Blocking: its hidden workbook is closed by the time the run is graded."""
-    parts = {}
+    """Info: the warm-up's own timings, why it skipped, and what the press waited for. Blocking: its hidden
+    workbook is closed by the time the run is graded."""
+    parts, skips = {}, []
     for e in events:
-        if e.get("event") == "close_step" and e.get("step") == "timing" and e.get("part") in WARM_PARTS:
-            parts.setdefault(e["part"], e.get("ms"))
+        if e.get("event") != "close_step" or e.get("step") != "timing":
+            continue
+        if e.get("part") in WARM_PARTS:
+            parts.setdefault(e["part"], e)
+        elif e.get("part") == "pq_warm_skip":
+            skips.append(str(e.get("why") or "?"))
+    bits = []
+    for p in WARM_PARTS:
+        if p in parts:
+            e, extra = parts[p], []
+            if p == "pq_warm_wait" and e.get("by"):
+                extra.append(f"chờ {e['by']}")
+            if p == "pq_warm_wait" and e.get("timed_out"):
+                extra.append("hết giờ chờ")
+            bits.append(f"{p[len('pq_warm_'):]} {e.get('ms')} ms" + (f" ({', '.join(extra)})" if extra else ""))
+    if skips:
+        bits.append("bỏ qua: " + ", ".join(skips))
     out = []
-    if parts:
-        out.append(checks.Check("Khởi động Power Query trong lúc đọc phiếu (chỉ đo)", True,
-                                ", ".join(f"{p[len('pq_warm_'):]} {parts[p]} ms" for p in WARM_PARTS if p in parts),
-                                blocking=False))
+    if bits:
+        out.append(checks.Check("Khởi động Power Query trong lúc đọc phiếu (chỉ đo)", bool(parts), "; ".join(bits)
+                                if skips else ", ".join(bits), blocking=False))
     if still_open:
         out.append(checks.Check("Sổ khởi động Power Query của Clicky đã đóng", False,
                                 f"{WARM_BOOK} vẫn mở khi chấm", blocking=True))

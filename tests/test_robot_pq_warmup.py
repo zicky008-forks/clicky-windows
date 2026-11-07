@@ -75,3 +75,12 @@ def test_state_line_counts_the_warm_up_workbook():
     line = rehearse.state_line("sau lượt 1", {"excel": 1, "workbooks": 2, "warm_books": 1})
     assert "sổ khởi động PQ 1" in line
     assert "sổ khởi động" not in rehearse.state_line("x", {"excel": 1, "workbooks": 1})
+
+
+def test_skip_reason_and_what_the_press_waited_for():
+    events = [timing("pq_warm_skip", 3) | {"why": "no_excel"}]
+    (info,) = rehearse.warmup_checks(events, still_open=False)
+    assert not info.ok and not info.blocking and "bỏ qua: no_excel" in info.detail
+    events = [timing("pq_warm_total", 4800), timing("pq_warm_wait", 900) | {"by": "read_files", "timed_out": False}]
+    info, closed = rehearse.warmup_checks(events, still_open=False)
+    assert info.detail == "total 4800 ms, wait 900 ms (chờ read_files)" and closed.ok
