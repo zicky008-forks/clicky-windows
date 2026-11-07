@@ -693,6 +693,8 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
         f" Còn {len(unread)} file em chưa đọc được, lý do ghi trong phiếu bên dưới.")
     if receipt.impact_short:                        # said before "Đúng rồi, làm tiếp", not found after it
         missed += " " + receipt.impact
+    if not receipt.same_basis:                      # the report will not explain any change: said up front
+        missed += " " + receipt.comparable
     text = (f"Em đọc được {n_tb} sổ cân đối và {truth.unique_rows} đơn bán hàng"
             + (f" từ {len(files)} trên {len(files) + len(unread)} file đơn hàng" if unread else "") + "." + missed
             + f" {you(True)} xem giúp em có đúng không, em chưa sửa gì trong file.")
@@ -1628,10 +1630,15 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
     # The rows already read from the files are what the report is built from; reading them back
     # out of Excel would only add a way to fail (cell types change on the way in and out).
     (cur, cur_rows, _), (prev, prev_rows, _) = tbs[-1], tbs[-2]
+    from engine import comparable
+    from engine.cli import read_rows
+    mapping_file, mapping = comparable.find_mapping(folder, read_rows)
     with _timed("report_sheet"):
-        summary, report, names = report_skill.run_report(bridge, ((cur, cur_rows), (prev, prev_rows)))
+        summary, report, names = report_skill.run_report(bridge, ((cur, cur_rows), (prev, prev_rows)), mapping,
+                                                         mapping_file)
     if report is None:
         return [Beat(summary)]
+    _audit_gate(report.gate)
     pat = report.figures[-1].value
     prev_pat = next((v.previous for v in report.variances if v.key == "pat"), None)
     row = 4 + len(report.figures)
@@ -1669,9 +1676,12 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
         at = line_row[opened.key]
         beats.append(Beat(visuals.leader_sentence(tags), f"{sheet}!A{at}:C{at}",
                           graphic={"kind": "leaders", "figure_ref": f"{sheet}!C{at}", **tags}))
+    same_basis = report.gate is None or report.gate.same_basis
     if overstated > 0:
         real = pat - overstated
-        change = f" Giảm {spoken(prev_pat - real)} so với kỳ trước." if prev_pat is not None and prev_pat > real else ""
+        # No change against a prior period on another basis (F8): that would explain an unlike comparison.
+        change = f" Giảm {spoken(prev_pat - real)} so với kỳ trước." if (
+            same_basis and prev_pat is not None and prev_pat > real) else ""
         beats.append(Beat(f"Lợi nhuận thực là {spoken(real)}, không phải {spoken(pat)} như trên báo cáo.",
                           pat_ref, "Lợi nhuận sau thuế thực", "warn", spoken(real),
                           f"{spoken(overstated)} hàng bán bị trả lại đang ghi thẳng vào Nợ TK 511. "
@@ -1679,6 +1689,9 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
                           was=spoken(pat), roll=(int(pat), int(real))))
         chart = visuals.profit_bridge(pat, [("Hàng trả lại ghi Nợ 511", -overstated)], real)
         beats.append(Beat(visuals.bridge_sentence(chart), pat_ref, graphic={"kind": "bridge", **chart}))
+        if not same_basis:                  # the summary that says it is not spoken on this path
+            beats.append(Beat(report.gate.sentence(you()), f"{sheet}!A1:G2", "Chưa so với kỳ trước", "warn",
+                              "Khác cơ sở lập", report.gate.basis_text()))
     else:
         beats.append(Beat(summary, pat_ref, "Lợi nhuận sau thuế", "", spoken(pat)))
     # Every trap the engine found gets a note beside the line it touches; they stay up while the save is asked.
@@ -1694,6 +1707,29 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
 
 
 _REPORT_COLUMNS = {"A": 40, "B": 12, "C": 17, "D": 17, "E": 17, "F": 9, "G": 15, "H": 34, "I": 14}
+
+
+def _audit_gate(gate) -> None:
+    """The "so sánh được" gate in the Biên bản: what was not compared, and the mapping table used (F5, F8)."""
+    if _AUDIT is None or gate is None:
+        return
+    src = "Sổ cân đối kỳ này và kỳ trước"
+    if gate.mapping_file:
+        _AUDIT.add("—", "Bảng ghép tài khoản", "Mã cũ", "Mã mới",
+                   f"Dùng {gate.mapped} cặp mã trong {gate.mapping_file} để nối số dư và so hai kỳ; đổi mã có trong "
+                   "bảng không phải lỗi", audit.AUTO, gate.mapping_file)
+    if gate.basis:
+        what, now, before = gate.basis[0]
+        _AUDIT.add("—", f"Cơ sở lập kỳ trước ({what})", before or "không ghi", now or "không ghi",
+                   "Hai kỳ lập trên cơ sở khác nhau: không dùng biến động để giải thích; đề nghị xuất lại kỳ trước "
+                   "cùng cơ sở", audit.AUTO, src)
+    for g in gate.gaps[:20]:
+        _AUDIT.add(f"TK {g.account}", "Số dư đầu kỳ so với cuối kỳ trước", int(g.closing_before), int(g.opening_now),
+                   "Không nối được số dư hai kỳ" + (" (có thể đổi mã, chưa có trong bảng ghép)" if g.renumbered else "")
+                   + ": không dùng tài khoản này để giải thích biến động", audit.AUTO, src)
+    for old, new in gate.renumbered[:20]:
+        _AUDIT.add(f"TK {old} → {new}", "Có thể đổi mã tài khoản", old, new,
+                   "Chưa có bảng ghép tài khoản: không dùng hai tài khoản này để giải thích biến động", audit.AUTO, src)
 
 
 def _style_report_sheet(bridge, sheet: str, last: int, extra: int = 0) -> None:

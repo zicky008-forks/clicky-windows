@@ -50,7 +50,7 @@ def run(bridge) -> str:
     return run_report(bridge)[0]
 
 
-def run_report(bridge, periods=None) -> tuple:
+def run_report(bridge, periods=None, mapping=None, mapping_file="") -> tuple:
     """(spoken summary, MonthlyReport or None, sheet names used or None).
 
     periods is ((this period's name, rows), (previous name, rows)) when the caller already
@@ -74,7 +74,8 @@ def run_report(bridge, periods=None) -> tuple:
         if not actual:
             return f"Em không thêm được sheet mới vào file này. {you(True)} kiểm tra file có đang bị khoá hoặc chỉ đọc không.", None, None
         names[key] = actual
-    report = build(cur_rows, prev_rows, cur_name, prev_name, text_prefix="'", names=names)
+    report = build(cur_rows, prev_rows, cur_name, prev_name, text_prefix="'", names=names, mapping=mapping,
+                   mapping_file=mapping_file)
     for name, grid in report.sheets.items():
         if not bridge.write(f"{quote(name)}!A1", grid):
             return f"Em tính xong nhưng ghi vào sheet {name} bị lỗi. Kết quả: {report.summary}", report, names

@@ -16,7 +16,7 @@ from glob import escape as glob_escape
 from pathlib import Path
 from typing import Optional
 
-from engine import roles as roles_mod, sources
+from engine import comparable, roles as roles_mod, sources
 from engine.monthly_report import fmt, spoken
 from engine.trial_balance import ZERO, _is_total, fold, parse_amount
 from engine.address import you  # the one word for the user (CLAUDE.md rule 8)
@@ -70,6 +70,8 @@ class Intake:
     roles: dict = field(default_factory=dict)           # file name → role (engine.roles)
     impact: str = ""                 # what a left-out order-like file does to the revenue, said before "làm tiếp"
     impact_short: bool = False       # True when the revenue is short of the ledger because of it
+    comparable: str = ""             # why the two periods do not compare like for like (F5, F8); "" when they do
+    same_basis: bool = True          # False: the prior period is on another basis, no change will be explained
 
     @property
     def balanced(self) -> bool:
@@ -408,12 +410,34 @@ def build(folder: Path, files: list, tbs: list, truth, ledger: dict, workbook: O
         intake.roles[name] = roles_mod.NOTE
         intake.files.append(FileLine(name=name, kind="Query Power Query", rows=0, rows_label="",
                                      checks="em dùng để kiểm tra query, không lấy số từ file này"))
+    mapping_file = _comparable(intake, folder, picked)
     stems = [n for n, _, _ in tbs] + [n for n, _ in set_aside or []]
     used_names = set(query_files(folder)) | {f.path.name for f in files} | {p.name for name in stems
                                                                            for p in folder.glob(f"{name}.xls*")}
+    if mapping_file:
+        used_names.add(mapping_file)
     intake.dropped += _unused_files(folder, used_names, workbook, intake.roles)
     intake.impact, intake.impact_short = _impact(intake, truth, ledger)
     return intake
+
+
+def _comparable(intake: Intake, folder: Path, picked: list) -> str:
+    """The "so sánh được" gate on the two trial balances, said on the receipt before anything is computed.
+    Returns the account-mapping table's file name when the folder has one (it is listed as read)."""
+    if len(picked) < 2:
+        return ""
+    from engine.cli import read_rows
+    mapping_file, mapping = comparable.find_mapping(folder, read_rows)
+    (_, prev_rows, prev_tb), (_, cur_rows, cur_tb) = picked[-2], picked[-1]
+    g = comparable.gate(prev_rows, prev_tb, cur_rows, cur_tb, mapping, mapping_file,
+                        comparable.is_new_year(sources.period_of(prev_rows), sources.period_of(cur_rows)))
+    intake.comparable, intake.same_basis = g.sentence(you()), g.same_basis
+    if mapping_file:
+        intake.roles[mapping_file] = roles_mod.NOTE
+        intake.files.append(FileLine(name=mapping_file, kind="Bảng ghép tài khoản", rows=len(mapping),
+                                     rows_label=f"{len(mapping)} cặp mã",
+                                     checks="em dùng để nối số dư và so hai kỳ theo mã mới, không lấy số từ file này"))
+    return mapping_file
 
 
 def _impact(intake: Intake, truth, ledger: dict) -> tuple:
@@ -470,6 +494,13 @@ def card(intake: Intake) -> dict:
             detail += f" · cột ngày, số tiền theo {you()} đã chỉ"
         rows.append({"ok": intake.revenue_ok is not False, "title": f"Bán hàng · {where}",
                      "count": f"{intake.orders_rows} đơn", "detail": detail, "role": roles_mod.DETAIL})
+    for f in intake.files:
+        if f.kind == "Bảng ghép tài khoản":
+            rows.append({"ok": True, "title": f"{f.name} · {f.kind}", "count": f.rows_label, "detail": f.checks,
+                         "role": roles_mod.NOTE})
+    if intake.comparable:                           # before the button: a change that will not be explained
+        rows.append({"ok": False, "title": "So với kỳ trước · chưa so được", "count": "", "detail": intake.comparable,
+                     "role": ""})
     for f in intake.files:
         if f.kind == "Query Power Query":
             rows.append({"ok": True, "title": f"{f.name} · {f.kind}", "count": "", "detail": f.checks,
@@ -537,7 +568,7 @@ def log_fields(intake: Intake, text: str) -> dict:
                       for f in intake.files],
             "dropped": [{"what": d.what, "amount": None if d.amount is None else int(d.amount), "reason": d.reason,
                          "file": d.file} for d in intake.dropped],
-            "impact": intake.impact, "text": text}
+            "impact": intake.impact, "comparable": intake.comparable, "same_basis": intake.same_basis, "text": text}
 
 
 def dropped_rows(intake: Intake) -> list:

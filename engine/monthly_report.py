@@ -108,11 +108,23 @@ def compare(current: list, previous: list) -> list:
 INCOME_KEYS = {"rev", "fin_inc", "oth_inc"}
 
 
-def summary_vi(variances: list, issues: list, n_questions: int = 0) -> str:
+def summary_vi(variances: list, issues: list, n_questions: int = 0, gate=None) -> str:
     """One spoken paragraph: conclusion first, then what moved profit most, then traps.
-    It states calculations only; causes are left to the questions sheet."""
+    It states calculations only; causes are left to the questions sheet.
+
+    gate (engine.comparable.Gate): when the prior period is on another basis, the profit is said for this
+    period only and no change is explained; accounts that do not bridge never explain a change."""
+    from engine.address import you
     v = {x.key: x for x in variances}
     pat = v["pat"]
+    if gate is not None and not gate.same_basis:
+        text = f"Lợi nhuận sau thuế kỳ này {spoken(pat.current)}. " + gate.sentence(you())
+        if any(i.code == "not_closed" for i in issues if not i.message.startswith("[")):
+            text = "Số sơ bộ, chưa khoá sổ. " + text
+        errors = [i for i in issues if i.severity == "error" and i.code not in ("recurring_missing", "basis_differs")]
+        if errors:
+            text += f" Cảnh báo: có {len(errors)} lỗi cần xem trước khi gửi, ví dụ: {errors[0].message}."
+        return text
     direction = "tăng" if pat.change > 0 else "giảm" if pat.change < 0 else "không đổi"
     pct = f" ({pat.pct:+.1f}%)".replace(".", ",") if pat.pct is not None else ""
     text = f"Lợi nhuận sau thuế kỳ này {spoken(pat.current)}, {direction} {spoken(abs(pat.change))}{pct} so với kỳ trước."
@@ -127,6 +139,11 @@ def summary_vi(variances: list, issues: list, n_questions: int = 0) -> str:
         text += (f" Chưa nên giải thích lợi nhuận bằng chi phí giảm: kỳ này còn thiếu {names}, "
                  f"chi phí có thể đang thiếu khoảng {spoken(short)} so với kỳ trước, lợi nhuận đang cao hơn thực tế.")
         variances = [x for x in variances if x.key in INCOME_KEYS]
+    held = [x for x in variances if gate is not None and x.drivers and gate.uses_blocked(x)]
+    if held:
+        # A line moved by an account whose balance does not bridge, or that looks renumbered: not explained.
+        variances = [x for x in variances if x not in held]
+        text += " " + gate.sentence(you())
     # Effect of each mapped line on profit: income up helps, cost up hurts.
     effects = [(x, x.change if x.key in INCOME_KEYS else -x.change) for x in variances if x.drivers]
     same_way = sorted((e for e in effects if e[1] * pat.change > 0), key=lambda e: -abs(e[1]))[:2]
@@ -143,7 +160,8 @@ def summary_vi(variances: list, issues: list, n_questions: int = 0) -> str:
             text += f" Bù lại một phần: {x.label.lower()} {'tăng' if x.change > 0 else 'giảm'} {spoken(abs(x.change))}."
     if n_questions:
         text += f" Em đã ghi {n_questions} câu hỏi cần xác minh nguyên nhân trước khi giải thích với sếp."
-    errors = [i for i in issues if i.severity == "error" and i.code != "recurring_missing"]
+    errors = [i for i in issues if i.severity == "error" and i.code != "recurring_missing"
+              and not (held and i.code == "opening_bridge")]       # already said above
     if errors:
         text += f" Cảnh báo: có {len(errors)} lỗi cần xem trước khi gửi, ví dụ: {errors[0].message}."
     elif issues:
