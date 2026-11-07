@@ -79,3 +79,16 @@ def test_the_power_query_smoke_check_queries_are_plain_m():
     assert "Function.InvokeAfter" in pq_smoke.slow_query(20) and "#duration(0, 0, 0, 20)" in pq_smoke.slow_query(20)
     assert pq_smoke.amounts([["PX001", "x", "1200000"], ["PX002", "x", 3400000.0]]) == 4_600_000
     assert pq_smoke.main([]) == 2 or sys.platform == "win32"      # off Windows it says it cannot run
+
+
+def test_receipt_rows_must_add_up_when_clicky_logs_them():
+    """BHC fb08855 logs rows_total/rows_used/rows_dropped per file (rule 4 in rows): Mastersale 97 = 24 + 73."""
+    from engine.monthly_report import spoken
+    from decimal import Decimal
+    right = spoken(Decimal("1869116800"))
+    ev = _events(right)
+    ev[0]["files"][0].update(rows_total=97, rows_used=24, rows_dropped=73)
+    line = next(l for l in bhc_e2e.grade_close(ev, KEY, True, True).lines if l.name.startswith("1b."))
+    assert line.ok and "24+73=97 dòng" in line.detail
+    ev[0]["files"][0]["rows_dropped"] = 70
+    assert not next(l for l in bhc_e2e.grade_close(ev, KEY, True, True).lines if l.name.startswith("1b.")).ok
