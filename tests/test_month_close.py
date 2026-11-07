@@ -1160,7 +1160,8 @@ def test_confirm_logs_where_its_time_goes(folder, tmp_path, monkeypatch):
     _begin(bridge, FakePQ(bridge, folder), sources.DAY_FIRST)
     events = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
     parts = {e["part"]: e["ms"] for e in events if e.get("event") == "close_step" and e.get("step") == "timing"}
-    assert {"keep_original", "read_files", "find_query", "check_sheet", "reconcile", "audit_sheet"} <= set(parts)
+    assert {"keep_original", "read_files", "find_query", "build_query", "query_add", "lint", "check_sheet",
+            "reconcile", "audit_sheet"} <= set(parts)
     assert all(isinstance(ms, int) and ms >= 0 for ms in parts.values())
     assert parts["reconcile"] >= parts["check_sheet"]
 
@@ -1245,3 +1246,17 @@ def test_a_failing_bien_ban_never_logs_the_workbook_name(folder, monkeypatch, ca
         month_close.approve(bridge, pq)
     assert "AgriS" not in caplog.text and "BCTC" not in caplog.text
     assert "Bien ban sheet failed" in caplog.text and "RuntimeError 0x80020009" in caplog.text
+
+
+def test_the_line_under_the_cursor_says_when_excel_starts_loading(folder):
+    # The first Power Query work of an Excel session takes seconds: the caption says what is happening.
+    shown = []
+    bridge = FakeBridge(folder)
+    pq = FakePQ(bridge, folder)
+    month_close.start(bridge, pq, sources.DAY_FIRST)
+    month_close._PROGRESS = shown.append
+    try:
+        month_close.confirm(bridge, pq)
+    finally:
+        month_close._PROGRESS = None
+    assert shown == ["load"] and month_close.WORKING["load"] == "Em đang nạp đơn hàng vào Excel…"

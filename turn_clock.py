@@ -82,6 +82,11 @@ class TurnClock:
         if not bound:
             self.finish()
 
+    def elapsed(self) -> Optional[int]:
+        """Milliseconds since this turn started, or None when no turn is running."""
+        with self._lock:
+            return None if self._t0 is None else int(round((self._now() - self._t0) * 1000))
+
     def mark(self, name: str) -> None:
         """Keep the first time only: later chunks, points or cards of the same turn do not move it."""
         with self._lock:
@@ -146,6 +151,9 @@ class _NoClock:
 
     def idle(self) -> None:
         pass
+
+    def elapsed(self):
+        return None
 
     def mark(self, name: str) -> None:
         pass

@@ -950,10 +950,12 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
                       sum((truth.doc_amounts[d] for d in truth.collisions), ZERO), "",
                       f"{len(truth.collisions)} số chứng từ được dùng cho các đơn khác nhau ({shared}). Đây là đơn thật, "
                       + ("Clicky xoá trùng theo Chi nhánh + Số CT." if keys else "Clicky chỉ xoá dòng giống hệt nhau.")])
-    fixed_m = m_code.folder_query(str(folder), {f.name: f.culture(machine_order) for f in files},
-                                  _typed_columns(files), files[0].header[files[0].columns["doc"]] if "doc" in files[0].columns else None,
-                                  folder_parameter=PARAM_NAME, key_columns=keys, period=period if truth.outside else None,
-                                  delimiter={f.name: f.delimiter for f in files})
+    with _timed("build_query"):
+        fixed_m = m_code.folder_query(str(folder), {f.name: f.culture(machine_order) for f in files},
+                                      _typed_columns(files), files[0].header[files[0].columns["doc"]] if "doc" in files[0].columns else None,
+                                      folder_parameter=PARAM_NAME, key_columns=keys, period=period if truth.outside else None,
+                                      delimiter={f.name: f.delimiter for f in files})
+    _progress("load")                             # Excel's first Power Query work of the session takes seconds
     if name is None:
         name, formula, origin = QUERY_NAME, None, "clicky"
         if _AUDIT is not None:
@@ -963,19 +965,22 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
         notes.append(["Query đơn hàng", "", "", "", "Trong file chưa có query đơn hàng; Clicky tạo query mới đọc đúng kiểu ngày của từng file."])
     elif origin != "workbook":
         formula, moved = _point_at_this_folder(formula, files)
-        pq.add(name, formula)
+        with _timed("query_add"):                 # Excel's Queries.Add: the first one per Excel session is slow
+            pq.add(name, formula)
         notes.append(["Query đơn hàng", "", "", "", f"Lấy từ file {origin}, nạp vào Excel với tên {name} để kiểm tra."
                       + (" Thư mục trong query trỏ tới một máy khác, máy này không có, nên Clicky đổi sang thư mục "
                          "đơn hàng ở đây." if moved else "")])
 
     if formula is not None:
-        findings = m_code.lint(name, formula)
+        with _timed("lint"):
+            findings = m_code.lint(name, formula)
         worst = sorted(findings, key=lambda f: (_LINT_ORDER.index(f.code) if f.code in _LINT_ORDER else 99,
                                                 f.severity != "error"))
         notes += _lint_rows(worst)
     else:
-        pq.add(PARAM_NAME, m_code.parameter_query(str(folder)))
-        pq.add(name, fixed_m)
+        with _timed("query_add"):
+            pq.add(PARAM_NAME, m_code.parameter_query(str(folder)))
+            pq.add(name, fixed_m)
 
     _step("query_add", name=name, origin=origin or "clicky", existing=formula is not None)
     result = _load(pq, name)
@@ -1569,6 +1574,10 @@ async def play(manager, beats: list, keep_card: bool = True) -> None:
             if graphic:
                 graphic.update(avoid=_as_boxes(figures) or None, soft=_as_boxes(words) or None)
                 manager.sig_draw.emit(graphic)
+        since = turn_clock.of(manager).elapsed() if i == 0 else None
+        if since is not None:
+            # From the turn's start to the first card on screen (after locating it and reading the figures).
+            _step("timing", part="first_card", ms=since)
         log.info("beat: %s", beat.text)
         if beat.intake:
             # The receipt: what was read and what was left out, logged before anything is drawn or changed.
@@ -1625,11 +1634,25 @@ WORKING = {
     "read": "Em đang đọc các file trong thư mục…",
     "confirm": "Em đang đối chiếu và sửa trong file…",
     "approve": "Em đang sửa query và tải lại…",
+    "load": "Em đang nạp đơn hàng vào Excel…",
     "save": "Em đang lưu rồi mở lại file để kiểm…",
     "verify": "Em đang mở lại file đã lưu để kiểm…",
     "pick": "Em đang đọc lại với sổ chị chọn…",
     "final": "Em đang chuyển sang Chính thức…",
 }
+
+
+_PROGRESS = None          # set while a step runs in a worker thread: shows how far it got (caption only)
+
+
+def _progress(step: str) -> None:
+    """Say what the long step is doing now. Excel's first Power Query use takes seconds, and the line under
+    the cursor should say so rather than stand still."""
+    if _PROGRESS is not None:
+        try:
+            _PROGRESS(step)
+        except Exception:
+            log.debug("progress caption failed", exc_info=False)
 
 
 def _working(manager, step: str) -> None:
@@ -1673,8 +1696,17 @@ def _open_chat(manager) -> None:
 
 
 async def handle_confirm(manager, transcript: str) -> str:
+    import turn_clock
     _working(manager, "confirm")
-    beats = await asyncio.to_thread(lambda: confirm(manager._excel, _pq(manager)))
+    clock = turn_clock.of(manager)
+    _step("timing", part="to_confirm", ms=clock.elapsed())      # the press → confirm() starting
+    global _PROGRESS
+    _PROGRESS = lambda step: _working(manager, step)
+    try:
+        beats = await asyncio.to_thread(lambda: confirm(manager._excel, _pq(manager)))
+    finally:
+        _PROGRESS = None
+    _step("timing", part="confirm_done", ms=clock.elapsed())    # since the press; play() logs the first card
     await play(manager, beats)
     return ""
 

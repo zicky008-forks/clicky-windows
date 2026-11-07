@@ -205,3 +205,40 @@ def test_every_sample_press_is_a_turn_with_its_own_clock(monkeypatch):
     monkeypatch.setattr(sample.asyncio, "sleep", no_wait)
     asyncio.run(sample._press(Manager(), "Đúng rồi, làm tiếp"))
     assert started == [("button", "Đúng rồi, làm tiếp")] and Manager.sig_turn_started.sent == [("",)]
+
+
+def test_the_confirm_turn_logs_its_dispatch_its_end_and_its_first_card(monkeypatch):
+    # PC lap 1 on dcf6bca: 2.67 s were covered by no mark. These three name the time outside confirm().
+    records = []
+    monkeypatch.setattr("scene_log.record", lambda event, **data: records.append((event, data)))
+    now = _Now()
+    m = _Manager()
+    for n in ("sig_clear_drawings", "sig_point_hold", "sig_point_release", "sig_guided"):
+        setattr(m, n, _Sig())
+    m._clock = turn_clock.TurnClock(now)
+    m._clock.start("typed", "Đúng rồi, làm tiếp")
+    m._excel = object()
+    now.t += 0.25
+
+    def confirm(_bridge, _pq):
+        now.t += 3.0
+        return [mc.Beat("Excel khớp sổ cái.", "'Doi chieu'!C7", "Khớp", "ok", "0 đ")]
+
+    async def locate(_m, _ref):
+        now.t += 0.4
+        return (10.0, 10.0, 50.0, 20.0)
+
+    async def figures(_m):
+        return [], []
+
+    async def say(_text):
+        return True
+    m._reply_local = say
+    monkeypatch.setattr(mc, "confirm", confirm)
+    monkeypatch.setattr(mc, "_pq", lambda _m: None)
+    monkeypatch.setattr(mc, "_locate", locate)
+    monkeypatch.setattr(mc, "_figures", figures)
+    monkeypatch.setattr(mc, "BEAT_GAP_S", 0)
+    asyncio.run(mc.handle_confirm(m, "Đúng rồi, làm tiếp"))
+    parts = {d["part"]: d["ms"] for e, d in records if e == "close_step" and d.get("step") == "timing"}
+    assert parts["to_confirm"] == 250 and parts["confirm_done"] == 3250 and parts["first_card"] == 3650
