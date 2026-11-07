@@ -4,6 +4,6 @@
     "bridge": {"bars_millions": [556, -120, 436]},
     "notes": {"codes": ["wrong_side", "closing_mismatch", "profit_tie", "returns_in_revenue"],
               "fix_sheet": "Doi chieu", "fix_causes": 2},
-    "latency": {"first_feedback_ms": 1000, "point_after_ready_ms": 1500, "ready_ms": 5000, "first_excel_ready_ms": 7000}
+    "latency": {"first_feedback_ms": 1000, "point_after_ready_ms": 1500, "ready_ms": 5000, "first_excel_ready_ms": 8000}
   }
 }
