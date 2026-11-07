@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import sys
 import time
@@ -40,8 +41,18 @@ def prepare(target_root: Path | None = None) -> Path:
     from storage import data_dir
     root = target_root or (data_dir() / "File mau")
     dest = root / time.strftime("%Y%m%d-%H%M%S")
-    shutil.copytree(bundled(), dest)
+    # Contents only: the installed copy can carry a read-only flag, and Excel opens a read-only workbook
+    # in a mode where saving asks for a new name.
+    shutil.copytree(bundled(), dest, copy_function=shutil.copyfile)
     return dest / f"{SAMPLE}.xlsx"
+
+
+def same_file(a, b) -> bool:
+    """Excel's FullName and the prepared path name the same file (case and 8.3 short names aside)."""
+    if not a or not b:
+        return False
+    norm = lambda x: os.path.normcase(os.path.realpath(str(x)))
+    return norm(a) == norm(b)
 
 
 def offer() -> list:
@@ -86,16 +97,24 @@ async def run(manager) -> str:
     if not await asyncio.to_thread(bridge.open_workbook, str(workbook)):
         await mc.play(manager, [Beat("Em chưa mở được Excel. Chị mở Excel lên rồi bấm Xem em làm lần nữa nhé.")])
         return ""
+    active = None
     for _ in range(20):                         # Excel needs a moment before the new workbook is the active one
-        if await asyncio.to_thread(bridge.workbook_path) == str(workbook):
+        active = await asyncio.to_thread(bridge.workbook_path)
+        if same_file(active, workbook):
             break
         await asyncio.sleep(0.5)
+    else:
+        # Never run the month close on whatever else is in front: it may be the user's own file.
+        log.warning("the sample did not become the active workbook: expected %s, Excel has %r", workbook, active)
+        await mc.play(manager, [Beat("Em chưa mở được file mẫu trong Excel. Chị đóng các hộp thoại của Excel "
+                                     "rồi bấm Xem em làm lần nữa nhé. File của chị không bị đụng tới.")])
+        return ""
     mc.use_folder(None)                         # the sample reads its own folder, never a dropped one
     mc._CHOSEN.clear()
     mc._PICKS.clear()
     order = mc.machine_date_order()
     steps = (lambda: mc.start(bridge, pq, order), lambda: mc.confirm(bridge, pq),
-             lambda: mc.approve(bridge, pq), lambda: mc.save_and_verify(bridge))
+             lambda: mc.approve(bridge, pq), lambda: mc.save_and_verify(bridge, workbook))
     for step in steps:
         beats = await asyncio.to_thread(step)
         if not beats:

@@ -212,3 +212,60 @@ def test_figure_boxes_map_each_block_to_screen_pixels():
     assert boxes["numbers"] == [(164.0, 200.0, 228.0, 240.0)]          # B1:B2, "T10" and 1350
     assert (100.0, 200.0, 164.0, 240.0) in boxes["text"]               # A1:A2 labels
     assert (228.0, 240.0, 292.0, 260.0) in boxes["text"]               # C3
+
+
+class SavingBook:
+    """A workbook as Excel reports it: Path is empty for one with no file behind it."""
+    def __init__(self, app, full="C:\\Mau\\Mau_SongHong_T10.xlsx", path="C:\\Mau", read_only=False, renames_to=None):
+        self.app, self.FullName, self.Path, self.ReadOnly = app, full, path, read_only
+        self.renames_to, self.saves, self.alerts_seen = renames_to, 0, []
+
+    def Save(self):
+        self.saves += 1
+        self.alerts_seen.append(self.app.DisplayAlerts)
+        if self.renames_to:                      # Excel could not replace the file and kept a temp copy
+            self.FullName, self.Path = self.renames_to, ""
+
+    def SaveAs(self, Filename, FileFormat):
+        self.saved_as = (Filename, FileFormat, self.app.DisplayAlerts)
+        self.FullName, self.Path, self.ReadOnly = Filename, Filename.rsplit("\\", 1)[0], False
+
+
+def _saving_app(**kw):
+    app = type("App", (), {})()
+    app.DisplayAlerts = True
+    app.ActiveWorkbook = SavingBook(app, **kw)
+    return app
+
+
+def test_save_never_opens_save_as_for_a_workbook_with_no_file():
+    # PC --sample run on 37265be: the workbook had no real path, Save() opened a modal Save As and
+    # every COM call after it was rejected. Clicky must refuse and say it could not save.
+    app = _saving_app(full="65302810", path="")
+    assert ExcelBridge(app=app).save() is False
+    assert app.ActiveWorkbook.saves == 0 and app.DisplayAlerts is True
+
+
+def test_save_refuses_a_read_only_workbook():
+    app = _saving_app(read_only=True)
+    assert ExcelBridge(app=app).save() is False and app.ActiveWorkbook.saves == 0
+
+
+def test_save_runs_with_alerts_off_and_counts_only_if_the_path_held():
+    app = _saving_app()
+    assert ExcelBridge(app=app).save() is True
+    assert app.ActiveWorkbook.alerts_seen == [False] and app.DisplayAlerts is True
+    app = _saving_app(renames_to="C:\\Mau\\65302810")
+    assert ExcelBridge(app=app).save() is False and app.DisplayAlerts is True
+
+
+def test_a_workbook_with_no_file_is_saved_as_the_exact_file_clicky_made():
+    # The sample lives in Clicky's own folder: a workbook Excel holds with no path goes through
+    # SaveAs with that name and alerts off, never Save (which would open the Save As window).
+    target = "C:\\Users\\chi\\AppData\\Local\\Clicky\\File mau\\20261107-130015\\Mau_SongHong_T10.xlsx"
+    app = _saving_app(full="65302810", path="")
+    assert ExcelBridge(app=app).save(target) is True
+    book = app.ActiveWorkbook
+    assert book.saves == 0 and book.saved_as == (target, 51, False) and app.DisplayAlerts is True
+    app = _saving_app(full=target, path=target.rsplit("\\", 1)[0])
+    assert ExcelBridge(app=app).save(target) is True and app.ActiveWorkbook.saves == 1

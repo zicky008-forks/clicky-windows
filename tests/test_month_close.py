@@ -955,3 +955,14 @@ def test_load_errors_name_a_timeout_in_plain_words():
     assert "Privacy levels" in with_dialog and "quyền riêng tư" not in with_dialog
     plain = month_close.load_error_vi(_timed_out())
     assert "180 giây" in plain and "gọi lại em" in plain and "Power Query refresh" not in plain
+
+
+def test_a_save_excel_refuses_gives_a_clear_card_and_no_check(folder):
+    # The bridge refuses to save a workbook with no file behind it (it would open Save As): the user
+    # gets "chưa lưu được", never "khớp", and no delivery.
+    bridge = SavingBridge(folder)
+    pq = _to_the_save_question(bridge, folder)
+    bridge.save = lambda: False
+    beats = month_close.approve(bridge, pq)
+    said = " ".join(f"{b.text} {b.label} {b.note}" for b in beats)
+    assert beats[0].label == "Chưa lưu được" and beats[0].mark == "warn" and "Khớp sổ cái" not in said

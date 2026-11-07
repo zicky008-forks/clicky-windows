@@ -1095,15 +1095,18 @@ def _save_offer() -> Beat:
     return Beat("Em lưu file rồi mở lại bản đã lưu để đối chiếu với sổ cái nhé?", choices=SAVE_CHOICES)
 
 
-def save_and_verify(bridge) -> list:
-    """Save the workbook, re-read the saved xlsx from disk and compare its key cells with the code's figures."""
+def save_and_verify(bridge, target=None) -> list:
+    """Save the workbook, re-read the saved xlsx from disk and compare its key cells with the code's figures.
+
+    target is the exact file to save to when Clicky made the workbook itself (the sample, in Clicky's
+    own folder); the user's own file is only ever saved where it already is."""
     global _PENDING
     if stage() == "save":
         _PENDING = None
     _step("save")
     if not bridge.available():
         return [Beat("Em không thấy file Excel đang mở, nên chưa lưu được.")]
-    if not _try(bridge, "save"):
+    if not _try(bridge, "save", *([str(target)] if target else [])):
         return [Beat("Em chưa lưu được file. Anh bấm Ctrl + S rồi gọi \"kiểm tra file đã lưu\" nhé.",
                      label="Chưa lưu được", mark="warn")]
     return verify_saved(bridge)
