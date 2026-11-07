@@ -139,7 +139,9 @@ async def run(manager, folder: Optional[Path] = None) -> None:
     finally:
         if bridge is not None and pack is not None and hasattr(bridge, "close_opened"):
             # source files opened read-only to show a cell are closed unsaved; the pack is shown again
-            await asyncio.to_thread(bridge.close_opened, str(pack))
+            for name, closed in await asyncio.to_thread(bridge.close_opened, str(pack)) or []:
+                scene_log.record("close_book", name=Path(name).name, closed=bool(closed), saved=False,
+                                 read_only=True)
 
 
 async def handle(manager, transcript: str) -> str:

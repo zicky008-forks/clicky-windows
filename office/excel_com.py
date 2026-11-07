@@ -359,24 +359,27 @@ class ExcelBridge:
             log.warning("Showing %s in Excel failed: %s", _shape(path), _why(exc))
             return False
 
-    def close_opened(self, back_to: Optional[str] = None) -> int:
-        """Close, without saving, the read-only files show_workbook opened; then show back_to again."""
-        app, closed = self._excel(), 0
+    def close_opened(self, back_to: Optional[str] = None) -> list:
+        """Close, without saving, the read-only files show_workbook opened; then show back_to again.
+        Returns [(full name, closed)] so the caller can log what was closed (the robot checks it)."""
+        app, out = self._excel(), []
         opened, self._opened = list(getattr(self, "_opened", [])), []
         if app is None:
-            return 0
+            return [(name, False) for name in opened]
         for name in opened:
+            closed = False
             try:
                 for i in range(app.Workbooks.Count, 0, -1):
                     wb = app.Workbooks(i)
                     if _same_path(str(wb.FullName or ""), name):
                         wb.Close(SaveChanges=False)
-                        closed += 1
+                        closed = True
             except Exception as exc:
                 log.warning("Closing a source file failed: %s", _why(exc))
+            out.append((name, closed))
         if back_to:
             self.show_workbook(back_to)
-        return closed
+        return out
 
     def save(self, path: Optional[str] = None) -> bool:
         """Save the active workbook (only when the user asked Clicky to); never shows a window.
