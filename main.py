@@ -389,6 +389,21 @@ def main():
     choice_card.chosen.connect(lambda _label: overlay.clear_annotations())
     choice_card.dismissed.connect(overlay.clear_annotations)
     manager.sig_turn_started.connect(lambda _q: choice_card.hide())
+    # Job 13: after the first report on the user's own files, "bớt được bao lâu" (kept on this PC only).
+    from ui.feedback_card import FeedbackCard
+    feedback_card = FeedbackCard()
+    manager.sig_feedback.connect(feedback_card.ask)
+
+    def _feedback_sent(choice: str, note: str, run_s):
+        from engine import feedback
+        try:
+            feedback.record(choice, note, run_s)
+        except (OSError, ValueError) as exc:
+            import logging
+            logging.getLogger("clicky.feedback").warning("feedback not kept: %s", type(exc).__name__)
+            return
+        manager._submit(manager._reply_local(feedback.thanks()))
+    feedback_card.sent.connect(_feedback_sent)
     # Rehearsals only (CLICKY_SCENE_LOG set): log every card, box and sentence for the robot to check.
     import scene_log
     scene_log.connect(manager, choice_card)

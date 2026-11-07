@@ -18,6 +18,7 @@ returns Beats (sentence + cell to point at) that the app speaks and points at.
 import asyncio
 import logging
 import re
+import time
 from collections import Counter
 from dataclasses import dataclass
 from decimal import Decimal
@@ -656,8 +657,9 @@ def _workbook_name(bridge) -> Optional[str]:
 
 def start(bridge, pq, machine_order: Optional[str]) -> list:
     """Stage 0: read every file in the folder and say what was read. Nothing in the workbook changes yet."""
-    global _PENDING, _AUDIT
+    global _PENDING, _AUDIT, _RUN_T0
     _PENDING, _AUDIT = None, None
+    _RUN_T0 = time.monotonic()          # the run's wall time, for the first-report feedback (job 13)
     _step("read_folder")
     _EXPECT.clear()
     if not bridge.available():
@@ -2190,13 +2192,35 @@ async def handle_save(manager, transcript: str) -> str:
     manager.sig_clear_drawings.emit()
     beats = await _busy(manager, "save", lambda: save_and_verify(manager._excel))
     await play(manager, beats)
+    _ask_feedback(manager, beats)
     return ""
 
 
 async def handle_verify(manager, transcript: str) -> str:
     beats = await _busy(manager, "verify", lambda: verify_saved(manager._excel))
     await play(manager, beats)
+    _ask_feedback(manager, beats)
     return ""
+
+
+_RUN_T0: Optional[float] = None
+
+
+def _delivered(beats) -> bool:
+    return any(b.label == "Khớp sổ cái" and b.mark == "ok" for b in beats or [])
+
+
+def _ask_feedback(manager, beats) -> None:
+    """Job 13: once the user's own report is saved and re-checked, ask how much time it saved.
+
+    Only from the buttons a user presses (Lưu / kiểm tra file đã lưu), never from the sample, which saves on its own."""
+    from engine import feedback
+    sig = getattr(manager, "sig_feedback", None)
+    if sig is None or not _delivered(beats) or not feedback.due():
+        return
+    card = feedback.card(time.monotonic() - _RUN_T0 if _RUN_T0 is not None else None)
+    _step("feedback_card", asked=True)
+    sig.emit(card)
 
 
 async def handle_self_save(manager, transcript: str) -> str:
