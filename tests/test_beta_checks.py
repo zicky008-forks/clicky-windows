@@ -180,3 +180,11 @@ def test_sample_card_must_state_the_real_time(tmp_path):
     assert not out["Thẻ cuối nói đúng thời gian thật"].ok
     ev[-1]["title"] = "Xong trong 1 phút 14 giây"
     assert names(beta_checks.evaluate(ev, {}, spec, workbook=wb))["Thẻ cuối nói đúng thời gian thật"].ok
+
+
+def test_no_ai_call_and_no_egress_log_is_fine_but_a_call_without_log_is_not():
+    spec = {"egress": {"names": [], "ids": []}}
+    assert all(c.ok for c in beta_checks.evaluate(run(), {}, spec, egress_text=None))
+    out = beta_checks.evaluate(run({"t": 4, "event": "ai_call", "preview_shown": True, "approved": True}), {}, spec,
+                               egress_text=None)
+    assert not [c for c in out if c.name == "Có nhật ký gửi đi"][0].ok

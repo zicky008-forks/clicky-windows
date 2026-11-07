@@ -208,7 +208,10 @@ def egress_checks(events, expected, egress_text: str | None, network: dict | Non
         out.append(Check("Lần gửi đầu có xem trước và được duyệt",
                          bool(first.get("preview_shown")) and bool(first.get("approved")), ""))
     if egress_text is None:
-        out.append(Check("Có nhật ký gửi đi", False, "không đọc được nhật ký gửi đi"))
+        # No call and no log: nothing left the PC (AI is off by default in the beta), which is the safe case.
+        out.append(Check("Có nhật ký gửi đi", not calls,
+                         "không gọi AI lần nào, không có gì gửi đi" if not calls else
+                         f"{len(calls)} lần gọi AI nhưng không đọc được nhật ký gửi đi"))
         return out
     flat = _digits(egress_text)
     names = [n for n in spec.get("names", []) if n and n.casefold() in egress_text.casefold()]

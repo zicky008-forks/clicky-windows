@@ -142,7 +142,9 @@ def evaluate(events: list, sheets: dict, expected: dict) -> Result:
         if ev.get("event") != "beat" or not ev.get("box"):
             continue
         box = ev["box"]
+        graphic = (ev.get("graphic") or {}).get("kind")
         spot = None
+        drawn_graphic = False
         for later in events[idx + 1:]:
             if later.get("event") == "beat":
                 break
@@ -150,6 +152,11 @@ def evaluate(events: list, sheets: dict, expected: dict) -> Result:
             if later.get("event") == "draw" and shape.get("kind") == "spotlight":
                 spot = shape
                 break
+            if graphic and later.get("event") == "draw" and shape.get("kind") == graphic:
+                drawn_graphic = True
+        # A notes scene shows its sticky notes instead of a lit range (by design): the graphic is the frame.
+        if spot is None and drawn_graphic:
+            continue
         if spot is None or not _same_box(spot, box):
             off.append(ev.get("ref"))
     add(Check("Khung sáng nằm đúng ô Excel", not off,

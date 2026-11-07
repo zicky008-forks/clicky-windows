@@ -329,3 +329,15 @@ def test_single_lap_is_unchanged():
     seen = []
     assert rehearse.run_laps(["--workbook", "x.xlsx", "--out", "o"], runner=lambda a: seen.append(a) or 0) == 0
     assert seen == [["--workbook", "x.xlsx", "--out", "o"]]
+
+
+def test_notes_scene_shows_sticky_notes_instead_of_a_lit_range():
+    events = good_run() + [
+        {"t": 80.0, "event": "beat", "i": 2, "ref": "'BC thang'!A1:G23", "box": BOX, "graphic": {"kind": "notes"}},
+        {"t": 80.1, "event": "draw", "shape": {"kind": "notes", "notes": []}},
+    ]
+    res = checks.evaluate(events, SHEETS, EXPECTED)
+    assert "Khung sáng nằm đúng ô Excel" not in [c.name for c in res.checks if not c.ok]
+    events[-1] = {"t": 80.1, "event": "draw", "shape": {"kind": "card"}}
+    res = checks.evaluate(events, SHEETS, EXPECTED)
+    assert "Khung sáng nằm đúng ô Excel" in [c.name for c in res.checks if not c.ok]
