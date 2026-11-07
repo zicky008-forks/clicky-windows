@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 from engine import audit, intake as intake_mod, m_code, sources, visuals
+from engine.log_safe import scrub          # clicky.log never holds a customer's file or folder name
 from engine.monthly_report import spoken
 from engine.trial_balance import ZERO
 from office.power_query import LoadTimeout, ReadFailed
@@ -325,7 +326,7 @@ def _try(bridge, method: str, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except Exception as exc:
-        log.debug("Excel %s failed: %s", method, exc)
+        log.debug("Excel %s failed: %s", method, scrub(exc))
         return None
 
 
@@ -984,7 +985,7 @@ def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
                              _check_ref("A7:E7"), "Chưa đối chiếu được", "warn", "Chưa có số",
                              "Không phải lỗi file của anh. Anh cập nhật Clicky rồi gọi lại em.")]
     if isinstance(result, str):
-        log.warning("loading query %s failed: %s", name, result)
+        log.warning("loading query %s failed: %s", name, scrub(result))
         why_vi = load_error_vi(result)
         _write_check_sheet(bridge, None, truth, ledger,
                            [["Lỗi khi tải query", "", "", "", why_vi + " Chi tiết kỹ thuật ghi trong clicky.log."]] + notes)
@@ -1082,7 +1083,7 @@ def _approve(bridge, pq, job) -> list:
     try:
         before = dict(pq.list()).get(job["name"])
     except Exception as exc:
-        log.warning("reading query %s before the fix failed: %s", job["name"], exc)
+        log.warning("reading query %s before the fix failed: %s", job["name"], scrub(exc))
         before = None
     pq.add(PARAM_NAME, m_code.parameter_query(str(folder)))
     if not pq.add(job["name"], job["formula"]):
@@ -1099,7 +1100,7 @@ def _approve(bridge, pq, job) -> list:
     if isinstance(result, str):
         # The raw COM/Power Query text is for the log, never the screen. Put the user's query back as it was,
         # so a failed fix leaves the workbook as Clicky found it, and end the turn in one clear sentence.
-        log.warning("reloading the fixed query %s failed: %s", job["name"], result)
+        log.warning("reloading the fixed query %s failed: %s", job["name"], scrub(result))
         restored = before is not None and pq.add(job["name"], before)
         kept = "Query cũ vẫn giữ nguyên." if restored else _BACKUP_NOTE
         why_vi = load_error_vi(result)
@@ -1398,7 +1399,7 @@ async def _locate(manager, ref_text: str):
             log.warning("cannot place %s on screen (Excel rect %s)", ref_text, rect)
         return box
     except Exception as exc:
-        log.warning("pointing at %s failed: %s", ref_text, exc)
+        log.warning("pointing at %s failed: %s", ref_text, scrub(exc))
         scene_log.record("locate", ref=ref_text, excel_rect=None, box=None, error=str(exc)[:200])
         return None
 
@@ -1409,7 +1410,7 @@ async def _filled_area(manager):
         rect = await asyncio.to_thread(manager._excel.content_rect)
         return manager._physical_to_logical_bbox(rect) if rect else None
     except Exception as exc:
-        log.debug("filled area unknown: %s", exc)
+        log.debug("filled area unknown: %s", scrub(exc))
         return None
 
 
@@ -1425,7 +1426,7 @@ async def _figures(manager):
         try:
             found = await asyncio.to_thread(read)
         except Exception as exc:
-            log.debug("figures on screen unknown: %s", exc)
+            log.debug("figures on screen unknown: %s", scrub(exc))
     if found and (found.get("numbers") or found.get("text")):
         many = getattr(manager, "_physical_to_logical_boxes", None)
         convert = many or (lambda rects: [manager._physical_to_logical_bbox(r) for r in rects])
@@ -1465,7 +1466,7 @@ async def _box_of(manager, ref: str):
         rect = await asyncio.to_thread(manager._excel.screen_rect, ref, False)
         return manager._physical_to_logical_bbox(rect) if rect else None
     except Exception as exc:
-        log.debug("graphic piece %s not on screen: %s", ref, exc)
+        log.debug("graphic piece %s not on screen: %s", ref, scrub(exc))
         return None
 
 

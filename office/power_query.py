@@ -13,6 +13,7 @@ from typing import Callable, Optional
 
 from engine import m_code
 from storage import atomic_write, data_dir
+from engine.log_safe import scrub      # clicky.log never holds a customer's file or folder name
 
 log = logging.getLogger(__name__)
 MAX_PROMPT_CHARS = 6000
@@ -59,7 +60,7 @@ def excel_dialogs() -> list:
             found.append("hộp thoại")
         return found
     except Exception as exc:                  # noqa: BLE001 - watching is best effort, never a failure
-        log.debug("listing Excel dialogs failed: %s", exc)
+        log.debug("listing Excel dialogs failed: %s", scrub(exc))
         return []
 
 
@@ -152,7 +153,7 @@ class PowerQuery:
             qs = self._queries()
             return [(qs.Item(i + 1).Name, qs.Item(i + 1).Formula) for i in range(qs.Count)] if qs else []
         except Exception as exc:
-            log.debug("Power Query list failed: %s", exc)
+            log.debug("Power Query list failed: %s", scrub(exc))
             return []
 
     def lint_all(self) -> list:
@@ -169,7 +170,7 @@ class PowerQuery:
             query.Formula = formula
             return True
         except Exception as exc:
-            log.warning("Power Query replace failed for %s: %s", name, exc)
+            log.warning("Power Query replace failed for %s: %s", name, scrub(exc))
             return False
 
     def _backup(self, name: str, formula: str) -> None:
@@ -194,7 +195,7 @@ class PowerQuery:
             qs.Add(name, formula)
             return True
         except Exception as exc:
-            log.warning("Power Query add failed for %s: %s", name, exc)
+            log.warning("Power Query add failed for %s: %s", name, scrub(exc))
             return False
 
     def table_for(self, name: str):
@@ -213,7 +214,7 @@ class PowerQuery:
                     if f"[{name}]" in text or f'Location={name};' in text or f'Location="{name}"' in text:
                         return lo
         except Exception as exc:
-            log.debug("table_for %s failed: %s", name, exc)
+            log.debug("table_for %s failed: %s", name, scrub(exc))
         return None
 
     def load(self, name: str, timeout: float = None, step=None) -> tuple:
@@ -247,12 +248,12 @@ class PowerQuery:
                 try:
                     app.DisplayAlerts = alerts
                 except Exception as exc:        # noqa: BLE001 - Excel still busy with a late refresh
-                    log.debug("restoring DisplayAlerts failed: %s", exc)
+                    log.debug("restoring DisplayAlerts failed: %s", scrub(exc))
             if late is not None:
-                log.warning("Power Query load of %s stopped: %s", name, late)
+                log.warning("Power Query load of %s stopped: %s", name, scrub(late))
                 return late
         except Exception as exc:
-            log.warning("Power Query load failed for %s: %s", name, exc)
+            log.warning("Power Query load failed for %s: %s", name, scrub(exc))
             return str(exc)
         try:
             # Value2 gives dates as serial numbers, so reading never depends on
@@ -261,7 +262,7 @@ class PowerQuery:
             rows = [list(r) for r in grid] if isinstance(grid, tuple) else [[grid]]
             return lo.Parent.Name, rows[0], rows[1:]
         except Exception as exc:
-            log.warning("Reading the loaded table for %s failed: %s", name, exc)
+            log.warning("Reading the loaded table for %s failed: %s", name, scrub(exc))
             return ReadFailed(str(exc))
 
     def refresh_all(self) -> None:
