@@ -222,6 +222,20 @@ def show_outcome(log: Path, timeout: float = 40.0) -> str:
     return "failed" if e.get("event") == "present_failed" else "attached"
 
 
+FRAME_DRAW_MAX_S = 2.2      # ui/overlay.py SHAPE_DRAW_MAX_S: frames are drawn one after another, by hand
+
+
+def draw_seconds(boxes: list, settle: float) -> float:
+    """How long the frames of one slide take to finish drawing: each rect strokes in for up to 2.2 s,
+    one after the other (PC 07/11: slide 3 shot with the first frame half drawn, the second not yet)."""
+    return max(settle, 0.5 + FRAME_DRAW_MAX_S * len(boxes or []))
+
+
+def frames_settle(slide_event, settle: float) -> float:
+    """Seconds to wait before the screenshot: until this slide's frames (its rects) are fully drawn."""
+    return draw_seconds((slide_event or {}).get("rects") or [], settle)
+
+
 def window_handle(win) -> int:
     """SlideShowWindow.HWND. Late-bound win32com hands back HWND as a callable that fails with 'Member not
     found' when called as a method (PC, 07/11), so ask for it as a property; the show window's class
@@ -381,7 +395,7 @@ def main(argv=None) -> int:
                         pass
                     _key(VK_NEXT)
                 e = wait_event(log, "present_slide", 8, where=lambda ev, n=n: int(ev.get("slide", 0)) == n)
-                time.sleep(a.settle)
+                time.sleep(frames_settle(e, a.settle))
                 if e is not None and n in want:
                     shot = shots / f"slide-{n:02d}.png"
                     origin = screenshot(shot)
