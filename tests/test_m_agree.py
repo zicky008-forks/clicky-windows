@@ -76,5 +76,5 @@ def test_a_real_xls_without_a_kind_column_still_reads_its_sheets():
     from engine import m_code
     m = m_code.order_files_query("ThuMuc", {"x.xls": {"order": "dmy", "encoding": 65001}}, ["amount", "date", "doc"], None)
     reader = m[m.index("DocExcel ="):m.index("in List.Transform(to[Data], Table.ToRows)")]
-    assert 'Table.HasColumns(so, "Kind")' in reader and 'Text.EndsWith(Text.From([Name]), "$")' in reader
+    assert 'Table.HasColumns(so, "Kind")' in reader and 'Text.EndsWith(n, "$")' in reader and 'Text.EndsWith(n, "$\'")' in reader
     assert reader.index('Table.HasColumns(so, "Kind")') < reader.index('[Kind] = "Sheet"')
