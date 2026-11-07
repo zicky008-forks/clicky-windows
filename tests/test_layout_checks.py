@@ -142,7 +142,7 @@ def test_robot_waits_until_every_turn_has_its_latency_line():
     assert layout_checks.turns_measured([])
 
 
-READY = "Lượt chạy bằng code: tính xong ≤ 5000 ms (lượt nạp Power Query đầu ≤ 7000 ms, có dòng chữ báo chờ)"
+READY = "Lượt chạy bằng code: tính xong ≤ 5000 ms (lượt nạp Power Query đầu ≤ 8000 ms, có dòng chữ báo chờ)"
 
 
 def _confirm(ready, caption=True, load=True):
@@ -157,11 +157,12 @@ def _confirm(ready, caption=True, load=True):
 
 
 def test_ready_gates_from_the_lead():
-    """84603e7 on the PC: cold 6828 ms with the caption up passes; warm 3563 passes; 7.5 s or no caption fails."""
+    """84603e7 on the PC: cold 6828 ms with the caption up passes; warm 3563 passes; 8.5 s or no caption fails (lead: 8 s, 07/11)."""
     spec = {"layout": {"latency": SPEC["layout"]["latency"]}}
     assert by_name(layout_checks.evaluate(_confirm(6828), spec))[READY].ok
     assert by_name(layout_checks.evaluate(_confirm(3563), spec))[READY].ok
-    assert not by_name(layout_checks.evaluate(_confirm(7500), spec))[READY].ok
+    assert not by_name(layout_checks.evaluate(_confirm(8500), spec))[READY].ok
+    assert by_name(layout_checks.evaluate(_confirm(7531), spec))[READY].ok          # 9ea1aa4 lap 1, clean PC
     bad = by_name(layout_checks.evaluate(_confirm(6828, caption=False), spec))[READY]
     assert not bad.ok and "báo đang chờ" in bad.detail
     # Only the first query-loading turn gets the longer limit; a turn with no Power Query must be ≤ 5 s.

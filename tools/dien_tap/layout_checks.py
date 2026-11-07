@@ -132,7 +132,7 @@ def _code_turns(events):
 
 
 def ready_checks(events, spec, tagged) -> list:
-    """Beta gates (lead, 07/11): a code turn has its answer within ready_ms; the first turn of the session that
+    """Beta gates (lead, 07/11; first query turn 8 s after three clean cold runs 6.8/7.9/7.5 s): a code turn has its answer within ready_ms; the first turn of the session that
     loads a query (Excel's first Power Query start) may take up to first_excel_ready_ms, but only while the
     caption tells the user what it is waiting for."""
     limit, first_limit = spec.get("ready_ms"), spec.get("first_excel_ready_ms")
