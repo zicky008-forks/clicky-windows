@@ -218,3 +218,27 @@ def test_a_real_com_object_is_marshalled_to_the_worker_thread():
     fso = win32com.client.Dispatch("Scripting.FileSystemObject")
     late, name = call_with_timeout(fso, "GetTempName", (), timeout=20, poll=0.1, dialogs=list)
     assert late is None and str(name).lower().endswith(".tmp")
+
+
+def test_adding_a_query_logs_where_its_time_goes_and_skips_an_unchanged_m(tmp_path, monkeypatch):
+    # PC 9ea1aa4: the first query add of an Excel session took 3.6 s. Split it: finding the query, the backup,
+    # and Excel taking the M. The same M (line endings aside) is not written again and logs skipped=true.
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    monkeypatch.setenv("CLICKY_DATA_DIR", str(tmp_path))
+    bridge = FakeBridge([("DonHang", BRANCH_QUERY.replace("\n", "\r\n"))])
+    added = []
+    bridge.queries.Add = lambda name, formula: added.append(FakeQuery(name, formula))
+    pq = PowerQuery(bridge)
+    assert pq.add("DonHang", BRANCH_QUERY)                         # same M, Excel's CRLF: nothing written
+    assert bridge.queries.Item("DonHang").Formula == BRANCH_QUERY.replace("\n", "\r\n")
+    assert not (tmp_path / "power_query_backups.json").exists()
+    assert pq.add("DonHang", CLEAN_QUERY)                          # a real change: backed up, then written
+    assert bridge.queries.Item("DonHang").Formula == CLEAN_QUERY
+    assert pq.add("KhachHang", CLEAN_QUERY) and added[0].Name == "KhachHang"
+    parts = [(e["part"], e.get("skipped"), e.get("found"), e.get("new")) for e in map(json.loads, log.read_text(encoding="utf-8").splitlines())
+             if e.get("step") == "timing"]
+    assert parts == [("pq_find", None, True, None), ("pq_read", None, None, None), ("formula_write", True, None, None),
+                     ("pq_find", None, True, None), ("pq_read", None, None, None), ("pq_backup", None, None, None),
+                     ("formula_write", False, None, None),
+                     ("pq_find", None, False, None), ("formula_write", False, None, True)]
