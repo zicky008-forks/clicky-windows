@@ -6,6 +6,7 @@ used from any thread. Needs pywin32 on Windows; elsewhere every call returns Non
 """
 import ctypes
 import logging
+import os
 import sys
 from decimal import Decimal
 from typing import Optional
@@ -123,6 +124,14 @@ def reveal_scroll(row: int, rows: int, col: int, seen_rows: int, seen_cols: int)
     top = 1 if row + rows - 1 <= seen_rows - 1 else max(1, row - seen_rows // 3)
     left = 1 if col < seen_cols - 1 else col
     return top, left
+
+XL_OPEN_XML_WORKBOOK = 51        # .xlsx
+
+
+def _same_path(a: str, b: str) -> bool:
+    """Two Windows paths name the same file (Excel's FullName may differ in case from ours)."""
+    return bool(a) and bool(b) and os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
 
 class ExcelBridge:
     def __init__(self, app=None, dpi: Optional[int] = None):
@@ -294,11 +303,40 @@ class ExcelBridge:
             log.warning("Opening %s in Excel failed: %s", path, exc)
             return False
 
-    def save(self) -> bool:
-        """Save the active workbook in place (only when the user asked Clicky to)."""
+    def save(self, path: Optional[str] = None) -> bool:
+        """Save the active workbook (only when the user asked Clicky to); never shows a window.
+
+        Workbook.Save on a workbook with no file behind it (new, or renamed by Excel to a temporary
+        name like "65302810" after a save it could not finish) opens a modal Save As dialog. That
+        dialog shows the user's own folders and blocks every later COM call. So:
+        - with `path` (a file Clicky made, e.g. the sample in Clicky's folder), any workbook that is not
+          already that saved file goes through SaveAs with that exact name;
+        - without it (the user's own file), Clicky refuses and says it could not save.
+        Alerts stay off while saving, so a failure comes back as an error rather than a window, and the
+        save counts only if the workbook ends up at the file it should be.
+        """
         app = self._excel()
         try:
-            app.ActiveWorkbook.Save()
+            wb = app.ActiveWorkbook
+            before = str(wb.FullName or "")
+            has_file = bool(str(wb.Path or "")) and not bool(getattr(wb, "ReadOnly", False))
+            if path is None and not has_file:
+                log.warning("Not saving %r: no writable file behind it (Excel would open Save As)", before)
+                return False
+            target = str(path) if path else before
+            alerts = app.DisplayAlerts
+            app.DisplayAlerts = False
+            try:
+                if has_file and _same_path(before, target):
+                    wb.Save()
+                else:
+                    wb.SaveAs(Filename=target, FileFormat=XL_OPEN_XML_WORKBOOK)
+            finally:
+                app.DisplayAlerts = alerts
+            after = str(wb.FullName or "")
+            if not _same_path(after, target):
+                log.warning("Saving %r did not finish: Excel now calls it %r", target, after)
+                return False
             return True
         except Exception as exc:
             log.warning("Saving the workbook failed: %s", exc)
@@ -308,7 +346,12 @@ class ExcelBridge:
         """Save a copy of the workbook as it is now under another name; the open workbook is not renamed or saved."""
         app = self._excel()
         try:
-            app.ActiveWorkbook.SaveCopyAs(path)
+            alerts = app.DisplayAlerts
+            app.DisplayAlerts = False           # a failure comes back as an error, never as a window
+            try:
+                app.ActiveWorkbook.SaveCopyAs(path)
+            finally:
+                app.DisplayAlerts = alerts
             return True
         except Exception as exc:
             log.warning("Saving a copy to %s failed: %s", path, exc)
