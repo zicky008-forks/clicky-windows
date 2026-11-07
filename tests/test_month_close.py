@@ -1273,9 +1273,16 @@ def test_the_line_under_the_cursor_says_when_excel_starts_loading(folder):
     month_close._PROGRESS = shown.append
     try:
         month_close.confirm(bridge, pq)
+        fixed = []
+        month_close._PROGRESS = fixed.append
+        month_close.approve(bridge, pq)
     finally:
         month_close._PROGRESS = None
-    assert shown == ["load"] and month_close.WORKING["load"] == "Em đang nạp đơn hàng vào Excel…"
+    # Every slow stage says its line as it starts, in the order it runs (Case 05: ~50 s under one line).
+    assert shown == ["keep", "read", "query", "load", "check_sheet", "audit"]
+    assert fixed == ["load", "check_sheet", "tb_copy", "report", "audit"]
+    assert month_close.WORKING["load"] == "Em đang nạp đơn hàng vào Excel…"
+    assert month_close.WORKING["check_sheet"] == "Em đang ghi sheet Kiểm tra…"
 
 
 def test_a_total_row_at_the_end_of_the_export_is_dropped_before_dates_are_typed_and_counted(tmp_path):
