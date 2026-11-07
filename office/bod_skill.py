@@ -77,7 +77,7 @@ def beats_for(reviews: list, out: Optional[dict]) -> list:
                               was=_figure(f.actual, f.code) if f.actual is not None and f.expected is not None else "",
                               # a cell in a source file: the card says which file, sheet and cell
                               note=f"Nhóm {f.group} · file {book}, ô {f.where}" if other else f"Nhóm {f.group}",
-                              book=str(Path(r.folder) / book) if r.folder else book))
+                              book=str(Path(r.folder) / book) if r.folder else book, book_pack=not other))
         if r.notes:
             beats.append(Beat(f"Sổ chi tiết còn {len(r.notes)} điểm cần hỏi kế toán, không phải lỗi của bộ BOD. "
                               "Em ghi trong file kết quả.", mark="warn"))
@@ -139,9 +139,10 @@ async def run(manager, folder: Optional[Path] = None) -> None:
     finally:
         if bridge is not None and pack is not None and hasattr(bridge, "close_opened"):
             # source files opened read-only to show a cell are closed unsaved; the pack is shown again
+            from office.excel_com import book_id
             for name, closed in await asyncio.to_thread(bridge.close_opened, str(pack)) or []:
-                scene_log.record("close_book", name=Path(name).name, closed=bool(closed), saved=False,
-                                 read_only=True)
+                scene_log.record("close_book", book=book_id(name), pack=book_id(name) == book_id(pack),
+                                 closed=bool(closed), saved=False, read_only=True)
 
 
 async def handle(manager, transcript: str) -> str:

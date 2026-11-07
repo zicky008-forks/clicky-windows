@@ -1104,12 +1104,19 @@ def test_a_cell_in_another_file_is_lit_in_that_file_and_no_card_outlives_its_mis
     excel = _PlayExcel()
     m = _PlayManager(excel)
     beats = [month_close.Beat("Có 2 chỗ cần sửa."),
-             month_close.Beat("Tổng lệch sổ.", "'Tong hop'!B13", "Tổng chi phí lệch sổ", "bad", "10 đ", book="C:/case/pack.xlsx"),
+             month_close.Beat("Tổng lệch sổ.", "'Tong hop'!B13", "Tổng chi phí lệch sổ", "bad", "10 đ", book="C:/case/pack.xlsx",
+                              book_pack=True),
              month_close.Beat("Tháng 7 còn số AOP.", "Data!I174", "File AOPR: tháng khoá còn số kế hoạch", "bad", "5 đ",
                               note="Nhóm 5 · file KeHoach_AOPR1.xlsx, ô Data!I174", book="C:/case/KeHoach_AOPR1.xlsx"),
              month_close.Beat("Em đã ghi kết quả.", mark="ok")]
     asyncio.run(month_close.play(m, beats, keep_card=False))
     assert excel.shown == ["C:/case/pack.xlsx", "C:/case/KeHoach_AOPR1.xlsx"]
+    import json
+    from office.excel_com import book_id
+    shows = [json.loads(l) for l in (tmp_path / "scene.jsonl").read_text(encoding="utf-8").splitlines() if '"show_book"' in l]
+    assert [(e["book"], e["pack"]) for e in shows] == [(book_id("C:/case/pack.xlsx"), True),
+                                                      (book_id("C:/case/KeHoach_AOPR1.xlsx"), False)]
+    assert not any("KeHoach" in json.dumps(e) or "pack.xlsx" in json.dumps(e) for e in shows)
     per = _between_says(m.log)
     third = [n for n, _ in per[2]]
     assert third.index("sig_clear_drawings") < third.index("sig_draw")          # old card gone, then the new frame
