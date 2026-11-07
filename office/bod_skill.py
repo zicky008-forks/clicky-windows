@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 import scene_log
+from engine.log_safe import scrub
 from office import month_close as mc
 from office.month_close import Beat
 
@@ -109,7 +110,7 @@ def _open_pack(bridge, path: Path) -> None:
             return
         bridge.open_workbook(str(path))
     except Exception as exc:                 # noqa: BLE001 - the results are written anyway
-        log.warning("cannot open %s in Excel: %s", path, exc)
+        log.warning("cannot open the pack in Excel: %s", scrub(exc))   # never the customer's file name
 
 
 async def run(manager, folder: Optional[Path] = None) -> None:
@@ -120,7 +121,8 @@ async def run(manager, folder: Optional[Path] = None) -> None:
         await mc.play(manager, [Beat("Chị mở một file trong thư mục có bộ BOD, hoặc thả thư mục đó vào ô thả file, "
                                      "rồi gõ lại: soát bộ BOD.")])
         return
-    scene_log.record("bod_start", folder=str(folder))
+    from office.excel_com import book_id
+    scene_log.record("bod_start", folder=book_id(str(folder)))   # an id, never the customer's folder name
     try:
         reviews = await asyncio.to_thread(bod_check.review, folder)
         out = await asyncio.to_thread(bod_check.write_outputs, reviews, folder / OUT_DIR) if reviews else None
