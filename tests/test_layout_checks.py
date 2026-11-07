@@ -121,3 +121,22 @@ def test_widget_over_a_figure_fails():
     ev = story() + [{"t": 9, "event": "widget", "rect": [5, 5, 50, 50], "covers_figures": 1, "covers_range": False}]
     rows = by_name(layout_checks.evaluate(ev, SPEC))
     assert not rows["Thẻ, nút chọn và hình không che con số (Clicky tự đo)"].ok
+
+
+def test_untimed_button_turns_fail_only_on_a_build_that_tags_the_mode():
+    """37265be: the chat turn is timed, the button presses are not. Shown, but the run is not failed for it."""
+    spec = {"layout": {"latency": SPEC["layout"]["latency"]}}
+    turns = [{"t": 1, "event": "turn"}, {"t": 2, "event": "turn"}, {"t": 3, "event": "turn"}]
+    old = by_name(layout_checks.evaluate(turns + [{"t": 4, "event": "latency", "source": "typed",
+                                                   "first_feedback": 16}], spec))
+    c = old["Mỗi lượt có đo thời gian phản hồi"]
+    assert not c.ok and not c.blocking and "1 lần đo / 3 lượt" in c.detail
+    new = by_name(layout_checks.evaluate(turns + [{"t": 4, "event": "latency", "source": "chat", "mode": "code",
+                                                   "first_feedback": 16}], spec))
+    assert new["Mỗi lượt có đo thời gian phản hồi"].blocking
+
+
+def test_robot_waits_until_every_turn_has_its_latency_line():
+    assert not layout_checks.turns_measured([{"event": "turn"}, {"event": "latency"}, {"event": "turn"}])
+    assert layout_checks.turns_measured([{"event": "turn"}, {"event": "latency"}])
+    assert layout_checks.turns_measured([])

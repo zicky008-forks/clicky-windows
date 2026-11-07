@@ -430,6 +430,9 @@ def main(argv=None) -> int:
         wb = excel.ActiveWorkbook
         copy = Path(wb.FullName) if wb is not None else None
     sheets = sheet_values(wb) if wb is not None else {}
+    if "latency" in (expected.get("layout") or {}):
+        # The last turn's latency line is written when that turn ends, often after its final scene.
+        wait_log(log, layout_checks.turns_measured, expected.get("latency_wait_seconds", 15))
     events = checks.read_log(log)
     result = checks.evaluate(events, sheets, expected)
     result.checks.append(checks.stage_check(stalled))

@@ -108,6 +108,12 @@ def _gap(e, a, b):
     return e[b] - e[a] if isinstance(e.get(a), (int, float)) and isinstance(e.get(b), (int, float)) else None
 
 
+def turns_measured(events) -> bool:
+    """Every turn so far has its latency line (Clicky writes it when the turn ends)."""
+    turns = sum(e.get("event") == "turn" for e in events)
+    return sum(e.get("event") == "latency" for e in events) >= turns
+
+
 def latency_checks(events, spec) -> list:
     """Code turns must answer fast; voice turns are measured only. Limits block only on a build that tags
     each turn with its mode (PR #16): an older build's numbers are shown but cannot fail the run."""
@@ -125,7 +131,8 @@ def latency_checks(events, spec) -> list:
         return ", ".join(bits)
 
     out = [Check("Mỗi lượt có đo thời gian phản hồi", bool(lat) and len(lat) >= len(turns),
-                 f"{len(lat)} lần đo / {len(turns)} lượt · " + "; ".join(line(e) for e in lat[:6]))]
+                 f"{len(lat)} lần đo / {len(turns)} lượt · " + "; ".join(line(e) for e in lat[:6]),
+                 blocking=tagged)]
     limit = spec.get("first_feedback_ms")
     if limit is not None and code:
         slow = [e for e in code if (e.get("first_feedback") or 0) > limit]
