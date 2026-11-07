@@ -173,7 +173,9 @@ def grade(events: list, captures: list, open_image=None):
         rows.append(("Clicky tính đúng vị trí ô (so với robot tự hỏi Excel)", err <= MAX_RECT_ERR,
                      f"{ref}: lệch {err:.1f} px", True, cap.beat_no, {"cell": robot}))
 
-        if cap.shot and open_image:
+        # A sticky-notes scene lights no range on purpose (plain graphic): there is no frame to find.
+        plain = (beat.get("graphic") or {}).get("kind") == "notes"
+        if cap.shot and open_image and not plain:
             img = open_image(cap.shot)
             ox, oy = cap.origin
             pad = FRAME_PAD * m[0]

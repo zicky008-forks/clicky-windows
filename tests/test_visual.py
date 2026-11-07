@@ -154,3 +154,17 @@ def test_watcher_can_be_stopped_and_joined(tmp_path):
     w.stop()
     w.join(timeout=5)
     assert not w.is_alive()
+
+
+def test_sticky_notes_scene_is_not_asked_for_a_frame(tmp_path):
+    """Run (a), 07/11: the notes scene lights no range on purpose, so 'no frame found' was a false note."""
+    shot = tmp_path / "giay-nho.png"
+    Image.new("RGB", (800, 600), (255, 255, 255)).save(shot)
+    ev = events()
+    ev[2]["graphic"] = {"kind": "notes", "notes": [{"codes": ["returns_in_revenue"]}]}
+    del ev[3]                                   # no spotlight is drawn for a notes scene
+    names = by_name(visual.grade(ev, [capture(str(shot))], lambda p: Image.open(p).convert("RGB")))
+    assert "Thấy khung vẽ trên ảnh chụp" not in names
+    assert "Khung vẽ thật nằm đúng ô trên màn hình" not in names
+    plain = by_name(visual.grade(events(), [capture(str(shot))], lambda p: Image.open(p).convert("RGB")))
+    assert not plain["Thấy khung vẽ trên ảnh chụp"][1]     # an ordinary scene with no frame is still noted
