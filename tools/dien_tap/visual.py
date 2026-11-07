@@ -270,17 +270,17 @@ class Watcher(threading.Thread):
         super().__init__(daemon=True)
         self.log, self.out, self.settle = log, out, settle
         self.captures: list = []
-        self._stop = threading.Event()
+        self._halt = threading.Event()
 
     def stop(self):
-        self._stop.set()
+        self._halt.set()
 
     def run(self):
         import pythoncom
         pythoncom.CoInitialize()
         try:
             seen = 0
-            while not self._stop.is_set():
+            while not self._halt.is_set():
                 beats = [e for e in _read(self.log) if e.get("event") == "beat"]
                 while seen < len(beats):
                     beat = beats[seen]

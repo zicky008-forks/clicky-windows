@@ -144,3 +144,13 @@ def test_new_pointer_spot_under_the_frame_passes():
     ev.append({"t": 2.4, "event": "point", "x": x, "y": y, "label": NO_BUBBLE})
     rows = visual.grade(ev, [capture()])
     assert all(r[1] for r in rows), [r for r in rows if not r[1]]
+
+
+def test_watcher_can_be_stopped_and_joined(tmp_path):
+    # Regression: an attribute named _stop shadowed Thread._stop, so join() raised TypeError on Python 3.12.
+    w = visual.Watcher(tmp_path / "scene.jsonl", tmp_path)
+    w.run = lambda: w._halt.wait(5)
+    w.start()
+    w.stop()
+    w.join(timeout=5)
+    assert not w.is_alive()
