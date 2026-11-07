@@ -55,6 +55,8 @@ INTAKE_CHOICES = ("Đúng rồi, làm tiếp", "Có chỗ sai")
 CONFIRM_TRIGGER = r"^\s*(đúng rồi|dung roi|đúng|dung|làm tiếp|lam tiep|tiếp tục|tiep tuc)\b(\s+\S+){0,3}\s*[.!]?\s*$"
 WRONG_TRIGGER = r"^\s*(có chỗ sai|co cho sai|sai rồi|sai roi|chưa đúng|chua dung)\b(\s+\S+){0,4}\s*[.!]?\s*$"
 PICK_TRIGGER = r"^\s*(dùng|dung|chọn|chon|lấy|lay)\s+\S+"
+COLUMN_TRIGGER = r"^\s*(cột|cot|đúng, dùng file này|dung, dung file nay|không phải đơn hàng|khong phai don hang)\b"
+COLUMN_YES, COLUMN_NO = "Đúng, dùng file này", "Không phải đơn hàng"
 FINAL_TRIGGER = r"\b(chốt|chot|chuyển sang|chuyen sang|đánh dấu|danh dau)\s+(là\s+|la\s+)?(chính thức|chinh thuc)\b"
 
 _PENDING: Optional[dict] = None
@@ -617,7 +619,11 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     folder = _data_folder(bridge)
     if folder is None:
         return [Beat("File Excel này chưa được lưu. Anh lưu nó vào thư mục có các file đơn hàng và file cân đối tài khoản, rồi gọi lại em.")]
+    _load_columns()
     files = sources.find_order_files(folder)
+    unknown = sources.unexplained_order_files(folder, {f.name for f in files})
+    if unknown:                                     # an order-like file under column names Clicky does not know
+        return _ask_columns(folder, unknown[0], machine_order)
     if not files:
         return _stop_no_orders(folder, _workbook_name(bridge))
     _tbs, aside, conflict = _tb_groups(folder)
@@ -643,7 +649,8 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
             + (f" từ {len(files)} trên {len(files) + len(unread)} file đơn hàng" if unread else "") + "." + missed
             + " Anh xem giúp em có đúng không, em chưa sửa gì trong file.")
     _PENDING = {"stage": "intake", "order": machine_order, "intake": receipt, "folder": str(folder),
-                "period": f"{period[1]:02d}/{period[0]}" if period else "", "picked": list(_PICKS)}
+                "period": f"{period[1]:02d}/{period[0]}" if period else "", "picked": list(_PICKS),
+                "columns": list(_COLUMN_PICKS)}
     return [Beat(text, choices=INTAKE_CHOICES,
                  intake={"card": intake_mod.card(receipt), "log": intake_mod.log_fields(receipt, text)})]
 
@@ -681,6 +688,122 @@ def _no_orders(folder: Path, workbook: Optional[str]) -> str:
     said = "; ".join(f"{d.file} {d.reason}" for d in cands[:2]) + (f"; và {len(cands) - 2} file khác" if len(cands) > 2 else "")
     return (f"Em thấy {len(cands)} file CSV hoặc .xls trong thư mục {folder.name} nhưng chưa đọc được file nào "
             f"làm đơn hàng: {said}. Em chưa sửa gì trong file.")
+
+
+# ── Column names Clicky does not know: ask, remember per header ("nhớ cho tháng sau") ─────────────────────────
+
+COLUMNS_FILE = "cot_da_nho.json"      # header signature → {role: column key}; header names only, never a file name
+# This session's answers, for the Biên bản: (file, what was chosen, when and who).
+_COLUMN_PICKS: list = []
+
+
+def _columns_path() -> Path:
+    from storage import data_dir
+    return data_dir() / COLUMNS_FILE
+
+
+def _load_columns() -> None:
+    import json
+    try:
+        saved = json.loads(_columns_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+    sources.REMEMBERED.clear()
+    sources.REMEMBERED.update({k: v for k, v in saved.items() if isinstance(v, dict)})
+
+
+def _save_columns() -> None:
+    import json
+    from storage import atomic_write
+    try:
+        atomic_write(_columns_path(), json.dumps(sources.REMEMBERED, ensure_ascii=False, indent=1).encode("utf-8"))
+    except OSError as exc:
+        from office.excel_com import _why
+        log.warning("saving the remembered columns failed: %s", _why(exc))
+
+
+def columns_pending() -> bool:
+    return stage() == "pick_columns"
+
+
+def _column_choices(names: list) -> tuple:
+    return tuple(f"Cột {n}" for n in names) + (COLUMN_NO,)
+
+
+def _ask_columns(folder: Path, u, machine_order) -> list:
+    """An order-like file whose date and amount columns have names Clicky does not know: ask which is which, one
+    question at a time, at most the 3 likeliest columns each (by content). Nothing is read from it until chị
+    answers; "Không phải đơn hàng" is remembered too."""
+    global _PENDING
+    job = {"stage": "pick_columns", "folder": str(folder), "order": machine_order, "file": u.name,
+           "sig": u.signature, "header": [str(h).strip() for h in u.header], "dates": u.dates, "amounts": u.amounts,
+           "chosen": {}}
+    _PENDING = job
+    return [_column_question(job)]
+
+
+def _column_question(job: dict) -> Beat:
+    file, dates, amounts, chosen = job["file"], job["dates"], job["amounts"], job["chosen"]
+    lead = f"File {file} có vẻ là file đơn hàng nhưng tên cột lạ, em chưa lấy số từ file này. "
+    if not chosen and len(dates) == 1 and len(amounts) == 1:
+        job["need"] = "confirm"
+        text = lead + f"Em hiểu cột \"{dates[0]}\" là ngày bán, cột \"{amounts[0]}\" là số tiền. Đúng không chị?"
+        choices = (COLUMN_YES, COLUMN_NO)
+    elif "date" not in chosen and len(dates) > 1:
+        job["need"] = "date"
+        text = lead + "Cột nào là ngày bán hả chị?"
+        choices = _column_choices(dates)
+    else:
+        job["need"] = "amount"
+        options = [a for a in amounts if a != chosen.get("date")]
+        job["options"] = options
+        said = f"Ngày bán là cột \"{chosen.get('date') or dates[0]}\". " if "date" in chosen or len(dates) == 1 else ""
+        text = (lead if not chosen else "") + said + "Còn số tiền bán là cột nào hả chị?"
+        choices = _column_choices(options)
+    _step("column_question", file=file, need=job["need"], options=list(choices))
+    return Beat(text, choices=choices)
+
+
+def answer_columns(bridge, pq, answer: str) -> list:
+    """chị's answer to _column_question: the next question, or remember the columns, note them for the Biên bản
+    and read the folder again (the receipt comes next)."""
+    global _PENDING
+    job = _PENDING if columns_pending() else None
+    if not job:
+        return []
+    said = fold_text(answer)
+    if fold_text(COLUMN_NO) in said:
+        sources.REMEMBERED[job["sig"]] = {sources.NOT_ORDERS: True}
+        _save_columns()
+        _COLUMN_PICKS.append((job["file"], "không phải file đơn hàng", audit.who()))
+        _PENDING = None
+        return start(bridge, pq, job["order"])
+    need = job.get("need")
+    if need == "confirm":
+        if fold_text(COLUMN_YES) not in said and not said.startswith(("dung", "ok", "dongy", "phai")):
+            return [_column_question(job)]
+        job["chosen"] = {"date": job["dates"][0], "amount": job["amounts"][0]}
+    else:
+        options = job["dates"] if need == "date" else job.get("options", job["amounts"])
+        hit = next((n for n in sorted(options, key=len, reverse=True) if fold_text(n) in said), None)
+        if hit is None:
+            return [Beat("Chị bấm một trong các nút để chọn cột nhé.", choices=_column_choices(options))]
+        job["chosen"][need] = hit
+        if len(job["dates"]) == 1:
+            job["chosen"].setdefault("date", job["dates"][0])
+        if "amount" not in job["chosen"]:
+            left = [a for a in job["amounts"] if a != job["chosen"]["date"]]
+            if len(left) != 1:
+                return [_column_question(job)]
+            job["chosen"]["amount"] = left[0]       # the only amount column left: nothing to ask
+    chosen = job["chosen"]
+    sources.REMEMBERED[job["sig"]] = {role: sources._key(name) for role, name in chosen.items()}
+    _save_columns()
+    _COLUMN_PICKS.append((job["file"], f"ngày = cột \"{chosen['date']}\", số tiền = cột \"{chosen['amount']}\"",
+                          audit.who()))
+    _step("column_answer", file=job["file"], date=chosen["date"], amount=chosen["amount"])
+    _PENDING = None
+    return start(bridge, pq, job["order"])
 
 
 # The user's answers to "which file?", kept for the Biên bản: (what, chosen, set aside, when).
@@ -766,6 +889,8 @@ def needs_reader(files: list) -> Optional[tuple]:
     for f in files:
         if f.kind != "csv":
             return f, _KIND_VI.get(f.kind, "là loại file khác CSV")
+        if f.remembered:
+            return f, "có cột ngày hoặc số tiền do chị chỉ"
         if f.preamble:
             return f, f"có {len(f.preamble)} dòng tiêu đề phía trên bảng"
         if f.cancelled:
@@ -799,8 +924,10 @@ def _reader_query(files: list, truth, period) -> str:
     params = {f.name: {"order": f.date_order or sources.DAY_FIRST, "encoding": sources.file_encoding(f.path)}
               for f in files}
     roles = sorted({r for f in files for r in f.columns} | {"doc", "date", "amount"})
+    told = {sources.header_signature(f.header): sources.REMEMBERED[sources.header_signature(f.header)]
+            for f in files if f.remembered and sources.header_signature(f.header) in sources.REMEMBERED}
     return m_code.order_files_query(PARAM_NAME, params, roles, _dedup_roles(files, truth),
-                                    period=period if truth.outside else None)
+                                    period=period if truth.outside else None, remembered=told)
 
 
 def _dedup_roles(files: list, truth: sources.SourceTruth) -> Optional[list]:
@@ -833,6 +960,19 @@ def confirm(bridge, pq) -> list:
     for what, chosen, others, agreed in job.get("picked", []):
         _AUDIT.add("—", f"Chọn nguồn: {what}", others, chosen,
                    "Hai file cùng vai trò Số chính thức cho cùng kỳ; người dùng chọn bản dùng", agreed, "Thư mục dữ liệu")
+    asked = set()
+    for file, chosen, agreed in job.get("columns", []):
+        asked.add(file)
+        _AUDIT.add("—", f"Chọn cột: {file}", "—", chosen,
+                   "Tên cột lạ; chị chỉ cột nào là ngày bán và số tiền, Clicky nhớ cho các tháng sau", agreed,
+                   "Thư mục dữ liệu")
+    for f in sources.find_order_files(Path(job["folder"])):
+        if f.remembered and f.name not in asked:
+            told = ", ".join(f"{label} = cột \"{f.header[f.columns[role]]}\"" for role, label in
+                             (("date", "ngày"), ("amount", "số tiền")) if role in f.columns)
+            _AUDIT.add("—", f"Cột đã nhớ: {f.name}", "—", told,
+                       "Chị đã chỉ các cột này cho cùng tiêu đề ở lần trước; Clicky dùng lại", audit.AUTO,
+                       "Thư mục dữ liệu")
     before = set(bridge.sheet_names())
     # As in approve: adding and styling the check sheets with the screen frozen is faster (Excel does not
     # repaint after every call) and does not flash sheets past the user; the result shows when it is ready.
@@ -1868,6 +2008,13 @@ def save_pending() -> bool:
     return stage() == "save"
 
 
+async def handle_columns(manager, transcript: str) -> str:
+    _working(manager, "pick")
+    beats = await asyncio.to_thread(lambda: answer_columns(manager._excel, _pq(manager), transcript))
+    await play(manager, beats)
+    return ""
+
+
 async def handle_pick(manager, transcript: str) -> str:
     _working(manager, "pick")
     beats = await asyncio.to_thread(lambda: pick(manager._excel, _pq(manager), transcript))
@@ -1886,6 +2033,8 @@ SKILLS = [
     {"name": "Báo cáo tháng trọn gói", "trigger": START_TRIGGER, "handler": handle_start,
      "description": "Từ thư mục dữ liệu tháng: đọc các file và cho xem phiếu nhận file, rồi tải query đơn hàng, đối chiếu "
                     "với file gốc và sổ cái, chỉ ra chỗ lệch, đề xuất sửa, rồi lập báo cáo tháng."},
+    {"name": "Chọn cột ngày và số tiền", "trigger": COLUMN_TRIGGER, "handler": handle_columns, "when": columns_pending,
+     "description": "Người dùng chỉ cột nào là ngày bán, cột nào là số tiền trong một file đơn hàng có tên cột lạ."},
     {"name": "Chọn sổ cân đối", "trigger": PICK_TRIGGER, "handler": handle_pick, "when": pick_pending,
      "description": "Người dùng chọn một trong hai sổ cân đối cùng kỳ."},
     {"name": "Xác nhận phiếu nhận file", "trigger": CONFIRM_TRIGGER, "handler": handle_confirm, "when": intake_pending,

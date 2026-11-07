@@ -89,7 +89,7 @@ def find_columns(header: list) -> dict:
 def find_header(rows: list) -> Optional[int]:
     """The row that names the columns: the first of the top rows with a date and an amount column."""
     for i, row in enumerate(rows[:HEADER_SCAN]):
-        cols = find_columns(row)
+        cols, _told = columns_of(row)
         if "date" in cols and "amount" in cols:
             return i
     return None
@@ -103,6 +103,44 @@ def best_header(rows: list) -> tuple:
         if len(cols) > len(best_cols):
             best, best_cols = i, cols
     return best, best_cols
+
+
+# Header signatures a person has explained, the "nhớ cho tháng sau" of column names: signature → {role: column key},
+# or {NOT_ORDERS: True} for "không phải file đơn hàng". Loaded and saved by the office layer; header names only.
+REMEMBERED: dict = {}
+NOT_ORDERS = "khong_phai_don_hang"
+
+
+def header_signature(row) -> str:
+    """The header row as folded column keys, blanks at either end left out: the same text m_code builds in M."""
+    keys = [_key(c) for c in row]
+    while keys and not keys[-1]:
+        keys.pop()
+    while keys and not keys[0]:
+        keys.pop(0)
+    return "|".join(keys)
+
+
+def columns_of(row) -> tuple:
+    """(roles, remembered): find_columns, and when it lacks a date or an amount, the columns a person named for
+    this exact header before (REMEMBERED)."""
+    cols = find_columns(row)
+    if "date" in cols and "amount" in cols:
+        return cols, False
+    told = REMEMBERED.get(header_signature(row)) or {}
+    if not told or told.get(NOT_ORDERS):
+        return cols, False
+    keys = [_key(c) for c in row]
+    mixed = dict(cols)
+    for role, key in told.items():
+        if key in keys:
+            mixed[role] = keys.index(key)
+    return (mixed, True) if "date" in mixed and "amount" in mixed else (cols, False)
+
+
+def declined(row) -> bool:
+    """A person said a file with this header is not an order file."""
+    return bool((REMEMBERED.get(header_signature(row)) or {}).get(NOT_ORDERS))
 
 
 def is_cancelled(status) -> bool:
@@ -181,6 +219,7 @@ class OrderFile:
     preamble: list = field(default_factory=list)  # rows above the header: title, company, period (print layout)
     cancelled: list = field(default_factory=list) # rows whose Status says the order was cancelled: not sales
     sheet: str = ""                # the sheet or table the orders were read from, for a workbook-like file
+    remembered: bool = False       # its date or amount column is the one a person named (REMEMBERED), not a name match
 
     @property
     def number_style(self) -> Optional[str]:
@@ -295,7 +334,7 @@ def load_order_file(path: Path) -> Optional[OrderFile]:
     else:
         return None
     header, body, preamble = rows[at], rows[at + 1:], rows[:at]
-    cols = find_columns(header)
+    cols, told = columns_of(header)
     data, footers = [], []
     for r in body:
         # A row without a date is not an order (exports often end with a "Tổng cộng" line whose
@@ -317,7 +356,7 @@ def load_order_file(path: Path) -> Optional[OrderFile]:
         cancelled = [r for r in data if s < len(r) and is_cancelled(r[s])]
         data = [r for r in data if not (s < len(r) and is_cancelled(r[s]))]
     order = date_order([r[cols["date"]] for r in data if cols["date"] < len(r)])
-    return OrderFile(path, header, data, cols, order, footers, delim, kind, preamble, cancelled, sheet)
+    return OrderFile(path, header, data, cols, order, footers, delim, kind, preamble, cancelled, sheet, told)
 
 
 def find_order_files(folder: Path) -> list:
@@ -538,3 +577,119 @@ def file_encoding(path: Path) -> int:
             if enc == "utf-8" and exc.start >= len(raw) - 4 and len(raw) == 1 << 20:
                 return code                       # a character cut by the 1 MB sample, not a wrong encoding
     return 28591
+
+
+# ── A table that looks like orders under names Clicky does not know ─────────────────────────────────────────────
+
+@dataclass
+class Unexplained:
+    """An order-like file whose header names no date or amount Clicky knows: a column of dates and a column of
+    amounts by content. Clicky asks which is which (at most 3 likeliest of each) instead of leaving it out."""
+    path: Path
+    header: list
+    dates: list                    # column names, likeliest first
+    amounts: list
+
+    @property
+    def name(self) -> str:
+        return self.path.name
+
+    @property
+    def signature(self) -> str:
+        return header_signature(self.header)
+
+
+def _is_amount(value) -> bool:
+    text = str(value or "").strip()
+    if not any(ch.isdigit() for ch in text) or _any_date(text):
+        return False
+    try:
+        parse_amount(text)
+        return True
+    except ValueError:
+        return False
+
+
+def guess_columns(rows: list) -> Optional[tuple]:
+    """(header row, date column indexes, amount column indexes) judged by the values, best first, at most 3 each.
+
+    The header is the first of the top rows whose next row already holds a date and an amount under named
+    columns; a column counts when at least 4 in 5 of its cells below that hold a digit read as a date (or an
+    amount).
+    Amounts rank by how often they read, then by size, so a line total comes before a quantity."""
+    for i, row in enumerate(rows[:HEADER_SCAN]):
+        body = rows[i + 1:i + 201]
+        if not body:
+            break
+        width = max(len(r) for r in [row] + body)
+        dates, amounts = [], []
+        for j in range(width):
+            if j >= len(row) or not str(row[j] or "").strip() or _any_date(row[j]) or _is_amount(row[j]):
+                continue                           # a column needs a name that is not itself a figure
+            first = body[0][j] if j < len(body[0]) else ""
+            # Cells without a digit ("Cộng", "Người lập biểu") are footers, as the order reader treats them.
+            values = [r[j] for r in body if j < len(r) and any(ch.isdigit() for ch in str(r[j] or ""))]
+            if not values:
+                continue
+            if _any_date(first):
+                share = sum(1 for v in values if _any_date(v)) / len(values)
+                if share >= 0.8:
+                    dates.append((-share, j))
+            elif _is_amount(first):
+                read = [v for v in values if _is_amount(v)]
+                share = len(read) / len(values)
+                if share >= 0.8:
+                    size = sum(abs(parse_amount(v)[0]) for v in read) / len(read)
+                    amounts.append((-share, -size, j))
+        if dates and amounts:
+            return i, [j for *_, j in sorted(dates)][:3], [j for *_, j in sorted(amounts)][:3]
+    return None
+
+
+def _candidate_tables(path: Path) -> list:
+    """Every table in a .csv or .xls, as the order reader would see it."""
+    if path.suffix.lower() == ".csv":
+        try:
+            text = _read_text(path)
+        except OSError:
+            return []
+        return [_parse(text, sniff_delimiter(text))]
+    from engine import tabular
+    try:
+        return [rows for _, rows in tabular.sheets(path)]
+    except tabular.Unreadable:
+        return []
+
+
+def unexplained_order_files(folder: Path, used: set) -> list:
+    """Order-like .csv/.xls files in the folder (and one level down) that are not read as orders, have not been
+    declined, and have a column of dates and a column of amounts under names Clicky does not know."""
+    out = []
+    paths = sorted([p for suffix in ORDER_SUFFIXES for p in list(folder.glob(f"*{suffix}")) + list(folder.glob(f"*/*{suffix}"))],
+                   key=lambda p: p.name.lower())
+    for p in paths:
+        if p.name in used or p.name.startswith("~$"):
+            continue
+        for rows in _candidate_tables(p):
+            if find_header(rows) is not None:
+                break                              # read as orders after all (one sheet among several)
+            guess = guess_columns(rows)
+            if guess is None:
+                continue
+            at, dates, amounts = guess
+            header = rows[at]
+            if declined(header):
+                break
+            name = lambda j: str(header[j]).strip()
+            out.append(Unexplained(p, header, [name(j) for j in dates], [name(j) for j in amounts]))
+            break
+    return out
+
+
+def declined_file(path: Path) -> bool:
+    """A person said this file (its header) is not an order file."""
+    for rows in _candidate_tables(path):
+        guess = guess_columns(rows)
+        if guess is not None and declined(rows[guess[0]]):
+            return True
+    return False

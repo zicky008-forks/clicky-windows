@@ -405,3 +405,118 @@ def test_the_per_file_query_parses_as_m(tmp_path):
     run = subprocess.run([node, str(Path(__file__).with_name("m_syntax.js"))] + [str(p) for p in paths],
                          capture_output=True, text=True)
     assert run.returncode == 0, run.stdout + run.stderr
+
+
+# ── C2: column names Clicky does not know ──────────────────────────────────────
+
+POS_ROWS = [["Mã phiếu", "Thời điểm", "SL", "Giá trị", "Phí"],
+            ["P1", "03/10/2026", "2", "1.250.000", "12.500"],
+            ["P2", "09/10/2026", "1", "2.500.000", "25.000"],
+            ["P3", "15/10/2026", "3", "3.750.500", "37.500"],
+            ["", "Cộng", "", "7.500.500", ""]]
+
+
+def _pos_folder(tmp_path, rows=POS_ROWS, name="POS_T10.csv"):
+    import csv
+    data = tmp_path / "T10"
+    data.mkdir(exist_ok=True)
+    with open(data / name, "w", newline="", encoding="utf-8") as fh:
+        csv.writer(fh).writerows(rows)
+    return data
+
+
+@pytest.fixture
+def memory(tmp_path, monkeypatch):
+    """The remembered columns live in a temporary data folder, empty at the start."""
+    import storage
+    home = tmp_path / "clicky-data"
+    home.mkdir()
+    monkeypatch.setattr(storage, "data_dir", lambda: home)
+    sources.REMEMBERED.clear()
+    month_close._COLUMN_PICKS.clear()
+    yield home / month_close.COLUMNS_FILE
+    sources.REMEMBERED.clear()
+    month_close._COLUMN_PICKS.clear()
+
+
+def test_columns_are_guessed_by_their_values_best_first():
+    at, dates, amounts = sources.guess_columns([["Báo cáo bán lẻ"], [""]] + POS_ROWS[:4])
+    assert at == 2 and dates == [1] and amounts == [3, 4, 2]            # a line total before a fee before a quantity
+
+
+def test_an_order_file_under_unknown_names_is_asked_about_then_read_and_remembered(tmp_path, memory, monkeypatch):
+    """F2 follow-up: instead of leaving the file out, Clicky asks which column is which (3 likeliest at most), the
+    answer is remembered per header, the receipt reads the file, and the Biên bản records the choice."""
+    from test_month_close import CopyingBridge
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    data = _pos_folder(tmp_path)
+    bridge = CopyingBridge(data)
+    pq = _ReaderPQ(bridge, data)
+    month_close._PENDING, month_close._CHOSEN = None, {}
+    ask = month_close.start(bridge, pq, sources.DAY_FIRST)
+    assert month_close.columns_pending() and len(ask) == 1
+    assert "POS_T10.csv" in ask[0].text and "tên cột lạ" in ask[0].text and "số tiền" in ask[0].text
+    assert ask[0].choices == ("Cột Giá trị", "Cột Phí", "Cột SL", "Không phải đơn hàng")
+    assert bridge.writes == [] and pq.queries == {}
+    receipt = month_close.answer_columns(bridge, pq, "Cột Giá trị")
+    assert month_close.intake_pending(), receipt[0].text
+    assert "3 đơn bán hàng" in receipt[0].text
+    sales = [r for r in receipt[0].intake["card"]["rows"] if r["title"].startswith("Bán hàng")]
+    assert sales and sales[0]["detail"].startswith("Tổng") and "chị đã chỉ" in sales[0]["detail"]
+    saved = json.loads(memory.read_text(encoding="utf-8"))
+    assert saved == {"maphieu|thoidiem|sl|giatri|phi": {"date": "thoidiem", "amount": "giatri"}}
+    assert "POS" not in memory.read_text(encoding="utf-8")                # header names only, never a file name
+    beats = month_close.confirm(bridge, pq)
+    assert "Excel khớp" in " ".join(b.text for b in beats)
+    m = pq.queries[month_close.QUERY_NAME]
+    assert '#"maphieu|thoidiem|sl|giatri|phi" = [#"amount" = "giatri", #"date" = "thoidiem"]' in m
+    month_close.approve(bridge, pq) if month_close.stage() == "fix_query" else None
+    rows = bridge.sheets.get("Bien ban Clicky") or []
+    pick = [r for r in rows if len(r) > 3 and str(r[3]).startswith("Chọn cột: POS_T10.csv")]
+    assert pick and "Giá trị" in str(pick[0][5])
+    events = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert [e for e in events if e.get("step") == "column_question"]
+    # Next month: same header, nothing asked, the file is read and the Biên bản says the columns were remembered.
+    sources.REMEMBERED.clear()
+    month_close._COLUMN_PICKS.clear()
+    month_close._PENDING = None
+    again = month_close.start(bridge, pq, sources.DAY_FIRST)
+    assert month_close.intake_pending() and "3 đơn bán hàng" in again[0].text
+    assert any("chị đã chỉ" in r["detail"] for r in again[0].intake["card"]["rows"])
+
+
+def test_one_date_and_one_amount_are_confirmed_in_one_question(tmp_path, memory):
+    rows = [[c for i, c in enumerate(r) if i in (0, 1, 3)] for r in POS_ROWS]
+    data = _pos_folder(tmp_path, rows)
+    month_close._PENDING = None
+    ask = month_close.start(_Bridge(data), None, sources.DAY_FIRST)
+    assert ask[0].choices == ("Đúng, dùng file này", "Không phải đơn hàng")
+    assert "\"Thời điểm\" là ngày bán" in ask[0].text and "\"Giá trị\" là số tiền" in ask[0].text
+
+
+def test_not_an_order_file_is_remembered_and_named_on_the_receipt(tmp_path, memory):
+    import tb_samples as tb
+    from test_month_close import _write_tb
+    data = _pos_folder(tmp_path)
+    t10 = tb.month(8400, 450, 210, 5800, 6000, 9000, 5500, 15, 70, (760, 420, 200), (520, 170), 5, 25, 139)
+    _write_tb(data / "TB_T10.xlsx", tb.misa_rows(tb.OPENING_T9, t10, "Tháng 10 năm 2026"))
+    month_close._PENDING = None
+    month_close.start(_Bridge(data), None, sources.DAY_FIRST)
+    after = month_close.answer_columns(_Bridge(data), None, "Không phải đơn hàng")
+    assert not month_close.columns_pending()
+    lines = {r["title"].split(" · ")[0]: r for r in after[0].intake["card"]["rows"]}
+    assert "chị đã chỉ đây không phải file đơn hàng" in lines["POS_T10.csv"]["detail"]
+    month_close._PENDING = None
+    sources.REMEMBERED.clear()
+    again = month_close.start(_Bridge(data), None, sources.DAY_FIRST)           # read back from disk: not asked again
+    assert not month_close.columns_pending() and again[0].intake
+
+
+def test_the_remembered_header_in_m_matches_the_engines_signature():
+    header = ["  Mã phiếu", "Thời điểm ", "SL", "Giá trị", "Phí", "", ""]
+    assert sources.header_signature(header) == "maphieu|thoidiem|sl|giatri|phi"
+    m = m_code.order_files_query("P", {}, ["doc", "date", "amount"], None, None,
+                                 {sources.header_signature(header): {"date": "thoidiem", "amount": "giatri"}})
+    assert 'Text.Combine(List.Range(k, dau, List.Count(k) - dau - duoi), "|")' in m
+    assert m_code.order_files_query("P", {}, ["doc", "date", "amount"], None).count("Nho = []") == 1

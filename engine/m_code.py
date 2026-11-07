@@ -430,6 +430,7 @@ _ORDER_M = r"""let
             if List.Contains({"", "-", "–"}, s0) then 0 else if n = null then null else if am then -n else n,
     Huy = (v) as logical => List.Contains(@@CANCELLED@@, Text.Trim(GomTrang(BoDau(Chu(v))), {" ", "."})),
     // sources.find_columns: the first-tier names, leftmost column first; the extra names only fill an empty role.
+    Nho = @@REMEMBERED@@,
     Ten1 = @@TIER1@@,
     Ten2 = @@TIER2@@,
     TimCot = (tieuDe as list) as record =>
@@ -440,8 +441,15 @@ _ORDER_M = r"""let
             hai = List.Accumulate(Record.FieldNames(Ten2), mot, (st, r) =>
                 if Record.HasFields(st, r) then st else
                 let hit = List.Select(List.Transform(Record.Field(Ten2, r), each List.PositionOf(k, _)), each _ >= 0)
-                in if List.IsEmpty(hit) then st else Record.AddField(st, r, hit{0}))
-        in hai,
+                in if List.IsEmpty(hit) then st else Record.AddField(st, r, hit{0})),
+            // sources.columns_of: when no name gives a date and an amount, the columns chị named for this header.
+            dau = List.Count(List.FirstN(k, each _ = "")),
+            duoi = List.Count(List.FirstN(List.Reverse(k), each _ = "")),
+            chuKy = if dau = List.Count(k) then "" else Text.Combine(List.Range(k, dau, List.Count(k) - dau - duoi), "|"),
+            nho = Record.FieldOrDefault(Nho, chuKy, []),
+            them = List.Accumulate(Record.FieldNames(nho), hai, (st, r) =>
+                let i = List.PositionOf(k, Record.Field(nho, r)) in if i >= 0 then Record.Combine({st, Record.AddField([], r, i)}) else st)
+        in if Record.HasFields(hai, {"date", "amount"}) or not Record.HasFields(them, {"date", "amount"}) then hai else them,
     O = (r as list, c as record, vai as text) => let i = Record.FieldOrDefault(c, vai, null) in
         if i = null or i >= List.Count(r) then null else r{i},
     // engine.tabular: what the bytes are, not what the name says.
@@ -577,7 +585,7 @@ _ORDER_M = r"""let
 
 
 def order_files_query(folder_parameter: str, file_params: dict, roles: list, dedup: Optional[list],
-                      period: Optional[tuple] = None) -> str:
+                      period: Optional[tuple] = None, remembered: Optional[dict] = None) -> str:
     """M that reads every order export in the folder, whatever it is, with the rules engine.sources applies.
 
     Each file is read by its bytes (engine.tabular): a real .xls or an .xlsx under that name through
@@ -591,6 +599,8 @@ def order_files_query(folder_parameter: str, file_params: dict, roles: list, ded
     file_params: file name → {"order": "vi-VN"|"en-US", "encoding": code page}; a file not listed (next month's)
     reads day-first in UTF-8. roles: the roles to output. dedup: None → by document number; [] → whole identical
     orders; a list of roles (["branch", "doc"]) → those. Rows without a document number are never merged.
+    remembered: header signature → {role: column key} that a person named (sources.REMEMBERED), only for the
+    headers of this folder's files, so no other company's column names are written into this workbook.
     """
     from engine import sources
     tier1, tier2 = _role_names()
@@ -598,6 +608,9 @@ def order_files_query(folder_parameter: str, file_params: dict, roles: list, ded
         f"{_m_field(name)} = [thu = {_m_text(p.get('order') or 'vi-VN')}, ma_hoa = {int(p.get('encoding') or 65001)}]"
         for name, p in sorted(file_params.items())) + "]"
     out_roles = [r for r in _ROLE_ORDER if r in roles]
+    told = "[" + ", ".join(
+        f"{_m_field(sig)} = [" + ", ".join(f"{_m_field(r)} = {_m_text(k)}" for r, k in sorted(cols.items())) + "]"
+        for sig, cols in sorted((remembered or {}).items())) + "]"
     kinds = {"doc": "nullable text", "date": "nullable date", "amount": "nullable number", "cost": "nullable number"}
     row_type = "type table [" + ", ".join(f"{_m_field(CANON[r])} = {kinds.get(r, 'nullable text')}" for r in out_roles) \
                + f", {_m_field(SOURCE_COLUMN)} = text]"
@@ -609,7 +622,8 @@ def order_files_query(folder_parameter: str, file_params: dict, roles: list, ded
     for token, value in (("@@FOLD@@", _fold_table()), ("@@CANCELLED@@", _m_list(sorted(sources.CANCELLED))),
                          ("@@TIER1@@", tier1), ("@@TIER2@@", tier2), ("@@SCAN@@", str(sources.HEADER_SCAN)),
                          ("@@CELLS@@", cells), ("@@PARAMS@@", params), ("@@FOLDER@@", folder_parameter),
-                         ("@@ROWTYPE@@", row_type), ("@@SSNS@@", _m_text(_SS_NS)), ("@@QUOTE@@", '""""')):
+                         ("@@ROWTYPE@@", row_type), ("@@SSNS@@", _m_text(_SS_NS)), ("@@QUOTE@@", '""""'),
+                         ("@@REMEMBERED@@", told)):
         m = m.replace(token, value)
     out, last = [m], "GopFile"
     f = {r: "[" + _m_field(CANON[r]) + "]" for r in out_roles}

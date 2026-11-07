@@ -221,6 +221,10 @@ def _order_lines(files: list, truth, period: Optional[tuple]) -> tuple:
                                  "dòng tổng cuối file, không phải đơn hàng" +
                                  ("" if blank else f", ghi {spoken(value)}, dùng làm mốc kiểm: {check}")))
         note = _status_note(f)
+        if getattr(f, "remembered", False):
+            told = " · ".join(f"{label} là cột \"{f.header[f.columns[role]]}\"" for role, label in
+                              (("date", "ngày"), ("amount", "số tiền")) if role in f.columns)
+            note = "; ".join(x for x in (note, f"{told} (chị đã chỉ)") if x)
         lines.append(FileLine(name=f.name, kind="Bán hàng", period=_period_text(period), unit=_unit(preamble) or "đồng",
                               rows=used_rows, rows_label=f"{used_rows} đơn",
                               checks=f"tổng {spoken(used)}" + (f" · {note}" if note else ""), total=total, used=used,
@@ -287,6 +291,8 @@ def _unused_files(folder: Path, used: set, workbook: Optional[str], roles: dict)
             why = "vai trò Lý do (email, văn bản): chỉ để hiểu nguyên nhân, em không lấy số từ file này"
         elif suffix in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".heic"):
             why = "ảnh, vai trò Ghi chú: em không bao giờ lấy số từ ảnh"
+        elif suffix in sources.ORDER_SUFFIXES and sources.declined_file(p):
+            why = "chị đã chỉ đây không phải file đơn hàng, em không lấy số từ file này"
         elif suffix == ".xls":
             why, kind = _xls_why(p)
             out.append(Dropped(f"File {p.name}", p.name, None, why, rows=0, kind=kind))
@@ -430,6 +436,8 @@ def card(intake: Intake) -> dict:
     if sales:
         where = f"{intake.branches} chi nhánh" if intake.branches > 1 else f"{len(sales)} file"
         detail = f"Tổng {spoken(intake.orders_total)}" + (f", {intake.revenue_note}" if intake.revenue_note else "")
+        if any("(chị đã chỉ)" in f.checks for f in sales):
+            detail += " · cột ngày, số tiền theo chị đã chỉ"
         rows.append({"ok": intake.revenue_ok is not False, "title": f"Bán hàng · {where}",
                      "count": f"{intake.orders_rows} đơn", "detail": detail, "role": roles_mod.DETAIL})
     for f in intake.files:
