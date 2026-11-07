@@ -435,6 +435,30 @@ class Gate:
         return [g for g in self.gaps if not g.renumbered]
 
     @property
+    def offsetting(self) -> list:
+        """[(a, b)]: broken gaps equal in size and opposite in sign. The balance moved between two accounts (a
+        reclassification, or the periods are on another basis); it did not appear or vanish. Still errors."""
+        left = sorted((g for g in self.broken if abs(g.diff) > TOLERANCE), key=lambda g: g.account)
+        pairs = []
+        while left:
+            g = left.pop(0)
+            twins = sorted((o for o in left if abs(o.diff + g.diff) <= TOLERANCE),
+                           key=lambda o: (o.account[:3] != g.account[:3], o.account))
+            if twins:
+                left.remove(twins[0])
+                pairs.append((g, twins[0]))
+        return pairs
+
+    def offset_of(self, account: str) -> Optional[str]:
+        """The account whose gap offsets this one's, if any."""
+        for a, b in self.offsetting:
+            if a.account == account:
+                return b.account
+            if b.account == account:
+                return a.account
+        return None
+
+    @property
     def moved(self) -> list:
         """Gaps that are a code change with the balance carried across (no mapping table lists them)."""
         return [g for g in self.gaps if g.renumbered]
@@ -517,9 +541,15 @@ def issues(g: Gate, cur: TrialBalance) -> list:
         listed = "; ".join(f"TK {x.account}: đầu kỳ {fmt(x.opening_now)}, cuối kỳ trước {fmt(x.closing_before)}"
                            for x in g.broken[:5])
         more = f"; còn {len(g.broken) - 5} tài khoản khác" if len(g.broken) > 5 else ""
+        pairs = g.offsetting
+        offset = "" if not pairs else (
+            "; " + ", ".join(f"TK {a.account} và TK {b.account}" for a, b in pairs[:3])
+            + (f" và {len(pairs) - 3} cặp khác" if len(pairs) > 3 else "")
+            + " lệch bằng nhau, ngược dấu (bù trừ nhau): nhiều khả năng là phân loại lại hoặc hai kỳ lập trên cơ sở "
+            "khác nhau, cần xem lại")
         out.append(Issue("error", "opening_bridge",
-                         f"Số dư đầu kỳ không khớp số dư cuối kỳ trước ở {len(g.broken)} tài khoản ({listed}{more}); "
-                         "chưa dùng các tài khoản này để giải thích biến động",
+                         f"Số dư đầu kỳ không khớp số dư cuối kỳ trước ở {len(g.broken)} tài khoản ({listed}{more})"
+                         f"{offset}; chưa dùng các tài khoản này để giải thích biến động",
                          next((rows[x.account] for x in g.broken if x.account in rows), 0), "số dư hai kỳ",
                          sum((abs(x.diff) for x in g.broken), ZERO)))
     if g.moved:

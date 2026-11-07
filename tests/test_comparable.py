@@ -434,3 +434,37 @@ def test_several_equity_codes_mapped_into_one_bridge_by_their_sum():
     cur = _renumber(tb.t10_rows(), "411", "4118")
     g = _gate(prev, cur, {"4111": "4118", "4112": "4118"})
     assert g.broken == [] and g.moved == [], [(x.account, x.diff) for x in g.gaps]
+
+
+def _shift_opening(rows, account, by):
+    return _set_opening(rows, account, next(r[2] for r in rows if r and r[0] == account) + by)
+
+
+def test_gaps_that_offset_each_other_are_named_as_likely_reclassified_and_stay_errors(monkeypatch):
+    """Grader on Case 05: two gaps left after mapping, equal and opposite, read as two unrelated errors."""
+    cur = _shift_opening(_shift_opening(tb.t10_rows(), "131", 120 * tb.M), "156", -120 * tb.M)
+    g = _gate(tb.t9_rows(), cur)
+    assert sorted(x.account for x in g.broken) == ["131", "156"]
+    assert [(a.account, b.account) for a, b in g.offsetting] == [("131", "156")]
+    assert g.offset_of("156") == "131" and g.offset_of("112") is None
+    report = build.build(cur, tb.t9_rows(), "T10", "T09")
+    issue = next(i for i in report.issues if i.code == "opening_bridge")
+    assert issue.severity == "error" and "TK 131 và TK 156 lệch bằng nhau, ngược dấu (bù trừ nhau)" in issue.message
+    assert "phân loại lại" in issue.message
+
+    from office import month_close as mc
+    from engine import audit
+    rows = []
+    monkeypatch.setattr(mc, "_AUDIT", type("A", (), {"add": lambda self, *a: rows.append(a)})())
+    mc._audit_gate(g)
+    notes = {r[0]: r[4] for r in rows}
+    assert notes["TK 156"].startswith("Lệch bằng và ngược dấu với TK 131") and "không dùng" in notes["TK 156"]
+    assert audit.AUTO in rows[0]
+
+
+def test_gaps_that_do_not_offset_say_nothing_about_offsetting():
+    cur = _shift_opening(_shift_opening(tb.t10_rows(), "131", 120 * tb.M), "156", -80 * tb.M)
+    g = _gate(tb.t9_rows(), cur)
+    assert len(g.broken) == 2 and g.offsetting == []
+    issue = next(i for i in build.build(cur, tb.t9_rows(), "T10", "T09").issues if i.code == "opening_bridge")
+    assert "bù trừ" not in issue.message

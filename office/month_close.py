@@ -1728,8 +1728,12 @@ def _audit_gate(gate) -> None:
                    "Hai kỳ lập trên cơ sở khác nhau: không dùng biến động để giải thích; đề nghị xuất lại kỳ trước "
                    "cùng cơ sở", audit.AUTO, src)
     for g in gate.broken[:20]:
+        twin = gate.offset_of(g.account)
+        why = ("" if twin is None else f"Lệch bằng và ngược dấu với TK {twin} (bù trừ nhau): nhiều khả năng là phân "
+               "loại lại hoặc khác cơ sở giữa hai kỳ. ")
         _AUDIT.add(f"TK {g.account}", "Số dư đầu kỳ so với cuối kỳ trước", int(g.closing_before), int(g.opening_now),
-                   "Không nối được số dư hai kỳ: không dùng tài khoản này để giải thích biến động", audit.AUTO, src)
+                   why + "Không nối được số dư hai kỳ: không dùng tài khoản này để giải thích biến động", audit.AUTO,
+                   src)
     for g in gate.moved[:20]:
         _AUDIT.add(f"TK {g.account}", "Đổi mã tài khoản (số dư vẫn khớp)", int(g.closing_before), int(g.opening_now),
                    "Đổi mã, không phải lỗi; chưa có trong bảng ghép nên không so từng mã giữa hai kỳ", audit.AUTO, src)
