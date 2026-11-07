@@ -28,6 +28,7 @@ POLL_MS = 300
 START_GRACE_S = 15.0                   # PowerPoint may need seconds before the show window answers
 RETRY_AFTER_S = 3.0                     # then Run again with the deck's window brought forward
 COMMAND_LINE_AFTER_S = 7.0              # then PowerPoint's own POWERPNT /S
+STARTED_BY = ("run", "run_again", "command_line")   # which start the show came from (present_attached)
 NO_SHOW = ("Em chưa mở được PowerPoint để trình chiếu bộ slide này. File slide của anh chị vẫn nguyên. "
            "Anh chị mở PowerPoint, bấm Trình chiếu (F5), rồi gọi lại em.")
 FORCE_PANEL = "CLICKY_PRESENT_FORCE_PANEL"     # robot on a one-screen PC: show the box anyway
@@ -257,18 +258,21 @@ class PresentMode(QObject):
             # start). Follow a show window of this deck when it appears, start once more, then say why.
             waited = time.monotonic() - self._started
             if self.bridge.find_show(self.deck_path) and self.bridge.running():
-                scene_log.record("present_attached", after=round(waited, 1), how=getattr(self.bridge, "how", ""))
+                scene_log.record("present_attached", after=round(waited, 1), how=getattr(self.bridge, "how", ""),
+                                 started_by=STARTED_BY[self._retried])
             elif waited < START_GRACE_S:
                 due = 2 if waited >= COMMAND_LINE_AFTER_S else 1 if waited >= RETRY_AFTER_S else 0
                 if due > self._retried:
                     self._retried = attempt = self._retried + 1           # in order, even after a slow tick
-                    ok = self.bridge.restart(self.deck_path, attempt)     # ok = PowerPoint reports the show
-                    scene_log.record("present_retry", attempt=attempt, how=("run" if attempt == 1 else "command_line"),
-                                     ok=ok, why=getattr(self.bridge, "last_error", ""),
+                    ok = self.bridge.restart(self.deck_path, attempt)     # ok = PowerPoint reports the show now
+                    why = getattr(self.bridge, "last_error", "")
+                    # sent: the call went through; the show it starts may come a second later (present_attached)
+                    scene_log.record("present_retry", attempt=attempt, how=STARTED_BY[attempt], sent=ok or not why,
+                                     ok=ok, why=why,
                                      shows=getattr(self.bridge, "shows_seen", 0))
                     if ok and self.bridge.running():
                         scene_log.record("present_attached", after=round(waited, 1),
-                                         how=getattr(self.bridge, "how", ""))
+                                         how=getattr(self.bridge, "how", ""), started_by=STARTED_BY[attempt])
                         self._seen_running = True
                         self.live.poll()
                 return
