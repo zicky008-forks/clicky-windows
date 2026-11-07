@@ -15,6 +15,7 @@ drops files, and marks the first time each kind of feedback reaches the screen:
     first_voice   the first sound of Clicky's voice (after synthesis), when a voice is on
     done          Clicky is idle again
 
+A turn ends when its task ends, or when the next turn starts first (then it carries cut=True).
 At "done" one line goes to clicky.log and, in rehearsals, a "latency" event to the scene log, in
 milliseconds since the start, with mode "ai" when the turn asked the AI and "code" when code alone
 answered (the month close, the sample, the buttons). Nothing is sent anywhere.
@@ -33,6 +34,10 @@ MARKS = ("transcript", "context", "ready", "first_text", "first_point", "first_d
 
 
 class TurnClock:
+    """One turn at a time, each with its own token: a turn that is still running when the next one starts
+    (a card button pressed while the question is still being read) is closed then, with its own done time
+    and cut=True, so its line is never lost or overwritten."""
+
     def __init__(self, now=time.monotonic):
         self._now = now
         self._lock = threading.Lock()
@@ -40,15 +45,42 @@ class TurnClock:
         self._source = ""
         self._label = ""
         self._marks: dict = {}
+        self._token = 0
+        self._bound = False
 
     @property
     def running(self) -> bool:
         return self._t0 is not None
 
-    def start(self, source: str, label: str = "") -> None:
-        """source: voice / typed / button / drop; label: what was asked (a button's text), for the report."""
+    def start(self, source: str, label: str = "") -> int:
+        """source: voice / typed / button / drop; label: what was asked (a button's text), for the report.
+
+        Returns the turn's token, for bind()."""
+        self.finish(cut=True)
         with self._lock:
+            self._token += 1
             self._t0, self._source, self._label, self._marks = self._now(), source, label[:60], {}
+            self._bound = False
+            return self._token
+
+    def bind(self, future, token: Optional[int] = None) -> None:
+        """End this turn when its task ends (done, failed or cancelled), not when the screen next goes idle:
+        a cancelled task's clean-up can report idle after the next turn has already started."""
+        if future is None:
+            return
+        with self._lock:
+            token = self._token if token is None else token
+            if token != self._token or self._t0 is None:
+                return
+            self._bound = True
+        future.add_done_callback(lambda _f: self.finish(token=token))
+
+    def idle(self) -> None:
+        """The screen is idle with no task left: ends a turn that has no task bound to it (voice turns)."""
+        with self._lock:
+            bound = self._bound
+        if not bound:
+            self.finish()
 
     def mark(self, name: str) -> None:
         """Keep the first time only: later chunks, points or cards of the same turn do not move it."""
@@ -57,15 +89,17 @@ class TurnClock:
                 return
             self._marks[name] = int(round((self._now() - self._t0) * 1000))
 
-    def finish(self) -> Optional[dict]:
-        """Close the turn; returns what was measured (None when no turn was running)."""
+    def finish(self, token: Optional[int] = None, cut: bool = False) -> Optional[dict]:
+        """Close the turn; returns what was measured (None when no turn was running, or that turn is over)."""
         with self._lock:
-            if self._t0 is None:
+            if self._t0 is None or (token is not None and token != self._token):
                 return None
             self._marks.setdefault("done", int(round((self._now() - self._t0) * 1000)))
             result = {"source": self._source, "label": self._label,
                       "mode": "ai" if "context" in self._marks else "code",
                       **{k: self._marks[k] for k in MARKS if k in self._marks}}
+            if cut:
+                result["cut"] = True            # the next turn started before this one was over
             self._t0 = None
         first = [result[k] for k in ("first_text", "first_point", "first_draw", "first_card", "first_caption")
                  if k in result]
@@ -91,7 +125,7 @@ def connect(manager, clock: TurnClock) -> None:
     def _state(state):
         # A skill reads each card out and goes idle in between; the turn ends only when no task is left.
         if getattr(state, "name", str(state)) == "IDLE" and getattr(manager, "_current_task", None) is None:
-            clock.finish()
+            clock.idle()
     manager.sig_state_changed.connect(_state)
     try:
         import importlib
@@ -104,7 +138,13 @@ def connect(manager, clock: TurnClock) -> None:
 class _NoClock:
     running = False
 
-    def start(self, source: str, label: str = "") -> None:
+    def start(self, source: str, label: str = "") -> int:
+        return 0
+
+    def bind(self, future, token=None) -> None:
+        pass
+
+    def idle(self) -> None:
         pass
 
     def mark(self, name: str) -> None:

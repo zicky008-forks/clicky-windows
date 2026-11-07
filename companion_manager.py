@@ -975,9 +975,10 @@ class CompanionManager(QObject):
             return
         guided = self._guided and is_next(text)
         self.stop()
-        turn_clock.of(self).start("typed", text)
+        turn = turn_clock.of(self).start("typed", text)
         self._guided = guided
         self._request_future = self._submit(self._process_query(text))
+        turn_clock.of(self).bind(self._request_future, turn)
 
     def submit_drop(self, paths: list):
         """Files or a folder dropped on the drop zone (UI thread): start the month close on them."""
@@ -985,8 +986,9 @@ class CompanionManager(QObject):
         if not paths:
             return
         self.stop()
-        turn_clock.of(self).start("drop")
+        turn = turn_clock.of(self).start("drop")
         self._request_future = self._submit(self._process_drop(paths))
+        turn_clock.of(self).bind(self._request_future, turn)
 
     def submit_bod_review(self, folder: str):
         """Review the BOD draft pack in a folder (UI thread), e.g. from Clicky.exe --bod-review."""

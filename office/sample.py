@@ -75,9 +75,13 @@ def closing(seconds: float, workbook: Path) -> Beat:
                 choices=DONE_CHOICES)
 
 
-async def _press(manager) -> None:
-    """Leave the question up long enough to read, then take it down as if the first button was pressed."""
+async def _press(manager, label: str = "") -> None:
+    """Leave the question up long enough to read, then take it down as if the first button was pressed.
+
+    A press is a turn of its own, as it is when the user presses: it gets its own latency line."""
     await asyncio.sleep(PAUSE_S)
+    import turn_clock
+    turn_clock.of(manager).start("button", label)
     manager.sig_turn_started.emit("")          # hides the choice card
     manager.sig_clear_drawings.emit()
 
@@ -125,7 +129,7 @@ async def run(manager) -> str:
         await mc.play(manager, beats)
         if not (beats[-1].choices and mc.stage()):
             break                               # the run stopped on its own (an error, or nothing left to ask)
-        await _press(manager)
+        await _press(manager, beats[-1].choices[0])
     await mc.play(manager, [closing(time.monotonic() - started, workbook)])
     return ""
 

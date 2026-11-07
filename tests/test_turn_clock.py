@@ -127,3 +127,81 @@ def test_label_stays_out_of_clicky_log(caplog):
         result = clock.finish()
     assert result["label"] == "doanh thu Công ty ABC" and result["mode"] == "code"
     assert "ABC" not in caplog.text and "mode=code" in caplog.text
+
+
+class _Future:
+    """A task's future: done callbacks run when it ends (done, failed or cancelled)."""
+    def __init__(self):
+        self.callbacks = []
+
+    def add_done_callback(self, fn):
+        self.callbacks.append(fn)
+
+    def end(self):
+        for fn in self.callbacks:
+            fn(self)
+
+
+def test_overlapping_turns_each_keep_their_own_line(monkeypatch):
+    # PC gate on 263556f: the robot pressed "Đúng rồi, làm tiếp" while the typed turn was still reading its
+    # receipt, and the press's start overwrote the typed turn's clock, so one line per lap went missing.
+    records = []
+    monkeypatch.setattr("scene_log.record", lambda event, **data: records.append(data) if event == "latency" else None)
+    now, m = _Now(), _Manager()
+    clock = turn_clock.TurnClock(now)
+    turn_clock.connect(m, clock)
+    typed, first_task = clock.start("typed", "Lập báo cáo tháng"), _Future()
+    clock.bind(first_task, typed)
+    now.t += 0.4
+    m.sig_choices.emit("Phiếu nhận file", ["Đúng rồi, làm tiếp"])
+    now.t += 1.0
+    press, second_task = clock.start("typed", "Đúng rồi, làm tiếp"), _Future()   # pressed mid-read
+    clock.bind(second_task, press)
+    first_task.end()                          # the cancelled turn's task ends after the press began
+    m.sig_state_changed.emit(_State("IDLE"))  # and its clean-up reports idle: the press goes on
+    assert clock.running and len(records) == 1
+    assert records[0]["label"] == "Lập báo cáo tháng" and records[0]["cut"] is True
+    assert records[0]["first_card"] == 400 and records[0]["done"] == 1400
+    now.t += 0.2
+    m.sig_point_at.emit(1.0, 2.0, "")
+    now.t += 2.0
+    second_task.end()
+    assert not clock.running and len(records) == 2
+    assert records[1]["label"] == "Đúng rồi, làm tiếp" and "cut" not in records[1]
+    assert (records[1]["first_point"], records[1]["done"]) == (200, 2200)
+
+
+def test_a_bound_turn_ends_with_its_task_not_with_the_first_idle(monkeypatch):
+    records = []
+    monkeypatch.setattr("scene_log.record", lambda event, **data: records.append(data) if event == "latency" else None)
+    now, m = _Now(), _Manager()
+    clock = turn_clock.TurnClock(now)
+    turn_clock.connect(m, clock)
+    task = _Future()
+    clock.bind(task, clock.start("typed", "Sửa giúp tôi"))
+    m.sig_state_changed.emit(_State("IDLE"))
+    assert clock.running and records == []
+    now.t += 3.0
+    task.end()
+    task.end()                                # a second callback for the same turn writes nothing more
+    assert len(records) == 1 and records[0]["done"] == 3000
+
+
+def test_every_sample_press_is_a_turn_with_its_own_clock(monkeypatch):
+    from office import sample
+    started = []
+
+    class Clock:
+        def start(self, source, label=""):
+            started.append((source, label))
+
+    class Manager:
+        _clock = Clock()
+        sig_turn_started = _Sig()
+        sig_clear_drawings = _Sig()
+
+    async def no_wait(_s):
+        return None
+    monkeypatch.setattr(sample.asyncio, "sleep", no_wait)
+    asyncio.run(sample._press(Manager(), "Đúng rồi, làm tiếp"))
+    assert started == [("button", "Đúng rồi, làm tiếp")] and Manager.sig_turn_started.sent == [("",)]
