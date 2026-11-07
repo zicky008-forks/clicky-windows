@@ -63,3 +63,28 @@ def test_a_group_clicky_could_not_check_fails_the_run_and_is_said(tmp_path, monk
     from openpyxl import load_workbook
     rows = list(load_workbook(out["xlsx"])["Cac nhom kiem"].iter_rows(values_only=True))
     assert any(r[1] == 2 and "CHƯA KIỂM ĐƯỢC" in str(r[3]) for r in rows)
+
+
+def test_results_inside_the_case_folder_are_refused(tmp_path, monkeypatch):
+    """Case 07 on the PC, 07/11: --out inside the case folder copied the case into itself, level after level."""
+    case = tmp_path / "Case07"
+    case.mkdir()
+    (case / "BOD_nhap.xlsx").write_bytes(b"x")
+    monkeypatch.setattr(bod_robot, "find_clicky", lambda: str(tmp_path / "Clicky.exe"))
+    (tmp_path / "Clicky.exe").write_bytes(b"")
+    monkeypatch.setattr(bod_robot, "other_files_open", lambda: [])
+    said = []
+    monkeypatch.setattr(bod_robot, "say", said.append)
+    assert bod_robot.main(["--thu-muc", str(case), "--out", str(case / "ket-qua-robot")]) == 2
+    assert not (case / "ket-qua-robot").exists() and sorted(p.name for p in case.iterdir()) == ["BOD_nhap.xlsx"]
+    assert "nằm trong thư mục case" in said[-1]
+    assert bod_robot.inside(case, case) and not bod_robot.inside(tmp_path / "ket-qua-Case07", case)
+
+
+def test_open_files_are_counted_not_named(monkeypatch):
+    monkeypatch.setattr(bod_robot, "other_files_open", lambda: ["So_cai_that.xlsx", "AOP.pptx"])
+    said = []
+    monkeypatch.setattr(bod_robot, "say", said.append)
+    monkeypatch.setattr(bod_robot, "find_clicky", lambda: __file__)
+    assert bod_robot.main(["--tu-tao"]) == 2
+    assert "2 file khác" in said[-1] and "So_cai" not in said[-1]

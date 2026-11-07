@@ -223,7 +223,7 @@ def main(argv=None) -> int:
         return 2
     others = other_files_open()
     if others:
-        say(f"Robot không chạy vì Excel/PowerPoint đang mở file khác: {', '.join(others)}. Đóng hết rồi chạy lại.")
+        say(f"Robot không chạy vì Excel/PowerPoint đang mở {len(others)} file khác (robot không đọc tên). Đóng hết rồi chạy lại.")
         return 2
     out = Path(a.out) if a.out else Path.cwd() / f"dien-tap-4-chang-{time.strftime('%Y%m%d-%H%M')}"
     case = out / "case"
