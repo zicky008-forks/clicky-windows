@@ -364,6 +364,8 @@ def main(argv=None) -> int:
         expected = dict(expected, tamper={"cell": ref, "delta": float(delta)})
         expected.pop("verify", None)            # a clean re-read is not expected on this run
     hash_before = file_hash(copy) if copy else ""
+    # Counted before Clicky starts, so the files it writes do not count; names only, never opened.
+    data_files = checks.data_file_count(workbook.parent, workbook, COPY_TAG) if workbook else None
     clock.lap("Mở Excel")
 
     say(f"2/6 Mở Clicky: {exe}")
@@ -485,6 +487,7 @@ def main(argv=None) -> int:
     events = checks.read_log(log)
     result = checks.evaluate(events, sheets, expected)
     result.checks.append(checks.stage_check(stalled))
+    result.checks.append(checks.receipt_reached_check(events, data_files, expected.get("stop_before_receipt_ok", False)))
     network = net.stop()
     egress_text = None
     if "egress" in expected and egress.exists():

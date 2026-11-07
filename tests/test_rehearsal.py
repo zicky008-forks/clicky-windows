@@ -444,3 +444,26 @@ def test_excel_stuck_behind_a_dialog_is_said_plainly(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         rehearse.no_workbook(False)
     assert "hộp thoại" in str(exc.value)
+
+
+def test_folder_with_data_must_reach_the_receipt(tmp_path):
+    # Case 05 run 1: one scene saying no order file was found, no receipt, and the robot said ĐẠT.
+    wb = tmp_path / "BaoCao_T01.xlsx"
+    for name in ("BaoCao_T01.xlsx", "BaoCao_T01_ban-goc.xlsx", "BaoCao_T01_dientap_0107_101010.xlsx",
+                 "~$BaoCao_T01.xlsx", "DonHang_T01.xlsx", "CDTK_T01.xls", "ghi-chu.txt"):
+        (tmp_path / name).write_bytes(b"")
+    (tmp_path / "dien-tap").mkdir()
+    n = checks.data_file_count(tmp_path, wb)
+    assert n == 2
+    stopped = [{"t": 1.0, "event": "turn", "text": "làm báo cáo tháng từ thư mục này"},
+               {"t": 2.0, "event": "beat", "i": 0, "text": "Em không thấy file đơn hàng CSV nào trong thư mục X."}]
+    c = checks.receipt_reached_check(stopped, n)
+    assert not c.ok and c.blocking
+    assert "2 file dữ liệu" in c.detail and "chặng 1 sau 1 cảnh" in c.detail and "không thấy file" in c.detail
+    assert checks.receipt_reached_check(stopped + [{"t": 3.0, "event": "intake", "files": []}], n).ok
+    assert checks.receipt_reached_check(stopped, 0).ok          # nothing to read: not this check's business
+    assert checks.receipt_reached_check(stopped, None).ok       # the sample run has no case folder
+    assert checks.receipt_reached_check(stopped, n, allowed=True).ok
+    computed = good_run()                                       # computed straight away, no receipt
+    c = checks.receipt_reached_check(computed, n)
+    assert not c.ok and "tính luôn" in c.detail
