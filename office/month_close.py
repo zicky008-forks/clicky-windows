@@ -746,10 +746,12 @@ def _close_out(bridge, before: set, quiet: bool = False) -> None:
         _note_new_sheets(bridge, before)
         with _timed("audit_sheet"):
             _write_audit(bridge)
-    except Exception:
+    except Exception as exc:
         if not quiet:
             raise
-        log.warning("updating the Bien ban sheet failed after the step itself failed", exc_info=True)
+        # Type and code only: Excel's error text can quote the workbook's name and folder.
+        from office.excel_com import _why
+        log.warning("updating the Bien ban sheet failed after the step itself failed: %s", _why(exc))
 
 
 def _guarded(bridge, before: set, step):
@@ -1179,7 +1181,8 @@ def verify_saved(bridge) -> list:
         # The robot's tamper hook hands back a changed copy; without it this is the saved file itself.
         ok, diffs = saved_check.check(saved_check.tamper_from_env(Path(path)), _EXPECT)
     except Exception as exc:
-        log.warning("re-reading the saved workbook failed: %s", exc)
+        from office.excel_com import _why
+        log.warning("re-reading the saved workbook failed: %s", _why(exc))    # an OS error quotes the path
         ok, diffs = False, [{"cell": "", "want": None, "got": None}]
     scene_log.record("verify", ok=ok, path=path, diffs=diffs)
     if ok:

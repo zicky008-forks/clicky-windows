@@ -808,6 +808,22 @@ def test_a_saved_file_that_cannot_be_read_back_is_never_called_matching(folder, 
     assert "Khớp sổ cái" not in said and "không đọc lại được" in said and beats[0].mark == "bad"
 
 
+def test_a_failed_re_read_logs_no_path(folder, monkeypatch, caplog):
+    # PC run 37265be: clicky.log carried "Permission denied: '...\\Thu_Clicky_Case01_beta\\BaoCao….xlsx'".
+    import logging
+    from engine import saved_check
+    caplog.set_level(logging.DEBUG)
+    bridge = SavingBridge(folder)
+    pq = _to_the_save_question(bridge, folder)
+
+    def locked(path, expect):
+        raise PermissionError(13, "Permission denied", "C:\\Users\\chi\\AgriS\\BCTC_Q3.xlsx")
+    monkeypatch.setattr(saved_check, "check", locked)
+    month_close.approve(bridge, pq)
+    assert "AgriS" not in caplog.text and "BCTC" not in caplog.text
+    assert "re-reading the saved workbook failed: PermissionError 0x0000000D" in caplog.text
+
+
 # ── Beta job 5: each input has a role; two of the same kind → ask, never pick ──
 
 def test_two_trial_balances_of_one_month_are_asked_about_not_picked(folder):
@@ -1209,3 +1225,23 @@ def test_the_step_s_own_error_is_not_hidden_by_a_failing_bien_ban(folder, monkey
     with pytest.raises(ValueError, match="fix itself"):
         month_close.approve(bridge, pq)
     assert bridge.screen == [False, True]
+
+
+def test_a_failing_bien_ban_never_logs_the_workbook_name(folder, monkeypatch, caplog):
+    import logging
+    caplog.set_level(logging.DEBUG)
+    bridge = _recording(folder)
+    pq = FakePQ(bridge, folder)
+    _begin(bridge, pq, sources.DAY_FIRST)
+
+    def broken(*_a):
+        raise ValueError("the fix itself failed")
+
+    def rejected(_bridge):
+        raise RuntimeError(-2147352567, "Cannot access 'BCTC_AgriS_Q3.xlsx' in C:\\Users\\chi\\AgriS")
+    monkeypatch.setattr(month_close, "_approve", broken)
+    monkeypatch.setattr(month_close, "_write_audit", rejected)
+    with pytest.raises(ValueError):
+        month_close.approve(bridge, pq)
+    assert "AgriS" not in caplog.text and "BCTC" not in caplog.text
+    assert "Bien ban sheet failed" in caplog.text and "RuntimeError 0x80020009" in caplog.text
