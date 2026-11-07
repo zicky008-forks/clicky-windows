@@ -721,15 +721,11 @@ def confirm(bridge, pq) -> list:
     # As in approve: adding and styling the check sheets with the screen frozen is faster (Excel does not
     # repaint after every call) and does not flash sheets past the user; the result shows when it is ready.
     _try(bridge, "screen_updating", False)
-    try:
+
+    def step():
         with _timed("reconcile"):
-            beats = _reconcile(bridge, pq, job["order"])
-    finally:
-        _note_new_sheets(bridge, before)
-        with _timed("audit_sheet"):
-            _write_audit(bridge)
-        _try(bridge, "screen_updating", True)
-    return beats
+            return _reconcile(bridge, pq, job["order"])
+    return _guarded(bridge, before, step)
 
 
 def wrong() -> list:
@@ -737,6 +733,36 @@ def wrong() -> list:
     global _PENDING
     _PENDING = None
     return [Beat("Anh nói giúp em chỗ nào chưa đúng nhé. Em chưa sửa gì trong file.")]
+
+
+def _close_out(bridge, before: set, quiet: bool = False) -> None:
+    """Record the sheets Clicky added and rewrite the Biên bản.
+
+    After a step that failed (quiet), a failure here (Excel rejecting a call while the user clicks into a
+    cell) is only logged, so it never hides the step's own error. After a step that worked it is raised:
+    changes with no Biên bản must not be handed over as done."""
+    try:
+        _note_new_sheets(bridge, before)
+        with _timed("audit_sheet"):
+            _write_audit(bridge)
+    except Exception:
+        if not quiet:
+            raise
+        log.warning("updating the Bien ban sheet failed after the step itself failed", exc_info=True)
+
+
+def _guarded(bridge, before: set, step):
+    """Run step, then the Biên bản; the screen is released last whatever happens."""
+    try:
+        try:
+            result = step()
+        except BaseException:
+            _close_out(bridge, before, quiet=True)
+            raise
+        _close_out(bridge, before)
+        return result
+    finally:
+        _try(bridge, "screen_updating", True)      # always last: a frozen screen must never stay frozen
 
 
 def _note_new_sheets(bridge, before: set) -> None:
@@ -1016,13 +1042,12 @@ def approve(bridge, pq) -> list:
     # Reloading the query and adding the report sheets would flash a dozen sheets past the user;
     # the screen stays still and the result is shown when it is ready.
     _try(bridge, "screen_updating", False)
-    before = set(bridge.sheet_names())
     try:
-        return _approve(bridge, pq, job)
-    finally:
-        _note_new_sheets(bridge, before)
-        _write_audit(bridge)
+        before = set(bridge.sheet_names())
+    except BaseException:
         _try(bridge, "screen_updating", True)
+        raise
+    return _guarded(bridge, before, lambda: _approve(bridge, pq, job))
 
 
 def load_error_vi(raw: str) -> str:

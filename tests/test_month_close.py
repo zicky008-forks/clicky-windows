@@ -1056,3 +1056,47 @@ def test_a_failing_check_still_releases_the_screen(folder):
     with pytest.raises(RuntimeError):
         _begin(bridge, Broken(bridge, folder), sources.DAY_FIRST)
     assert bridge.screen == [False, True]
+
+
+def _recording(folder):
+    class Recording(FakeBridge):
+        def __init__(self, f):
+            super().__init__(f)
+            self.screen = []
+
+        def screen_updating(self, on):
+            self.screen.append(on)
+    return Recording(folder)
+
+
+def test_a_failing_bien_ban_never_leaves_the_screen_frozen(folder, monkeypatch):
+    # Excel rejects a call (the user clicked into a cell) while the Biên bản is rewritten: the screen must
+    # still be released, in the check after "Đúng rồi, làm tiếp" and in the fix after "Sửa giúp tôi".
+    bridge = _recording(folder)
+    pq = FakePQ(bridge, folder)
+    real = month_close._write_audit
+
+    def rejected(_bridge):
+        raise RuntimeError("Call was rejected by callee")
+    monkeypatch.setattr(month_close, "_write_audit", rejected)
+    with pytest.raises(RuntimeError, match="rejected"):
+        _begin(bridge, pq, sources.DAY_FIRST)
+    assert bridge.screen == [False, True]
+
+
+def test_the_step_s_own_error_is_not_hidden_by_a_failing_bien_ban(folder, monkeypatch):
+    bridge = _recording(folder)
+    pq = FakePQ(bridge, folder)
+    _begin(bridge, pq, sources.DAY_FIRST)
+    bridge.screen.clear()
+
+    def broken(*_a):
+        raise ValueError("the fix itself failed")
+
+    def rejected(_bridge):
+        raise RuntimeError("Call was rejected by callee")
+    monkeypatch.setattr(month_close, "_approve", broken)
+    monkeypatch.setattr(month_close, "_write_audit", rejected)
+    with pytest.raises(ValueError, match="fix itself"):
+        month_close.approve(bridge, pq)
+    assert bridge.screen == [False, True]
