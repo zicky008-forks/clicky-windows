@@ -1,9 +1,13 @@
 """Month close end to end from one voice command: load the sales query, check it against the files and the ledger,
 fix it with the user's approval, then build the monthly report, pointing at each number as it is spoken.
 
-    "làm báo cáo tháng từ thư mục này"   → stage 1: read files, load the query, reconcile, explain, propose a fix
+    "làm báo cáo tháng từ thư mục này"   → stage 0: read the files only and show what was read ("Em đọc được những gì")
+    "đúng rồi, làm tiếp"                → stage 1: keep a copy of the workbook, load the query, reconcile, propose a fix
     "đồng ý"                            → stage 2: apply the fix, reload, confirm, then build the report
-    "thôi"                              → keep the query as it is
+    "thôi" / "có chỗ sai"               → keep the query as it is / stop before anything is changed
+
+Nothing in the workbook changes before the user confirms the receipt, and every change after it
+is written to the "Bien ban Clicky" sheet (engine.audit).
 
 The folder is the one the open workbook is saved in (and its sub-folders). All
 numbers come from code: the source files are re-read independently of Power Query,
@@ -14,16 +18,20 @@ returns Beats (sentence + cell to point at) that the app speaks and points at.
 import asyncio
 import logging
 import re
+import time
 from collections import Counter
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
-from engine import m_code, sources
+from engine import audit, intake as intake_mod, m_code, sources, visuals
+from engine.log_safe import kind_only, scrub  # clicky.log never holds a customer's file or folder name
 from engine.monthly_report import spoken
 from engine.trial_balance import ZERO
-from office.power_query import ReadFailed
+from office.power_query import LoadTimeout, ReadFailed
+import scene_log
+from engine.address import you  # the one word for the user (CLAUDE.md rule 8)
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +52,14 @@ APPROVE_TRIGGER = (r"^\s*(đồng ý|dong y|ok|oke|okay|được|duoc|sửa đi|
 REJECT_TRIGGER = (r"^\s*(thôi|thoi|không|khong|giữ nguyên|giu nguyen|để tôi xem|de toi xem|để anh xem|để chị xem|no)\b"
                   r"(\s+\S+){0,2}\s*[.!]?\s*$")
 FIX_CHOICES = ("Sửa giúp tôi", "Để tôi xem")
+# The receipt's buttons; the rehearsal robot presses the first one by its exact words.
+INTAKE_CHOICES = ("Đúng rồi, làm tiếp", "Có chỗ sai")
+CONFIRM_TRIGGER = r"^\s*(đúng rồi|dung roi|đúng|dung|làm tiếp|lam tiep|tiếp tục|tiep tuc)\b(\s+\S+){0,3}\s*[.!]?\s*$"
+WRONG_TRIGGER = r"^\s*(có chỗ sai|co cho sai|sai rồi|sai roi|chưa đúng|chua dung)\b(\s+\S+){0,4}\s*[.!]?\s*$"
+PICK_TRIGGER = r"^\s*(dùng|dung|chọn|chon|lấy|lay)\s+\S+"
+COLUMN_TRIGGER = r"^\s*(cột|cot|đúng, dùng file này|dung, dung file nay|không phải đơn hàng|khong phai don hang)\b"
+COLUMN_YES, COLUMN_NO = "Đúng, dùng file này", "Không phải đơn hàng"
+FINAL_TRIGGER = r"\b(chốt|chot|chuyển sang|chuyen sang|đánh dấu|danh dau)\s+(là\s+|la\s+)?(chính thức|chinh thuc)\b"
 
 _PENDING: Optional[dict] = None
 
@@ -61,6 +77,18 @@ class Beat:
     choices: tuple = ()             # buttons offered after the sentence, e.g. ("Sửa giúp tôi", "Để tôi xem")
     was: str = ""                   # the figure it replaces, shown struck through above the new one
     roll: tuple = ()                # (from, to) in đồng: the big figure counts from one to the other
+    intake: Optional[dict] = None   # the receipt card ({"card": ..., "log": ...}) shown with this beat's buttons
+    graphic: Optional[dict] = None  # leader tags, sticky notes or a profit bridge (engine.visuals), drawn beside the range
+    book: str = ""                  # the workbook the ref is in, brought to the front first (read-only when Clicky opens it)
+    book_pack: bool = False         # that workbook is the file under review itself (logged, never its name)
+
+
+def stage() -> Optional[str]:
+    return _PENDING.get("stage") if _PENDING else None
+
+
+def intake_pending() -> bool:
+    return stage() == "intake"
 
 
 def pending() -> bool:
@@ -303,8 +331,51 @@ def _try(bridge, method: str, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except Exception as exc:
-        log.debug("Excel %s failed: %s", method, exc)
+        log.debug("Excel %s failed: %s", method, scrub(exc))
         return None
+
+
+class _Sheets:
+    """The writes and formats for Clicky's own sheets, collected and then sent to Excel in one go
+    (ExcelBridge.paint): one Excel handle, and each format set once on all the ranges that share it, instead
+    of a trip to Excel for every call. It takes the bridge calls the writers always made, so the cells come out
+    the same (tests/test_sheet_batch.py)."""
+
+    def __init__(self):
+        self.ops = []
+
+    def clear(self, ref: str) -> None:
+        self.ops.append(("clear", ref))
+
+    def write(self, ref: str, rows: list) -> bool:
+        self.ops.append(("write", ref, rows))
+        return True
+
+    def format_numbers(self, ref: str, number_format: Optional[str] = None) -> None:
+        self.ops.append(("numbers", ref, number_format))
+
+    def style(self, ref: str, **opts) -> None:
+        self.ops.append(("style", ref, opts))
+
+    def layout_sheet(self, name: str, widths: dict, gridlines: bool = True) -> None:
+        self.ops.append(("layout", name, widths, gridlines))
+
+    def send(self, bridge) -> None:
+        """To Excel in one go when the bridge can; otherwise call by call, as before."""
+        if hasattr(bridge, "paint"):
+            bridge.paint(self.ops)
+            return
+        for op in self.ops:
+            if op[0] == "write":
+                bridge.write(op[1], op[2])
+            elif op[0] == "numbers":
+                bridge.format_numbers(op[1], *([op[2]] if op[2] else []))
+            elif op[0] == "clear":
+                _try(bridge, "clear", op[1])
+            elif op[0] == "style":
+                _try(bridge, "style", op[1], **op[2])
+            elif op[0] == "layout":
+                _try(bridge, "layout_sheet", op[1], op[2], gridlines=op[3])
 
 
 def _write_check_sheet(bridge, loaded: Optional[Loaded], truth, ledger: dict,
@@ -343,10 +414,12 @@ def _write_check_sheet(bridge, loaded: Optional[Loaded], truth, ledger: dict,
     if details:
         grid += [["", "", "", "", ""], ["Chi tiết kiểm tra", "Chứng từ", "Doanh thu (đ)", "", "Giải thích"]]
         grid += [list(r) + [""] * (5 - len(r)) for r in details]
-    _try(bridge, "clear", f"{_q(sheet)}!A1:F60")
-    bridge.write(f"{_q(sheet)}!A1", grid)
-    bridge.format_numbers(f"{_q(sheet)}!B4:D7", ZERO_SHOWN)
-    _style_check_sheet(bridge, sheet, len(details or []), gap_state if loaded else None)
+    out = _Sheets()
+    out.clear(f"{_q(sheet)}!A1:F60")
+    out.write(f"{_q(sheet)}!A1", grid)
+    out.format_numbers(f"{_q(sheet)}!B4:D7", ZERO_SHOWN)
+    _style_check_sheet(out, sheet, len(details or []), gap_state if loaded else None)
+    out.send(bridge)
     return sheet
 
 
@@ -372,9 +445,62 @@ def _style_check_sheet(bridge, sheet: str, n_details: int, gap_state: Optional[s
         bridge.format_numbers(f"{s}!B{top + 1}:C{last}")
 
 
-def _ledger(folder: Path) -> tuple:
+# The folder the user dropped on the drop zone; None reads the folder the open workbook is saved in.
+_SOURCE: Optional[str] = None
+
+
+def _data_folder(bridge) -> Optional[Path]:
+    """Where the trial balances and sales exports are read from. The workbook must be saved either way:
+    the original is kept next to it before the first change."""
+    own = bridge.workbook_folder()
+    if not own:
+        return None
+    return Path(_SOURCE or own)
+
+
+def use_folder(folder: Optional[Path]) -> None:
+    global _SOURCE
+    _SOURCE = str(folder) if folder else None
+
+
+# Which file the user chose when two trial balances cover the same period: (year, month) → file stem.
+_CHOSEN: dict = {}
+
+
+def _tb_groups(folder: Path) -> tuple:
+    """(one trial balance per period, oldest first; the duplicates set aside; the first unresolved conflict).
+
+    A conflict is two files for one of the two periods the report needs, with no choice from the user yet;
+    Clicky asks instead of picking. Older periods are not used, so their copies need no answer.
+    """
     from engine.cli import read_rows
-    tbs = sources.find_trial_balances(folder, read_rows)
+    found = sources.find_trial_balances(folder, read_rows)
+    groups = {}
+    for t in found:
+        groups.setdefault(sources.period_of(t[1]) or (0, 0), []).append(t)
+    periods = sorted(groups)
+    picked, aside, conflict = [], [], None
+    for period in periods:
+        group = groups[period]
+        choice = next((t for t in group if t[0] == _CHOSEN.get(period)), None)
+        if len(group) > 1 and choice is None and period in periods[-2:] and conflict is None:
+            conflict = (period, group)
+        keep = choice or max(group, key=lambda t: _mtime(folder, t[0]))
+        picked.append(keep)
+        aside += [(t[0], period) for t in group if t is not keep]
+    return picked, aside, conflict
+
+
+def _mtime(folder: Path, stem: str) -> float:
+    p = next(iter(sorted(folder.glob(f"{stem}.xls*"))), None)
+    try:
+        return p.stat().st_mtime if p else 0.0
+    except OSError:
+        return 0.0
+
+
+def _ledger(folder: Path) -> tuple:
+    tbs = _tb_groups(folder)[0]
     if not tbs:
         return tbs, {}
     name, _, tb = tbs[-1]
@@ -383,6 +509,19 @@ def _ledger(folder: Path) -> tuple:
     return tbs, {"name": name, "rev_acct": acct, "revenue": revenue, "gross": revenue,
                  "returns": sources.ledger_movement(tb, "521", "dr"),
                  "cost": sources.ledger_movement(tb, "632", "dr")}
+
+
+def _rescope(tbs, ledger: dict, truth) -> dict:
+    """Compare against the 511 scope the order files cover (5111 alone or every 511 sub-account),
+    so a sales file holding goods and finished products is not reported short by 5112."""
+    if not ledger:
+        return ledger
+    tb = tbs[-1][2]
+    acct = sources.revenue_scope(tb, truth.gross)
+    if acct == ledger["rev_acct"]:
+        return ledger
+    revenue = sources.ledger_movement(tb, acct, "cr")
+    return dict(ledger, rev_acct=acct, revenue=revenue, gross=revenue)
 
 
 def _net_of_returns(ledger: dict, truth) -> dict:
@@ -483,14 +622,14 @@ def _cause_beats(why: dict, machine_order: Optional[str], first_row: int, reader
     if why["other"]:
         n, amt = len(why["other"]), _amount(why["other"])
         add(Beat(f"Còn {n} chứng từ bị mất mà em chưa rõ lý do.", label="Chưa rõ nguyên nhân", mark="warn",
-                 value=spoken(amt), note="Anh xem danh sách trong bảng chi tiết."),
+                 value=spoken(amt), note=f"{you(True)} xem danh sách trong bảng chi tiết."),
             ["Chưa rõ nguyên nhân", n, amt, "", "Có trong file gốc nhưng không có trong bảng query."])
     # The causes must add up to the gap; whatever they do not cover is said, never left silent.
     if gap is not None:
         rest = gap - explained(why)
         if abs(rest) > TOLERANCE:
             add(Beat(f"Còn {spoken(abs(rest))} em chưa tìm ra nguyên nhân.", label="Chưa rõ nguyên nhân", mark="warn",
-                     value=_signed(rest), note="Phần này chưa được giải thích. Anh xem bảng query trước khi dùng số."),
+                     value=_signed(rest), note=f"Phần này chưa được giải thích. {you(True)} xem bảng query trước khi dùng số."),
                 ["Phần lệch chưa rõ nguyên nhân", "", rest, "", "Tổng các nguyên nhân ở trên chưa bằng chỗ lệch giữa query và file gốc."])
     if why["excel_dups"]:
         n = len(why["excel_dups"])
@@ -505,25 +644,587 @@ def _lint_rows(findings) -> list:
 
 
 def _fix_offer() -> Beat:
-    return Beat("Em sửa query giúp anh nhé? Bản cũ vẫn được giữ lại.", choices=FIX_CHOICES)
+    return Beat(f"Em sửa query giúp {you()} nhé? Bản cũ vẫn được giữ lại.", choices=FIX_CHOICES)
+
+
+_AUDIT: Optional[audit.AuditLog] = None
+
+
+def _workbook_name(bridge) -> Optional[str]:
+    path = _try(bridge, "workbook_path")
+    return Path(path).name if path else None
 
 
 def start(bridge, pq, machine_order: Optional[str]) -> list:
+    """Stage 0: read every file in the folder and say what was read. Nothing in the workbook changes yet."""
+    global _PENDING, _AUDIT, _RUN_T0
+    _PENDING, _AUDIT = None, None
+    _RUN_T0 = time.monotonic()          # the run's wall time, for the first-report feedback (job 13)
+    _step("read_folder")
+    _EXPECT.clear()
+    if not bridge.available():
+        return [Beat(f"{you(True)} mở file Excel đã lưu trong thư mục dữ liệu tháng rồi gọi lại em.")]
+    folder = _data_folder(bridge)
+    if folder is None:
+        return [Beat(f"File Excel này chưa được lưu. {you(True)} lưu nó vào thư mục có các file đơn hàng và file cân đối tài khoản, rồi gọi lại em.")]
+    book = _workbook_name(bridge)       # the last Excel call of stage 0: the rest reads files only
+    _warm_early(bridge)
+    _load_columns()
+    files = sources.find_order_files(folder)
+    unknown = sources.unexplained_order_files(folder, {f.name for f in files})
+    if unknown:                                     # an order-like file under column names Clicky does not know
+        return _ask_columns(folder, unknown[0], machine_order)
+    if not files:
+        return _stop_no_orders(folder, book)
+    _tbs, aside, conflict = _tb_groups(folder)
+    if conflict:
+        return _ask_which(folder, conflict, machine_order)
+    with _timed("read_files"):
+        tbs, ledger = _ledger(folder)
+        period = sources.period_of(tbs[-1][1]) if tbs else None
+        truth = sources.truth(files, period)
+    ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
+    receipt = intake_mod.build(folder, files, tbs, truth, ledger, book,
+                               set_aside=[(name, f"bản sổ cân đối T{p[1]:02d} khác; {you()} đã chọn dùng {intake_mod.file_name(folder, _CHOSEN[p])}"
+                                           if p in _CHOSEN else "bản cũ hơn của cùng kỳ")
+                                          for name, p in aside])
+    scene_log.record("roles", files=[{"name": n, "role": r} for n, r in receipt.roles.items()])
+    n_tb = len(tbs[-2:])
+    unread = intake_mod.unread(receipt)
+    # Every order-like file that was not used is named, never skipped in silence (rule 4).
+    missed = "" if not unread else (
+        f" File {unread[0].file} em chưa đọc được: {unread[0].reason}." if len(unread) == 1 else
+        f" Còn {len(unread)} file em chưa đọc được, lý do ghi trong phiếu bên dưới.")
+    if receipt.impact_short:                        # said before "Đúng rồi, làm tiếp", not found after it
+        missed += " " + receipt.impact
+    if not receipt.same_basis:                      # the report will not explain any change: said up front
+        missed += " " + receipt.comparable
+    text = (f"Em đọc được {n_tb} sổ cân đối và {truth.unique_rows} đơn bán hàng"
+            + (f" từ {len(files)} trên {len(files) + len(unread)} file đơn hàng" if unread else "") + "." + missed
+            + f" {you(True)} xem giúp em có đúng không, em chưa sửa gì trong file.")
+    _PENDING = {"stage": "intake", "order": machine_order, "intake": receipt, "folder": str(folder),
+                "period": f"{period[1]:02d}/{period[0]}" if period else "", "picked": list(_PICKS),
+                "columns": list(_COLUMN_PICKS)}
+    return [Beat(text, choices=INTAKE_CHOICES,
+                 intake={"card": intake_mod.card(receipt), "log": intake_mod.log_fields(receipt, text)})]
+
+
+STOP_CHOICES = ("Để tôi xem",)
+
+
+def _stop_no_orders(folder: Path, workbook: Optional[str]) -> list:
+    """No order file Clicky can use: the receipt still comes first, one line per file with why, then the honest
+    sentence. Nothing in the workbook changes; "Để tôi xem" ends the turn and opens the chat."""
+    global _PENDING
+    text = _no_orders(folder, workbook)
+    _tbs, aside, _conflict = _tb_groups(folder)
+    tbs, ledger = _ledger(folder)
+    receipt = intake_mod.stopped(folder, tbs, ledger, workbook,
+                                 set_aside=[(name, "bản cũ hơn của cùng kỳ") for name, _p in aside])
+    if not receipt.files:                           # an empty folder: nothing to list, the sentence says so
+        return [Beat(text)]
+    scene_log.record("roles", files=[{"name": n, "role": r} for n, r in receipt.roles.items()])
+    _PENDING = {"stage": "stopped", "folder": str(folder)}
+    return [Beat(text, choices=STOP_CHOICES,
+                 intake={"card": intake_mod.card(receipt), "log": intake_mod.log_fields(receipt, text)})]
+
+
+def _no_orders(folder: Path, workbook: Optional[str]) -> str:
+    """No usable order file: say what is there and why each could not be used. "Không thấy" only when there is
+    really no CSV or .xls file to look at."""
+    from engine.cli import read_rows
+    books = {p.name for name, _, _ in sources.find_trial_balances(folder, read_rows) for p in folder.glob(f"{name}.xls*")}
+    unused = intake_mod.unused_files(folder, books, workbook)
+    cands = [d for d in unused if Path(d.file).suffix.lower() in sources.ORDER_SUFFIXES]
+    scene_log.record("intake_none", files=[{"name": d.file, "reason": d.reason} for d in cands])
+    if not cands:
+        return f"Em không thấy file đơn hàng nào (CSV hoặc .xls) trong thư mục {folder.name}."
+    said = "; ".join(f"{d.file} {d.reason}" for d in cands[:2]) + (f"; và {len(cands) - 2} file khác" if len(cands) > 2 else "")
+    return (f"Em thấy {len(cands)} file CSV hoặc .xls trong thư mục {folder.name} nhưng chưa đọc được file nào "
+            f"làm đơn hàng: {said}. Em chưa sửa gì trong file.")
+
+
+# ── Column names Clicky does not know: ask, remember per header ("nhớ cho tháng sau") ─────────────────────────
+
+COLUMNS_FILE = "cot_da_nho.json"      # header signature → {role: column key}; header names only, never a file name
+# This session's answers, for the Biên bản: (file, what was chosen, when and who).
+_COLUMN_PICKS: list = []
+
+
+def _columns_path() -> Path:
+    from storage import data_dir
+    return data_dir() / COLUMNS_FILE
+
+
+def _load_columns() -> None:
+    import json
+    try:
+        saved = json.loads(_columns_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+    sources.REMEMBERED.clear()
+    sources.REMEMBERED.update({k: v for k, v in saved.items() if isinstance(v, dict)})
+
+
+def _save_columns() -> None:
+    import json
+    from storage import atomic_write
+    try:
+        atomic_write(_columns_path(), json.dumps(sources.REMEMBERED, ensure_ascii=False, indent=1).encode("utf-8"))
+    except OSError as exc:
+        from office.excel_com import _why
+        log.warning("saving the remembered columns failed: %s", _why(exc))
+
+
+def columns_pending() -> bool:
+    return stage() == "pick_columns"
+
+
+def _column_choices(names: list) -> tuple:
+    return tuple(f"Cột {n}" for n in names) + (COLUMN_NO,)
+
+
+def _ask_columns(folder: Path, u, machine_order) -> list:
+    """An order-like file whose date and amount columns have names Clicky does not know: ask which is which, one
+    question at a time, at most the 3 likeliest columns each (by content). Nothing is read from it until chị
+    answers; "Không phải đơn hàng" is remembered too."""
+    global _PENDING
+    job = {"stage": "pick_columns", "folder": str(folder), "order": machine_order, "file": u.name,
+           "sig": u.signature, "header": [str(h).strip() for h in u.header], "dates": u.dates, "amounts": u.amounts,
+           "chosen": {}}
+    _PENDING = job
+    return [_column_question(job)]
+
+
+def _column_question(job: dict) -> Beat:
+    file, dates, amounts, chosen = job["file"], job["dates"], job["amounts"], job["chosen"]
+    lead = f"File {file} có vẻ là file đơn hàng nhưng tên cột lạ, em chưa lấy số từ file này. "
+    if not chosen and len(dates) == 1 and len(amounts) == 1:
+        job["need"] = "confirm"
+        text = lead + f"Em hiểu cột \"{dates[0]}\" là ngày bán, cột \"{amounts[0]}\" là số tiền. Đúng không {you()}?"
+        choices = (COLUMN_YES, COLUMN_NO)
+    elif "date" not in chosen and len(dates) > 1:
+        job["need"] = "date"
+        text = lead + f"Cột nào là ngày bán hả {you()}?"
+        choices = _column_choices(dates)
+    else:
+        job["need"] = "amount"
+        options = [a for a in amounts if a != chosen.get("date")]
+        job["options"] = options
+        said = f"Ngày bán là cột \"{chosen.get('date') or dates[0]}\". " if "date" in chosen or len(dates) == 1 else ""
+        text = (lead if not chosen else "") + said + f"Còn số tiền bán là cột nào hả {you()}?"
+        choices = _column_choices(options)
+    _step("column_question", file=file, need=job["need"], options=list(choices))
+    return Beat(text, choices=choices)
+
+
+def answer_columns(bridge, pq, answer: str) -> list:
+    """chị's answer to _column_question: the next question, or remember the columns, note them for the Biên bản
+    and read the folder again (the receipt comes next)."""
+    global _PENDING
+    job = _PENDING if columns_pending() else None
+    if not job:
+        return []
+    said = fold_text(answer)
+    if fold_text(COLUMN_NO) in said:
+        sources.REMEMBERED[job["sig"]] = {sources.NOT_ORDERS: True}
+        _save_columns()
+        _COLUMN_PICKS.append((job["file"], "không phải file đơn hàng", audit.who()))
+        _PENDING = None
+        return start(bridge, pq, job["order"])
+    need = job.get("need")
+    if need == "confirm":
+        if fold_text(COLUMN_YES) not in said and not said.startswith(("dung", "ok", "dongy", "phai")):
+            return [_column_question(job)]
+        job["chosen"] = {"date": job["dates"][0], "amount": job["amounts"][0]}
+    else:
+        options = job["dates"] if need == "date" else job.get("options", job["amounts"])
+        hit = next((n for n in sorted(options, key=len, reverse=True) if fold_text(n) in said), None)
+        if hit is None:
+            return [Beat(f"{you(True)} bấm một trong các nút để chọn cột nhé.", choices=_column_choices(options))]
+        job["chosen"][need] = hit
+        if len(job["dates"]) == 1:
+            job["chosen"].setdefault("date", job["dates"][0])
+        if "amount" not in job["chosen"]:
+            left = [a for a in job["amounts"] if a != job["chosen"]["date"]]
+            if len(left) != 1:
+                return [_column_question(job)]
+            job["chosen"]["amount"] = left[0]       # the only amount column left: nothing to ask
+    chosen = job["chosen"]
+    sources.REMEMBERED[job["sig"]] = {role: sources._key(name) for role, name in chosen.items()}
+    _save_columns()
+    _COLUMN_PICKS.append((job["file"], f"ngày = cột \"{chosen['date']}\", số tiền = cột \"{chosen['amount']}\"",
+                          audit.who()))
+    _step("column_answer", file=job["file"], date=chosen["date"], amount=chosen["amount"])
+    _PENDING = None
+    return start(bridge, pq, job["order"])
+
+
+# The user's answers to "which file?", kept for the Biên bản: (what, chosen, set aside, when).
+_PICKS: list = []
+
+
+def _ask_which(folder: Path, conflict: tuple, machine_order) -> list:
+    """Two files claim the same role for the same month: say when each was last changed and ask. Never pick."""
+    global _PENDING
+    from engine import roles
+    (year, month), group = conflict
+    group = sorted(group, key=lambda t: _mtime(folder, t[0]), reverse=True)[:2]
+    paths = {name: next(iter(sorted(folder.glob(f"{name}.xls*"))), folder / name) for name, _, _ in group}
+    stamps = {name: roles.modified(paths[name]) for name in paths}
+    said = ", ".join(f"{paths[name].name} sửa ngày {stamps[name]}" if stamps[name] else paths[name].name
+                     for name, _, _ in group)
+    _PENDING = {"stage": "pick_source", "period": (year, month), "options": [name for name, _, _ in group],
+                "stamps": stamps, "order": machine_order, "folder": str(folder)}
+    return [Beat(f"Có 2 sổ cân đối T{month:02d}: {said}. Em dùng bản nào?",
+                 choices=tuple(f"Dùng {name}" for name, _, _ in group))]
+
+
+def pick(bridge, pq, answer: str) -> list:
+    """The answer to _ask_which: remember the file, write it down for the Biên bản, then read the folder again."""
+    global _PENDING
+    job = _PENDING if stage() == "pick_source" else None
+    if not job:
+        return []
+    text = fold_text(answer)
+    # Longest name first: "Dùng TB_T10_cu" also contains "TB_T10".
+    hit = next((n for n in sorted(job["options"], key=len, reverse=True) if fold_text(n) in text), None)
+    if hit is None:
+        return [Beat(f"{you(True)} bấm một trong hai nút để chọn sổ cân đối nhé.", choices=tuple(f"Dùng {n}" for n in job["options"]))]
+    _PENDING = None
+    _CHOSEN[job["period"]] = hit
+    others = [n for n in job["options"] if n != hit]
+    folder = Path(job["folder"]) if job.get("folder") else None
+    shown = (lambda n: intake_mod.file_name(folder, n)) if folder else (lambda n: n)   # TB_T11.xlsx, not TB_T11
+    _PICKS.append((f"Sổ cân đối T{job['period'][1]:02d}", f"{shown(hit)} (sửa {job['stamps'].get(hit, '')})",
+                   ", ".join(shown(n) for n in others), audit.who()))
+    return start(bridge, pq, job["order"])
+
+
+def fold_text(text: str) -> str:
+    from engine.trial_balance import fold
+    return fold(text).replace(" ", "")
+
+
+def pick_pending() -> bool:
+    return stage() == "pick_source"
+
+
+def _keep_original(bridge) -> str:
+    """Save a copy of the workbook as it is now, next to it, before Clicky's first change: <name>_ban-goc.xlsx.
+
+    An existing copy is the real original (from an earlier run) and is never overwritten.
+    """
+    path = _try(bridge, "workbook_path")
+    if not path:
+        return ""
+    p = Path(path)
+    copy = p.with_name(f"{p.stem}{intake_mod.ORIGINAL_TAG}{p.suffix}")
+    if not copy.exists():
+        _try(bridge, "save_copy", str(copy))
+    return copy.name if copy.exists() else ""
+
+
+_KIND_VI = {"xls": "là file Excel 97-2003 (.xls)", "xlsx": "là file Excel lưu dưới tên .xls",
+            "html": "là trang HTML lưu dưới tên .xls", "xml": "là bảng XML lưu dưới tên .xls",
+            "text": "là văn bản có dấu phân cách lưu dưới tên .xls"}
+_TIME = re.compile(r"\d{1,2}:\d{2}")
+
+
+def needs_reader(files: list) -> Optional[tuple]:
+    """(file, why) when the plain folder query (m_code.folder_query) would not read these files the way the receipt
+    did, so the query that reads each file by its own format (m_code.order_files_query) is built instead.
+
+    The plain query reads CSV files whose header is the first row, with the same column names in every file,
+    and keeps every row with a date. An .xls of any kind, a print layout, cancelled orders to set aside, dates
+    with a time or other column names need the per-file reader. Folders the plain query reads (Case 01, BHC)
+    keep exactly the query they always had."""
+    first = files[0] if files else None
+    for f in files:
+        if f.kind != "csv":
+            return f, _KIND_VI.get(f.kind, "là loại file khác CSV")
+        if f.remembered:
+            return f, f"có cột ngày hoặc số tiền do {you()} chỉ"
+        if f.preamble:
+            return f, f"có {len(f.preamble)} dòng tiêu đề phía trên bảng"
+        if f.cancelled:
+            return f, f"có {len(f.cancelled)} đơn đã huỷ cần để riêng ra"
+        d = f.columns["date"]
+        if any(_TIME.search(str(r[d])) for r in f.rows[:200] if d < len(r)):
+            return f, "có cột ngày kèm giờ"
+        for role in ("date", "amount", "doc", "cost"):
+            mine = f.header[f.columns[role]] if role in f.columns else None
+            theirs = first.header[first.columns[role]] if role in first.columns else None
+            if mine != theirs:
+                return f, f"đặt tên cột khác file {first.name}"
+    return None
+
+
+READABLE_KINDS = ("csv", "xls", "xlsx", "html", "xml", "text")
+
+
+def cannot_load(files: list) -> Optional[tuple]:
+    """(file, why) for an order file no query Clicky builds can read the way the receipt did. Every kind
+    engine.tabular reads has a reader in m_code.order_files_query, so this only guards a kind added later."""
+    for f in files:
+        if f.kind not in READABLE_KINDS:
+            return f, _KIND_VI.get(f.kind, "là loại file khác CSV")
+    return None
+
+
+def _reader_query(files: list, truth, period, param: str = PARAM_NAME) -> str:
+    """The per-file query for these files: each file's date order and code page, the roles any file has, and the
+    same de-duplication rule as the receipt (sources.truth)."""
+    params = {f.name: {"order": f.date_order or sources.DAY_FIRST, "encoding": sources.file_encoding(f.path)}
+              for f in files}
+    roles = sorted({r for f in files for r in f.columns} | {"doc", "date", "amount"})
+    told = {sources.header_signature(f.header): sources.REMEMBERED[sources.header_signature(f.header)]
+            for f in files if f.remembered and sources.header_signature(f.header) in sources.REMEMBERED}
+    return m_code.order_files_query(param, params, roles, _dedup_roles(files, truth),
+                                    period=period if truth.outside else None, remembered=told)
+
+
+def _dedup_roles(files: list, truth: sources.SourceTruth) -> Optional[list]:
+    """_dedup_key by role, for the per-file query whose columns carry one name whatever each file called them."""
+    if not truth.multi:
+        return None
+    if truth.invoice_lines:
+        return []
+    return ["branch", "doc"] if all("branch" in f.columns and "doc" in f.columns for f in files) else []
+
+
+def confirm(bridge, pq) -> list:
+    """Stage 1, after "Đúng rồi, làm tiếp": keep the original, then reconcile and change what needs changing."""
+    global _PENDING, _AUDIT
+    job, _PENDING = _PENDING, None
+    if not job or job.get("stage") != "intake":
+        return []
+    receipt = job["intake"]
+    stop = cannot_load(sources.find_order_files(Path(job["folder"])))
+    if stop:
+        f, why = stop
+        _step("query_unsupported", file=f.name, kind=f.kind, why=why)
+        return [Beat(f"Em dừng ở đây, chưa đối chiếu: file {f.name} {why}, bản Clicky này chưa nạp được loại file đó "
+                     "vào Excel bằng Power Query nên chưa so được với sổ cái. Em chưa sửa gì trong file.", mark="warn")]
+    _step("confirmed")
+    with _timed("keep_original"):
+        original = _keep_original(bridge)
+    _AUDIT = audit.AuditLog(period=job.get("period", ""), original=original,
+                            dropped=intake_mod.dropped_rows(receipt), coverage=intake_mod.coverage_rows(receipt))
+    for what, chosen, others, agreed in job.get("picked", []):
+        _AUDIT.add("—", f"Chọn nguồn: {what}", others, chosen,
+                   "Hai file cùng vai trò Số chính thức cho cùng kỳ; người dùng chọn bản dùng", agreed, "Thư mục dữ liệu")
+    asked = set()
+    for file, chosen, agreed in job.get("columns", []):
+        asked.add(file)
+        _AUDIT.add("—", f"Chọn cột: {file}", "—", chosen,
+                   f"Tên cột lạ; {you()} chỉ cột nào là ngày bán và số tiền, Clicky nhớ cho các tháng sau", agreed,
+                   "Thư mục dữ liệu")
+    for f in sources.find_order_files(Path(job["folder"])):
+        if f.remembered and f.name not in asked:
+            told = ", ".join(f"{label} = cột \"{f.header[f.columns[role]]}\"" for role, label in
+                             (("date", "ngày"), ("amount", "số tiền")) if role in f.columns)
+            _AUDIT.add("—", f"Cột đã nhớ: {f.name}", "—", told,
+                       f"{you(True)} đã chỉ các cột này cho cùng tiêu đề ở lần trước; Clicky dùng lại", audit.AUTO,
+                       "Thư mục dữ liệu")
+    before = set(bridge.sheet_names())
+    # As in approve: adding and styling the check sheets with the screen frozen is faster (Excel does not
+    # repaint after every call) and does not flash sheets past the user; the result shows when it is ready.
+    _try(bridge, "screen_updating", False)
+
+    def step():
+        with _timed("reconcile"):
+            return _reconcile(bridge, pq, job["order"])
+    return _guarded(bridge, before, step)
+
+
+def wrong() -> list:
+    """ "Có chỗ sai": stop before anything changed and let the user say what is wrong in the chat."""
+    global _PENDING
+    _PENDING = None
+    return [Beat(f"{you(True)} nói giúp em chỗ nào chưa đúng nhé. Em chưa sửa gì trong file.")]
+
+
+def _close_out(bridge, before: set, quiet: bool = False) -> None:
+    """Record the sheets Clicky added and rewrite the Biên bản.
+
+    After a step that failed (quiet), a failure here (Excel rejecting a call while the user clicks into a
+    cell) is only logged, so it never hides the step's own error. After a step that worked it is raised:
+    changes with no Biên bản must not be handed over as done."""
+    try:
+        _note_new_sheets(bridge, before)
+        with _timed("audit_sheet"):
+            _write_audit(bridge)
+    except Exception as exc:
+        if not quiet:
+            raise
+        # Type and code only: Excel's error text can quote the workbook's name and folder.
+        from office.excel_com import _why
+        log.warning("updating the Bien ban sheet failed after the step itself failed: %s", _why(exc))
+
+
+def _guarded(bridge, before: set, step):
+    """Run step, then the Biên bản; the screen is released last whatever happens."""
+    try:
+        try:
+            result = step()
+        except BaseException:
+            _close_out(bridge, before, quiet=True)
+            raise
+        _close_out(bridge, before)
+        return result
+    finally:
+        _try(bridge, "screen_updating", True)      # always last: a frozen screen must never stay frozen
+
+
+def _note_new_sheets(bridge, before: set) -> None:
+    added = [n for n in bridge.sheet_names() if n not in before and n != audit.SHEET]
+    if _AUDIT is not None and added:
+        _AUDIT.add("—", "Thêm sheet", "—", ", ".join(added), "Sheet làm việc và báo cáo của Clicky; sheet gốc giữ nguyên",
+                   audit.AUTO, "—")
+
+
+_AUDIT_COLUMNS = {"A": 5, "B": 8, "C": 16, "D": 30, "E": 16, "F": 16, "G": 48, "H": 18, "I": 22}
+_DRAFT_FILL, _DRAFT_INK = "#FEF3C7", "#B45309"
+_FINAL_FILL, _FINAL_INK = "#DCFCE7", "#157347"
+
+
+def _write_audit(bridge) -> Optional[str]:
+    """Rewrite the whole Biên bản sheet from the log (it is small), then put the status on the report too."""
+    if _AUDIT is None:
+        return None
+    names = bridge.sheet_names()
+    sheet = audit.SHEET if audit.SHEET in names else bridge.add_sheet(audit.SHEET)
+    if not sheet:
+        return None
+    rows, at = audit.grid(_AUDIT)
+    s = _q(sheet)
+    out = _Sheets()
+    out.clear(f"{s}!A1:I200")
+    out.write(f"{s}!A1", rows)
+    first, last = at["changes"]
+    out.format_numbers(f"{s}!E{first}:F{last}")
+    out.format_numbers(f"{s}!C{at['dropped'] + 1}:C{at['coverage'] - 2}")
+    out.format_numbers(f"{s}!B{at['coverage'] + 1}:D{at['last']}")
+    out.layout_sheet(sheet, _AUDIT_COLUMNS, gridlines=False)
+    out.style(f"{s}!A1", bold=True, size=15, color=_INK)
+    out.style(f"{s}!A2", italic=True, size=9, color=_MUTED)
+    for row in (4, at["dropped"], at["coverage"]):
+        out.style(f"{s}!A{row}:I{row}", bold=True, color="#FFFFFF", fill="#1E3A5F", height=22)
+    out.style(f"{s}!A{first}:I{last}", border_bottom=_LINE, wrap=True)
+    out.style(f"{s}!F{first}:F{last}", bold=True, color=_FINAL_INK)
+    fill, ink = (_FINAL_FILL, _FINAL_INK) if _AUDIT.status == audit.FINAL else (_DRAFT_FILL, _DRAFT_INK)
+    out.style(f"{s}!A{at['status']}", bold=True, color=_INK)
+    out.style(f"{s}!B{at['status']}", bold=True, color=ink, fill=fill)
+    _show_status_on_report(bridge, _AUDIT.status, out, names)
+    out.send(bridge)
+    scene_log.record("status", label=_AUDIT.status)
+    return sheet
+
+
+def _show_status_on_report(bridge, status: str, out=None, names: Optional[list] = None) -> None:
+    """SƠ BỘ or CHÍNH THỨC in I1 of the report; into out (a _Sheets) when given, else straight to Excel."""
+    from engine.build import SHEET_NAMES
+    report = next((n for n in (names if names is not None else bridge.sheet_names())
+                   if n.startswith(SHEET_NAMES["report"])), None)
+    if not report:
+        return
+    fill, ink = (_FINAL_FILL, _FINAL_INK) if status == audit.FINAL else (_DRAFT_FILL, _DRAFT_INK)
+    if out is None:
+        bridge.write(f"{_q(report)}!I1", [[status]])
+        _try(bridge, "style", f"{_q(report)}!I1", bold=True, color=ink, fill=fill, halign="center")
+        return
+    out.write(f"{_q(report)}!I1", [[status]])
+    out.style(f"{_q(report)}!I1", bold=True, color=ink, fill=fill, halign="center")
+
+
+def make_final(bridge) -> list:
+    """ "chốt chính thức": the one step that turns SƠ BỘ into CHÍNH THỨC, only ever on the user's word."""
+    global _AUDIT
+    if not bridge.available() or audit.SHEET not in bridge.sheet_names():
+        return [Beat(f"Em chưa thấy sheet Bien ban Clicky trong file này. {you(True)} chạy báo cáo tháng trước rồi mới chốt nhé.")]
+    if _AUDIT is None:
+        # Clicky was restarted: keep what the sheet already shows and only change its status line.
+        rows = bridge.sheet_rows(audit.SHEET) or []
+        row = next((i + 1 for i, r in enumerate(rows) if r and str(r[0]).strip() == "Trạng thái"), None)
+        if row is None:
+            return [Beat("Em không tìm thấy dòng Trạng thái trong sheet Bien ban Clicky, nên chưa chốt.")]
+        s = _q(audit.SHEET)
+        bridge.write(f"{s}!B{row}", [[audit.FINAL, "", f"Đã chuyển sang Chính thức: {audit.who()}."]])
+        _try(bridge, "style", f"{s}!B{row}", bold=True, color=_FINAL_INK, fill=_FINAL_FILL)
+        _show_status_on_report(bridge, audit.FINAL)
+        scene_log.record("status", label=audit.FINAL)
+    else:
+        _AUDIT.add("—", "Trạng thái báo cáo", audit.DRAFT, audit.FINAL, "Người dùng chốt sau khi duyệt",
+                   audit.who(), "—")
+        _AUDIT.status = audit.FINAL
+        _write_audit(bridge)
+    return [Beat(f"Em đã chuyển báo cáo sang Chính thức và ghi vào biên bản. {you(True)} bấm Ctrl + S để lưu nhé.",
+                 f"{_q(audit.SHEET)}!A1:I4", "Đã chốt", "ok", audit.FINAL)]
+
+
+def _step(step: str, **data) -> None:
+    """One line per step of the month close in the scene log, so a run that stops shows where it stopped."""
+    scene_log.record("close_step", step=step, **data)
+
+
+class _timed:
+    """Logs how long one part of a step took ("close_step" step="timing"), so a slow turn on the PC shows
+    where its time went: Excel saving the original, Power Query, writing sheets, or Clicky's own code."""
+
+    def __init__(self, part: str):
+        self.part = part
+
+    def __enter__(self):
+        import time
+        if self.part in _STAGE_OF:
+            _progress(_STAGE_OF[self.part])
+        self.t0 = time.monotonic()
+        return self
+
+    def __exit__(self, *exc):
+        import time
+        _step("timing", part=self.part, ms=int(round((time.monotonic() - self.t0) * 1000)))
+        return False
+
+
+def _load(pq, name: str):
+    """pq.load with its start, end and outcome in the scene log."""
+    import time
+    global _LOADED_ONCE
+    _progress("load")                             # Excel's first Power Query work of the session takes seconds
+    _step("query_load", name=name, state="start")
+    t0 = time.monotonic()
+    result = pq.load(name)
+    _LOADED_ONCE = True
+    seconds = round(time.monotonic() - t0, 1)
+    if isinstance(result, LoadTimeout):
+        _step("query_load", name=name, state="timeout", seconds=seconds, dialog=result.dialog)
+    elif isinstance(result, str):
+        # Excel's own message, paths and file names taken out, so a PC run says why (grader F4).
+        _step("query_load", name=name, state="error", seconds=seconds, why=load_error_vi(result),
+              detail=scrub(result)[:400])
+    else:
+        _step("query_load", name=name, state="ok", seconds=seconds, rows=len(result[2]))
+    return result
+
+
+def _reconcile(bridge, pq, machine_order: Optional[str]) -> list:
     global _PENDING
     _PENDING = None
     if not bridge.available():
-        return [Beat("Anh mở file Excel đã lưu trong thư mục dữ liệu tháng rồi gọi lại em.")]
-    folder_text = bridge.workbook_folder()
-    if not folder_text:
-        return [Beat("File Excel này chưa được lưu. Anh lưu nó vào thư mục có các file đơn hàng và file cân đối tài khoản, rồi gọi lại em.")]
-    folder = Path(folder_text)
+        return [Beat(f"{you(True)} mở file Excel đã lưu trong thư mục dữ liệu tháng rồi gọi lại em.")]
+    folder = _data_folder(bridge)
+    if folder is None:
+        return [Beat(f"File Excel này chưa được lưu. {you(True)} lưu nó vào thư mục có các file đơn hàng và file cân đối tài khoản, rồi gọi lại em.")]
     files = sources.find_order_files(folder)
-    if not files:
-        return [Beat(f"Em không thấy file đơn hàng CSV nào trong thư mục {folder.name}.")]
-    tbs, ledger = _ledger(folder)
-    period = sources.period_of(tbs[-1][1]) if tbs else None
-    truth = sources.truth(files, period)
-    ledger = _net_of_returns(ledger, truth)
+    if not files:                                   # the files changed since the receipt: same honest sentence
+        return [Beat(_no_orders(folder, _workbook_name(bridge)))]
+    with _timed("read_files"):
+        tbs, ledger = _ledger(folder)
+        period = sources.period_of(tbs[-1][1]) if tbs else None
+        truth = sources.truth(files, period)
+    ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
     beats, notes = [], []
     if truth.outside:
         out_amt = sum((a for *_, a in truth.outside), ZERO)
@@ -546,7 +1247,7 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
         same = abs(diff) <= TOLERANCE
         beats.append(Beat(
             f"File gốc và sổ cái khớp nhau: doanh thu {spoken(truth.amount)}." if same else
-            f"File gốc {_gap_vi(diff)} so với sổ cái, anh cần xem lại file xuất.",
+            f"File gốc {_gap_vi(diff)} so với sổ cái, {you()} cần xem lại file xuất.",
             _check_ref("C5:C6"), "File gốc khớp sổ cái" if same else "File gốc lệch sổ cái", "ok" if same else "bad",
             spoken(truth.amount) if same else _signed(diff), source_note + f" · TK {ledger['rev_acct']}"))
     else:
@@ -557,7 +1258,8 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
         notes.append(["Kiểu ngày trong file gốc", "", "", "",
                       "; ".join(f"{f.name}: {_order_vi(f.date_order)}" for f in files)])
 
-    name, formula, origin = _query_to_check(pq, folder)
+    with _timed("find_query"):
+        name, formula, origin = _query_to_check(pq, folder)
     keys = _dedup_key(files, truth)
     if truth.invoice_lines:
         lines = ", ".join(sorted(truth.invoice_lines)[:5])
@@ -571,44 +1273,56 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
                       sum((truth.doc_amounts[d] for d in truth.collisions), ZERO), "",
                       f"{len(truth.collisions)} số chứng từ được dùng cho các đơn khác nhau ({shared}). Đây là đơn thật, "
                       + ("Clicky xoá trùng theo Chi nhánh + Số CT." if keys else "Clicky chỉ xoá dòng giống hệt nhau.")])
-    fixed_m = m_code.folder_query(str(folder), {f.name: f.culture(machine_order) for f in files},
-                                  _typed_columns(files), files[0].header[files[0].columns["doc"]] if "doc" in files[0].columns else None,
-                                  folder_parameter=PARAM_NAME, key_columns=keys, period=period if truth.outside else None,
-                                  delimiter={f.name: f.delimiter for f in files})
+    with _timed("build_query"):
+        # Plain CSV exports keep the plain folder query; anything else is read file by file, each by its format.
+        fixed_m = _reader_query(files, truth, period) if needs_reader(files) else \
+            m_code.folder_query(str(folder), {f.name: f.culture(machine_order) for f in files},
+                                _typed_columns(files), files[0].header[files[0].columns["doc"]] if "doc" in files[0].columns else None,
+                                folder_parameter=PARAM_NAME, key_columns=keys, period=period if truth.outside else None,
+                                delimiter={f.name: f.delimiter for f in files})
     if name is None:
         name, formula, origin = QUERY_NAME, None, "clicky"
+        if _AUDIT is not None:
+            _AUDIT.add(f"Query {QUERY_NAME}", "Query đơn hàng", "—", "Query mới",
+                       "Trong file chưa có query đơn hàng; Clicky tạo query đọc đúng kiểu ngày của từng file",
+                       audit.AUTO, f"{len(files)} file đơn hàng")
         notes.append(["Query đơn hàng", "", "", "", "Trong file chưa có query đơn hàng; Clicky tạo query mới đọc đúng kiểu ngày của từng file."])
     elif origin != "workbook":
         formula, moved = _point_at_this_folder(formula, files)
-        pq.add(name, formula)
+        with _timed("query_add"):                 # Excel's Queries.Add: the first one per Excel session is slow
+            pq.add(name, formula)
         notes.append(["Query đơn hàng", "", "", "", f"Lấy từ file {origin}, nạp vào Excel với tên {name} để kiểm tra."
                       + (" Thư mục trong query trỏ tới một máy khác, máy này không có, nên Clicky đổi sang thư mục "
                          "đơn hàng ở đây." if moved else "")])
 
     if formula is not None:
-        findings = m_code.lint(name, formula)
+        with _timed("lint"):
+            findings = m_code.lint(name, formula)
         worst = sorted(findings, key=lambda f: (_LINT_ORDER.index(f.code) if f.code in _LINT_ORDER else 99,
                                                 f.severity != "error"))
         notes += _lint_rows(worst)
     else:
-        pq.add(PARAM_NAME, m_code.parameter_query(str(folder)))
-        pq.add(name, fixed_m)
+        with _timed("query_add"):
+            pq.add(PARAM_NAME, m_code.parameter_query(str(folder)))
+            pq.add(name, fixed_m)
 
-    result = pq.load(name)
+    _step("query_add", name=name, origin=origin or "clicky", existing=formula is not None)
+    result = _load(pq, name)
     if isinstance(result, ReadFailed):
         _write_check_sheet(bridge, None, truth, ledger, notes)
         return beats + [Beat("Em chưa đọc lại được bảng query, nên chưa có số chênh lệch. Đây là lỗi của Clicky.",
                              _check_ref("A7:E7"), "Chưa đối chiếu được", "warn", "Chưa có số",
-                             "Không phải lỗi file của anh. Anh cập nhật Clicky rồi gọi lại em.")]
+                             f"Không phải lỗi file của {you()}. {you(True)} cập nhật Clicky rồi gọi lại em.")]
     if isinstance(result, str):
-        log.warning("loading query %s failed: %s", name, result)
+        log.warning("loading query %s failed: %s", name, kind_only(result))
         why_vi = load_error_vi(result)
         _write_check_sheet(bridge, None, truth, ledger,
                            [["Lỗi khi tải query", "", "", "", why_vi + " Chi tiết kỹ thuật ghi trong clicky.log."]] + notes)
-        beats.append(Beat(f"Excel chưa tải được query {name}.", _check_ref("A4:E4"), "Query chưa tải được", "bad",
-                          "Lỗi tải", why_vi))
-        if formula is None:
-            return beats
+        failed = load_error_file(result)
+        beats.append(Beat(f"Excel chưa tải được query {name}" + (f": lỗi ở file {failed}." if failed else "."),
+                          _check_ref("A4:E4"), "Query chưa tải được", "bad", "Lỗi tải", why_vi))
+        if formula is None or isinstance(result, LoadTimeout):
+            return beats                        # Excel is busy or asking: a rewritten query would not load either
         _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder)}
         return beats + [_fix_offer()]
     sheet, header, rows = result
@@ -621,18 +1335,28 @@ def start(bridge, pq, machine_order: Optional[str]) -> list:
     why = diagnose(truth, loaded, read_order) if not clean else {"date": [], "distinct": [], "other": [], "excel_dups": []}
     cause_beats, cause_rows = _cause_beats(why, read_order, 0, f"Query ghi cứng {culture}, nên đọc" if culture else "Máy này đọc",
                                            None if clean else loaded.amount - truth.amount)
-    check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, cause_rows + notes, "ok" if clean else "bad")
+    with _timed("check_sheet"):
+        check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, cause_rows + notes, "ok" if clean else "bad")
     ref = f"{_q(check_sheet)}!C7" if check_sheet and ledger else None
     if clean:
         beats.append(Beat(f"Excel khớp sổ cái đến từng đồng: doanh thu {spoken(loaded.amount)}.",
                           ref, "Excel khớp sổ cái", "ok", "0 đ", f"{len(rows)} chứng từ · {spoken(loaded.amount)}"))
-        return beats + build_report(bridge, folder, tbs) + [SAVE_REMINDER]
+        _EXPECT.update({_check_ref("C4"): int(loaded.amount), _check_ref("C7"): 0} if ledger else {})
+        return beats + build_report(bridge, folder, tbs) + [_save_offer()]
 
     beats.append(Beat(f"Báo cáo trong Excel đang {_gap_vi(gap)} so với sổ cái.", ref, "Excel lệch sổ cái", "bad",
                       _signed(gap), f"Query chỉ giữ {len(rows)}/{truth.unique_rows} chứng từ. Chưa được dùng số này."))
     beats += cause_beats
-    _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder), "gap": int(gap)}
-    return beats + [_fix_offer()]
+    offer = _fix_offer()
+    if cause_rows:
+        # The question stays up with one note per cause, each beside its own row in the detail table.
+        notes = visuals.cause_notes(cause_rows)
+        for n in notes:
+            n["ref"] = _detail_ref(n["row"])
+        offer.graphic = {"kind": "notes", "notes": notes, "plain": True}
+    _PENDING = {"stage": "fix_query", "name": name, "formula": fixed_m, "folder": str(folder), "gap": int(gap),
+                "before": int(loaded.amount), "before_rows": len(rows)}
+    return beats + [offer]
 
 
 # ── Stage 2 ───────────────────────────────────────────────────────────────────
@@ -642,21 +1366,67 @@ _BACKUP_NOTE = "Bản query cũ vẫn còn trong power_query_backups.json."
 
 def approve(bridge, pq) -> list:
     global _PENDING
+    if stage() == "intake":                        # "ok" / "đồng ý" said to the receipt means the same as its button
+        return confirm(bridge, pq)
+    if stage() == "stopped":                       # nothing to agree to: the early-stop card only offers a look
+        return reject()
+    if stage() == "save":
+        return save_and_verify(bridge)
     job, _PENDING = _PENDING, None
-    if not job:
+    if not job or job.get("stage") != "fix_query":
         return []
     # Reloading the query and adding the report sheets would flash a dozen sheets past the user;
     # the screen stays still and the result is shown when it is ready.
     _try(bridge, "screen_updating", False)
     try:
-        return _approve(bridge, pq, job)
-    finally:
+        before = set(bridge.sheet_names())
+    except BaseException:
         _try(bridge, "screen_updating", True)
+        raise
+    return _guarded(bridge, before, lambda: _approve(bridge, pq, job))
+
+
+_FAILED_FILE = re.compile(r"Tệp ([^:\r\n]+?): ")
+
+
+def load_error_file(raw) -> Optional[str]:
+    """The order file a failed load names ("Tệp <name>: …", from the per-file query), or None."""
+    m = _FAILED_FILE.search(str(raw or ""))
+    return m.group(1).strip() if m else None
+
+
+def _file_error_vi(file: str, text: str) -> str:
+    """Which file, which column when Excel says, and one next step (grader F6). Never a value from Excel's message:
+    it can quote a cell of the file; the raw message goes to the scene log only, scrubbed."""
+    col = re.search(r"column '([^']+)' of the table wasn't found", text, re.I)
+    resave = (f"{you(True)} mở file {file} bằng Excel, chọn File > Save As, lưu thành CSV UTF-8 cùng thư mục và cất bản cũ "
+              "ra chỗ khác, rồi gọi em làm lại.")
+    if col:
+        what, step = f"không thấy cột \"{col.group(1)}\"", f"{you(True)} xem file {file} còn cột đó không, rồi gọi em làm lại."
+    elif re.search(r"DataFormat\.Error|couldn't convert|could not convert", text, re.I):
+        what = "có một ô không đổi được sang số hoặc ngày"      # never the cell itself: Excel's text quotes it
+        step = f"{you(True)} tìm ô đó trong file {file}, sửa cho đúng số hoặc ngày, rồi gọi em làm lại."
+    elif re.search(r"DataSource\.(Error|NotFound)|being used by another|access.*denied", text, re.I):
+        what, step = "file đang mở ở nơi khác hoặc không mở được", f"{you(True)} đóng file {file} ở nơi khác rồi gọi em làm lại."
+    elif re.search(r"field '[^']+' of the record wasn't found|wasn't recognized|Excel\.Workbook", text, re.I):
+        what, step = "bên trong file khác cách em đọc loại file này", resave
+    else:
+        what, step = "Excel báo lỗi khi đọc file này", resave
+    return f"Excel chưa đọc được file {file}: {what}. {step}"
 
 
 def load_error_vi(raw: str) -> str:
     """One plain Vietnamese sentence for a Power Query / COM load error; the raw text goes to the log only."""
+    if isinstance(raw, LoadTimeout):
+        if raw.dialog:
+            return (f"Excel đang chờ trả lời hộp thoại \"{raw.dialog}\", nên query chưa tải xong. {you(True)} xem cửa sổ "
+                    "Excel, trả lời hoặc đóng hộp thoại đó, rồi gọi lại em.")
+        return (f"Excel tải query quá {int(raw.seconds)} giây vẫn chưa xong, nên em dừng chờ. {you(True)} đợi Excel rảnh "
+                "(hoặc đóng bớt file đang mở), rồi gọi lại em.")
     text = str(raw or "")
+    file = load_error_file(text)
+    if file:                                        # Clicky's per-file query names the file (engine.m_code DonHang)
+        return _file_error_vi(file, text)
     m = re.search(r"column '([^']+)' of the table wasn't found", text, re.I)
     if m:
         return f"Excel không tìm thấy cột {m.group(1)} trong file đơn hàng."
@@ -666,6 +1436,9 @@ def load_error_vi(raw: str) -> str:
         return "Excel không mở được thư mục hoặc một file đơn hàng (có thể file đang mở ở nơi khác)."
     if re.search(r"Formula\.Firewall|privacy", text, re.I):
         return "Excel chặn query vì cài đặt quyền riêng tư của Power Query."
+    from engine import errors_vi                    # Excel busy / not answering / offline: the shared words
+    if errors_vi.classify(text) != errors_vi.GENERIC:
+        return errors_vi.one_line(text)
     return "Excel báo lỗi khi tải query."
 
 
@@ -674,23 +1447,24 @@ def _approve(bridge, pq, job) -> list:
     try:
         before = dict(pq.list()).get(job["name"])
     except Exception as exc:
-        log.warning("reading query %s before the fix failed: %s", job["name"], exc)
+        log.warning("reading query %s before the fix failed: %s", job["name"], scrub(exc))
         before = None
     pq.add(PARAM_NAME, m_code.parameter_query(str(folder)))
     if not pq.add(job["name"], job["formula"]):
-        return [Beat(f"Em không sửa được query {job['name']}. Anh kiểm tra file có đang bị khoá không.")]
+        return [Beat(f"Em không sửa được query {job['name']}. {you(True)} kiểm tra file có đang bị khoá không.")]
     files = sources.find_order_files(folder)
     tbs, ledger = _ledger(folder)
     truth = sources.truth(files, sources.period_of(tbs[-1][1]) if tbs else None)
-    ledger = _net_of_returns(ledger, truth)
-    result = pq.load(job["name"])
+    ledger = _net_of_returns(_rescope(tbs, ledger, truth), truth)
+    _step("query_fix", name=job["name"])
+    result = _load(pq, job["name"])
     if isinstance(result, ReadFailed):
         return [Beat("Em đã sửa query nhưng chưa đọc lại được bảng kết quả. Đây là lỗi của Clicky.",
                      label="Chưa kiểm tra được", mark="warn", note=_BACKUP_NOTE)]
     if isinstance(result, str):
         # The raw COM/Power Query text is for the log, never the screen. Put the user's query back as it was,
         # so a failed fix leaves the workbook as Clicky found it, and end the turn in one clear sentence.
-        log.warning("reloading the fixed query %s failed: %s", job["name"], result)
+        log.warning("reloading the fixed query %s failed: %s", job["name"], kind_only(result))
         restored = before is not None and pq.add(job["name"], before)
         kept = "Query cũ vẫn giữ nguyên." if restored else _BACKUP_NOTE
         why_vi = load_error_vi(result)
@@ -705,52 +1479,170 @@ def _approve(bridge, pq, job) -> list:
     ok = abs(gap) <= TOLERANCE
     fixed_note = [["Đã sửa query", "", "", "", "Đọc ngày theo đúng kiểu của từng file, xoá trùng chỉ theo số chứng từ, "
                    "không xoá âm thầm dòng lỗi, đường dẫn thư mục nằm trong tham số " + PARAM_NAME + ". " + _BACKUP_NOTE]]
-    check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, fixed_note, "ok" if ok else "bad")
+    with _timed("check_sheet"):
+        check_sheet = _write_check_sheet(bridge, loaded, truth, ledger, fixed_note, "ok" if ok else "bad")
     ref = f"{_q(check_sheet)}!C7" if check_sheet and ledger else None
     if not ok:
-        return [Beat(f"Em đã sửa nhưng Excel vẫn {_gap_vi(gap)} so với sổ cái. Em dừng ở đây để anh xem.",
+        return [Beat(f"Em đã sửa nhưng Excel vẫn {_gap_vi(gap)} so với sổ cái. Em dừng ở đây để {you()} xem.",
                      ref, "Vẫn lệch sổ cái", "bad", _signed(gap), f"Query còn {len(rows)} chứng từ. Chưa lập báo cáo.")]
     cost_ok = not ledger or "cost" not in loaded.columns or abs(loaded.cost - ledger["cost"]) <= TOLERANCE
     note = f"{len(rows)} chứng từ · doanh thu {spoken(loaded.amount)}" + (
         " · giá vốn khớp TK 632" if cost_ok and ledger and "cost" in loaded.columns else "")
+    if _AUDIT is not None:
+        files_n = len(files)
+        _AUDIT.add(f"Query {job['name']}", "Doanh thu đơn hàng trong Excel",
+                   job.get("before", "—"), int(loaded.amount),
+                   f"Sửa query: đọc ngày đúng kiểu từng file, xoá trùng chỉ theo số chứng từ; "
+                   f"{job.get('before_rows', '?')} → {len(rows)} chứng từ, khớp sổ cái",
+                   audit.who(), f"{files_n} file đơn hàng")
     # Shown straight as 0 đ: a figure rolling through "−2,9 tỷ" under the title "Đã khớp" reads as a contradiction.
     beats = [Beat("Đã sửa xong. Excel khớp sổ cái đến từng đồng.", ref, "Đã khớp sổ cái", "ok", "0 đ", note)]
-    return beats + build_report(bridge, folder, tbs) + [SAVE_REMINDER]
+    _EXPECT.update({_check_ref("C4"): int(loaded.amount), _check_ref("C7"): 0} if ledger else {})
+    return beats + build_report(bridge, folder, tbs) + [_save_offer()]
 
 
 # Clicky changes the open workbook but never saves it for the user; closing without saving
 # loses the fix and the report, so the last thing it says is how to keep them.
-SAVE_REMINDER = Beat("Em chưa lưu file. Anh bấm Ctrl + S để giữ kết quả nhé.")
+SAVE_REMINDER = Beat(f"Em chưa lưu file. {you(True)} bấm Ctrl + S để giữ kết quả nhé.")
+SAVE_CHOICES = ("Lưu và kiểm tra", "Để tôi tự lưu")
+SAVE_TRIGGER = r"^\s*(lưu và kiểm tra|luu va kiem tra|lưu đi|luu di|lưu giúp|luu giup)\b(\s+\S+){0,3}\s*[.!]?\s*$"
+SELF_SAVE_TRIGGER = r"^\s*(để tôi tự lưu|de toi tu luu|tôi tự lưu|toi tu luu|để tôi lưu|de toi luu)\b(\s+\S+){0,3}\s*[.!]?\s*$"
+VERIFY_TRIGGER = r"\b(kiểm tra|kiem tra|đối chiếu|doi chieu)\s+(lại\s+|lai\s+)?file\s+(đã\s+|da\s+)?lưu|\bkiem tra file da luu\b"
+# Cells of the saved file that must read back as the code computed them (sheet!cell → đồng).
+_EXPECT: dict = {}
+# The last report's key figures, for the sample run's closing card (code-computed, never typed in).
+_LAST: dict = {}
+
+
+def _save_offer() -> Beat:
+    """The last question: Clicky saves only when asked, then opens the saved file and checks it."""
+    global _PENDING
+    _PENDING = {"stage": "save"}
+    return Beat("Em lưu file rồi mở lại bản đã lưu để đối chiếu với sổ cái nhé?", choices=SAVE_CHOICES)
+
+
+def save_and_verify(bridge, target=None) -> list:
+    """Save the workbook, re-read the saved xlsx from disk and compare its key cells with the code's figures.
+
+    target is the exact file to save to when Clicky made the workbook itself (the sample, in Clicky's
+    own folder); the user's own file is only ever saved where it already is."""
+    global _PENDING
+    if stage() == "save":
+        _PENDING = None
+    _step("save")
+    if not bridge.available():
+        return [Beat("Em không thấy file Excel đang mở, nên chưa lưu được.")]
+    if not _try(bridge, "save", *([str(target)] if target else [])):
+        return [Beat(f"Em chưa lưu được file. {you(True)} bấm Ctrl + S rồi gọi \"kiểm tra file đã lưu\" nhé.",
+                     label="Chưa lưu được", mark="warn")]
+    return verify_saved(bridge)
+
+
+def verify_saved(bridge) -> list:
+    from engine import saved_check
+    path = _try(bridge, "workbook_path")
+    if not path or not _EXPECT:
+        return [Beat(f"Em chưa có số nào để đối chiếu với file đã lưu. {you(True)} chạy báo cáo tháng trước nhé.")]
+    try:
+        # The robot's tamper hook hands back a changed copy; without it this is the saved file itself.
+        ok, diffs = saved_check.check(saved_check.tamper_from_env(Path(path)), _EXPECT)
+    except Exception as exc:
+        from office.excel_com import _why
+        log.warning("re-reading the saved workbook failed: %s", _why(exc))    # an OS error quotes the path
+        ok, diffs = False, [{"cell": "", "want": None, "got": None}]
+    scene_log.record("verify", ok=ok, path=path, diffs=diffs)
+    if ok:
+        scene_log.record("delivered", path=path)
+        return [Beat("Em đã mở lại file đã lưu: khớp sổ cái 0 đ. File sẵn sàng để gửi.",
+                     _check_ref("A7:E7") if _check_ref("C7") in _EXPECT else None,
+                     "Khớp sổ cái", "ok", "0 đ", f"Đã đọc lại {len(_EXPECT)} ô từ file trên đĩa · {Path(path).name}")]
+    first = diffs[0]
+    if first["cell"]:
+        where = first["cell"]
+        got = "trống" if first["got"] is None else spoken(Decimal(first["got"]))
+        detail = f"Ô {where}: cần {spoken(Decimal(first['want']))}, file ghi {got}."
+    else:
+        where, detail = "", "Em không đọc lại được file đã lưu."
+    more = f" Còn {len(diffs) - 1} ô khác lệch." if len(diffs) > 1 else ""
+    return [Beat(f"File đã lưu không giống số em tính, em chưa giao file này. {you(True)} đừng gửi bản này nhé.",
+                 where or None, "File đã lưu bị lệch", "bad",
+                 _signed(Decimal(first["got"] - first["want"])) if first.get("got") is not None and first.get("want") is not None
+                 else "Lệch", detail + more)]
+
+
+def self_save() -> list:
+    return [Beat(f"{you(True)} bấm Ctrl + S để lưu nhé. Lưu xong {you()} gõ \"kiểm tra file đã lưu\", em mở lại và đối chiếu.")]
 
 
 def reject() -> list:
     global _PENDING
     if not _PENDING:
         return []
+    if stage() == "intake":
+        return wrong()
+    if stage() == "stopped":
+        _PENDING = None
+        return [Beat(f"Dạ, {you()} xem các file trong phiếu nhé. Khi có file đơn hàng em đọc được, {you()} gọi lại em. "
+                     "Em chưa sửa gì trong file.")]
+    if stage() == "save":
+        _PENDING = None
+        return self_save()
     _PENDING = None
-    return [Beat("Em giữ nguyên query. Số trong Excel vẫn lệch sổ cái, anh đừng dùng cho báo cáo nhé.")]
+    return [Beat(f"Em giữ nguyên query. Số trong Excel vẫn lệch sổ cái, {you()} đừng dùng cho báo cáo nhé.")]
 
 
 # ── Stage 3: the report ───────────────────────────────────────────────────────
 
+EXTRA_ROWS = 3        # returns line, real net revenue, real profit (engine.report_sheet.real_profit_rows)
+
+
+def _audit_returns(report, names: dict, pat_row: int, overstated) -> None:
+    """Biên bản lines for the three lines Clicky adds under the report when returns sit in Nợ 511."""
+    if _AUDIT is None:
+        return
+    from engine.report_sheet import FIRST_LINE_ROW
+    keys = [f.key for f in report.figures]
+    value = {f.key: f.value for f in report.figures}
+    tb = report.current
+    acct = sources.revenue_account(tb)
+    line = next((l for l in tb.leaves if l.account.startswith(acct) and l.dr), None)
+    source = f"{names['tb_cur']} dòng {line.row}" if line else names["tb_cur"]
+    adj = pat_row + 1
+    net_row = FIRST_LINE_ROW + keys.index("net_rev")
+    _AUDIT.add(f"C{adj}", "Trừ: hàng bán bị trả lại", 0, -int(overstated),
+               f"{spoken(overstated)} hàng bán bị trả lại đang ghi Nợ {acct}, chuyển sang 521", audit.AUTO, source)
+    _AUDIT.add(f"C{adj + 1}", "Doanh thu thuần thực", int(value["net_rev"]), int(value["net_rev"] - overstated),
+               f"Tính lại theo dòng {adj} (doanh thu thuần ở ô C{net_row})", audit.AUTO, "Công thức")
+    _AUDIT.add(f"C{adj + 2}", "Lợi nhuận sau thuế thực", int(value["pat"]), int(value["pat"] - overstated),
+               f"Tính lại theo dòng {adj} (lợi nhuận sau thuế ở ô C{pat_row})", audit.AUTO, "Công thức")
+
+
 def build_report(bridge, folder: Path, tbs: list) -> list:
     from engine.report_sheet import quote
     from office import report_skill
+    _step("build_report", trial_balances=len(tbs))
     if len(tbs) < 2:
         return [Beat("Em chưa thấy đủ hai file cân đối tài khoản, kỳ này và kỳ trước, nên chưa lập báo cáo.")]
-    existing = set(bridge.sheet_names())
-    for name, rows, _ in tbs[-2:]:
-        if name not in existing:
-            sheet = bridge.add_sheet(name)
-            if sheet:
-                bridge.write(f"{quote(sheet)}!A1", [list(r) for r in rows])
+    with _timed("tb_copy"):
+        existing = set(bridge.sheet_names())
+        for name, rows, _ in tbs[-2:]:
+            if name not in existing:
+                sheet = bridge.add_sheet(name)
+                if sheet:
+                    bridge.write(f"{quote(sheet)}!A1", [list(r) for r in rows])
     bridge.activate(tbs[-1][0])
     # The rows already read from the files are what the report is built from; reading them back
     # out of Excel would only add a way to fail (cell types change on the way in and out).
     (cur, cur_rows, _), (prev, prev_rows, _) = tbs[-1], tbs[-2]
-    summary, report, names = report_skill.run_report(bridge, ((cur, cur_rows), (prev, prev_rows)))
+    from engine import comparable
+    from engine.cli import read_rows
+    mapping_file, mapping = comparable.find_mapping(folder, read_rows)
+    with _timed("report_sheet"):
+        summary, report, names = report_skill.run_report(bridge, ((cur, cur_rows), (prev, prev_rows)), mapping,
+                                                         mapping_file)
     if report is None:
         return [Beat(summary)]
+    _audit_gate(report.gate)
     pat = report.figures[-1].value
     prev_pat = next((v.previous for v in report.variances if v.key == "pat"), None)
     row = 4 + len(report.figures)
@@ -758,38 +1650,102 @@ def build_report(bridge, folder: Path, tbs: list) -> list:
     pat_ref = f"{sheet}!A{row}:G{row}"      # the whole line, label included: the figure never appears without its name
     overstated = sources.returns_in_revenue(report.current)
     if overstated > 0:
-        # The report already carries the returns line and the real profit under the reported one.
-        pat_ref = f"{sheet}!A{row}:G{row + 2}"
-    _style_report_sheet(bridge, names["report"], row, extra=2 if overstated > 0 else 0)
+        # The report already carries the returns line, the real net revenue and the real profit under the reported one.
+        pat_ref = f"{sheet}!A{row}:G{row + EXTRA_ROWS}"
+        _audit_returns(report, names, row, overstated)
+    _style_report_sheet(bridge, names["report"], row, extra=EXTRA_ROWS if overstated > 0 else 0)
     bridge.activate(names["report"])
     # The whole report, title to real profit, fits on screen; it is seen from the top and stays that way.
     # Ten empty rows are kept under it, so the profit card sits below the report instead of covering it.
-    _try(bridge, "fit_rows", names["report"], f"A1:I{(row + 2 if overstated > 0 else row) + 10}")
+    _try(bridge, "fit_rows", names["report"], f"A1:I{(row + EXTRA_ROWS if overstated > 0 else row) + 10}")
     _try(bridge, "scroll_home", names["report"])
     asks = (f", kèm {len(report.questions)} câu hỏi cho các bộ phận" if report.questions else "")
     note = "Mọi số là công thức trỏ về sổ cái." + (
         f" {len(report.questions)} câu hỏi xác minh ở sheet {names['questions']}." if report.questions else "")
+    from engine.report_sheet import FIRST_LINE_ROW
+    for i, fig in enumerate(report.figures):
+        _EXPECT[f"{sheet}!C{FIRST_LINE_ROW + i}"] = int(fig.value)
+    if overstated > 0:
+        net = next(f.value for f in report.figures if f.key == "net_rev")
+        _EXPECT.update({f"{sheet}!C{row + 1}": -int(overstated), f"{sheet}!C{row + 2}": int(net - overstated),
+                        f"{sheet}!C{row + 3}": int(pat - overstated)})
+    _LAST.clear()
+    _LAST.update(pat=pat, overstated=overstated, real=pat - overstated, report=names["report"])
     beats = [Beat(f"Em đã lập báo cáo tháng{asks}.", f"{sheet}!A4:G{row}", "Báo cáo tháng đã lập", "", "", note)]
+    line_row = {f.key: FIRST_LINE_ROW + i for i, f in enumerate(report.figures)}
+    opened = visuals.figure_to_explain(report.figures, report.variances)
+    if opened is not None:
+        # Wires from the figure to the accounts it is made of: where a number comes from, seen at once.
+        tags = visuals.leader_tags(opened)
+        at = line_row[opened.key]
+        beats.append(Beat(visuals.leader_sentence(tags), f"{sheet}!A{at}:C{at}",
+                          graphic={"kind": "leaders", "figure_ref": f"{sheet}!C{at}", **tags}))
+    same_basis = report.gate is None or report.gate.same_basis
     if overstated > 0:
         real = pat - overstated
-        change = f" Giảm {spoken(prev_pat - real)} so với kỳ trước." if prev_pat is not None and prev_pat > real else ""
+        # No change against a prior period on another basis (F8): that would explain an unlike comparison.
+        change = f" Giảm {spoken(prev_pat - real)} so với kỳ trước." if (
+            same_basis and prev_pat is not None and prev_pat > real) else ""
         beats.append(Beat(f"Lợi nhuận thực là {spoken(real)}, không phải {spoken(pat)} như trên báo cáo.",
                           pat_ref, "Lợi nhuận sau thuế thực", "warn", spoken(real),
                           f"{spoken(overstated)} hàng bán bị trả lại đang ghi thẳng vào Nợ TK 511. "
                           f"Cần chuyển sang TK 521 trước khi gửi sếp.{change}",
                           was=spoken(pat), roll=(int(pat), int(real))))
+        chart = visuals.profit_bridge(pat, [("Hàng trả lại ghi Nợ 511", -overstated)], real)
+        beats.append(Beat(visuals.bridge_sentence(chart), pat_ref, graphic={"kind": "bridge", **chart}))
+        if not same_basis:                  # the summary that says it is not spoken on this path
+            beats.append(Beat(report.gate.sentence(you()), f"{sheet}!A1:G2", "Chưa so với kỳ trước", "warn",
+                              "Khác cơ sở lập", report.gate.basis_text()))
     else:
         beats.append(Beat(summary, pat_ref, "Lợi nhuận sau thuế", "", spoken(pat)))
-    return beats            # the profit card is the last scene: it is what goes to the boss
+    # Every trap the engine found gets a note beside the line it touches; they stay up while the save is asked.
+    notes = visuals.report_notes(report.issues, report.current, overstated,
+                                 {**line_row, "returns": row + 1 if overstated > 0 else line_row.get("net_rev")})
+    if notes:
+        end = row + EXTRA_ROWS if overstated > 0 else row
+        for n in notes:
+            n["ref"] = f"{sheet}!A{n['line']}:G{n['line']}" if n.get("line") else f"{sheet}!A1:G2"
+        beats.append(Beat(visuals.notes_sentence(notes), f"{sheet}!A1:G{end}",
+                          graphic={"kind": "notes", "notes": notes, "plain": True}))
+    return beats            # the profit story, then what to check before it goes to the boss
 
 
 _REPORT_COLUMNS = {"A": 40, "B": 12, "C": 17, "D": 17, "E": 17, "F": 9, "G": 15, "H": 34, "I": 14}
 
 
+def _audit_gate(gate) -> None:
+    """The "so sánh được" gate in the Biên bản: what was not compared, and the mapping table used (F5, F8)."""
+    if _AUDIT is None or gate is None:
+        return
+    src = "Sổ cân đối kỳ này và kỳ trước"
+    if gate.mapping_file:
+        _AUDIT.add("—", "Bảng ghép tài khoản", "Mã cũ", "Mã mới",
+                   f"Dùng {gate.mapped} cặp mã trong {gate.mapping_file} để nối số dư và so hai kỳ; đổi mã có trong "
+                   "bảng không phải lỗi", audit.AUTO, gate.mapping_file)
+    if gate.basis:
+        what, now, before = gate.basis[0]
+        _AUDIT.add("—", f"Cơ sở lập kỳ trước ({what})", before or "không ghi", now or "không ghi",
+                   "Hai kỳ lập trên cơ sở khác nhau: không dùng biến động để giải thích; đề nghị xuất lại kỳ trước "
+                   "cùng cơ sở", audit.AUTO, src)
+    for g in gate.broken[:20]:
+        twin = gate.offset_of(g.account)
+        why = ("" if twin is None else f"Lệch bằng và ngược dấu với TK {twin} (bù trừ nhau): nhiều khả năng là phân "
+               "loại lại hoặc khác cơ sở giữa hai kỳ. ")
+        _AUDIT.add(f"TK {g.account}", "Số dư đầu kỳ so với cuối kỳ trước", int(g.closing_before), int(g.opening_now),
+                   why + "Không nối được số dư hai kỳ: không dùng tài khoản này để giải thích biến động", audit.AUTO,
+                   src)
+    for g in gate.moved[:20]:
+        _AUDIT.add(f"TK {g.account}", "Đổi mã tài khoản (số dư vẫn khớp)", int(g.closing_before), int(g.opening_now),
+                   "Đổi mã, không phải lỗi; chưa có trong bảng ghép nên không so từng mã giữa hai kỳ", audit.AUTO, src)
+    for old, new in gate.renumbered[:20]:
+        _AUDIT.add(f"TK {old} → {new}", "Có thể đổi mã tài khoản", old, new,
+                   "Chưa có bảng ghép tài khoản: không dùng hai tài khoản này để giải thích biến động", audit.AUTO, src)
+
+
 def _style_report_sheet(bridge, sheet: str, last: int, extra: int = 0) -> None:
     """The report reads like one: title, a header band, readable columns, the profit line stands out.
 
-    extra: lines added under the profit line (the returns adjustment and the real profit)."""
+    extra: lines added under the profit line (returns adjustment, real net revenue, real profit)."""
     s = _q(sheet)
     _try(bridge, "layout_sheet", sheet, _REPORT_COLUMNS, gridlines=False)
     _try(bridge, "style", f"{s}!A1", bold=True, size=15, color=_INK)
@@ -818,9 +1774,10 @@ CLEAR_AFTER_S = 8.0       # the last card fades this long after Clicky stops tal
 FINAL_HOLD_S = 25.0       # ...unless it is a warning: that one stays up long enough to read, screenshot, act on
 
 
-def shapes_for(box: tuple, beat: Beat, avoid: tuple = None) -> list:
+def shapes_for(box: tuple, beat: Beat, avoid=None, soft=None) -> list:
     """Overlay shapes for one beat: the range lit with the rest of the screen dimmed, and one card beside it.
-    avoid: the filled part of the sheet on screen, which the card keeps off when it can."""
+    avoid: the figures on screen (one box or a list of boxes), which the card never covers when anything
+    else fits; soft: the cells holding words, which it keeps off when it can."""
     from ui.card_layout import tone_of
     l, t, r, b = box
     tone = tone_of(beat.mark)
@@ -828,8 +1785,16 @@ def shapes_for(box: tuple, beat: Beat, avoid: tuple = None) -> list:
     if beat.label or beat.value or beat.note:
         shapes.append({"kind": "card", "anchor": [l, t, r, b], "title": beat.label, "was": beat.was,
                        "value": beat.value, "note": beat.note, "tone": tone, "roll": list(beat.roll),
-                       "avoid": list(avoid) if avoid else None})
+                       "avoid": _as_boxes(avoid) or None, "soft": _as_boxes(soft) or None})
     return shapes
+
+
+def _as_boxes(boxes) -> list:
+    if not boxes:
+        return []
+    if len(boxes) == 4 and all(isinstance(v, (int, float)) for v in boxes):
+        return [list(boxes)]
+    return [list(b) for b in boxes if b]
 
 
 async def _locate(manager, ref_text: str):
@@ -840,11 +1805,13 @@ async def _locate(manager, ref_text: str):
             await asyncio.to_thread(manager._excel.activate, ref.sheet)
         rect = await asyncio.to_thread(manager._excel.screen_rect, ref_text, True)
         box = manager._physical_to_logical_bbox(rect) if rect else None
+        scene_log.record("locate", ref=ref_text, excel_rect=rect, box=box)
         if not box:
             log.warning("cannot place %s on screen (Excel rect %s)", ref_text, rect)
         return box
     except Exception as exc:
-        log.warning("pointing at %s failed: %s", ref_text, exc)
+        log.warning("pointing at %s failed: %s", ref_text, scrub(exc))
+        scene_log.record("locate", ref=ref_text, excel_rect=None, box=None, error=str(exc)[:200])
         return None
 
 
@@ -854,51 +1821,201 @@ async def _filled_area(manager):
         rect = await asyncio.to_thread(manager._excel.content_rect)
         return manager._physical_to_logical_bbox(rect) if rect else None
     except Exception as exc:
-        log.debug("filled area unknown: %s", exc)
+        log.debug("filled area unknown: %s", scrub(exc))
         return None
 
 
-async def play(manager, beats: list) -> None:
+async def _figures(manager):
+    """(figures, words) on screen as lists of logical boxes, so a card keeps off every figure.
+
+    Each block of figures is its own box, so a card can use a gap inside a full sheet. Without the
+    detailed read, the whole filled area counts as figures: the card then goes past it, as before.
+    """
+    read = getattr(manager._excel, "figure_boxes", None)
+    found = None
+    if read is not None:
+        try:
+            found = await asyncio.to_thread(read)
+        except Exception as exc:
+            log.debug("figures on screen unknown: %s", scrub(exc))
+    if found and (found.get("numbers") or found.get("text")):
+        many = getattr(manager, "_physical_to_logical_boxes", None)
+        convert = many or (lambda rects: [manager._physical_to_logical_bbox(r) for r in rects])
+        numbers = [b for b in convert(found.get("numbers", [])) if b]
+        words = [b for b in convert(found.get("text", [])) if b]
+        if numbers or words:
+            return numbers, words
+    filled = await _filled_area(manager)
+    return ([filled] if filled else []), []
+
+
+def graphic_seconds(graphic: dict) -> float:
+    """Extra time on screen for a graphic beyond its sentence: each piece is read, and a bridge column
+    stays readable for at least six seconds."""
+    kind = graphic.get("kind")
+    if kind == "leaders":
+        return 1.5 + 1.0 * len(graphic.get("tags") or [])
+    if kind == "notes":
+        return 1.0 + 2.0 * len(graphic.get("notes") or [])
+    if kind == "bridge":
+        return max(6.0, 2.0 * len(graphic.get("bars") or []))
+    return 0.0
+
+
+def graphic_log(graphic: dict) -> dict:
+    """What the robot needs to check a graphic: its figures and words, without screen positions."""
+    keep = ("kind", "title", "figure", "sum", "ok", "check", "tags", "bars")
+    out = {k: graphic[k] for k in keep if k in graphic}
+    if graphic.get("notes") is not None:
+        out["notes"] = [{k: n.get(k) for k in ("codes", "warn", "action", "ref")} for n in graphic["notes"]]
+    return out
+
+
+async def _box_of(manager, ref: str):
+    """Logical box of a range already on screen, without scrolling (the beat's own range is shown first)."""
+    try:
+        rect = await asyncio.to_thread(manager._excel.screen_rect, ref, False)
+        return manager._physical_to_logical_bbox(rect) if rect else None
+    except Exception as exc:
+        log.debug("graphic piece %s not on screen: %s", ref, scrub(exc))
+        return None
+
+
+async def _graphic_shape(manager, graphic: dict, box):
+    """The overlay shape for a beat's graphic, every piece tied to a box on screen, or None if none is."""
+    shape = {k: v for k, v in graphic.items() if k not in ("figure_ref", "plain")}
+    if graphic["kind"] == "notes":
+        notes, first = [], None
+        for n in graphic.get("notes") or []:
+            ref = n.get("ref")
+            if ref and first is None and box is None:
+                at = first = await _locate(manager, ref)          # shows the sheet the notes are on
+            else:
+                at = await _box_of(manager, ref) if ref else None
+            # A note whose cells are off screen still shows, beside the beat's range: no trap goes unseen.
+            notes.append({**n, "anchor": list(at or box or first or ()) or None})
+        if not any(n["anchor"] for n in notes):
+            return None
+        shape["notes"] = notes
+        return shape
+    anchor = (await _box_of(manager, graphic["figure_ref"]) if graphic.get("figure_ref") else None) or box
+    if not anchor:
+        return None
+    shape["anchor"] = list(anchor)
+    return shape
+
+
+def free_card(beat: Beat, screen: tuple) -> dict:
+    """A card with no range to point at (the cell could not be shown): top right of the screen, no stem, no
+    spotlight. Its note says where the cell is, so the figure is never tied to the wrong cells."""
+    from ui.card_layout import tone_of
+    sl, st, sr, sb = screen
+    return {"kind": "card", "anchor": [sr - 24, st + 96, sr - 20, st + 100], "free": True, "title": beat.label,
+            "was": beat.was, "value": beat.value, "note": beat.note, "tone": tone_of(beat.mark), "roll": []}
+
+
+def _screen() -> tuple:
+    try:
+        from PyQt6.QtWidgets import QApplication
+        g = QApplication.primaryScreen().availableGeometry()
+        return g.left(), g.top(), g.right(), g.bottom()
+    except Exception:
+        return 0, 0, 1920, 1040
+
+
+async def play(manager, beats: list, keep_card: bool = True) -> None:
     """One idea at a time: light up the beat's range, show its card, say its one sentence, pause, next.
 
-    A beat without a range keeps the previous card up, so the screen never goes blank mid-story.
-    When the sentence cannot be read aloud (no Vietnamese voice), it stays up long enough to read.
+    With keep_card, a beat without a range keeps the previous card up, so the screen never goes blank
+    mid-story. A beat whose range cannot be shown never keeps another beat's card: the old card goes, and its
+    own card shows without pointing (free_card). keep_card=False (a list of separate mistakes): every beat
+    clears the card before it. When the sentence cannot be read aloud (no Vietnamese voice), it stays up long
+    enough to read.
     """
     from ui.card_layout import NO_BUBBLE, pointer_spot, reading_seconds
     run = object()
     manager._month_close_run = run
+    import turn_clock
+    turn_clock.of(manager).mark("ready")
     guided = getattr(manager, "sig_guided", None)     # the chat panel steps aside while Clicky guides
     if guided is not None:
         guided.emit(True)
     manager.sig_clear_drawings.emit()
+    caption = getattr(manager, "sig_caption", None)
+    if caption is not None:
+        caption.emit("")                               # the "Em đang …" line gives way to the first card
     last_card = None
     for i, beat in enumerate(beats):
         if i:
             manager.sig_response_chunk.emit("\n\n")
             if BEAT_GAP_S:
                 await asyncio.sleep(BEAT_GAP_S)
+        if beat.ref or beat.graphic:
+            await _excel_free()
+        if beat.book and beat.ref:
+            shown = await asyncio.to_thread(getattr(manager._excel, "show_workbook", lambda p: False), beat.book)
+            from office.excel_com import book_id
+            scene_log.record("show_book", i=i, ref=beat.ref, book=book_id(beat.book), pack=beat.book_pack, ok=bool(shown))
         box = await _locate(manager, beat.ref) if beat.ref else None
         if box:
-            manager.sig_clear_drawings.emit()
-            avoid = await _filled_area(manager)
-            for shape in shapes_for(box, beat, avoid):
-                manager.sig_draw.emit(shape)
-            l, t, r, b = box
             manager.sig_point_hold.emit(True)
-            # The pointer stops beside the range, never on it: it must not hide the figure being explained.
+            # The pointer flies the moment the range is known; the frame and the card land while it travels.
+            # It stops beside the range, never on it: it must not hide the figure being explained.
             manager.sig_point_at.emit(*pointer_spot(box), NO_BUBBLE)
+        graphic = await _graphic_shape(manager, beat.graphic, box) if beat.graphic else None
+        # the card names a source file for the user; the log carries its id instead
+        hide = (lambda t: t.replace(Path(beat.book).name, f"[file {scene_log.book_id(beat.book)}]")) if beat.book else (lambda t: t)
+        scene_log.record("beat", i=i, ref=beat.ref, box=box, title=beat.label, value=beat.value, was=beat.was,
+                         note=hide(beat.note), mark=beat.mark, text=hide(beat.text), choices=list(beat.choices or []),
+                         **({"graphic": graphic_log(beat.graphic)} if beat.graphic else {}))
+        loose = None
+        if not box and not graphic and (beat.ref or not keep_card):
+            # Never leave another mistake's card up while this one is read out (grading round 8).
+            manager.sig_clear_drawings.emit()
+            if beat.ref and (beat.label or beat.value or beat.note):
+                loose = free_card(beat, _screen())
+                manager.sig_draw.emit(loose)
+            scene_log.record("clear", i=i, ref=beat.ref, free_card=loose is not None)
+        if box or graphic:
+            manager.sig_clear_drawings.emit()
+            figures, words = await _figures(manager)
+            if box and not (graphic and beat.graphic.get("plain")):
+                for shape in shapes_for(box, beat, figures, words):
+                    manager.sig_draw.emit(shape)
+            if graphic:
+                graphic.update(avoid=_as_boxes(figures) or None, soft=_as_boxes(words) or None)
+                manager.sig_draw.emit(graphic)
+        since = turn_clock.of(manager).elapsed() if i == 0 else None
+        if since is not None:
+            # From the turn's start to the first card on screen (after locating it and reading the figures).
+            _step("timing", part="first_card", ms=since)
         log.info("beat: %s", beat.text)
+        if beat.intake:
+            # The receipt: what was read and what was left out, logged before anything is drawn or changed.
+            scene_log.record("intake", **beat.intake.get("log", {}))
+            sig = getattr(manager, "sig_intake", None)
+            if sig is not None:
+                sig.emit(beat.intake.get("card", {}))
         if beat.choices:
             # The question's buttons appear with the question, not after it has been read out.
             manager.sig_choices.emit(beat.text, list(beat.choices))
         spoke = await manager._reply_local(beat.text)
+        scene_log.record("spoken", i=i, spoke=spoke)
         if spoke is False and BEAT_GAP_S:
             # Not read aloud: leave time to read the sentence, and with a card, to look at the figure and its note.
             await asyncio.sleep(reading_seconds(beat.text)
-                                + ((1.0 + 0.6 * reading_seconds(beat.note) if beat.note else 1.0) if box else 0))
+                                + ((1.0 + 0.6 * reading_seconds(beat.note) if beat.note else 1.0) if box else 0)
+                                + (graphic_seconds(beat.graphic) if graphic else 0))
+        elif graphic and BEAT_GAP_S:
+            # Read aloud, the sentence is shorter than the graphic: leave time to look at every piece.
+            await asyncio.sleep(max(0.0, graphic_seconds(beat.graphic) - reading_seconds(beat.text) / 2))
         if box:
             manager.sig_point_release.emit()
             last_card = beat
+    # The story is over: the rehearsal robot waits for this, not for a quiet spell (a card read without
+    # a voice can sit still for ten seconds while scenes are still to come).
+    scene_log.record("story_end", beats=len(beats), last=beats[-1].text[:80] if beats else "",
+                     choices=list(beats[-1].choices or []) if beats else [])
     if beats and not beats[-1].choices:
         def fade():
             if getattr(manager, "_month_close_run", None) is run:
@@ -918,29 +2035,285 @@ def _pq(manager):
 
 
 async def handle_start(manager, transcript: str) -> str:
-    order = machine_date_order()
-    beats = await asyncio.to_thread(lambda: start(manager._excel, _pq(manager), order))
-    await play(manager, beats)
+    await run_from(manager, None)   # typed "làm báo cáo từ thư mục này": the open workbook's own folder
     return ""
+
+
+# Said the moment a button is pressed, before the slow part (reading files, writing, saving), so the
+# screen never sits still while Clicky works. Each slow stage inside the step says its own line as it starts,
+# and a stage still running after STILL_AFTER_S says once more that it is still at it: no turn is silent for
+# more than two seconds. Replaced by the first card as soon as it is ready.
+WORKING = {
+    "read": "Em đang đọc các file trong thư mục…",
+    "confirm": "Em đang đối chiếu và sửa trong file…",
+    "approve": "Em đang sửa query và tải lại…",
+    "load": "Em đang nạp đơn hàng vào Excel…",
+    "save": "Em đang lưu rồi mở lại file để kiểm…",
+    "verify": "Em đang mở lại file đã lưu để kiểm…",
+    "pick": f"Em đang đọc lại với sổ {you()} chọn…",
+    "final": "Em đang chuyển sang Chính thức…",
+    "keep": "Em đang giữ một bản gốc của file…",
+    "query": "Em đang đưa query đơn hàng vào Excel…",
+    "check_sheet": "Em đang ghi sheet Kiểm tra…",
+    "tb_copy": "Em đang chép hai bảng cân đối vào file…",
+    "report": "Em đang lập báo cáo tháng…",
+    "audit": "Em đang ghi Biên bản Clicky…",
+}
+# Excel's first Power Query load in a session starts its engine: seconds with nothing to see.
+FIRST_LOAD_STILL = f"Lần đầu chạy Power Query trong phiên Excel này nên mất vài giây, {you()} chờ em chút nhé…"
+STILL_AFTER_S = 2.0
+# A _timed part that is a stage the user should hear about, and the line it says.
+_STAGE_OF = {"keep_original": "keep", "read_files": "read", "query_add": "query", "check_sheet": "check_sheet",
+             "tb_copy": "tb_copy", "report_sheet": "report", "audit_sheet": "audit"}
+_LOADED_ONCE = False      # set after the first load of this session: later loads are not "the first time"
+
+
+def still_line(step: str) -> str:
+    """What a stage says when it is still running STILL_AFTER_S after it started."""
+    if step == "load" and not _LOADED_ONCE:
+        return FIRST_LOAD_STILL
+    return WORKING[step].rstrip("…") + f", {you()} chờ em chút nhé…"
+
+
+class Busy:
+    """The line under the cursor while one step runs in a worker thread.
+
+    say(stage) shows the stage's line at once and arms a timer; if the same stage is still running when it
+    fires, the line becomes still_line(stage), once. A new stage or stop() disarms it. timer is
+    threading.Timer, or a fake in tests."""
+
+    def __init__(self, emit, after: float = None, timer=None):
+        import threading
+        self.emit = emit
+        self.after = STILL_AFTER_S if after is None else after
+        self.timer = timer or threading.Timer
+        self.lock = threading.Lock()
+        self.current = None
+        self.armed = None
+
+    def say(self, step: str) -> None:
+        with self.lock:
+            if step == self.current:
+                return                      # the same stage again: its timer keeps running
+            self._disarm()
+            self.current = step
+            token = object()
+            self.armed = (token, self.timer(self.after, self._still, args=(step, token)))
+            self.armed[1].daemon = True
+        _step("caption", stage=step, still=False)
+        self.emit(WORKING[step])
+        self.armed[1].start()
+
+    def _still(self, step: str, token) -> None:
+        with self.lock:
+            if self.armed is None or self.armed[0] is not token or self.current != step:
+                return
+            self.armed = None
+        _step("caption", stage=step, still=True)
+        self.emit(still_line(step))
+
+    def _disarm(self) -> None:
+        if self.armed is not None:
+            self.armed[1].cancel()
+            self.armed = None
+
+    def stop(self) -> None:
+        with self.lock:
+            self._disarm()
+            self.current = None
+
+
+_PROGRESS = None          # set while a step runs in a worker thread: shows how far it got (caption only)
+
+
+def _progress(step: str) -> None:
+    """Say what the long step is doing now. Excel's first Power Query use takes seconds, and the line under
+    the cursor should say so rather than stand still."""
+    if _PROGRESS is not None:
+        try:
+            _PROGRESS(step)
+        except Exception:
+            log.debug("progress caption failed", exc_info=False)
+
+
+async def _busy(manager, step: str, work):
+    """Run one step's slow part in a worker thread with its stages said under the cursor as they start."""
+    global _PROGRESS
+    sig = getattr(manager, "sig_caption", None)
+    busy = Busy(sig.emit if sig is not None else (lambda text: None))
+    busy.say(step)
+    _PROGRESS = busy.say
+    try:
+        from office import pq_warmup
+
+        def run():
+            pq_warmup.wait(by=step)     # Excel serves one caller at a time; the warm-up workbook closes first
+            return work()
+        return await asyncio.to_thread(run)
+    finally:
+        _PROGRESS = None
+        busy.stop()
+
+
+async def _excel_free() -> None:
+    """A card that points at Excel waits for a running Power Query warm-up to close its workbook first:
+    Excel serves one caller at a time. Without a warm-up running this returns at once."""
+    from office import pq_warmup
+    if pq_warmup.running():
+        await asyncio.to_thread(pq_warmup.wait, pq_warmup.WAIT_S, "play")
+
+
+def _warm_early(bridge) -> None:
+    """Stage 0 has made its last Excel call: start Power Query (office.pq_warmup) now, while the files are read
+    and the receipt is shown, so the first press does not pay for Excel starting its engine. Anything that
+    needs Excel before the warm-up ends waits for it first (_busy, play)."""
+    from office import pq_warmup
+    pq_warmup.start(bridge)
+
+
+def warm_while_reading(manager) -> None:
+    """The receipt is on screen and nothing runs until the user presses: start Power Query now (office.pq_warmup),
+    so the first press does not pay for Excel starting its engine."""
+    if stage() == "intake":
+        from office import pq_warmup
+        pq_warmup.start(manager._excel, quiet=True)      # stage 0 already said why it would not run
+
+
+async def run_from(manager, folder: Optional[Path]) -> None:
+    """Start a fresh month close on a folder (the dropped one) or on the open workbook's folder."""
+    use_folder(folder)
+    _CHOSEN.clear()                 # a new run asks again: the folder may have changed since
+    _PICKS.clear()
+    order = machine_date_order()
+    beats = await _busy(manager, "read", lambda: start(manager._excel, _pq(manager), order))
+    await play(manager, beats)
+    warm_while_reading(manager)
 
 
 async def handle_approve(manager, transcript: str) -> str:
     # The question's frame must not stay frozen on screen while Excel reloads the query.
     manager.sig_clear_drawings.emit()
-    beats = await asyncio.to_thread(lambda: approve(manager._excel, _pq(manager)))
+    beats = await _busy(manager, "approve", lambda: approve(manager._excel, _pq(manager)))
     await play(manager, beats)
     return ""
 
 
 async def handle_reject(manager, transcript: str) -> str:
+    was_intake = stage() in ("intake", "stopped")
     await play(manager, reject())
+    if was_intake:
+        _open_chat(manager)
+    return ""
+
+
+def _open_chat(manager) -> None:
+    sig = getattr(manager, "sig_open_chat", None)
+    if sig is not None:
+        sig.emit()
+
+
+async def handle_confirm(manager, transcript: str) -> str:
+    import turn_clock
+    clock = turn_clock.of(manager)
+    _step("timing", part="to_confirm", ms=clock.elapsed())      # the press → confirm() starting
+    beats = await _busy(manager, "confirm", lambda: confirm(manager._excel, _pq(manager)))
+    _step("timing", part="confirm_done", ms=clock.elapsed())    # since the press; play() logs the first card
+    await play(manager, beats)
+    return ""
+
+
+async def handle_wrong(manager, transcript: str) -> str:
+    await play(manager, wrong())
+    _open_chat(manager)
+    return ""
+
+
+async def handle_save(manager, transcript: str) -> str:
+    manager.sig_clear_drawings.emit()
+    beats = await _busy(manager, "save", lambda: save_and_verify(manager._excel))
+    await play(manager, beats)
+    _ask_feedback(manager, beats)
+    return ""
+
+
+async def handle_verify(manager, transcript: str) -> str:
+    beats = await _busy(manager, "verify", lambda: verify_saved(manager._excel))
+    await play(manager, beats)
+    _ask_feedback(manager, beats)
+    return ""
+
+
+_RUN_T0: Optional[float] = None
+
+
+def _delivered(beats) -> bool:
+    return any(b.label == "Khớp sổ cái" and b.mark == "ok" for b in beats or [])
+
+
+def _ask_feedback(manager, beats) -> None:
+    """Job 13: once the user's own report is saved and re-checked, ask how much time it saved.
+
+    Only from the buttons a user presses (Lưu / kiểm tra file đã lưu), never from the sample, which saves on its own."""
+    from engine import feedback
+    sig = getattr(manager, "sig_feedback", None)
+    if sig is None or not _delivered(beats) or not feedback.due():
+        return
+    card = feedback.card(time.monotonic() - _RUN_T0 if _RUN_T0 is not None else None)
+    _step("feedback_card", asked=True)
+    sig.emit(card)
+
+
+async def handle_self_save(manager, transcript: str) -> str:
+    global _PENDING
+    _PENDING = None
+    await play(manager, self_save())
+    return ""
+
+
+def save_pending() -> bool:
+    return stage() == "save"
+
+
+async def handle_columns(manager, transcript: str) -> str:
+    beats = await _busy(manager, "pick", lambda: answer_columns(manager._excel, _pq(manager), transcript))
+    await play(manager, beats)
+    warm_while_reading(manager)
+    return ""
+
+
+async def handle_pick(manager, transcript: str) -> str:
+    beats = await _busy(manager, "pick", lambda: pick(manager._excel, _pq(manager), transcript))
+    await play(manager, beats)
+    warm_while_reading(manager)
+    return ""
+
+
+async def handle_final(manager, transcript: str) -> str:
+    beats = await _busy(manager, "final", lambda: make_final(manager._excel))
+    await play(manager, beats)
     return ""
 
 
 SKILLS = [
     {"name": "Báo cáo tháng trọn gói", "trigger": START_TRIGGER, "handler": handle_start,
-     "description": "Từ thư mục dữ liệu tháng: tải query đơn hàng, đối chiếu với file gốc và sổ cái, chỉ ra chỗ lệch, "
-                    "đề xuất sửa, rồi lập báo cáo tháng."},
+     "description": "Từ thư mục dữ liệu tháng: đọc các file và cho xem phiếu nhận file, rồi tải query đơn hàng, đối chiếu "
+                    "với file gốc và sổ cái, chỉ ra chỗ lệch, đề xuất sửa, rồi lập báo cáo tháng."},
+    {"name": "Chọn cột ngày và số tiền", "trigger": COLUMN_TRIGGER, "handler": handle_columns, "when": columns_pending,
+     "description": "Người dùng chỉ cột nào là ngày bán, cột nào là số tiền trong một file đơn hàng có tên cột lạ."},
+    {"name": "Chọn sổ cân đối", "trigger": PICK_TRIGGER, "handler": handle_pick, "when": pick_pending,
+     "description": "Người dùng chọn một trong hai sổ cân đối cùng kỳ."},
+    {"name": "Xác nhận phiếu nhận file", "trigger": CONFIRM_TRIGGER, "handler": handle_confirm, "when": intake_pending,
+     "description": "Người dùng xác nhận Clicky đọc đúng các file; bắt đầu tính."},
+    {"name": "Phiếu nhận file có chỗ sai", "trigger": WRONG_TRIGGER, "handler": handle_wrong, "when": intake_pending,
+     "description": "Dừng trước khi sửa gì, mở khung chat để người dùng nói chỗ sai."},
+    {"name": "Lưu và kiểm tra file", "trigger": SAVE_TRIGGER, "handler": handle_save, "when": save_pending,
+     "description": "Lưu file, mở lại bản đã lưu và đối chiếu các tổng chính với sổ cái."},
+    {"name": "Tự lưu file", "trigger": SELF_SAVE_TRIGGER, "handler": handle_self_save, "when": save_pending,
+     "description": "Người dùng tự lưu; Clicky nhắc cách kiểm tra sau."},
+    {"name": "Kiểm tra file đã lưu", "trigger": VERIFY_TRIGGER, "handler": handle_verify,
+     "description": "Mở lại file đã lưu trên đĩa và đối chiếu các tổng chính với số Clicky đã tính."},
+    {"name": "Chốt báo cáo chính thức", "trigger": FINAL_TRIGGER, "handler": handle_final,
+     "description": "Đổi trạng thái báo cáo từ Sơ bộ sang Chính thức và ghi vào Biên bản."},
     {"name": "Đồng ý bản sửa", "trigger": APPROVE_TRIGGER, "handler": handle_approve, "when": pending,
      "description": "Áp bản sửa query Clicky vừa đề xuất, tải lại và đối chiếu lại."},
     {"name": "Giữ nguyên query", "trigger": REJECT_TRIGGER, "handler": handle_reject, "when": pending,

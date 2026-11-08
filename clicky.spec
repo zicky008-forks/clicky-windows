@@ -21,10 +21,13 @@ from PyInstaller.utils.hooks import collect_all
 
 # CLICKY_EDITION=bi builds the Clicky BI edition: Excel/finance work with cloud
 # AI. It leaves out offline OCR, figure detection, lesson video recording and
-# local speech models, which make up much of the installer and are not used
-# there. Without a speech model the talk key starts Windows voice typing.
+# Whisper speech models, which make up much of the installer and are not used
+# there. Vietnamese speech and voice run offline through sherpa-onnx (voice/).
 EDITION = os.environ.get("CLICKY_EDITION", "full").strip().lower()
-BI_LEAVES_OUT = ["rapidocr_onnxruntime", "onnxruntime", "cv2", "imageio", "imageio_ffmpeg",
+import importlib.util as _iu
+# VieNeu (offline Vietnamese voice) runs on onnxruntime, so keep it when VieNeu is installed.
+_VIENEU = _iu.find_spec("vieneu") is not None and os.path.isdir(os.path.join("voice", "vieneu"))
+BI_LEAVES_OUT = ["rapidocr_onnxruntime"] + ([] if _VIENEU else ["onnxruntime"]) + ["cv2", "imageio", "imageio_ffmpeg",
                  "pywhispercpp", "faster_whisper", "ctranslate2"]
 
 # ── Modules that are lazy-imported by CompanionManager — PyInstaller's
@@ -49,10 +52,19 @@ hidden = [
     # lazily inside functions, so they need to be named explicitly)
     "ui.setup_wizard",
     "ui.api_keys_dialog",
+    # First run: welcome card, plain-words error card and bug-report preview
+    "first_run", "ui.plain_card", "ui.welcome", "ui.error_card", "engine.errors_vi", "engine.bug_report",
+    # Sample month, the drop zone for the first real month, the receipt, audit and saved-file check
+    "office.sample", "office.drop", "ui.drop_zone", "engine.intake", "engine.audit", "engine.saved_check", "engine.roles",
+    # Latency clock, and the three graphics drawn from engine figures (leader tags, sticky notes, profit bridge)
+    "turn_clock", "engine.visuals", "ui.graphics_paint",
+    # BOD draft pack review ("soát bộ BOD", Clicky.exe --bod-review)
+    "office.bod_skill", "engine.bod_check", "engine.bod_inputs", "engine.bod_pack", "engine.bod_review", "engine.tables",
     "ui.settings_window",
     "ui.connections_window",
     "ui.jobs_window",
     "ui.drawing_board",
+    "ui.outgoing_card", "office.outgoing", "engine.redact",
     "storage", "session_store", "drawing", "drive", "jobs", "desktop",
     "response_blocks", "browser_bridge", "connectors", "screen.privacy", "updates",
     "audio.narration", "audio.devices", "audio.tts.sapi_tts_provider",
@@ -73,6 +85,9 @@ hidden = [
     # Excel range that holds a date fails to read.
     "win32timezone",
 
+    # Legacy .xls order exports (engine.tabular imports it lazily)
+    "xlrd",
+
     # Indirect deps
     "tiktoken_ext",
     "tiktoken_ext.openai_public",
@@ -83,7 +98,18 @@ hidden = [
 datas, binaries, hiddenimports = [], [], []
 datas.append(("browser_extension", "browser_extension"))
 datas.append(("RELEASE-NOTES-1.6.md", "."))
+datas.append(("assets/mau", "assets/mau"))       # the sample month (made-up company) for "Xem em làm"
+if os.path.isdir(os.path.join("voice", "asr-vi")):  # offline Vietnamese speech (tools/giong_noi/tai_model.py)
+    datas.append((os.path.join("voice", "asr-vi"), os.path.join("voice", "asr-vi")))
+    datas.append(("audio/stt/hotwords_vi.txt", "audio/stt"))
+if os.path.isdir(os.path.join("voice", "tts-piper-vi")):  # offline Vietnamese voice + its phoneme table
+    datas.append((os.path.join("voice", "tts-piper-vi"), os.path.join("voice", "tts-piper-vi")))
+    datas.append(("audio/tts/vi_phonemes.tsv", "audio/tts"))
+if _VIENEU:                                       # tools/giong_noi/tai_vieneu.py; Apache-2.0 weights
+    datas.append((os.path.join("voice", "vieneu"), os.path.join("voice", "vieneu")))
 for pkg in (
+    "sherpa_onnx",              # offline Vietnamese speech (its own onnxruntime DLL under sherpa_onnx/lib)
+    "vieneu", "vieneu_utils", "sea_g2p", "kaldi_native_fbank", "soxr", "cpuinfo",   # VieNeu, when installed
     "faster_whisper",
     "ctranslate2",
     "tokenizers",

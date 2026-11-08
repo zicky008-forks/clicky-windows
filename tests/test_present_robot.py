@@ -1,0 +1,119 @@
+"""The presentation robot's grading: what counts as ĐẠT for a real-PowerPoint rehearsal."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "dien_tap"))
+import present_robot as robot          # noqa: E402
+
+SCRIPT = {"slides": [{"so": 1, "chi_vao": [{"shape": "tiêu đề"}, {"excel": "Tong_quan!B4"}]},
+                     {"so": 2, "chi_vao": [{"shape": "bảng"}, {"shape_chua": "1"}]}]}
+BANK = {"cau_hoi": [{"id": "Q01", "hoi_mau": "Tổng?"}, {"id": "Q04", "hoi_mau": "Phòng nào?"}, {"id": "X"}]}
+
+
+def good_events():
+    return [{"event": "present_preflight", "ok": True, "lines": ["ĐẠT  so_slide"]},
+            {"event": "present_start", "mode": "extend"},
+            {"event": "present_slide", "slide": 1, "targets": ["tiêu đề"], "rects": [[0, 0, 9, 9]], "missed": [], "missing": []},
+            {"event": "present_slide", "slide": 2, "targets": ["bảng", "1"], "rects": [[0, 0, 9, 9]] * 2, "missed": [], "missing": []},
+            {"event": "present_key", "key": "ask"},
+            {"event": "present_answer", "question": "Tổng?", "id": "Q01", "choices": [], "stop": ""},
+            {"event": "present_answer", "question": "Phòng nào?", "id": "Q04", "choices": [["Q04", "P. IT"]], "stop": ""},
+            {"event": "present_key", "key": "back"},
+            {"event": "present_end", "minutes": "C:/x.md"}]
+
+
+def test_expected_targets_and_questions():
+    assert robot.expected_targets(SCRIPT) == {1: 1, 2: 2}
+    assert robot.sample_questions(BANK) == [("Q01", "Tổng?"), ("Q04", "Phòng nào?")]
+
+
+def test_grade_pass():
+    asked = [("Q01", "Tổng?", 3, 3), ("Q04", "Phòng nào?", 3, 3)]
+    res = robot.grade(good_events(), SCRIPT, BANK, {1: (1, 1), 2: (2, 2)}, asked, True, False, True)
+    assert res.ok, res.markdown("x")
+
+
+def test_grade_catches_each_failure():
+    asked = [("Q01", "Tổng?", 3, 3), ("Q04", "Phòng nào?", 3, 5)]                  # back went elsewhere
+    events = [e for e in good_events() if not (e["event"] == "present_slide" and e["slide"] == 2)]
+    events[1:1] = [{"event": "present_answer", "question": "Tổng?", "id": "", "choices": [], "stop": ""}]
+    res = robot.grade(events, SCRIPT, BANK, {1: (0, 1)}, asked, True, True, False)
+    bad = {l.name.split(" ")[0] for l in res.lines if not l.ok}
+    assert not res.ok
+    assert {"Theo", "Hỏi", "Màn", "File"} <= bad
+    text = res.markdown("x")
+    assert "slide 2: Clicky không theo" in text and "ảnh chụp chỉ thấy 0/1" in text
+
+
+def test_grade_preflight_failure_is_reported():
+    events = [{"event": "present_preflight", "ok": False, "lines": ["KHÔNG ĐẠT  placeholder: {tq:d_cost_fy}"]}]
+    res = robot.grade(events, SCRIPT, BANK, {}, [], False, False, True)
+    assert not res.ok and "d_cost_fy" in res.lines[0].detail
+
+
+def test_robot_waits_for_the_slide_show_window(monkeypatch):
+    """bhc_e2e stage 4 on the PC, 07/11: SlideShowWindows(1) was asked for before the show had opened."""
+    import types
+    import present_robot
+    monkeypatch.setattr(present_robot.time, "sleep", lambda s: None)
+    state = {"polls": 0}
+
+    class Windows:
+        @property
+        def Count(self):
+            state["polls"] += 1
+            return 1 if state["polls"] >= 3 else 0
+
+        def __call__(self, i):
+            return "show-window"
+
+    app = types.SimpleNamespace(SlideShowWindows=Windows())
+    assert present_robot.show_window(app=app) == "show-window" and state["polls"] == 3
+
+
+def test_show_outcome_reads_clickys_attach_or_failure(tmp_path, monkeypatch):
+    import json
+    import present_robot
+    monkeypatch.setattr(present_robot.time, "sleep", lambda s: None)
+    log = tmp_path / "scene.jsonl"
+    log.write_text(json.dumps({"event": "present_start"}) + "\n", encoding="utf-8")
+    assert present_robot.show_outcome(log, timeout=0.01) == "unknown"
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"event": "present_retry"}) + "\n" + json.dumps({"event": "present_failed"}) + "\n")
+    assert present_robot.show_outcome(log, timeout=0.01) == "failed"
+    log.write_text(json.dumps({"event": "present_attached", "hwnd": 5}) + "\n", encoding="utf-8")
+    assert present_robot.show_outcome(log, timeout=0.01) == "attached"
+
+
+def test_window_handle_reads_hwnd_as_property_or_method():
+    class Early:
+        HWND = 4242
+
+    assert robot.window_handle(Early()) == 4242
+
+    class Ole:
+        def GetIDsOfNames(self, name):
+            assert name == "HWND"
+            return 7
+
+        def Invoke(self, dispid, lcid, flags, result):
+            assert dispid == 7 and flags == 2          # DISPATCH_PROPERTYGET
+            return 4343
+
+    class Late:                                 # PC 07/11: HWND() as a method raised 'Member not found'
+        _oleobj_ = Ole()
+
+        def HWND(self):
+            raise RuntimeError("Member not found.")
+
+    import types
+    sys.modules.setdefault("pythoncom", types.SimpleNamespace(DISPATCH_PROPERTYGET=2))
+    assert robot.window_handle(Late()) == 4343
+
+
+def test_screenshot_waits_until_every_frame_is_drawn():
+    assert robot.draw_seconds([], 1.2) == 1.2
+    assert robot.draw_seconds([[0, 0, 1, 1]], 1.2) == 0.5 + 2.2
+    assert robot.draw_seconds([[0, 0, 1, 1], [2, 2, 3, 3]], 1.2) == 0.5 + 4.4
+    assert robot.frames_settle({"event": "present_slide", "rects": [[0, 0, 1, 1]] * 2}, 1.2) == 0.5 + 4.4
+    assert robot.frames_settle(None, 1.2) == 1.2

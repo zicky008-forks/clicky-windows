@@ -190,20 +190,22 @@ def test_settings_microphone_test_releases_input(qt_app, microphones, monkeypatc
     assert not calls
     settings.test_microphone()
     settings.finish_microphone_test()
-    assert 'Audio received' in settings.mic_status.text()
+    assert 'Đã nghe được tiếng' in settings.mic_status.text()
     assert settings._mic_listener is None
     Listener.stop.assert_called_once()
     settings.close()
 
 
-def test_without_a_speech_model_the_talk_key_uses_windows_voice_typing(monkeypatch):
+def test_without_a_speech_model_the_talk_key_opens_the_typed_chat(monkeypatch):
     import importlib.util
+    from audio.stt import sherpa_vi_stt
     from config import cfg
     monkeypatch.delenv('CLICKY_STT', raising=False)
+    monkeypatch.setattr(sherpa_vi_stt, 'available', lambda: False)
     monkeypatch.setattr(cfg, 'deepgram_api_key', None)
     monkeypatch.setattr(cfg, 'openai_api_key', None)
     monkeypatch.setattr(importlib.util, 'find_spec', lambda name: None)
-    assert cfg.stt_provider() == 'windows'
+    assert cfg.stt_provider() == 'typed'
 
     from companion_manager import AppState, CompanionManager
     for dictating, into_chat in ((False, True), (True, False)):

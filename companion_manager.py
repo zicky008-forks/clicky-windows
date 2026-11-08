@@ -34,7 +34,8 @@ from tutor_features import (
     multilang, workflow_capture, collab,
 )
 import skills as skills_pkg
-from office import finance_mode
+import turn_clock
+from office import finance_mode, outgoing
 from office.cellref import parse_ref
 from office.excel_com import ExcelBridge, format_for_prompt as excel_context_prompt, is_excel_window
 from storage import setting, set_setting
@@ -310,6 +311,10 @@ class CompanionManager(QObject):
     sig_draw                = pyqtSignal(dict)            # generic teaching shape → overlay
     sig_clear_drawings      = pyqtSignal()                # wipe all teaching shapes
     sig_choices             = pyqtSignal(str, list)       # (question, button labels) → clickable choice card
+    sig_intake              = pyqtSignal(dict)            # the receipt ("Em đọc được những gì") shown with the next choices
+    sig_open_chat           = pyqtSignal()                # bring the chat panel up so the user can type
+    sig_drop_zone           = pyqtSignal()                # show the one drop place for the user's own files
+    sig_feedback            = pyqtSignal(dict)            # job 13: "bớt được bao lâu" after the first own report (engine.feedback.card)
     sig_guided              = pyqtSignal(bool)            # True while Clicky walks through the screen step by step
     sig_recording_state     = pyqtSignal(bool, str)       # (is_recording, output_dir)
     sig_turn_started        = pyqtSignal(str)
@@ -322,6 +327,7 @@ class CompanionManager(QObject):
     sig_external_request    = pyqtSignal(dict)
     sig_external_result     = pyqtSignal(str)
     sig_collab_message      = pyqtSignal(dict)
+    sig_outgoing_preview    = pyqtSignal(dict)            # masked lines to approve before the first send; {} hides the card
 
     def __init__(self):
         super().__init__()
@@ -386,6 +392,12 @@ class CompanionManager(QObject):
         self._privacy_guard = setting("privacy_guard", True)
         self._code_mode_auto = setting("code_mode", True)
         self._excel = ExcelBridge()
+        # Every AI request goes through this gate: masked, approved once, logged, or not sent at all.
+        self._outgoing = outgoing.Outgoing(ask=self._ask_outgoing)
+        # How fast each turn feels: key release / Enter / button → first thing on screen.
+        self._clock = turn_clock.TurnClock()
+        turn_clock.connect(self, self._clock)
+        self._outgoing_answer = None
         self._multilang = setting("multilang", True)
         self._journal_enabled = setting("journal", True)
         self._ocr_enabled = setting("ocr", True)
@@ -462,7 +474,7 @@ class CompanionManager(QObject):
     async def _job_worker(self):
         while True:
             try:
-                if self._state == AppState.IDLE:
+                if self._state == AppState.IDLE and not outgoing.local_only():
                     job = self._jobs.claim()
                     if job:
                         self._job_task = asyncio.current_task()
@@ -490,6 +502,8 @@ class CompanionManager(QObject):
             await asyncio.sleep(5)
 
     async def _refresh_stale_models(self):
+        if outgoing.local_only():
+            return          # model lists come from the providers' servers
         try:
             from ai.model_registry import refresh_all_stale
             results = await refresh_all_stale()
@@ -677,12 +691,17 @@ class CompanionManager(QObject):
                 _ensure_ollama_running()
                 from ai.ollama_provider import OllamaProvider
                 self._llm = OllamaProvider()
+            # Nothing reaches the provider except through the gate.
+            self._llm = outgoing.GuardedProvider(self._llm, self._outgoing)
         return self._llm
 
     def _get_stt(self):
         if self._stt is None:
             provider = cfg.stt_provider()
-            if provider == "deepgram":
+            if provider == "sherpa_vi":
+                from audio.stt.sherpa_vi_stt import SherpaViSTT
+                self._stt = SherpaViSTT()
+            elif provider == "deepgram":
                 from audio.stt.deepgram_stt import DeepgramSTT
                 self._stt = DeepgramSTT()
             elif provider == "openai":
@@ -704,7 +723,10 @@ class CompanionManager(QObject):
     def _get_tts(self):
         if self._tts is None:
             provider = cfg.tts_provider()
-            if provider == "elevenlabs":
+            if provider == "vi_offline":
+                from audio.tts.vi_offline_tts import OfflineViTTS
+                self._tts = OfflineViTTS(on_fallback=self.sig_notice.emit)
+            elif provider == "elevenlabs":
                 from audio.tts.elevenlabs_provider import ElevenLabsProvider
                 self._tts = ElevenLabsProvider()
             elif provider == "openai":
@@ -724,7 +746,7 @@ class CompanionManager(QObject):
     def on_hotkey_press(self):
         if self._state in {AppState.THINKING, AppState.SPEAKING}:
             self.stop()
-        if cfg.stt_provider() == "windows":
+        if cfg.stt_provider() == "typed":
             self.sig_voice_typing.emit(not self._dictating)
             self._dictating = False
             return
@@ -879,6 +901,7 @@ class CompanionManager(QObject):
 
     async def _end_capture_and_process(self):
         self._current_task = asyncio.current_task()
+        turn_clock.of(self).start("voice")
         try:
             pcm = self._listener.stop_recording()
             self._listener.on_recorded_pcm = None
@@ -923,6 +946,7 @@ class CompanionManager(QObject):
                 finally:self._live_stt_future = None
             if not transcript:
                 transcript = await asyncio.wait_for(self._get_stt().transcribe(pcm), timeout=90)
+            turn_clock.of(self).mark("transcript")
             _log.info("transcript: %r (provider=%s)",
                       transcript[:120], cfg.llm_provider())
             if not transcript.strip():
@@ -952,8 +976,61 @@ class CompanionManager(QObject):
             return
         guided = self._guided and is_next(text)
         self.stop()
+        turn = turn_clock.of(self).start("typed", text)
         self._guided = guided
         self._request_future = self._submit(self._process_query(text))
+        turn_clock.of(self).bind(self._request_future, turn)
+
+    def submit_drop(self, paths: list):
+        """Files or a folder dropped on the drop zone (UI thread): start the month close on them."""
+        paths = [str(p) for p in paths if str(p).strip()]
+        if not paths:
+            return
+        self.stop()
+        turn = turn_clock.of(self).start("drop")
+        self._request_future = self._submit(self._process_drop(paths))
+        turn_clock.of(self).bind(self._request_future, turn)
+
+    def submit_bod_review(self, folder: str):
+        """Review the BOD draft pack in a folder (UI thread), e.g. from Clicky.exe --bod-review."""
+        self.stop()
+        self._request_future = self._submit(self._process_bod(folder))
+
+    async def _process_bod(self, folder: str):
+        from office import bod_skill
+        self._current_task = asyncio.current_task()
+        self._cancel_flag = False
+        self._emit_state(AppState.THINKING)
+        try:
+            await bod_skill.run(self, Path(folder))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("BOD review failed")
+            self.sig_error.emit("Em chưa soát được bộ BOD. File của chị chưa bị thay đổi gì.")
+        finally:
+            if self._current_task is asyncio.current_task():
+                self._current_task = None
+                self._emit_state(AppState.IDLE)
+
+    async def _process_drop(self, paths: list):
+        from office import drop
+        self._current_task = asyncio.current_task()
+        self._cancel_flag = False
+        self._emit_state(AppState.THINKING)
+        self.sig_turn_started.emit("")
+        try:
+            await drop.handle(self, paths)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("reading the dropped files failed")
+            self.sig_error.emit("Em chưa đọc được các file vừa thả. File của chị chưa bị thay đổi gì. "
+                                "Chị thả lại thử nhé, nếu vẫn vậy thì bấm Báo lỗi.")
+        finally:
+            if self._current_task is asyncio.current_task():
+                self._current_task = None
+                self._emit_state(AppState.IDLE)
 
     def begin_dictation(self):
         self.stop()
@@ -968,7 +1045,7 @@ class CompanionManager(QObject):
         self.sig_turn_started.emit(transcript)
         pointing_held = False
         search_task = locate_task = None
-        narration_task = None
+        narration_task = excel_task = None
         try:
             # ── Voice commands — short-circuit before LLM ──
             if is_stop(transcript):
@@ -1049,6 +1126,11 @@ class CompanionManager(QObject):
             except Exception as e:
                 self.sig_error.emit(f"Skill error: {e}")
 
+            # Everything below can reach the network (AI, pointing, web search). Skills above are local.
+            if outgoing.local_only():
+                await self._reply_local(outgoing.stopped_here(len(transcript)))
+                return
+
             # 2. Screen capture — skipped if sensitive window (password manager etc.)
             #
             # ALSO skipped for "who is X" / "tell me about X" identity questions:
@@ -1059,6 +1141,11 @@ class CompanionManager(QObject):
             # actually wants when they ask "who is MrBeast" while on YouTube.
             sensitive = self._privacy_guard and is_sensitive_window(title)
             identity_q = is_identity_question(transcript)
+            # Excel is read over COM while the screen is captured, not after it.
+            excel_window = is_excel_window(title)
+            excel_task = None
+            if excel_window and not sensitive:
+                excel_task = asyncio.create_task(self._excel_prompt_context())
             if sensitive or identity_q:
                 screenshots = []
                 images_b64 = []
@@ -1077,7 +1164,7 @@ class CompanionManager(QObject):
             # models) can draw on them accurately by echoing the numbers.
             self._figures_ctx = []
             fig_extra = ""
-            if screenshots:
+            if screenshots and not excel_window:      # a sheet's grid is all rectangles: nothing to find there
                 try:
                     from ai.figure_detector import detect_figures, figures_prompt
                     self._figures_ctx = await asyncio.to_thread(
@@ -1146,7 +1233,8 @@ class CompanionManager(QObject):
                         physical_top=shot.physical_top,
                         dpi_scale=shot.dpi_scale,
                         screen_index=shot.index,
-                        user_question=transcript,
+                        # This path calls Anthropic directly, not through the provider: mask and log it here.
+                        user_question=await self._outgoing.cleared_text(transcript, images=1),
                     ))
                 else:
                     # Path B — Universal grid locator (any vision LLM)
@@ -1202,11 +1290,7 @@ class CompanionManager(QObject):
 
             # ── Per-turn enrichment: code mode, language, OCR, attached docs ──
             code_active = self._code_mode_auto and code_mode.is_code_window(title)
-            finance_extra = ""
-            if is_excel_window(title) and not (self._privacy_guard and is_sensitive_window(title)):
-                ctx = await asyncio.to_thread(self._excel.context)
-                finance_extra = finance_mode.finance_system_prompt_addendum() + excel_context_prompt(ctx)
-                finance_extra += await asyncio.to_thread(self._power_query_context)
+            finance_extra = await excel_task if excel_task else ""
             if cfg.response_language:
                 lang_code = cfg.response_language   # user-forced — always wins
             else:
@@ -1231,6 +1315,8 @@ class CompanionManager(QObject):
                 remaining = 16000 - len(doc_extra)
                 if remaining <= 0:
                     break
+                outgoing.learn_text(self._outgoing.catalogue, text)
+                self._outgoing.file_text(fname, text[:remaining])
                 doc_extra += pdf_context.format_for_prompt(fname, text[:remaining])
 
             # 4. Build system prompt with all context
@@ -1296,6 +1382,7 @@ class CompanionManager(QObject):
                         self.sig_error.emit(f"Voice unavailable; the answer is shown in the panel. {exc}")
 
             narration_task = asyncio.create_task(speak_queued())
+            turn_clock.of(self).mark("context")
             async for chunk in self._get_llm().stream_response(
                 user_text=transcript,
                 screenshots_b64=images_b64,
@@ -1424,6 +1511,10 @@ class CompanionManager(QObject):
             if self._guided and self._guided_target:
                 self._arm_guided_watch()
 
+        except outgoing.NotSent as e:
+            # Local-only mode, or the user pressed "Không gửi": nothing left the machine.
+            await self._reply_local(str(e))
+
         except Exception as e:
             # Log the traceback, not just the message. The toast shows one
             # line, so discarding the stack here left bug reporters with
@@ -1434,7 +1525,7 @@ class CompanionManager(QObject):
             self.sig_error.emit(friendly_request_error(e, cfg.llm_provider()))
 
         finally:
-            for task in (search_task, locate_task, narration_task):
+            for task in (search_task, locate_task, narration_task, excel_task):
                 if task and not task.done():
                     task.cancel()
             if narration_task:
@@ -1445,6 +1536,20 @@ class CompanionManager(QObject):
             if self._current_task is asyncio.current_task():
                 self._current_task = None
                 self._emit_state(AppState.IDLE)
+
+    async def _excel_prompt_context(self) -> str:
+        """The open sheet, the workbook's catalogue for masking and its Power Query, for the AI prompt."""
+        ctx = await asyncio.to_thread(self._excel.context)
+        if ctx:
+            # Names and IDs to mask come from the workbook's own catalogue columns.
+            await asyncio.to_thread(self._outgoing.learn_workbook, self._excel,
+                                    ctx.get("workbook", ""), ctx.get("sheet", ""))
+        excel_block = excel_context_prompt(ctx)
+        # The cells are file content; the pointing instruction that ends the block is not.
+        self._outgoing.file_text("Excel", excel_block.split("\n  To point at a cell", 1)[0])
+        extra = finance_mode.finance_system_prompt_addendum() + excel_block
+        extra += self._outgoing.file_text("Power Query", await asyncio.to_thread(self._power_query_context))
+        return extra
 
     async def _reply_local(self, msg: str) -> bool:
         """Show + speak a message that doesn't need an LLM round-trip; False when it was not read aloud."""
@@ -1575,6 +1680,18 @@ class CompanionManager(QObject):
                 _log.warning("reading monitor geometry failed: %s", exc)
                 return None
         return physical_to_logical(bbox, shots)
+
+    def _physical_to_logical_boxes(self, boxes):
+        """Many physical boxes → logical, reading the monitor layout once (a sheet's figures, cell by block)."""
+        from screen.capture import monitor_geometry, physical_to_logical
+        shots = self._screens_ctx
+        if not shots:
+            try:
+                shots = monitor_geometry()
+            except Exception as exc:
+                _log.warning("reading monitor geometry failed: %s", exc)
+                return []
+        return [physical_to_logical(b, shots) for b in boxes]
 
     def _excel_bbox(self, ref: str):
         """Cell or range → logical bbox, computed by Excel itself."""
@@ -1818,7 +1935,7 @@ class CompanionManager(QObject):
         plain TTS when the response contains no drawings."""
         segments = await asyncio.to_thread(self._segment_lesson, full_response)
         if not any(shapes for _, shapes in segments):
-            await self._get_tts().speak(_speakable(clean))
+            await self._get_tts().speak(self._voice_text(clean))
             return
 
         try:
@@ -1844,7 +1961,7 @@ class CompanionManager(QObject):
                     draw_end += 1.0
             if text:
                 try:
-                    await self._get_tts().speak(_speakable(text))
+                    await self._get_tts().speak(self._voice_text(text))
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -1854,6 +1971,14 @@ class CompanionManager(QObject):
             remaining = draw_end - time.monotonic()
             if remaining > 0:
                 await asyncio.sleep(min(remaining, 4.0) + 0.1)
+
+    def _voice_text(self, text: str) -> str:
+        """An online voice sends each sentence to its server, so the names put back into the answer
+        are masked again before it is read; the offline Windows voice reads them as they are."""
+        gate = getattr(self, "_outgoing", None)
+        if gate is not None and cfg.tts_provider() not in ("sapi", "vi_offline"):
+            text = gate.mask(text)
+        return _speakable(text)
 
     def _stable_voice_language(self, detected: str) -> str:
         """Debounce language detection before it is allowed to change the voice.
@@ -1913,6 +2038,8 @@ class CompanionManager(QObject):
             self.refresh_ollama_models()
 
     async def _refresh_one_model_list(self, provider: str):
+        if outgoing.local_only():
+            return
         try:
             from ai.model_registry import refresh
             ms = await refresh(provider)
@@ -1925,6 +2052,8 @@ class CompanionManager(QObject):
         self._submit(self._refresh_copilot_models())
 
     async def _refresh_copilot_models(self):
+        if outgoing.local_only():
+            return
         try:
             from ai.github_copilot_provider import refresh_models_to_cache
             models = await refresh_models_to_cache()
@@ -2056,9 +2185,9 @@ class CompanionManager(QObject):
         to catch "Clicky". OFF (the default) leaves the mic closed until you
         press the hotkey, which is both quieter on CPU and less invasive.
         """
-        if enabled and cfg.stt_provider() == "windows":
+        if enabled and cfg.stt_provider() == "typed":
             self.sig_notice.emit("Wake word needs a speech model. Add an OpenAI or Deepgram key, "
-                                 "or press the talk shortcut to use Windows voice typing.")
+                                 "or press the talk shortcut to type your question.")
             return
         try:
             self._listener.set_ambient(enabled)
@@ -2090,6 +2219,9 @@ class CompanionManager(QObject):
             title = active_window_title()
             if self._privacy_guard and is_sensitive_window(title):
                 await self._reply_local("Quiz paused: this window may contain private information.")
+                return
+            if outgoing.local_only():
+                await self._reply_local(outgoing.stopped_here(0))
                 return
             self._current_task = asyncio.current_task()
             self._cancel_flag = False
@@ -2125,6 +2257,33 @@ class CompanionManager(QObject):
             if getattr(self, '_current_task', None) in (None, asyncio.current_task()):
                 self._current_task = None
                 self._emit_state(AppState.IDLE)
+
+    async def _ask_outgoing(self, preview: dict) -> bool:
+        """Show the masked lines and wait for "Gửi đi" / "Không gửi"; Esc counts as "Không gửi"."""
+        future = asyncio.get_running_loop().create_future()
+        self._outgoing_answer = future
+        self.sig_outgoing_preview.emit(preview)
+        try:
+            return await future
+        finally:
+            self._outgoing_answer = None
+            self.sig_outgoing_preview.emit({})
+
+    def answer_outgoing(self, approved: bool):
+        """Called from the card (UI thread)."""
+        future = self._outgoing_answer
+        if future is not None and self._loop:
+            self._loop.call_soon_threadsafe(lambda: future.done() or future.set_result(bool(approved)))
+
+    def set_local_only(self, enabled: bool):
+        set_setting("local_only", bool(enabled))
+        # Cloud speech and online voices are dropped too; the next use picks an on-device one.
+        self._stt = None
+        self._tts = None
+
+    @property
+    def local_only(self) -> bool:
+        return outgoing.local_only()
 
     def set_privacy_guard(self, enabled: bool):
         set_setting("privacy_guard", enabled)

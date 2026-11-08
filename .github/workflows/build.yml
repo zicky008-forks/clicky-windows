@@ -4,6 +4,11 @@ name: Windows installer build
 # Actions tab, or it runs when packaging files change in a pull request.
 on:
   workflow_dispatch:
+    inputs:
+      vieneu:
+        description: Bundle the VieNeu v3 offline voice
+        type: boolean
+        default: false
   push:
     tags: ['v*']
   pull_request:
@@ -15,6 +20,9 @@ on:
       - updates.py
       - installer.iss
       - requirements.txt
+      - tools/giong_noi/tai_model.py
+      - tools/giong_noi/tai_vieneu.py
+      - requirements-vieneu.txt
 permissions:
   contents: write        # a v* tag publishes the Velopack release for in-app updates
 jobs:
@@ -27,12 +35,39 @@ jobs:
         edition: [full, bi]
     env:
       CLICKY_EDITION: ${{ matrix.edition }}
+      CLICKY_MODEL_CACHE: ~/clicky-model-cache
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install -r requirements.txt pyinstaller
+      - run: python -m pip install -r requirements.txt pyinstaller sentencepiece
+      # Model archives kept between runs: upstream release downloads sometimes answer 504 for hours.
+      # Each archive is still checked against its pinned SHA-256, so an older cache is safe to restore.
+      - id: models
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/clicky-model-cache
+          key: models-${{ hashFiles('tools/giong_noi/tai_model.py') }}
+          restore-keys: models-
+      # Offline Vietnamese speech (~75 MB, Apache-2.0 weights), checked by SHA-256, bundled as voice/asr-vi.
+      - run: python tools/giong_noi/tai_model.py --model 70k --out voice/asr-vi
+      # Offline Vietnamese voice (Piper vais1000 through sherpa-onnx, ~63 MB, no espeak-ng).
+      - run: python tools/giong_noi/tai_model.py --model piper-vais1000 --out voice/tts-piper-vi
+      # Saved right after the downloads, so a later failing step still keeps them for the next run.
+      - if: steps.models.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/clicky-model-cache
+          key: models-${{ hashFiles('tools/giong_noi/tai_model.py') }}
+      # VieNeu v3 (offline voice, Apache-2.0) without gradio/librosa/torch. Off until the blind listening
+      # test picks it: run the workflow by hand with vieneu=true, or set the repo variable CLICKY_VIENEU=1.
+      - name: VieNeu voice
+        if: inputs.vieneu == true || vars.CLICKY_VIENEU == '1'
+        run: |
+          python -m pip install -r requirements-vieneu.txt
+          python -m pip install --no-deps vieneu==3.8.3
+          python tools/giong_noi/tai_vieneu.py --precision both --out voice/vieneu
       - run: choco install innosetup --no-progress -y
       - run: .\build.bat installer
         shell: cmd
@@ -70,7 +105,11 @@ jobs:
           $repo = "https://github.com/${{ github.repository }}"
           # The previous release lets vpk build a delta; the first release has none.
           vpk download github --repoUrl $repo --token $env:GH_TOKEN --outputDir releases
-          vpk pack --packId ClickyBI --packTitle "Clicky BI" --packVersion $version --packDir dist\Clicky --mainExe Clicky.exe --runtime win-x64 --outputDir releases
+          # Release notes in plain Vietnamese: the first line is what Clicky says after a quiet update (updates.first_note).
+          $notes = @()
+          $base = $version -replace '-.*$', ''
+          if (Test-Path "docs\phat-hanh\$base.md") { $notes = @('--releaseNotes', "docs\phat-hanh\$base.md") }
+          vpk pack --packId ClickyBI --packTitle "Clicky BI" --packVersion $version --packDir dist\Clicky --mainExe Clicky.exe --runtime win-x64 --outputDir releases @notes
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem releases | ForEach-Object { "{0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB) } | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           if ('${{ github.ref_type }}' -eq 'tag') {
