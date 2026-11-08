@@ -260,7 +260,7 @@ python tools\dien_tap\tao_case_chi_phi.py --out <thu_muc_moi> --du-bao
 python tools\dien_tap\hoi_dap_robot.py --thu-muc <thu_muc_moi>
 ```
 
-Robot chép case sang thư mục kết quả và tự viết file câu hỏi `cau-hoi-bod.txt` gồm 10 câu. Trong đó có câu hỏi tiếp (dòng bắt đầu bằng `+`), một bộ phận không có trong báo cáo, câu về giá bán (case không có sổ bán hàng nên không có cầu nối), câu về cùng kỳ năm trước và một câu lạc đề.
+Robot chép case sang thư mục kết quả và tự viết file câu hỏi `cau-hoi-bod.txt` gồm 12 dòng. Trong đó có câu hỏi tiếp (dòng bắt đầu bằng `+`), một bộ phận không có trong báo cáo, câu “chi phí quản lý” (không được hiểu thành cùng kỳ năm trước), câu về giá bán (case không có sổ bán hàng nên không có cầu nối), câu về cùng kỳ năm trước và một câu lạc đề.
 
 Robot mở Clicky ba lần, lần lượt với `--fpa-report <case>`, `--forecast <case>` và `--hoi-dap <case> --cau-hoi cau-hoi-bod.txt`. Lần nào cũng có `CLICKY_LOCAL_ONLY=1`, `CLICKY_OUTLOOK=0` và không dùng cấu hình công ty trên máy. Sau đó robot hỏi lại đúng các câu đó qua hàm chat của Clicky để so với câu trả lời trong file.
 
@@ -271,6 +271,7 @@ Robot mở Clicky ba lần, lần lượt với `--fpa-report <case>`, `--foreca
 - không có số nào trong câu trả lời mà thiếu nguồn;
 - chi phí hoạt động tháng, lũy kế và cả năm ước đúng từng đồng với số robot tự cộng từ file của case;
 - câu hỏi về bộ phận được trả lời bằng các dòng của đúng bộ phận đó, không bao giờ trả lời bằng tổng chi phí;
+- mỗi câu trả lời mở đầu bằng “Em hiểu là: …” để người hỏi thấy ngay nếu Clicky hiểu sai;
 - câu báo cáo chưa có số thì ghi "chưa có số" và không có con số nào;
 - câu lạc đề thì ghi "không hiểu câu hỏi";
 - hỏi trong chat ra đúng câu trả lời như trong file;

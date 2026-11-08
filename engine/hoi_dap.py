@@ -41,23 +41,43 @@ LINES = (("gp", ("loi nhuan gop", "lai gop", "lng", "gp", "gross profit", "gross
          ("revenue", ("doanh thu thuan", "doanh thu", "doanh so", "dtt", "revenue", "sales")))
 LINE_NAMES = {"revenue": "Doanh thu thuần", "cogs": "Giá vốn hàng bán", "gp": "Lợi nhuận gộp",
               "opex": "Chi phí hoạt động", "op": "Lợi nhuận hoạt động"}
-YTD_WORDS = ("luy ke", "tu dau nam", "ytd", "den nay", "den thoi diem nay")
-FULL_WORDS = ("ca nam", "uoc ca nam", "uoc nam", "full year", "fy", "het nam", "cuoi nam", "forecast", "du bao", "le")
-LY_WORDS = ("cung ky", "nam truoc", "nam ngoai", "ly", "last year")
-WHY_WORDS = ("vi sao", "tai sao", "nguyen nhan", "do dau", "giai thich", "why", "ly do", "vi dau", "the nao ma")
+# Words are matched on folded text ('quản lý' -> 'quan ly'), so no word here may be a syllable that other words fold
+# to: 'LY' (last year) and 'LE' (latest estimate) are read only as upper-case letters in the question as typed.
+YTD_WORDS = ("luy ke", "tu dau nam", "ytd", "den nay", "den thoi diem nay", "den hien tai")
+FULL_WORDS = ("ca nam", "uoc ca nam", "uoc nam", "full year", "fy", "het nam", "cuoi nam", "forecast", "du bao",
+              "uoc tinh nam", "ca nam tai chinh", "nam tai chinh")
+THIS_YEAR_WORDS = ("nam nay",)                         # 'năm nay' alone is the year so far; with 'dự báo' it is the year
+LY_WORDS = ("cung ky", "nam truoc", "nam ngoai", "last year", "yoy", "so voi nam ngoai")
+PREV_WORDS = ("thang truoc", "ky truoc", "thang roi", "mom", "so voi thang")
+WHY_WORDS = ("vi sao", "tai sao", "nguyen nhan", "do dau", "giai thich", "why", "ly do", "vi dau", "the nao ma",
+             "vi gi", "nguyen do", "tai vi sao", "do cai gi", "keo xuong", "keo len")
+UPPER_LY = re.compile(r"(?<![A-Za-z])LY(?![A-Za-z])")
+UPPER_LE = re.compile(r"(?<![A-Za-z])LE(?![A-Za-z])")
+LEADING_WHY = re.compile(r"^\s*sao\b")                 # 'sao chi phí vượt?' (but 'ra sao' is 'how is it')
+SUB_LINES = (("selling", "chi phí bán hàng", ("chi phi ban hang", "cpbh", "chi phi bh", "chi phi kinh doanh")),
+             ("admin", "chi phí quản lý doanh nghiệp", ("chi phi quan ly", "chi phi qldn", "cpql",
+                                                        "quan ly doanh nghiep", "chi phi ql")))
+ABSENT = (("truoc thue", "lợi nhuận trước thuế"), ("lntt", "lợi nhuận trước thuế"), ("sau thue", "lợi nhuận sau thuế"),
+          ("lnst", "lợi nhuận sau thuế"), ("ebitda", "EBITDA"), ("dong tien", "dòng tiền"), ("cash flow", "dòng tiền"),
+          ("cong no", "công nợ"), ("phai thu", "công nợ phải thu"), ("ton kho", "tồn kho"),
+          ("chi phi tai chinh", "chi phí tài chính"), ("lai vay", "lãi vay"), ("thue tndn", "thuế TNDN"))
 TOP_WORDS = ("lon nhat", "top", "nhieu nhat", "dang chu y", "can hoi", "chenh lech lon", "chenh nhieu", "noi bat",
              "bat thuong")
 ONE_OFF_WORDS = ("mot lan", "dot xuat", "one off", "phat sinh mot lan")
 TIMING_WORDS = ("thoi diem", "timing", "chi bu", "chi truoc", "dao nguoc", "lech thang", "som hon", "muon hon")
 BRIDGE_PARTS = (("volume", ("san luong", "volume", "luong ban")), ("mix", ("co cau", "mix")),
                 ("price", ("gia ban", "price")), ("cost", ("gia von don vi", "chi phi don vi", "anh huong gia von")))
-BRIDGE_WORDS = ("cau noi", "bridge", "anh huong", "tac dong", "phan tich lng", "phan tich loi nhuan gop")
+BRIDGE_WORDS = ("cau noi", "bridge", "anh huong", "tac dong", "phan tich lng", "phan tich loi nhuan gop",
+                "do gia hay do luong", "do luong hay do gia", "gia hay luong", "luong hay gia", "do gia", "do luong",
+                "yeu to gia", "yeu to luong")
 BRIDGE_ROWS = {"volume": "san luong", "mix": "co cau", "price": "gia ban", "cost": "gia von"}
-OPEN_WORDS = ("chua ro", "dang cho", "con mo", "diem mo", "chua tinh", "con thieu", "can chi", "can xac nhan",
-              "cau hoi mo", "ton dong", "chua giai trinh")
+OPEN_WORDS = ("chua ro", "dang cho", "con mo", "diem mo", "chua tinh", "con thieu", "can chi xac nhan",
+              "can chi tra loi", "can chi gan", "dang cho chi", "con cho chi", "can xac nhan", "cau hoi mo", "ton dong", "chua giai trinh",
+              "chua chot", "van de mo")
 BASIS_WORDS = ("ban ke hoach nao", "so voi ban nao", "ban nao", "phien ban", "duyet ngay", "ke hoach nao", "aop nao",
                "can cu nao", "so voi gi")
-SKU_WORDS = ("ma hang", "sku", "san pham", "kenh", "channel", "nhan hang", "khach hang")
+SKU_WORDS = ("ma hang", "sku", "san pham", "kenh", "channel", "nhan hang", "khach hang", "mang", "nganh hang",
+             "dong san pham", "vung", "khu vuc", "mien", "chi nhanh")
 NUMBER_WORDS = {"mot": 1, "hai": 2, "ba": 3, "bon": 4, "tu": 4, "nam": 5, "sau": 6, "bay": 7, "tam": 8, "chin": 9,
                 "muoi": 10}
 NUM_RE = re.compile(r"-?\d{1,3}(?:\.\d{3})+(?![\d.])|-?\d+(?:,\d+)?(?=\s*(?:đ|%))")
@@ -218,6 +238,8 @@ class Query:
     target: Optional[str] = None      # a department or a cost element, as the report prints it
     n: Optional[int] = None
     part: Optional[str] = None
+    sub: Optional[str] = None         # selling or admin costs, when the question names one
+    absent: Optional[str] = None      # what the question asks that the report does not hold, in the user's words
 
 
 def _has(text: str, words) -> Optional[str]:
@@ -237,6 +259,9 @@ def _count(text: str) -> Optional[int]:
     return None
 
 
+ACRONYM_RE = re.compile(r"(?<![A-Za-z])[A-Z]{2,6}(?![A-Za-z])")
+KNOWN_ACRONYMS = {"AOP", "LE", "LY", "EBIT", "GP", "HO", "BOD", "SKU", "YTD", "FY", "MOM", "YOY", "LNST", "LNTT",
+                  "EBITDA", "TB", "KQKD", "LNG", "DTT", "COGS", "OPEX", "CPBH", "CPQL", "QLDN", "TNDN", "CEO", "CFO"}
 NOT_NAMES = {"nao", "gi", "nay", "do", "ban", "cac", "nhung", "chi", "co", "da", "thi", "la"}
 DEPT_RE = re.compile(r"(?<![a-z])(?:bo phan|phong|khoi)\s+([a-z0-9]{2,12})(?![a-z0-9])")
 
@@ -257,11 +282,17 @@ def parse(question: str, book: Book) -> Query:
     t = key(question)
     q = Query()
     line = next((code for code, words in LINES if _has(t, words)), None)
+    sub = next(((code, name) for code, name, words in SUB_LINES if _has(t, words)), None)
+    if sub and not _has(t, ("ban hang va quan ly", "ban hang quan ly")):
+        q.sub, line = sub[0], "opex"
     q.line = line
     if _has(t, YTD_WORDS):
         q.time = "ytd"
-    elif _has(t, FULL_WORDS):
+    elif _has(t, FULL_WORDS) or UPPER_LE.search(question):
         q.time = "full"
+    elif _has(t, THIS_YEAR_WORDS):
+        q.time = "ytd"
+    why = bool(_has(t, WHY_WORDS) or LEADING_WHY.search(t))
     targets = sorted({(r["dept"], "dept") for r in book.costs} | {(r["element"], "element") for r in book.costs
                                                                   if r["element"]}, key=lambda x: -len(x[0]))
     target = next(((name, kind) for name, kind in targets if name and _has(t, [key(name)])), None)
@@ -274,9 +305,20 @@ def parse(question: str, book: Book) -> Query:
             named = hit.group(1)
             found = {r["dept"] for r in book.costs if _short_for(named, r["dept"])}
             target = (found.pop(), "dept") if len(found) == 1 else None
+    if target is None and named is None:                # 'chi tiết chi phí MKT': a short name typed in capitals
+        for word in ACRONYM_RE.findall(question):
+            found = {r["dept"] for r in book.costs if word not in KNOWN_ACRONYMS and _short_for(word.lower(), r["dept"])}
+            if len(found) == 1:
+                target = (found.pop(), "dept")
+                break
     part = next((p for p, words in BRIDGE_PARTS if _has(t, words)), None)
-    if _has(t, LY_WORDS):
+    absent = next((name for word, name in ABSENT if _has(t, [word])), None)
+    if absent:
+        q.intent, q.absent = "absent", absent
+    elif _has(t, LY_WORDS) or UPPER_LY.search(question):
         q.intent = "ly"
+    elif _has(t, PREV_WORDS):
+        q.intent = "prev"
     elif _has(t, BASIS_WORDS):
         q.intent = "basis"
     elif _has(t, OPEN_WORDS):
@@ -291,19 +333,18 @@ def parse(question: str, book: Book) -> Query:
         q.intent = "sku"
     elif target:
         q.intent, q.target = target[1], target[0]
-    elif named:
-        q.intent, q.target = "dept", named               # a department the report does not have: no figure, no total
+    elif named:                                         # a department the report does not have: no figure, no total
+        q.intent = "dept"
+        q.target = next((w for w in re.findall(r"\w+", question) if key(w) == named), named)
     elif _has(t, TOP_WORDS):
         q.intent, q.line = "top", q.line or "opex"
-    elif line and _has(t, WHY_WORDS):
+    elif line and why and q.time != "full":
         q.intent = "why"
     elif line:
         q.intent = "forecast" if q.time == "full" else "line"
-    elif _has(t, WHY_WORDS):
+    elif why:
         q.intent = "why"                                # 'vì sao?' alone: a follow-up takes the line from above
     q.n = _count(t)
-    if q.intent == "line" and _has(t, WHY_WORDS):
-        q.intent = "why"
     return q
 
 
@@ -318,9 +359,13 @@ def follow(q: Query, parent: Query) -> Query:
             out.intent = parent.intent                  # a department's why is its lines with their causes
     elif q.intent is not None:
         out.intent = q.intent
-    for f in ("line", "time", "target", "n", "part"):
+    for f in ("line", "time", "target", "n", "part", "sub", "absent"):
         if getattr(q, f) is not None:
             setattr(out, f, getattr(q, f))
+    if q.line is not None and q.sub is None:
+        out.sub = None                                  # '+ còn doanh thu?' after 'chi phí bán hàng'
+    if q.intent in ("dept", "element") and parent.intent not in ("dept", "element", "top"):
+        out.time = q.time or parent.time                # '+ còn Marketing?' after 'chi phí lũy kế?' keeps the time
     if out.time == "full" and out.intent == "line":
         out.intent = "forecast"
     elif out.time != "full" and out.intent == "forecast":
@@ -484,31 +529,85 @@ def _forecast(b: Book, q: Query, cites: list) -> str:
     return said + f". {f.basis}."
 
 
+def reading(book: Book, q: Query) -> str:
+    """How the question was read, said before the answer so the chair can catch a misread ('Em hiểu là: …')."""
+    month = f"tháng {book.period}" if book.period else "tháng này"
+    when = {"ytd": f"lũy kế từ đầu năm đến {month}", "full": "cả năm ước"}.get(q.time or "", month)
+    plan = plan_version(book)
+    against = f"so với kế hoạch {plan}" if plan else "so với kế hoạch"
+    sub = {code: name for code, name, _w in SUB_LINES}.get(q.sub or "")
+    line = sub or (LINE_NAMES[q.line].lower() if q.line in LINE_NAMES else "")
+    i = q.intent
+    if i == "line":
+        said = f"{line}, {when}, {against}"
+    elif i == "why":
+        said = f"vì sao {line} {when} chênh {against}"
+    elif i == "forecast":
+        f = book.forecast
+        said = f"{line or 'lợi nhuận hoạt động'} cả năm ước" + (f", {key_words(f.basis)}" if f and f.basis else "") \
+            + ", so với kế hoạch năm"
+    elif i == "top":
+        said = f"{q.n or 3} khoản chi phí chênh nhiều nhất {against}, {month}"
+    elif i == "dept":
+        known = any(key(r["dept"]) == key(q.target or "") for r in book.costs)
+        said = f"chi phí của bộ phận {q.target}, {when if q.time != 'full' else month}" if known else \
+            f"chi phí của bộ phận “{q.target}”, báo cáo không có bộ phận này"
+    elif i == "element":
+        said = f"yếu tố chi phí {q.target} theo từng bộ phận, {when if q.time != 'full' else month}"
+    elif i == "bridge":
+        names = {"volume": "sản lượng", "mix": "cơ cấu", "price": "giá bán", "cost": "giá vốn"}
+        said = (f"phần {names[q.part]} trong " if q.part else "") + f"cầu nối lợi nhuận gộp {against}, {month}"
+    elif i == "one_off":
+        said = f"các khoản chi phí một lần trong {month}"
+    elif i == "timing":
+        said = f"các khoản chi phí lệch thời điểm trong {month}"
+    elif i == "open":
+        said = "các điểm còn chờ chị trong Phiếu nhận file"
+    elif i == "basis":
+        said = "báo cáo so với bản kế hoạch nào"
+    elif i == "ly":
+        said = f"{line or 'số liệu'} so với cùng kỳ năm trước"
+    elif i == "prev":
+        said = f"{line or 'số liệu'} so với tháng trước"
+    elif i == "sku":
+        said = f"{line or 'số liệu'} theo mã hàng, kênh hoặc mảng"
+    elif i == "absent":
+        said = q.absent or ""
+    else:
+        return ""
+    return "Em hiểu là: " + said.strip(", ") + "."
+
+
+def key_words(basis: str) -> str:
+    """'Thực hiện đến T10/2026; dự báo theo bản LE T09, duyệt …; so với bản AOP' -> 'dự báo theo bản LE T09, duyệt …'."""
+    part = next((x.strip() for x in basis.split(";") if x.strip().startswith("dự báo")), "")
+    return part
+
+
 def answer(book: Book, question: str, parent: Optional[Query] = None) -> Answer:
-    """One question; parent is the Query of the question above, for a follow-up."""
+    """One question; parent is the Query of the question above, for a follow-up. A question that is understood
+    opens with how it was read, then the answer or 'chưa có số'."""
     q = parse(question, book)
     if parent is not None:
         q = follow(q, parent)
     cites = []
+    if q.intent is None or (q.intent == "why" and q.line is None):
+        return Answer(NOT_UNDERSTOOD_TEXT, NOT_UNDERSTOOD, [], q, [NOT_UNDERSTOOD_TEXT])
+    head = reading(book, q)
     try:
-        if q.intent is None:
-            return Answer(NOT_UNDERSTOOD_TEXT, NOT_UNDERSTOOD, [], q)
-        if q.intent in ("ly", "sku"):
+        if q.intent in ("ly", "sku", "prev", "absent"):
             raise LookupError(q.intent)
         if q.intent == "basis":
             if not b_basis(book):
                 raise LookupError("basis")
-            return Answer(f"Báo cáo so với {book.basis[0].lower() + book.basis[1:]}.", ANSWERED, [], q)
-        if q.intent == "open":
+            text = f"Báo cáo so với {book.basis[0].lower() + book.basis[1:]}."
+        elif q.intent == "open":
             text = ("Các điểm còn chờ chị (Phiếu nhận file):"
                     + SEP + SEP.join(_quote(c.ref, c.value, cites).rstrip(".") + "." for c in book.open)) if book.open \
                 else "Phiếu nhận file không còn điểm nào chờ chị trả lời."
-            return _done(text, ANSWERED, cites, q)
-        if q.intent == "line":
+        elif q.intent == "line":
             text = _line(book, q, cites)
         elif q.intent == "why":
-            if q.line is None:
-                return Answer(NOT_UNDERSTOOD_TEXT, NOT_UNDERSTOOD, [], q)
             text = _why(book, q, cites)
         elif q.intent == "top":
             rows = _variance_rows(book, q.n or 3, cites)
@@ -525,10 +624,14 @@ def answer(book: Book, question: str, parent: Optional[Query] = None) -> Answer:
         elif q.intent == "forecast":
             text = _forecast(book, q, cites)
         else:
-            return Answer(NOT_UNDERSTOOD_TEXT, NOT_UNDERSTOOD, [], q)
+            return Answer(NOT_UNDERSTOOD_TEXT, NOT_UNDERSTOOD, [], q, [NOT_UNDERSTOOD_TEXT])
     except LookupError:
-        return Answer(NO_FIGURE_TEXT, NO_FIGURE, [], q)
-    return _done(text, ANSWERED, cites, q)
+        return _done(head + SEP + NO_FIGURE_TEXT, NO_FIGURE, [], q)
+    if q.sub and q.line == "opex":
+        name = {code: n for code, n, _w in SUB_LINES}[q.sub]
+        text = (f"Báo cáo chưa tách riêng {name}, nên em nói chi phí hoạt động (gồm cả bán hàng và quản lý)."
+                + SEP + text)
+    return _done(head + SEP + text, ANSWERED, cites, q)
 
 
 def b_basis(book: Book) -> bool:

@@ -62,6 +62,7 @@ QUESTIONS = [                                 # (number, question, what the robo
     ("Q7", "Doanh thu cùng kỳ năm trước?", NO_FIGURE),
     ("Q8", "Còn điểm nào chưa rõ cần chị xác nhận?", ANSWERED),
     ("Q9", "Thời tiết hôm nay thế nào?", NOT_UNDERSTOOD),
+    ("Q10", "Chi phí quản lý tháng này?", "opex_month"),      # 'quản lý' folds to 'quan ly': never 'last year'
 ]
 WORDS = ("chi phí", "thời tiết", "doanh thu", "giá bán", "vì sao")   # none of the question's words in the scene log
 
@@ -155,6 +156,9 @@ def grade(records: list, report, pack, events: list, sums: dict, chat: list, rep
             f"có {len(records)}/{len(want)} câu" if len(records) != len(want) else "")
     bad = bad_citations(records, Path(report), pack) if report else [("", "không thấy báo cáo")]
     res.add("Mọi số trích đúng ô trong báo cáo đã lưu", not bad, ", ".join(f"{n} {o}" for n, o in bad[:5]))
+    unread = [r["so"] for r in records if r["trang_thai"] in (ANSWERED, NO_FIGURE) and
+              not r["tra_loi"].startswith("Em hiểu là: ")]
+    res.add("Câu trả lời mở đầu bằng cách em hiểu câu hỏi", bool(records) and not unread, ", ".join(unread[:5]))
     loose = [(r["so"], unsourced(r)) for r in records if unsourced(r)]
     res.add("Không có số nào thiếu nguồn", not loose, "; ".join(f"{n}: {', '.join(x[:3])}" for n, x in loose[:5]))
     for number, _q, exp in QUESTIONS:
