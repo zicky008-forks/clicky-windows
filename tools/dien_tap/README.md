@@ -146,6 +146,8 @@ Clicky đếm số lần đã hỏi trong `settings.json` (`feedback_asked`, `fe
 
 Chạy: `--expected case01_beta_expected.json` (việc 1, 2, 3, 4, 6), thêm một lượt `--local-only` (số phải giống hệt), và `--expected case01_nguon_trung_expected.json` trên thư mục biến thể (việc 5). Robot chỉ báo loại lỗi lộ dữ liệu, không in giá trị bị lộ.
 
+Mọi robot mở Clicky qua `robot_env.clean_env`, trỏ `CLICKY_CONFIG_DIR` vào thư mục rỗng `cau-hinh-robot` trong thư mục kết quả. Máy test là nơi anh để cấu hình thật của công ty (`%LOCALAPPDATA%\Clicky\cau-hinh`), nên robot không bao giờ đọc cấu hình đó: ngưỡng và phân đoạn của công ty sẽ làm sai bài chấm số giả lập. Case nào cần cấu hình thì chép file YAML giả lập của chính nó vào `cau-hinh-robot`.
+
 Clicky cần ghi vào nhật ký cảnh các sự kiện `intake`, `verify`, `status`, `roles`, `ai_call`, ghi nhật ký gửi đi `%LOCALAPPDATA%\Clicky\gui-di.jsonl`, và tôn trọng biến môi trường `CLICKY_LOCAL_ONLY=1`. Chi tiết từng trường ở đầu `beta_checks.py`.
 
 ### Việc 10: file mẫu "xem em làm"

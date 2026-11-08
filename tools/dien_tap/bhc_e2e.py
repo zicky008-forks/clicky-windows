@@ -152,7 +152,8 @@ def run_close(exe: str, case: Path, key: dict, out: Path, timeout: float) -> Res
     report = case / key["report"]
     sources = [p for p in case.iterdir() if p.is_file() and p != report and p.name != "dap_an.json"]
     hashes = {p: file_hash(p) for p in sources}
-    env = dict(os.environ, CLICKY_SCENE_LOG=str(log), CLICKY_LOCAL_ONLY="1")
+    from robot_env import clean_env
+    env = clean_env(log, CLICKY_LOCAL_ONLY="1")  # never the PC's company configuration
     say(f"Chặng 1–2: {exe} --drop {case}")
     subprocess.Popen([exe, "--drop", str(case)], env=env, cwd=str(Path(exe).parent))
     driver = drivers.Uia("Clicky.exe")

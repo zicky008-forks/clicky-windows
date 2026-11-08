@@ -40,8 +40,10 @@ PERSONAL = ("Nguyễn Văn An", "Trần Thị Bình", "PL77701", "PL77702")
 
 
 def robot_env(log: Path) -> dict:
-    """The environment Clicky runs in for this robot: local only, and never Outlook."""
-    return dict(os.environ, CLICKY_SCENE_LOG=str(log), CLICKY_LOCAL_ONLY="1", CLICKY_OUTLOOK="0")
+    """The environment Clicky runs in for this robot: local only, never Outlook, never the PC's company
+    configuration."""
+    from robot_env import clean_env
+    return clean_env(log, CLICKY_LOCAL_ONLY="1", CLICKY_OUTLOOK="0")
 
 
 def finished(events: list) -> bool:

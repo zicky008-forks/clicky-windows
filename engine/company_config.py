@@ -112,26 +112,29 @@ class Company:
         return next((c.threshold for c in self.checks.values() if c.threshold), None)
 
 
+def _holds(p: Path) -> bool:
+    return p.is_dir() and any((p / f).is_file() for f in FILES)
+
+
 def folder() -> Optional[Path]:
-    """The configuration folder, when there is one."""
+    """The configuration folder, when one holds a configuration file. CLICKY_CONFIG_DIR, when set, is the only
+    place looked at: a robot points it at an empty folder so the PC's own configuration is never read."""
     said = os.getenv(ENV)
     if said:
         p = Path(said)
-        return p if p.is_dir() else None
+        return p if _holds(p) else None
     try:
         from storage import data_dir
         p = data_dir() / "cau-hinh"
     except Exception:                          # noqa: BLE001 - no data folder: no configuration
         return None
-    return p if p.is_dir() else None
+    return p if _holds(p) else None
 
 
 def find() -> Optional[Company]:
     """The company's configuration, read; None when no folder holds one."""
     p = folder()
-    if p is None or not any((p / f).is_file() for f in FILES):
-        return None
-    return load(p)
+    return load(p) if p is not None else None
 
 
 def _date(text) -> Optional[dt.date]:

@@ -11,8 +11,8 @@ import scene_log
 from office import month_close as mc
 from office.month_close import Beat
 
-TRIGGER = (r"h[ôo]m\s*nay\s*(l[àa]m|c[óo])\s*(g[ìi]|vi[ệe]c\s*g[ìi])|l[ịi]ch\s*(th[áa]ng|fp\s*&?\s*a|ch[ốo]t\s*s[ổo])"
-           r"|vi[ệe]c\s*h[ôo]m\s*nay")
+# Only words that ask for the calendar: "hôm nay có gì", "việc hôm nay" are everyday chat.
+TRIGGER = r"h[ôo]m\s*nay\s*l[àa]m\s*g[ìi]|l[ịi]ch\s*(th[áa]ng|fp\s*&?\s*a|ch[ốo]t\s*s[ổo])"
 
 
 def beats(on: Optional[dt.date] = None) -> list:

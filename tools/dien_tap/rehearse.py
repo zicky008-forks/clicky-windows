@@ -441,7 +441,8 @@ def _main(argv=None) -> int:
     clock.lap("Mở Excel")
 
     say(f"2/6 Mở Clicky: {exe}")
-    env = dict(os.environ, CLICKY_SCENE_LOG=str(log))
+    from robot_env import clean_env
+    env = clean_env(log)                        # never the PC's company configuration
     if args.local_only:
         env["CLICKY_LOCAL_ONLY"] = "1"
     if args.tamper:

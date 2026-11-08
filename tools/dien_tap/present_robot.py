@@ -360,7 +360,8 @@ def main(argv=None) -> int:
     set_setting("allow_screen_recording", True)
     mons = monitors()
     two_screens = len(mons) >= 2
-    env = dict(os.environ, CLICKY_SCENE_LOG=str(log), CLICKY_LOCAL_ONLY="1")
+    from robot_env import clean_env
+    env = clean_env(log, CLICKY_LOCAL_ONLY="1")  # never the PC's company configuration
     if not two_screens:
         env["CLICKY_PRESENT_FORCE_PANEL"] = "1"
         say("Máy chỉ có 1 màn hình: robot vẫn tập hỏi đáp; buổi thật cần 2 màn hình (Extend).")

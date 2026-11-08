@@ -237,7 +237,8 @@ def main(argv=None) -> int:
     from storage import set_setting, setting
     old_recording = bool(setting("allow_screen_recording", False))
     set_setting("allow_screen_recording", True)
-    env = dict(os.environ, CLICKY_SCENE_LOG=str(log), CLICKY_LOCAL_ONLY="1")
+    from robot_env import clean_env
+    env = clean_env(log, CLICKY_LOCAL_ONLY="1")  # never the PC's company configuration
     try:
         say(f"1/3 Mở Clicky soát bộ BOD: {exe} --bod-review {case}")
         subprocess.Popen([exe, "--bod-review", str(case)], env=env, cwd=str(Path(exe).parent))

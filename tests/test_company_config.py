@@ -173,8 +173,11 @@ def test_the_calendar_skill_words_and_beats(company, monkeypatch):
     from office import lich_skill
     from skills import load_all, match
     rx = re.compile(lich_skill.TRIGGER, re.I)
-    for said in ("hôm nay làm gì", "hôm nay có việc gì", "lịch tháng này", "xem lịch FP&A"):
+    for said in ("hôm nay làm gì", "Hôm nay làm gì?", "lịch tháng này",
+                 "xem lịch FP&A", "lịch chốt sổ tháng 10"):
         assert rx.search(said), said
+    for chat in ("hôm nay có gì mới", "việc hôm nay thế nào", "hôm nay có việc gì vui không"):
+        assert not rx.search(chat), chat                       # everyday chat stays with the assistant
     load_all()
     assert match("hôm nay làm gì vậy em")["name"] == "Lịch FP&A tháng"
     logged = []
@@ -183,3 +186,30 @@ def test_the_calendar_skill_words_and_beats(company, monkeypatch):
     assert beats[0].text == "Hôm nay 09/04: S3 Gửi dự báo." and beats[1].mark == "warn"
     assert beats[-1].text.startswith("Em chưa đọc được file cấu hình cau_hoi.yaml")
     assert logged == [("lich_thang", {"steps": 4, "said": 2, "problems": 1})]
+
+
+ROBOTS = ("rehearse", "present_robot", "bod_robot", "bhc_e2e", "opex_robot")
+
+
+def test_robots_never_read_the_pc_company_config(tmp_path, monkeypatch):
+    """The test PC keeps the user's real configuration in Clicky's data folder; every robot run points the loader
+    at an empty folder of its own, and the loader never falls back from it."""
+    import sys
+    robots = Path(__file__).resolve().parents[1] / "tools" / "dien_tap"
+    sys.path.insert(0, str(robots))
+    import opex_robot
+    import robot_env
+    monkeypatch.setenv("CLICKY_DATA_DIR", str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+    config_dir(tmp_path / "data", broken=False)                  # the PC's own configuration
+    monkeypatch.delenv(cc.ENV, raising=False)
+    assert cc.find() is not None
+    log = tmp_path / "out" / "scene.jsonl"
+    for env in (robot_env.clean_env(log), opex_robot.robot_env(log)):
+        own = Path(env[cc.ENV])
+        assert own.is_dir() and own.parent == log.parent and not list(own.iterdir())
+        monkeypatch.setenv(cc.ENV, env[cc.ENV])
+        assert cc.folder() is None and cc.find() is None
+    for name in ROBOTS:                                          # every robot builds its env with clean_env
+        src = (robots / f"{name}.py").read_text(encoding="utf-8")
+        assert "clean_env(log" in src and "dict(os.environ, CLICKY_SCENE_LOG" not in src, name
