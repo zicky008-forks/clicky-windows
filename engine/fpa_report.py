@@ -77,10 +77,10 @@ class Month:
     said: list = field(default_factory=list)    # the receipt's sentences, books against ledgers first
     opex_gap: tuple = (ZERO, ZERO)              # (month, year to date): books less cost detail, not explained
     tb_not_used: Optional[tuple] = None         # (file, why) for a trial balance that cannot give the month
+    version: Optional[str] = None               # the plan version asked for; None: the only or the approved one
     fy: int = 1                                 # the month the fiscal year starts (engine.fiscal)
     fy_said: str = ""                           # how that was found, for the receipt
     checks: list = field(default_factory=list)  # [(code, name, result, note, stop)] by the company's check codes
-    version: Optional[str] = None               # the plan version asked for; None: the only or the approved one
 
     def row(self, code: str) -> Optional[PnlRow]:
         return next((r for r in self.pnl if r.code == code), None)
@@ -102,8 +102,9 @@ def fiscal_start(folder: Path, b) -> tuple:
     return fiscal.start(b, tb, period, books_ytd)
 
 
-def compute(folder: Path, version: Optional[str] = None) -> Month:
-    """Read the folder and compute the month against the plan version (the only or the approved one when None).
+def compute(folder: Path, version: Optional[str] = None, plan_file: Optional[str] = None) -> Month:
+    """Read the folder and compute the month against the plan version (the user's answer; else the catalogue rule
+    "Bản kế hoạch"; else the only or the approved one). plan_file tells two plans of one name apart.
     Raises fpa.PickVersion when the plan must be chosen by the user."""
     from engine import bod_inputs
     folder = Path(folder)
@@ -111,11 +112,15 @@ def compute(folder: Path, version: Optional[str] = None) -> Month:
     fy, fy_said = fiscal_start(folder, b)
     if fy != 7:
         b = bod_inputs.load(folder, fy_start=fy, purpose="fpa")
-    costs = fpa.compute(b.gl, b.plans, version=version, fy_start=fy, config=b.config) if b.gl else None
+    version = version or (str(b.config.rule("ban ke hoach") or "").strip() or None)
+    costs = fpa.compute(b.gl, b.plans, version=version, fy_start=fy, config=b.config,
+                        plan_file=plan_file) if b.gl else None
     sales = None
     if b.sales:
         sales = sales_pnl.compute(b.sales, b.sku_plans, b.plans, period=costs.period if costs else None,
-                                  version=version, fy_start=fy, config=b.config, plan_tables=b.sku_plan_totals)
+                                  version=version, fy_start=fy, config=b.config, plan_tables=b.sku_plan_totals,
+                                  plan_file=plan_file if plan_file and any(r.file == plan_file for r in b.sku_plans)
+                                  else None)
     period = (costs or sales).period if (costs or sales) else None
     if not period:
         raise ValueError("thư mục không có sổ chi tiết chi phí hay sổ bán hàng nào có tháng")
@@ -319,6 +324,35 @@ def _pnl(m: Month) -> list:
     return out
 
 
+def plan_outside_year(m: Month) -> list:
+    """Plan rows of the chosen version that fall outside this fiscal year or have no month: counted and said per
+    file (rule 4), never dropped in silence. A year far from the ledger's is named: it is a cell read wrong."""
+    from collections import Counter
+    from engine.bod_check import fiscal_year, fy_months
+    b = m.bundle
+    try:
+        chosen = m.costs.plan if m.costs is not None else fpa.choose_plan(b.plans, m.version)[0]
+    except fpa.PickVersion:
+        chosen = None
+    if chosen is None:
+        return []
+    year = set(fy_months(fiscal_year(m.period, m.fy), m.fy))
+    out = []
+    rows = [r for r in b.plans if key(r.version or "") == key(chosen.version) and r.file == chosen.file]
+    no_month = [r for r in rows if not r.month]
+    outside = Counter(r.month[:4] for r in rows if r.month and r.month not in year)
+    if no_month:
+        out.append(f"File kế hoạch {chosen.file}: {len(no_month)} dòng không đọc được tháng (ô đầu tiên "
+                   f"{no_month[0].where}), em chưa tính vào kế hoạch.")
+    if outside:
+        far = sorted(y for y in outside if abs(int(y) - int(m.period[:4])) > 1)
+        out.append(f"File kế hoạch {chosen.file}: {sum(outside.values())} dòng có tháng ngoài năm tài chính này "
+                   f"(năm {', '.join(sorted(outside))}), em không tính vào kế hoạch năm nay"
+                   + (f"; năm {', '.join(far)} cách xa năm của sổ, có thể ô năm bị đọc sai, chị kiểm lại file" if far
+                      else "") + ".")
+    return out
+
+
 def split_planned(m: Month) -> bool:
     """The chosen plan has lines by department x cost element: the split, and its variances, can be read."""
     return m.costs is not None and any(l.plan_from for l in m.costs.ytd)
@@ -410,6 +444,8 @@ def _said(m: Month) -> list:
                    f"ghi phần này ở dòng “{GAP_LINE}”.")
     if m.fy_said:
         out.append(m.fy_said)
+    out += [x + "." for x in m.bundle.plan_checks]
+    out += plan_outside_year(m)
     none = [r.name.lower() for r in m.pnl if not r.has_plan and r.code in ("revenue", "cogs", "opex")]
     if none:
         out.append(f"Thư mục chưa có kế hoạch cho {', '.join(none)}: em để trống cột kế hoạch và chênh lệch của các "
@@ -479,7 +515,8 @@ def file_rows(m) -> list:
         if name != tb_file:
             if m.tb_not_used is not None and name == m.tb_not_used[0]:
                 why = m.tb_not_used[1]
-            out.append([name, "Không dùng", 0, 0, why])
+            role = "File làm việc của chị, không lấy số" if name in getattr(m.bundle, "working", []) else "Không dùng"
+            out.append([name, role, 0, 0, why])
     return out
 
 def write(m: Month, out: Optional[Path] = None) -> dict:

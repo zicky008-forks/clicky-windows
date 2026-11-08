@@ -29,14 +29,34 @@ class Stop(Exception):
         super().__init__(beat.text)
 
 
-def prepare(folder: Path) -> tuple:
-    """(Month, written) for the folder; Stop with one sentence when it must not go on."""
+def picked(said: str, choices: list) -> tuple:
+    """(version, file) the user named in the chat among the folder's plans ('so với AOP v4', or the file's name);
+    (None, None) when the words name none or more than one. The longest version named wins ('AOP v4' over 'AOP')."""
+    from engine.tables import key
+    words = f" {key(said)} "
+    hits = [(v, f) for v, f in choices if f" {key(v)} " in words]
+    if hits:
+        best = max(len(key(v)) for v, _f in hits)
+        hits = [(v, f) for v, f in hits if len(key(v)) == best]
+    if len(hits) > 1:                                     # one name in two files: the file's name tells them apart
+        by_file = [(v, f) for v, f in hits if key(Path(f).stem) in key(said)]
+        hits = by_file if len(by_file) == 1 else hits
+    return hits[0] if len(hits) == 1 else (None, None)
+
+
+def prepare(folder: Path, said: str = "") -> tuple:
+    """(Month, written) for the folder; Stop with one sentence when it must not go on. said is the user's words:
+    after Clicky asked which plan, the answer names it and the report goes on with that plan."""
     from engine import fpa, fpa_report
     try:
         m = fpa_report.compute(folder)
     except fpa.PickVersion as exc:
-        raise Stop(Beat("Thư mục có nhiều bản kế hoạch mà không bản nào ghi đã duyệt: " + ", ".join(exc.versions)
-                        + ". Chị cho em biết so với bản nào.", mark="warn"))
+        version, file = picked(said, exc.choices)
+        if version is None:
+            raise Stop(Beat("Thư mục có nhiều bản kế hoạch mà không bản nào ghi đã duyệt: " + ", ".join(exc.versions)
+                            + f". Chị gõ lại kèm tên bản, ví dụ: làm báo cáo FP&A tháng so với {exc.versions[-1]}.",
+                            mark="warn"))
+        m = fpa_report.compute(folder, version=version, plan_file=file)
     except ValueError as exc:
         raise Stop(Beat("Em chưa thấy sổ chi tiết chi phí hay sổ bán hàng nào có tháng trong thư mục này.", mark="warn")) \
             from exc
@@ -102,7 +122,7 @@ def beats_for(m, out: dict) -> list:
     return beats
 
 
-async def run(manager, folder: Optional[Path] = None) -> None:
+async def run(manager, folder: Optional[Path] = None, said: str = "") -> None:
     from office.bod_skill import find_folder
     folder = find_folder(getattr(manager, "_excel", None), folder)
     if folder is None or not folder.is_dir():
@@ -111,7 +131,7 @@ async def run(manager, folder: Optional[Path] = None) -> None:
         return
     scene_log.record("fpa_start", folder=scene_log.book_id(folder))     # an id, never the folder's name
     try:
-        m, out = await asyncio.to_thread(prepare, folder)
+        m, out = await asyncio.to_thread(prepare, folder, said)
     except Stop as stop:
         scene_log.record("fpa_stop", mark=stop.beat.mark)
         await mc.play(manager, [stop.beat])
@@ -126,7 +146,7 @@ async def run(manager, folder: Optional[Path] = None) -> None:
 
 
 async def handle(manager, transcript: str) -> str:
-    await run(manager, None)
+    await run(manager, None, transcript or "")
     return ""
 
 

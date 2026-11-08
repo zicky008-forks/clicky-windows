@@ -32,8 +32,9 @@ def two_sided_gl(closing: bool = True) -> list:
             out.append(r[:4] + [dr, cr] + r[6:9] + [amount, ""])
     if closing:
         for n, (account, amount) in enumerate(sorted(fs.october_debits().items()), 1):
+            net = amount - (fs.WRITTEN_DOWN[3] if account == fs.WRITTEN_DOWN[2] else 0)     # the account's balance
             out.append(["31/10/2026", f"KC{n:03d}", "10", "2026", account, "911", "", "", "Kết chuyển chi phí", "",
-                        str(amount)])
+                        str(net)])
     return out
 
 
@@ -273,3 +274,147 @@ def test_an_opex_total_beside_its_parts_is_taken_once(tmp_path):
     lines = (("Chi phí bán hàng", 900), ("Chi phí quản lý doanh nghiệp", 450), ("Chi phí hoạt động", 1350))
     d = _folder(tmp_path, "total", {"KH": [["Chỉ tiêu"] + T] + [[n] + [v * M] * 12 for n, v in lines]})
     assert fpa_report.compute(d).row("opex").plan == 1350 * M
+
+
+def test_the_closing_entry_is_found_without_a_contra_column(tmp_path):
+    # One account column, Phát sinh Nợ / Có, and no TK đối ứng: the closing entry is still a Có line on each cost
+    # account. Found by its text naming 911, or because it zeroes the account on the month's last day. The cost
+    # written down on 30/10 stays a cost written down.
+    plain = bod_inputs.load(fs.opex_folder(tmp_path / "plain", tb=True), fy_start=1)
+    for text in ("K/C 911", "Kết chuyển chi phí"):
+        d = fs.opex_folder(tmp_path / text.replace("/", ""), tb=True)
+        rows = [r[:5] + r[6:] for r in two_sided_gl()]
+        for r in rows[1:]:
+            if r[1].startswith("KC"):
+                r[7] = text
+        fs.write_csv(d / "SoChiTietChiPhi_2026.csv", rows)
+        b = bod_inputs.load(d, fy_start=1)
+        assert [(e.period, e.amount, e.account) for e in b.gl] == [(e.period, e.amount, e.account) for e in plain.gl]
+        _n, _r, used, skipped = receipt(b, "SoChiTietChiPhi_2026.csv")
+        why = bod_inputs.CLOSING_WHY if "911" in text else bod_inputs.CLOSING_NETS_WHY
+        assert sum(1 for _r, w in skipped if w == why) == len(fs.october_debits())
+        assert used + len(skipped) == lines_in(rows)
+        assert [e.amount for e in b.gl if e.side == "cr"] == [-fs.WRITTEN_DOWN[3]]
+    # An allocation written 'Kết chuyển' that does not zero the account is a real cost written down: kept.
+    d = fs.opex_folder(tmp_path / "alloc", tb=True)
+    rows = [r[:5] + r[6:] for r in two_sided_gl(closing=False)]
+    rows.append(["31/10/2026", "PB001", "10", "2026", "6427", "HC", "THUE", "Kết chuyển chi phí thuê phân bổ", "", "1000000"])
+    fs.write_csv(d / "SoChiTietChiPhi_2026.csv", rows)
+    b = bod_inputs.load(d, fy_start=1)
+    assert sorted(e.amount for e in b.gl if e.side == "cr") == sorted([-fs.WRITTEN_DOWN[3], D(-1000000)])
+
+
+# ── K8: actual and plan pair on department x cost element ────────────────────
+
+K8_ELEMENTS = (("Lương bán hàng", "6411"), ("Khấu hao bán hàng", "6414"), ("Chi phí bán hàng khác", "6418"),
+               ("Lương quản lý", "6421"), ("Khấu hao quản lý", "6424"), ("Dịch vụ mua ngoài", "6427"))
+K8_SPEND = {("KD", "6411"): 300, ("KD", "6414"): 40, ("KD", "6418"): 55, ("MKT", "6418"): 210,
+            ("HC", "6421"): 280, ("HC", "6424"): 20, ("HC", "6427"): 115}
+
+
+def test_actual_by_account_and_plan_by_element_name_pair_on_every_line(tmp_path):
+    d = tmp_path / "k8"
+    d.mkdir()
+    gl = [["Ngày CT", "Số CT", "Tháng", "Năm", "TK Nợ", "TK Có", "Mã phòng ban", "Diễn giải", "Số tiền"]]
+    for mo in range(1, 11):
+        for (dept, acct), v in K8_SPEND.items():
+            gl.append([f"20/{mo:02d}/2026", f"C{mo}{acct}{dept}", str(mo), "2026", acct, "331", dept, "Chi", str(v * M)])
+    fs.write_csv(d / "SoChiTiet_2026.csv", gl)
+    name = dict((a, n) for n, a in K8_ELEMENTS)
+    plan = [["Phiên bản", "Năm", "Tháng", "Phòng ban", "Khoản mục", "Số tiền"]]
+    for mo in range(1, 13):
+        for (dept, acct), v in K8_SPEND.items():
+            plan.append(["AOP", "2026", str(mo), dept, name[acct], str((v + 10) * M)])
+    fs.write_csv(d / "AOP_2026.csv", plan)
+    fs.write_xlsx(d / "Danh muc.xlsx", {"Phòng ban": fs.DEPT_SHEET, "Khoản mục": [["Khoản mục", "Tài khoản"]]
+                                        + [list(x) for x in K8_ELEMENTS]})
+    m = fpa_report.compute(d)
+    lines = m.costs.ytd
+    assert len(lines) == len(K8_SPEND)
+    unmatched = [l for l in lines if not l.actual or not l.plan]
+    assert unmatched == []                                        # 0 lines with only an actual or only a plan
+    mkt = next(l for l in lines if l.dept == "MKT")
+    assert (mkt.element, mkt.actual, mkt.plan) == ("Chi phí bán hàng khác", 2100 * M, 2200 * M)
+    assert not [c for c in m.classified if c.material and c.verdict and "vượt" in c.verdict and not c.line.plan]
+
+
+# ── K9: every plan row in its year, the plan against its own totals ─────────
+
+def test_a_full_year_column_is_never_read_as_the_year_and_checks_the_months(tmp_path):
+    head = ["Mã phòng ban", "Mã khoản mục"] + T + ["Cả năm"]
+    plan = [head]
+    for dp, el, _a, _p in fs.PLAN:
+        months = [fs.plan_month(dp, el, mo) for mo in range(1, 13)]
+        plan.append([dp, el] + months + [sum(months)])
+    plan[1][-1] += 2 * M                                          # the file's own full year is 2 tr off on one row
+    assert any("2000" in str(r[-1]) for r in plan[1:])            # a total whose digits hold '2000'
+    d = _folder(tmp_path, "k9", {"KH": plan})
+    b = bod_inputs.load(d, fy_start=1)
+    assert {r.month[:4] for r in b.plans} == {"2026"} and len(b.plans) == 12 * len(fs.PLAN)
+    m = fpa_report.compute(d)
+    said = " ".join(m.said)
+    assert "File kế hoạch KeHoach_AOP_2026.xlsx (sheet KH) không tự khớp: dòng 2: các tháng cộng" in said
+    assert "cột cả năm ghi" in said and "ngoài năm tài chính" not in said
+    assert m.row("opex").ytd_plan == sum(fs.plan_month(dp, el, mo) for dp, el, _a, _p in fs.PLAN for mo in range(1, 11))
+
+
+def test_plan_rows_outside_the_year_are_counted_and_said(tmp_path):
+    rows = fs.plan_rows("AOP")[:-1]
+    rows += [["AOP", "2000", "10", "MKT", "QC", str(7 * M)], ["AOP", "2025", "12", "KD", "CTP", str(3 * M)]]
+    d = _folder(tmp_path, "out", {"KH": rows})
+    m = fpa_report.compute(d)
+    said = " ".join(m.said)
+    assert "File kế hoạch KeHoach_AOP_2026.xlsx: 2 dòng có tháng ngoài năm tài chính này (năm 2000, 2025)" in said
+    assert "năm 2000 cách xa năm của sổ, có thể ô năm bị đọc sai" in said
+
+
+# ── K10: the plan file's own info sheet, two plans of one name, the user's choice ──
+
+def _versions_folder(tmp_path, name, approved_v4=True):
+    d = _folder(tmp_path, name, None)
+    for v, scale, info in (("v3", 1, [["Phiên bản", "v3"], ["Trạng thái", "Nháp"]]),
+                           ("v4", 2, [["Phiên bản", "v4"], ["Trạng thái", "Đã duyệt" if approved_v4 else "Chờ duyệt"]]
+                            + ([["Ngày duyệt", "15/09/2026"]] if approved_v4 else []))):
+        ss.write_xlsx(d / f"AOP_2026_{v}.xlsx", {"Thong tin": info, "KH": fs.plan_rows("AOP", scale=scale)[:-1]})
+    return d
+
+
+def test_the_info_sheet_names_the_version_and_its_approval(tmp_path):
+    from engine import roles
+    d = _versions_folder(tmp_path, "info")
+    b = bod_inputs.load(d, fy_start=1, purpose="fpa")
+    assert sorted(p.version for p in fpa.plan_choices(b.plans)) == ["AOP v3", "AOP v4"]
+    assert {p.version: p.approved for p in fpa.plan_choices(b.plans)}["AOP v4"] == "2026-09-15"
+    assert receipt(b, "AOP_2026_v4.xlsx")[1] == roles.PLAN
+    m = fpa_report.compute(d)
+    assert m.costs.version == "AOP v4" and "duyệt ngày 15/09/2026" in m.costs.basis
+    line = next(l for l in m.costs.month if (l.dept, l.element) == ("MKT", "QC"))
+    assert line.plan == 2 * fs.plan_month("MKT", "QC", 10)
+
+
+def test_after_asking_which_plan_the_answer_carries_the_report_through(tmp_path):
+    from office import fpa_skill
+    from office.fpa_skill import Stop
+    import pytest
+    d = _versions_folder(tmp_path, "ask", approved_v4=False)
+    with pytest.raises(Stop) as asked:
+        fpa_skill.prepare(d, "làm báo cáo FP&A tháng")
+    assert "AOP v3, AOP v4" in asked.value.beat.text and "so với AOP v4" in asked.value.beat.text
+    m, out = fpa_skill.prepare(d, "làm báo cáo FP&A tháng so với AOP v3")
+    assert m.costs.version == "AOP v3" and out["verified"]
+    line = next(l for l in m.costs.month if (l.dept, l.element) == ("MKT", "QC"))
+    assert line.plan == fs.plan_month("MKT", "QC", 10)
+    fs.write_xlsx(d / "Danh muc.xlsx", {"Phòng ban": fs.DEPT_SHEET, "Khoản mục": fs.ELEMENT_SHEET,
+                                        "Tham số": [["Tham số", "Giá trị"], ["Bản kế hoạch", "AOP v4"]]})
+    assert fpa_report.compute(d).costs.version == "AOP v4"           # the catalogue rule names it
+
+
+def test_a_working_file_has_the_fpa_wording(tmp_path):
+    d = _folder(tmp_path, "work", None)
+    ss.write_xlsx(d / "Working T10 FPA.xlsx", {"P&L": [["Chỉ tiêu", "T10"], ["Chi phí", 1]]})
+    ss.write_xlsx(d / "So chi tiet nhap kho.xlsx", {"S": [["Mã hàng", "SL"], ["A", 1]]})
+    m = fpa_report.compute(d)
+    rows = {r[0]: r for r in fpa_report.file_rows(m)[1:]}
+    assert rows["Working T10 FPA.xlsx"][1] == "File làm việc của chị, không lấy số"
+    assert rows["Working T10 FPA.xlsx"][4] == bod_inputs.WORKING_WHY
+    assert rows["So chi tiet nhap kho.xlsx"][1] == "Không dùng"     # 'nhập' (stock in) is not a draft

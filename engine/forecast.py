@@ -59,7 +59,8 @@ class Version:
         return file_roles.is_forecast(self.version)
 
     def said(self) -> str:
-        when = f", duyệt ngày {self.approved[8:10]}/{self.approved[5:7]}/{self.approved[:4]}" if self.approved else ""
+        when = (f", duyệt ngày {self.approved[8:10]}/{self.approved[5:7]}/{self.approved[:4]}"
+                if self.approved[:4].isdigit() else ", đã duyệt" if self.approved else "")
         return f"bản {self.version}{when}"
 
 
@@ -91,7 +92,10 @@ def roles(plans: list, sku_plans: list, config=None) -> tuple:
         basis = [v for v in found if v.forecast]
         if len(basis) > 1:
             approved = sorted((v for v in basis if v.approved), key=lambda v: v.approved)
-            if not approved or (len(approved) > 1 and approved[-1].approved == approved[-2].approved):
+            undated = [v for v in approved if not v.approved[:4].isdigit()]   # approved, no date: never ranked
+            if undated and len(approved) == 1:
+                pass
+            elif not approved or undated or (len(approved) > 1 and approved[-1].approved == approved[-2].approved):
                 raise PickVersion([(v.version, ", ".join(v.files)) for v in basis])
             basis = approved[-1:]
     return (target[0] if target else None), (basis[0] if basis else None)
