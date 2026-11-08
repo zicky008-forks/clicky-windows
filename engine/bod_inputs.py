@@ -723,6 +723,8 @@ class Bundle:
     fx: dict = field(default_factory=dict)
     sales: list = field(default_factory=list)
     postings: list = field(default_factory=list)       # Posting, both sides of every ledger line (match to the books)
+    segment_map: object = None                         # engine.segment_gl.SegmentMap, when the folder has one
+    segment_gls: list = field(default_factory=list)  # SegmentGL of each segmented ledger read (its unknown codes)
     sku_plans: list = field(default_factory=list)      # SkuPlanRow, every version
     sku_plan_totals: list = field(default_factory=list)  # (file, Table, [SkuPlanRow]) of each plan-by-SKU table
     cut: list = field(default_factory=list)            # (sheet, rows) of the cut parameters, read by the reviewer
@@ -839,6 +841,13 @@ def load(folder: Path, fy_start: int = 7) -> Bundle:
     files = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in (".csv", ".xlsx", ".xlsm")
                    and not p.name.startswith("~$"))
     rest = []
+    from engine import segment_gl
+    maps = [p for p in files if segment_gl.is_map_file(p.stem)]
+    for p in maps:                                             # the segment map first: it says how to read the GL
+        b.segment_map = segment_gl.read_map(p)
+        b.receipt.append((p.name, "Ánh xạ phân đoạn", len(b.segment_map.segments)
+                          + sum(len(x) for x in b.segment_map.codes.values()), []))
+    files = [p for p in files if p not in maps]
     for p in files:                                            # configuration first: its rules shape the rest
         if any(w in name_key(p.stem) for w in ("danh muc", "cau hinh", "config")):
             b.config = read_config(p)
@@ -878,8 +887,15 @@ def load(folder: Path, fy_start: int = 7) -> Bundle:
                  "plan": ("plan", "gl", "sales", "fx"), "fx": ("fx", "plan", "gl", "sales"),
                  "gl": ("gl", "plan", "sales", "fx")}.get(hint, ("fx", "gl", "plan", "sales"))
         for sheet, rows in sheets.items():
-            for kind in ("sku_plan",) + order:
-                if kind == "sku_plan":
+            for kind in ("segment_gl", "sku_plan") + order:
+                if kind == "segment_gl":
+                    got = segment_gl.read_segment_gl(rows, sheet, b.segment_map, fy_start) if b.segment_map else None
+                    if got:
+                        b.gl += got.entries
+                        b.postings += got.postings
+                        b.segment_gls.append(got)
+                        b.receipt.append((p.name, "Sổ cái theo tổ hợp tài khoản", len(got.table.rows), got.table.skipped))
+                elif kind == "sku_plan":
                     got = _try_sku_plan(rows, sheet, version, fy_start, file_fy, hint in ("plan", "prior"))
                     if got:
                         t, plan_rows = got
@@ -925,6 +941,12 @@ def load(folder: Path, fy_start: int = 7) -> Bundle:
                     break
         if not used:
             b.unused.append((p.name, _unused_reason(hint, sheets)))
+    if b.segment_map:                                           # the map names departments and cost elements
+        depts, elements = segment_gl.catalogue(b.segment_map)
+        for code, name in depts.items():
+            b.config.depts.setdefault(code, {"ten": name})
+        for code, name in elements.items():
+            b.config.elements.setdefault(code, {"ten": name})
     b.sales = _drop_sales_copies(b, sales_sources)
     _resolve_years(b, pending, fy_start)
     return b
