@@ -178,3 +178,19 @@ def test_questions_cover_material_moves_without_claiming_causes():
     sheet = report.sheets["Cau hoi xac minh"]
     assert sheet[1][3] == "TÍNH TOÁN" and sheet[1][7] == ""  # explanation left for a person
     assert "câu hỏi cần xác minh" in report.summary
+
+
+def test_year_to_date_columns_beside_the_month_are_read_apart():
+    """'Lũy kế từ đầu năm' columns hold the words 'phát sinh' and 'đầu năm' too: they must not take the month's
+    place, nor the opening balance's. A sheet whose only movement is the year to date keeps it as the movement."""
+    from engine.trial_balance import read_trial_balance
+    two_row = [["Số hiệu TK", "Tên tài khoản", "Số dư đầu năm", "", "Phát sinh trong tháng", "",
+                "Lũy kế từ đầu năm", "", "Số dư cuối tháng", ""],
+               ["", "", "Nợ", "Có", "Nợ", "Có", "Nợ", "Có", "Nợ", "Có"],
+               ["6421", "Chi phí nhân viên quản lý", 0, 0, 10, 10, 40, 40, 0, 0]]
+    tb = read_trial_balance(two_row)
+    line = tb.lines[0]
+    assert tb.has_ytd and (line.open_dr, line.dr, line.ytd_dr, line.close_dr) == (0, 10, 40, 0)
+    only = read_trial_balance([["Số hiệu TK", "Tên tài khoản", "Phát sinh lũy kế Nợ", "Phát sinh lũy kế Có",
+                                "Số dư cuối kỳ Nợ", "Số dư cuối kỳ Có"], ["6421", "x", 40, 40, 0, 0]])
+    assert not only.has_ytd and only.lines[0].dr == 40

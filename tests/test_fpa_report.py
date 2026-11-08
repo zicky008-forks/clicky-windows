@@ -51,13 +51,94 @@ def test_without_a_trial_balance_the_ledgers_are_used_and_it_says_so(tmp_path):
     assert [r.source for r in m.pnl[:2]] == ["sổ bán hàng", "sổ bán hàng"]
     assert m.row("opex").source == "sổ chi tiết chi phí"
     assert m.said[0].startswith("Thư mục chưa có bảng cân đối số phát sinh tháng 10/2026")
+    assert all(not r.ytd_books for r in m.pnl)
 
 
-def test_costs_that_do_not_match_the_books_are_not_put_in_the_report_as_books(tmp_path):
+def test_costs_that_do_not_match_the_books_still_show_the_books_and_the_gap_on_its_own_line(tmp_path):
     m = fpa_report.compute(case(tmp_path, cost_shift={"6418": 4 * M}))
-    assert m.row("opex").source == "sổ chi tiết chi phí"
+    opex = m.row("opex")
+    ledger = sum(l.actual for l in m.costs.month)
+    assert opex.source.startswith("sổ cân đối T10/2026") and opex.actual == ledger + 4 * M
+    assert m.opex_gap[0] == 4 * M
     assert any("lệch sổ cân đối ở TK 6418" in s for s in m.said)
-    assert any(s.startswith("Vì chi phí chưa khớp sổ cân đối") for s in m.said)
+    assert any(s.startswith("Vì chi phí chưa khớp sổ cân đối, dòng chi phí hoạt động trên báo cáo vẫn lấy số sổ cân "
+                            "đối") and "4.000.000 đ" in s and "đừng trình bản này" in s for s in m.said)
+    out = fpa_report.write(m)
+    assert out["verified"]
+    rows = list(load_workbook(out["xlsx"])["Chi phi theo bo phan"].iter_rows(values_only=True))
+    gap, total = rows[-2], rows[-1]
+    assert gap[0] == "Chênh lệch sổ cân đối chưa giải thích" and D(str(gap[2])) == 4 * M
+    assert total[0] == "Tổng cộng" and D(str(total[2])) == opex.actual
+    assert sum(D(str(r[2])) for r in rows[3:-1]) == opex.actual          # the department table adds up to the P&L
+
+
+def test_without_a_sales_ledger_revenue_and_cogs_still_come_from_the_books(tmp_path):
+    d = tmp_path / "F01"
+    fs.folder(d)
+    ss.write_xlsx(d / "KeHoach_AOP_2026.xlsx", {"KH theo ma hang": ss.plan_rows()})
+    ss.write_xlsx(d / "DanhMuc.xlsx", {"Ma hang": ss.catalogue_rows(), "Tham so": RULES})
+    fs.write_csv(d / "TB T10 2026.csv", fs.tb_rows()[:-1] + ss.tb_rows()[1:])
+    with_ledger = fpa_report.compute(case(tmp_path / "x"))
+    m = fpa_report.compute(d)
+    assert m.sales is None
+    rev, cogs, gp = m.row("revenue"), m.row("cogs"), m.row("gp")
+    assert rev.source == "sổ cân đối T10/2026 (Có TK 5111 trừ Nợ TK 521)" and cogs.source.endswith("(Nợ TK 632)")
+    assert (rev.actual, cogs.actual) == (with_ledger.row("revenue").actual, with_ledger.row("cogs").actual)
+    assert rev.plan == with_ledger.row("revenue").plan and rev.plan > 0
+    assert gp.actual == rev.actual - cogs.actual and m.row("op").actual == gp.actual - m.row("opex").actual
+    assert rev.ytd_actual is None and gp.ytd_actual is None                  # nothing in the folder holds it
+    said = " ".join(m.said)
+    assert "Thư mục chưa có sổ bán hàng, nên doanh thu và giá vốn chỉ có tổng theo sổ cân đối" in said
+    assert "Chưa có lũy kế doanh thu và giá vốn" in said
+    out = fpa_report.write(m)
+    assert out["verified"]
+    wb = load_workbook(out["xlsx"])
+    assert wb["P&L"]["F3"].value == "Lũy kế (theo sổ chi tiết, chưa khớp sổ cân đối)"
+    assert wb["P&L"]["F4"].value is None and D(str(wb["P&L"]["B4"].value)) == rev.actual
+    assert wb["Cau noi LNG"]["A2"].value.startswith("Chưa tính được: thư mục chưa có sổ bán hàng")
+
+
+def _with_ytd(rows, times=10):
+    """The trial balance with "Lũy kế từ đầu năm" columns: times the month's movement."""
+    head = rows[0] + ["Lũy kế phát sinh Nợ", "Lũy kế phát sinh Có"]
+    return [head] + [r + [r[4] * times, r[5] * times] for r in rows[1:]]
+
+
+def test_the_year_to_date_comes_from_the_books_when_the_trial_balance_has_it(tmp_path):
+    d = case(tmp_path, tb=False)
+    fs.write_csv(d / "TB T10 2026.csv", _with_ytd(fs.tb_rows()[:-1] + ss.tb_rows()[1:]))
+    m = fpa_report.compute(d)
+    assert m.tb.has_ytd
+    rev, cogs, opex = m.row("revenue"), m.row("cogs"), m.row("opex")
+    assert rev.ytd_actual == 10 * rev.actual and cogs.ytd_actual == 10 * cogs.actual
+    assert rev.ytd_source.startswith("sổ cân đối lũy kế đến T10/2026") and all(r.ytd_books for r in m.pnl)
+    books_ytd = sum(l.ytd_dr for l in m.tb.leaves if l.account[:3] in ("641", "642"))
+    assert opex.ytd_actual == books_ytd - fpa_report._reductions(m.bundle.gl, m.costs.months)
+    ledger_ytd = sum(l.actual for l in m.costs.ytd)
+    assert m.opex_gap == (0, opex.ytd_actual - ledger_ytd) and m.opex_gap[1] != 0
+    said = " ".join(m.said)
+    assert "Số lũy kế lấy từ cột lũy kế từ đầu năm của bảng cân đối." in said
+    assert "Chi phí lũy kế theo sổ cân đối khác sổ chi tiết" in said
+    out = fpa_report.write(m)
+    assert out["verified"]
+    wb = load_workbook(out["xlsx"])
+    assert wb["P&L"]["F3"].value == "Thực hiện lũy kế (sổ cân đối)"
+    assert D(str(wb["P&L"]["F4"].value)) == rev.ytd_actual
+    rows = list(wb["Chi phi theo bo phan"].iter_rows(values_only=True))
+    assert rows[-2][0] == "Chênh lệch sổ cân đối chưa giải thích" and D(str(rows[-1][8])) == opex.ytd_actual
+
+
+def test_a_trial_balance_holding_only_the_year_to_date_is_not_used_for_the_month(tmp_path):
+    d = case(tmp_path, tb=False)
+    rows = fs.tb_rows()[:-1] + ss.tb_rows()[1:]
+    rows[0] = [h.replace("Phát sinh", "Phát sinh lũy kế") for h in rows[0]]
+    fs.write_csv(d / "TB T10 2026.csv", rows)
+    m = fpa_report.compute(d)
+    assert m.tb is None and m.tb_not_used[0] == "TB T10 2026.csv"
+    assert m.row("opex").source == "sổ chi tiết chi phí"
+    assert any("chỉ có số lũy kế từ đầu năm" in s for s in m.said)
+    receipt = list(load_workbook(fpa_report.write(m)["xlsx"])["Phieu nhan file"].iter_rows(values_only=True))
+    assert any(r[0] == "TB T10 2026.csv" and r[1] == "Không dùng" and "lũy kế" in r[4] for r in receipt)
 
 
 def test_every_variance_is_classified_and_the_receipt_counts_them(tmp_path):

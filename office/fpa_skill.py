@@ -60,6 +60,9 @@ def _books(m) -> Beat:
     if bad:
         return Beat(" và ".join(bad).capitalize() + " tháng này chưa khớp bảng cân đối. Em ghi chỗ lệch trong Phiếu "
                     "nhận file; chị đừng trình bản này khi chưa rõ.", mark="bad")
+    if m.sales is None:
+        return Beat("Số tháng trên báo cáo lấy từ bảng cân đối số phát sinh. Thư mục chưa có sổ bán hàng, nên doanh "
+                    "thu và giá vốn chưa chia theo mã hàng.", mark="warn")
     return Beat("Số tháng trên báo cáo lấy từ bảng cân đối số phát sinh; doanh thu, giá vốn và chi phí đều khớp sổ chi "
                 "tiết.", mark="ok")
 

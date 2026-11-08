@@ -56,6 +56,8 @@ class Line:
     cr: Decimal = ZERO
     close_dr: Decimal = ZERO
     close_cr: Decimal = ZERO
+    ytd_dr: Decimal = ZERO         # Lũy kế từ đầu năm, when the export carries it beside the month's movement
+    ytd_cr: Decimal = ZERO
     leaf: bool = True
 
 
@@ -73,10 +75,18 @@ class TrialBalance:
     def leaves(self):
         return [l for l in self.lines if l.leaf]
 
+    @property
+    def has_ytd(self) -> bool:
+        """The export carries year-to-date movement columns beside the month's."""
+        return "ytd_dr" in self.columns and "ytd_cr" in self.columns
+
 
 # Section headers that sit above the Nợ/Có row in two-row headers.
 # TT99 (S06-DN) and monthly or quarterly exports say "đầu tháng / cuối tháng", "đầu quý / cuối quý".
-_SECTIONS = (("open", ("dau ky", "dau nam", "dau thang", "dau quy", "opening", "beginning")),
+# Many exports add "Lũy kế từ đầu năm" (or "Phát sinh lũy kế") columns beside the month's: read first, since the
+# words also hold "phát sinh" and "đầu năm". A sheet whose only movement is the year to date keeps it as dr/cr.
+_SECTIONS = (("ytd", ("luy ke", "tu dau nam", "year to date", "ytd", "cumulative")),
+             ("open", ("dau ky", "dau nam", "dau thang", "dau quy", "opening", "beginning")),
              ("move", ("phat sinh", "trong ky", "trong thang", "trong quy", "movement", "during", "period")),
              ("close", ("cuoi ky", "cuoi nam", "cuoi thang", "cuoi quy", "closing", "ending")))
 
@@ -117,8 +127,11 @@ def _find_header(rows):
             side = _side(sub) or _side(top)
             sec = current
             if side and sec:
-                key = {"open": "open_", "move": "", "close": "close_"}[sec] + side
+                key = {"ytd": "ytd_", "open": "open_", "move": "", "close": "close_"}[sec] + side
                 columns.setdefault(key, i)
+        for side in ("dr", "cr"):
+            if side not in columns and "ytd_" + side in columns:
+                columns[side] = columns.pop("ytd_" + side)
         if len(columns) >= 4 and "dr" in columns and "cr" in columns:
             name = next((i for i, c in enumerate(cells) if "ten" in c or "name" in c), acct + 1)
             data_start = r + 2 if any(_side(c) for c in below) else r + 1

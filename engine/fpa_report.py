@@ -3,11 +3,16 @@ cost element with each variance classified, the gross profit bridge, and the rec
 workbook, marked SƠ BỘ, reopened and checked before it counts.
 
 Rule 2 (CLAUDE.md): the figures in the P&L's month column come from the official books, the trial balance
-(Phát sinh of 511/521, 632, 641/642) when the folder has one. The ledgers only split them: the sales ledger by SKU
-and channel (and the bridge), the cost detail by department and cost element. Where the books and a ledger differ,
-the receipt says by how much and why (or that it is not explained yet), in one sentence each. Without a trial
-balance the ledgers' figures are used and the report says so. The year to date is the ledgers' (a month's trial
-balance holds only the month), which the report says too.
+(Phát sinh of 511/521, 632, 641/642) when the folder has one, whether or not a ledger matches it. The ledgers only
+split them: the sales ledger by SKU and channel (and the bridge), the cost detail by department and cost element.
+Where the books and the cost detail differ, the department table carries the gap as its own line ("Chênh lệch sổ
+cân đối chưa giải thích") so it still adds up to the P&L, and the receipt says not to present it yet. Without a
+sales ledger, revenue and cost of goods sold still come from the books, with no split by SKU. Without a trial
+balance the ledgers' figures are used and the report says so.
+
+The year to date comes from the trial balance's "Lũy kế từ đầu năm" columns when it has them; otherwise from the
+ledgers, and the column header says it is not matched to the books. A trial balance whose only movement columns
+are the year to date is not used for the month.
 
 Amounts are Decimal; every sentence is code (engine.variance_class, engine.fpa, engine.sales_pnl); nothing here is
 written by the LLM.
@@ -27,6 +32,8 @@ ZERO = Decimal(0)
 STATUS = "SƠ BỘ"
 OUT_PREFIX = "Clicky_FPA"
 PNL, COSTS, VARIANCES, BRIDGE, RECEIPT = "P&L", "Chi phi theo bo phan", "Chenh lech", "Cau noi LNG", "Phieu nhan file"
+GAP_LINE = "Chênh lệch sổ cân đối chưa giải thích"
+YTD_LEDGER = "Lũy kế (theo sổ chi tiết, chưa khớp sổ cân đối)"
 OPEX_ACCOUNTS = ("641", "642")
 
 
@@ -36,17 +43,19 @@ class PnlRow:
     name: str
     actual: Decimal
     plan: Decimal
-    ytd_actual: Decimal
+    ytd_actual: Optional[Decimal]     # None when nothing in the folder holds it
     ytd_plan: Decimal
     source: str                  # where the month's actual comes from, in plain words
+    ytd_source: str = ""         # where the year to date comes from
+    ytd_books: bool = False      # the year to date is the trial balance's
 
     @property
     def variance(self) -> Decimal:
         return self.actual - self.plan
 
     @property
-    def ytd_variance(self) -> Decimal:
-        return self.ytd_actual - self.ytd_plan
+    def ytd_variance(self) -> Optional[Decimal]:
+        return None if self.ytd_actual is None else self.ytd_actual - self.ytd_plan
 
 
 @dataclass
@@ -62,6 +71,8 @@ class Month:
     classified: list = field(default_factory=list)
     pnl: list = field(default_factory=list)     # [PnlRow]
     said: list = field(default_factory=list)    # the receipt's sentences, books against ledgers first
+    opex_gap: tuple = (ZERO, ZERO)              # (month, year to date): books less cost detail, not explained
+    tb_not_used: Optional[tuple] = None         # (file, why) for a trial balance that cannot give the month
 
     def row(self, code: str) -> Optional[PnlRow]:
         return next((r for r in self.pnl if r.code == code), None)
@@ -91,6 +102,10 @@ def compute(folder: Path) -> Month:
         raise ValueError("thư mục không có sổ chi tiết chi phí hay sổ bán hàng nào có tháng")
     m = Month(folder, period, b, costs, sales)
     m.tb = trial_balance_in(folder, b.unused)
+    if m.tb is not None and m.tb.ytd_only:
+        m.tb_not_used = (m.tb.file, "Bảng cân đối này chỉ có số lũy kế từ đầu năm, không có số phát sinh tháng; em "
+                                    "chưa dùng nó cho số tháng")
+        m.tb = None
     if m.tb is not None and costs is not None:
         m.cost_books = fpa.match_books(b.gl, m.tb, period)
     if m.tb is not None and sales is not None:
@@ -109,6 +124,7 @@ def trial_balance_in(folder: Path, unused: list):
     from engine.bod_inputs import hint_of
     from engine.tables import sheets_of
     from engine.trial_balance import read_trial_balance
+    from engine.comparable import basis
     for name, _why in unused:
         if hint_of(Path(name).stem) != "tb":
             continue
@@ -118,16 +134,60 @@ def trial_balance_in(folder: Path, unused: list):
             tb = read_trial_balance(rows, sheet)
             if tb.lines:
                 tb.file = name
+                tb.ytd_only = not tb.has_ytd and "movement" in basis(rows, tb).lines
                 return tb
         except Exception:                    # noqa: BLE001 - not a trial balance after all
             continue
     return None
 
 
+def books_figures(tb, config, prefix: str = "") -> dict:
+    """Revenue (Có of the goods accounts less Nợ of 521), cost of goods sold (Nợ of 632) and operating costs (Nợ of
+    641/642) in the trial balance: the month's movement (prefix "") or the year to date ("ytd_"). None for a figure
+    the books have no account for; "how" says which accounts, as the receipt prints it."""
+    leaves = tb.leaves
+    rev_acc, _other = sales_pnl._revenue_accounts(config, [l.account for l in leaves])
+    ded_acc = sales_pnl._accounts(config, ("tk", "giam tru"), ("521",))
+    cogs_acc = sales_pnl._accounts(config, ("tk", "gia von"), ("632",))
+
+    def under(prefixes):
+        return [l for l in leaves if l.account.startswith(tuple(prefixes))]
+
+    def total(lines, side):
+        return sum((getattr(l, prefix + side) for l in lines), ZERO)
+    rev, ded, cogs, opex = under(rev_acc), under(ded_acc), under(cogs_acc), under(OPEX_ACCOUNTS)
+    return {"revenue": total(rev, "cr") - total(ded, "dr") if rev else None,
+            "cogs": total(cogs, "dr") if cogs else None,
+            "opex": total(opex, "dr") if opex else None,
+            "deductions": bool(ded),
+            "how": {"revenue": f"Có TK {'/'.join(rev_acc)}" + (f" trừ Nợ TK {'/'.join(ded_acc)}" if ded else ""),
+                    "cogs": f"Nợ TK {'/'.join(cogs_acc)}", "opex": "Nợ TK 641/642 trừ phần ghi giảm bên Có"}}
+
+
+def _reductions(gl: list, months: list) -> Decimal:
+    """Cost detail posted on the credit side (a cost written down) in those months: in the books' Có beside the
+    closing entry, so taken off the books' Nợ, as fpa.match_books does."""
+    return -sum((e.amount for e in gl if e.period in months and e.account and getattr(e, "side", "") == "cr"), ZERO)
+
+
+def _plan_only(m: Month) -> Optional[object]:
+    """The sales plan alone, for a folder with a plan by SKU but no sales ledger."""
+    b = m.bundle
+    if not b.sku_plans:
+        return None
+    return sales_pnl.compute([], b.sku_plans, b.plans, period=m.period, fy_start=_fy_start(b.config), config=b.config,
+                             plan_tables=b.sku_plan_totals)
+
+
 def _pnl(m: Month) -> list:
-    """Revenue, cost of goods sold, gross profit, operating costs, operating profit: month (books) and year to date."""
+    """Revenue, cost of goods sold, gross profit, operating costs, operating profit: month (books) and year to date
+    (books when the trial balance has the year to date)."""
     out = []
     month_book = f"sổ cân đối T{_month_text(m.period)}"
+    ytd_book = f"sổ cân đối lũy kế đến T{_month_text(m.period)}"
+    cfg = m.bundle.config
+    bm = books_figures(m.tb, cfg) if m.tb is not None else None
+    by = books_figures(m.tb, cfg, "ytd_") if m.tb is not None and m.tb.has_ytd else None
     if m.sales is not None:
         led, ytd = m.sales.lines(), m.sales.lines(ytd=True)
         books = {l.code: l for l in (m.sales_books.lines if m.sales_books else [])}
@@ -137,23 +197,45 @@ def _pnl(m: Month) -> list:
             bl = books.get(code)
             if bl is not None and code == "revenue" and bl.name != a.name:
                 bl = None                   # the books could only be matched gross: the net figure is the ledger's
-            out.append(PnlRow(code, name, bl.books if bl is not None else a.actual, a.plan, y.actual, y.plan,
-                              f"{month_book} ({bl.how})" if bl is not None else "sổ bán hàng"))
-        r, c = out[0], out[1]
-        out.append(PnlRow("gp", "Lợi nhuận gộp", r.actual - c.actual, r.plan - c.plan, r.ytd_actual - c.ytd_actual,
-                          r.ytd_plan - c.ytd_plan, "doanh thu thuần trừ giá vốn"))
+            row = PnlRow(code, name, bl.books if bl is not None else a.actual, a.plan, y.actual, y.plan,
+                         f"{month_book} ({bl.how})" if bl is not None else "sổ bán hàng", "sổ bán hàng")
+            if bl is not None and by is not None and by[code] is not None:
+                row.ytd_actual, row.ytd_source, row.ytd_books = by[code], f"{ytd_book} ({bl.how})", True
+            out.append(row)
+    elif bm is not None and bm["revenue"] is not None:
+        plan = _plan_only(m)
+        for code, name in (("revenue", "Doanh thu thuần"), ("cogs", "Giá vốn hàng bán")):
+            p = next((l for l in plan.lines() if l.code == code), None) if plan else None
+            yp = next((l for l in plan.lines(ytd=True) if l.code == code), None) if plan else None
+            row = PnlRow(code, name, bm[code] if bm[code] is not None else ZERO, p.plan if p else ZERO, None,
+                         yp.plan if yp else ZERO, f"{month_book} ({bm['how'][code]})", "chưa có")
+            if by is not None:
+                row.ytd_actual = by[code] if by[code] is not None else ZERO
+                row.ytd_source, row.ytd_books = f"{ytd_book} ({by['how'][code]})", True
+            out.append(row)
+    if len(out) == 2:
+        r, c = out
+        ya = None if r.ytd_actual is None or c.ytd_actual is None else r.ytd_actual - c.ytd_actual
+        out.append(PnlRow("gp", "Lợi nhuận gộp", r.actual - c.actual, r.plan - c.plan, ya, r.ytd_plan - c.ytd_plan,
+                          "doanh thu thuần trừ giá vốn", "doanh thu thuần trừ giá vốn", r.ytd_books and c.ytd_books))
     if m.costs is not None:
-        a, p = fpa.Variance.totals(m.costs.month)
-        ya, yp = fpa.Variance.totals(m.costs.ytd)
-        source = "sổ chi tiết chi phí"
-        if m.cost_books is not None and m.cost_books.ok:
-            books, _detail, down = m.cost_books.totals
-            a, source = books - down, f"{month_book} (Nợ TK 641/642 trừ phần ghi giảm bên Có)"
-        out.append(PnlRow("opex", "Chi phí hoạt động", a, p, ya, yp, source))
+        led_a, p = fpa.Variance.totals(m.costs.month)
+        led_ya, yp = fpa.Variance.totals(m.costs.ytd)
+        row = PnlRow("opex", "Chi phí hoạt động", led_a, p, led_ya, yp, "sổ chi tiết chi phí", "sổ chi tiết chi phí")
+        if bm is not None and bm["opex"] is not None:
+            row.actual = bm["opex"] - _reductions(m.bundle.gl, [m.period])
+            row.source = f"{month_book} ({bm['how']['opex']})"
+        if by is not None and by["opex"] is not None:
+            row.ytd_actual = by["opex"] - _reductions(m.bundle.gl, m.costs.months)
+            row.ytd_source, row.ytd_books = f"{ytd_book} ({by['how']['opex']})", True
+        m.opex_gap = (row.actual - led_a, row.ytd_actual - led_ya)
+        out.append(row)
     gp, opex = next((r for r in out if r.code == "gp"), None), next((r for r in out if r.code == "opex"), None)
     if gp is not None and opex is not None:
-        out.append(PnlRow("op", "Lợi nhuận hoạt động", gp.actual - opex.actual, gp.plan - opex.plan,
-                          gp.ytd_actual - opex.ytd_actual, gp.ytd_plan - opex.ytd_plan, "lợi nhuận gộp trừ chi phí"))
+        ya = None if gp.ytd_actual is None else gp.ytd_actual - opex.ytd_actual
+        out.append(PnlRow("op", "Lợi nhuận hoạt động", gp.actual - opex.actual, gp.plan - opex.plan, ya,
+                          gp.ytd_plan - opex.ytd_plan, "lợi nhuận gộp trừ chi phí", "lợi nhuận gộp trừ chi phí",
+                          gp.ytd_books and opex.ytd_books))
     return out
 
 
@@ -162,12 +244,27 @@ def _said(m: Month) -> list:
     out = []
     month = _month_text(m.period)
     if m.tb is not None:
-        out.append(f"Số tháng {month} trên báo cáo lấy từ bảng cân đối số phát sinh (file {m.tb.file}). Sổ bán hàng "
-                   "chỉ dùng để chia theo mã hàng và kênh, sổ chi tiết chi phí để chia theo bộ phận và yếu tố. Số lũy "
-                   "kế lấy từ các sổ chi tiết, vì bảng cân đối chỉ có tháng này.")
+        split = ("Sổ bán hàng chỉ dùng để chia theo mã hàng và kênh, sổ chi tiết chi phí để chia theo bộ phận và yếu tố."
+                 if m.sales is not None else
+                 "Thư mục chưa có sổ bán hàng, nên doanh thu và giá vốn chỉ có tổng theo sổ cân đối, chưa chia theo mã "
+                 "hàng; sổ chi tiết chi phí dùng để chia chi phí theo bộ phận và yếu tố.")
+        ytd = ("Số lũy kế lấy từ cột lũy kế từ đầu năm của bảng cân đối." if m.tb.has_ytd else
+               "Số lũy kế lấy từ các sổ chi tiết, chưa khớp sổ cân đối, vì bảng cân đối chỉ có số tháng này.")
+        out.append(f"Số tháng {month} trên báo cáo lấy từ bảng cân đối số phát sinh (file {m.tb.file}). {split} {ytd}")
+        if m.sales is None and m.row("revenue") is not None:
+            if not books_figures(m.tb, m.bundle.config)["deductions"]:
+                out.append("Bảng cân đối không có tài khoản giảm trừ doanh thu (521), nên doanh thu lấy bên Có TK 511; "
+                           "nếu công ty ghi giảm trừ bên Nợ TK 511 thì đây là số trước giảm trừ.")
+            if m.row("revenue").ytd_actual is None:
+                out.append("Chưa có lũy kế doanh thu và giá vốn: thư mục không có sổ bán hàng và bảng cân đối không có "
+                           "cột lũy kế.")
+            if not m.bundle.sku_plans:
+                out.append("Chưa có kế hoạch doanh thu theo mã hàng, nên cột kế hoạch của doanh thu và giá vốn để 0.")
     else:
         out.append(f"Thư mục chưa có bảng cân đối số phát sinh tháng {month}, nên số trên báo cáo lấy từ sổ bán hàng và "
                    "sổ chi tiết chi phí, chưa khớp với sổ. Báo cáo vẫn là bản SƠ BỘ.")
+        if m.tb_not_used is not None:
+            out.append(f"File {m.tb_not_used[0]}: {m.tb_not_used[1]}.")
     if m.sales_books is not None:
         out.append(m.sales_books.sentence())
         out += [n + "." for n in m.sales_books.notes()]
@@ -179,8 +276,12 @@ def _said(m: Month) -> list:
     if m.cost_books is not None:
         out.append(m.cost_books.sentence())
         if not m.cost_books.ok:
-            out.append("Vì chi phí chưa khớp sổ cân đối, dòng chi phí hoạt động trên báo cáo lấy từ sổ chi tiết; chị "
-                       "đừng trình bản này khi chưa rõ chênh lệch.")
+            out.append("Vì chi phí chưa khớp sổ cân đối, dòng chi phí hoạt động trên báo cáo vẫn lấy số sổ cân đối; bảng "
+                       f"chi phí theo bộ phận có thêm dòng “{GAP_LINE}” {fmt(m.opex_gap[0])} đ để cộng khớp. Chị đừng "
+                       "trình bản này khi chưa rõ chênh lệch.")
+    if m.costs is not None and m.opex_gap[1] != m.opex_gap[0] and m.row("opex").ytd_books:
+        out.append(f"Chi phí lũy kế theo sổ cân đối khác sổ chi tiết {fmt(m.opex_gap[1])} đ; bảng chi phí theo bộ phận "
+                   f"ghi phần này ở dòng “{GAP_LINE}”.")
     if m.costs is not None:
         out += [x + "." for x in m.costs.left_out()]
     if m.sales is not None:
@@ -215,8 +316,8 @@ def out_folder(folder: Path, period: str) -> Path:
     return path
 
 
-def _pct(variance: Decimal, plan: Decimal) -> Optional[Decimal]:
-    return None if not plan else (variance / abs(plan) * 100).quantize(Decimal("0.1"))
+def _pct(variance: Optional[Decimal], plan: Decimal) -> Optional[Decimal]:
+    return None if not plan or variance is None else (variance / abs(plan) * 100).quantize(Decimal("0.1"))
 
 
 def write(m: Month, out: Optional[Path] = None) -> dict:
@@ -237,18 +338,21 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
     ws.title = PNL
     ws.append([f"{STATUS} · Báo cáo FP&A tháng {month}"])
     ws.append([basis])
-    ws.append(["Chỉ tiêu", f"Thực hiện T{month}", "Kế hoạch", "Chênh lệch", "%", "Thực hiện lũy kế", "Kế hoạch lũy kế",
-               "Chênh lệch lũy kế", "%", "Nguồn số tháng"])
+    ytd_head = "Thực hiện lũy kế (sổ cân đối)" if m.pnl and all(r.ytd_books for r in m.pnl) else YTD_LEDGER
+    ws.append(["Chỉ tiêu", f"Thực hiện T{month}", "Kế hoạch", "Chênh lệch", "%", ytd_head, "Kế hoạch lũy kế",
+               "Chênh lệch lũy kế", "%", "Nguồn số tháng", "Nguồn số lũy kế"])
     for r in m.pnl:
         ws.append([r.name, r.actual, r.plan, r.variance, _pct(r.variance, r.plan), r.ytd_actual, r.ytd_plan,
-                   r.ytd_variance, _pct(r.ytd_variance, r.ytd_plan), r.source])
+                   r.ytd_variance, _pct(r.ytd_variance, r.ytd_plan), r.source, r.ytd_source])
         expect[f"'{PNL}'!B{ws.max_row}"] = r.actual
-        expect[f"'{PNL}'!F{ws.max_row}"] = r.ytd_actual
+        if r.ytd_actual is not None:
+            expect[f"'{PNL}'!F{ws.max_row}"] = r.ytd_actual
 
     if m.costs is not None:
         cs = wb.create_sheet(COSTS)
         cs.append([f"{STATUS} · Chi phí hoạt động theo bộ phận × yếu tố, tháng {month} và lũy kế"])
-        cs.append(["Sổ chi tiết chi phí chia theo bộ phận; tổng tháng khớp sổ cân đối khi có (xem Phiếu nhận file)."])
+        cs.append(["Sổ chi tiết chi phí chia theo bộ phận; dòng tổng bằng chi phí hoạt động trên P&L (xem Phiếu nhận "
+                   "file)."])
         cs.append(["Bộ phận", "Yếu tố chi phí", f"Thực hiện T{month}", "Kế hoạch", "Chênh lệch", "%", "Phân loại",
                    "Số thực chất", "Thực hiện lũy kế", "Kế hoạch lũy kế", "Chênh lệch lũy kế"])
         ytd = {(l.dept, l.element): l for l in m.costs.ytd}
@@ -259,8 +363,12 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
             cs.append([l.dept_name or l.dept or fpa.UNASSIGNED, l.element_name or l.element, l.actual, l.plan,
                        l.variance, l.pct, c.verdict if c else "", c.underlying if c and c.material else None,
                        y.actual if y else ZERO, y.plan if y else ZERO, y.variance if y else ZERO])
-        a, p = fpa.Variance.totals(m.costs.month)
-        ya, yp = fpa.Variance.totals(m.costs.ytd)
+        gap, ygap = m.opex_gap
+        if gap or ygap:                          # the books less the detail: the table still adds up to the P&L
+            cs.append([GAP_LINE, "", gap, ZERO, gap, None, "", None, ygap, ZERO, ygap])
+            expect[f"'{COSTS}'!C{cs.max_row}"] = gap
+        opex = m.row("opex")
+        a, p, ya, yp = opex.actual, opex.plan, opex.ytd_actual, opex.ytd_plan
         cs.append(["Tổng cộng", "", a, p, a - p, None, "", None, ya, yp, ya - yp])
         expect[f"'{COSTS}'!C{cs.max_row}"] = a
         expect[f"'{COSTS}'!I{cs.max_row}"] = ya
@@ -276,6 +384,11 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
                        ", ".join(w for x in c.causes for w in x.where[:3]) or ", ".join(c.line.actual_from[:3])])
             expect[f"'{VARIANCES}'!D{vs.max_row}"] = c.underlying
 
+    if m.sales is None and m.row("revenue") is not None:
+        bs = wb.create_sheet(BRIDGE)
+        bs.append([f"{STATUS} · Cầu nối lợi nhuận gộp tháng {month}"])
+        bs.append(["Chưa tính được: thư mục chưa có sổ bán hàng, nên em không chia được lợi nhuận gộp theo sản lượng, "
+                   "cơ cấu, giá bán và giá vốn. Doanh thu và giá vốn trên P&L lấy từ sổ cân đối."])
     if m.sales is not None:
         bs = wb.create_sheet(BRIDGE)
         bs.append([f"{STATUS} · Cầu nối lợi nhuận gộp tháng {month} (theo mã hàng, gộp các kênh; tính trên sổ bán hàng)"])
@@ -313,6 +426,8 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
                    f"{skipped} dòng có số mà không đọc được số hiệu tài khoản" if skipped else ""])
     for name, why in m.bundle.unused:
         if name != tb_file:
+            if m.tb_not_used is not None and name == m.tb_not_used[0]:
+                why = m.tb_not_used[1]
             rs.append([name, "Không dùng", 0, 0, why])
 
     log = audit.AuditLog(period=month)
