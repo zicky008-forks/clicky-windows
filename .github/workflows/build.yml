@@ -48,8 +48,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/clicky-model-cache
-          key: models-${{ hashFiles('tools/giong_noi/tai_model.py') }}
-          restore-keys: models-
+          key: models-v2-${{ hashFiles('tools/giong_noi/tai_model.py') }}
+          restore-keys: models-v2-
       # Offline Vietnamese speech (~75 MB, Apache-2.0 weights), checked by SHA-256, bundled as voice/asr-vi.
       - run: python tools/giong_noi/tai_model.py --model 70k --out voice/asr-vi
       # Offline Vietnamese voice (Piper vais1000 through sherpa-onnx, ~63 MB, no espeak-ng).
@@ -59,7 +59,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/clicky-model-cache
-          key: models-${{ hashFiles('tools/giong_noi/tai_model.py') }}
+          key: models-v2-${{ hashFiles('tools/giong_noi/tai_model.py') }}
       # VieNeu v3 (offline voice, Apache-2.0) without gradio/librosa/torch. Off until the blind listening
       # test picks it: run the workflow by hand with vieneu=true, or set the repo variable CLICKY_VIENEU=1.
       - name: VieNeu voice
