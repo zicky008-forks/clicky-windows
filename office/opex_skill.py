@@ -6,7 +6,8 @@ Typed in the chat it works on the folder of the open workbook, or the folder las
 
 The figures come from engine.fpa and engine.opex_split (code, Decimal). When the folder has a trial balance the
 costs are matched to it first, and nothing is split while they do not match: a department should never be asked to
-check a figure that is about to change. Drafts are saved, never sent (office.outlook_drafts). The tracker of who
+check a figure that is about to change. Drafts are saved, never sent (office.outlook_drafts); an Outlook draft
+syncs to the company mail server like any email the user writes, and CLICKY_OUTLOOK=0 keeps them as .eml files. The tracker of who
 answered is a local file (engine.opex_feedback). The customer's files are never changed: everything is written to a
 new folder.
 """

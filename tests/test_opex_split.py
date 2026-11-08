@@ -2,6 +2,7 @@
 an Outlook draft each that is saved and never sent; and a local tracker of who answered what."""
 import asyncio
 import email
+import email.policy
 from decimal import Decimal
 from pathlib import Path
 
@@ -36,8 +37,21 @@ def _xlsx(path: Path, sheets: dict) -> Path:
     return path
 
 
-def case(tmp_path, tb=True, shift=None) -> Path:
+# Pay lines that name a person: they must never reach a department's file or its draft
+PAYROLL = [["25/10/2026", "PL77701", "10", "2026", "6411", "3341", "KD", "LUONG", "Lương T10 – Nguyễn Văn An", "25000000"],
+           ["25/10/2026", "PL77702", "10", "2026", "6411", "3341", "KD", "LUONG", "Thưởng KPI – Trần Thị Bình", "8000000"]]
+PAYROLL_TOTAL = 33 * M
+PERSONAL = ("Nguyễn Văn An", "Trần Thị Bình", "PL77701", "PL77702")
+
+
+def case(tmp_path, tb=True, shift=None, payroll=False) -> Path:
     d = fs.folder(tmp_path / "F01")
+    if payroll:
+        rows = fs.gl_rows()
+        rows[-1:-1] = PAYROLL
+        rows[-1][9] = str(int(rows[-1][9]) + PAYROLL_TOTAL)
+        fs.write_csv(d / "SoChiTietChiPhi_2026.csv", rows)
+        shift = dict(shift or {}, **{"6411": (shift or {}).get("6411", 0) + PAYROLL_TOTAL})
     _xlsx(d / "Danh muc.xlsx", {"Phòng ban": DEPT_SHEET, "Khoản mục": ELEMENT_SHEET, "Tham số": RULES})
     if tb:
         fs.write_csv(d / "TB T10 2026.csv", fs.tb_rows(shift))
@@ -299,3 +313,85 @@ async def _noop():
 
 def _done(_):
     return _noop()
+
+
+def _cells(path: Path) -> str:
+    wb = load_workbook(path)
+    return "\n".join(str(c.value) for ws in wb.worksheets for row in ws.iter_rows() for c in row if c.value is not None)
+
+
+def test_pay_lines_never_reach_a_department_and_the_totals_stay(tmp_path):
+    d = case(tmp_path, payroll=True)
+    r = opex_skill.prepare(d, outlook=lambda: None)
+    assert r["matched"].ok
+    for p, path in zip(r["packs"], r["paths"]):
+        text = _cells(path) + "\n" + opex_split.draft(p, r["v"], path).body
+        if p.dept:
+            assert not any(x in text for x in PERSONAL), p.dept
+        held = [x for x in p.details if x.text.startswith(opex_split.HELD)]
+        if p.dept:
+            assert sorted(x.element for x in held) == ["LUONG"]
+            assert all(not x.ref and not x.where for x in held)
+        else:
+            assert not held                               # accounting keeps every line
+    kd = next(p for p in r["packs"] if p.dept == "KD")
+    pay = next(x for x in kd.details if x.element == "LUONG")
+    assert pay.amount == fs.actual_month("KD", "LUONG", 10) + PAYROLL_TOTAL and pay.text == f"{opex_split.HELD} (4 dòng)"
+    assert sum(p.totals[0] for p in r["packs"]) == fpa.Variance.totals(r["v"].month)[0]
+    for p in r["packs"]:
+        assert sum(x.amount for x in p.details) == p.totals[0]
+    for eml in r["out"].glob("*.eml"):
+        if "chua_gan" not in eml.name:
+            body = email.message_from_bytes(eml.read_bytes(), policy=email.policy.default).get_body(("plain",)).get_content()
+            assert not any(x in body for x in PERSONAL)
+
+
+def test_what_counts_as_pay_and_the_catalogue_can_add_more():
+    c = bod_inputs.Config(elements={"QC": {"ten": "Quảng cáo", "tk": "6418"}, "CL": {"ten": "Kiểm tra chất lượng"},
+                                    "TM": {"ten": "Phí thương mại"}, "TH": {"ten": "Thưởng KPI"},
+                                    "BH": {"ten": "Bảo hiểm xã hội"}, "DT": {"ten": "Đào tạo"}},
+                          rules={"yeu to nhay cam": "DT"})
+    assert [e for e in ("QC", "CL", "TM", "TH", "BH", "DT", "LUONG", "KH") if opex_split.sensitive(e, "", c)] == \
+        ["TH", "BH", "DT", "LUONG"]
+    assert opex_split.sensitive("CTP", "6421", c) and not opex_split.sensitive("CTP", "6418", c)
+
+
+def test_outlook_is_never_started_when_the_flag_or_setting_says_eml(tmp_path, monkeypatch):
+    b, v = _variance(case(tmp_path))
+    p = next(x for x in opex_split.split(v, b.gl, b.config) if x.dept == "KD")
+    out = tmp_path / "out"
+    path = opex_split.write_pack(p, v, out)
+
+    def no_dispatch():
+        raise AssertionError("Outlook was started")
+    monkeypatch.setattr(outlook_drafts, "_outlook", no_dispatch)
+    monkeypatch.setenv("CLICKY_OUTLOOK", "0")
+    [s] = outlook_drafts.save_all([opex_split.draft(p, v, path)], out)
+    assert s.how == "eml"
+    monkeypatch.delenv("CLICKY_OUTLOOK")
+    from storage import set_setting
+    set_setting("drafts", "eml")
+    (out / "Chi phi KD.eml").unlink()
+    [s] = outlook_drafts.save_all([opex_split.draft(p, v, path)], out)
+    assert s.how == "eml"
+
+
+def test_the_robot_runs_without_outlook_and_grades_a_real_run(tmp_path, monkeypatch):
+    import json
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "dien_tap"))
+    import opex_robot
+    log = tmp_path / "scene.jsonl"
+    env = opex_robot.robot_env(log)
+    assert env["CLICKY_OUTLOOK"] == "0" and env["CLICKY_LOCAL_ONLY"] == "1"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    monkeypatch.setenv("CLICKY_OUTLOOK", "0")
+    monkeypatch.setattr(outlook_drafts, "_outlook", lambda: (_ for _ in ()).throw(AssertionError("Outlook")))
+    r = opex_skill.prepare(case(tmp_path))
+    events = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()] + [{"event": "story_end"}]
+    assert opex_robot.finished(events)
+    res = opex_robot.grade(events, True, r["out"])
+    assert res.ok, res.markdown("x")
+    bad = opex_robot.grade([e for e in events if e["event"] != "drafts_saved"], False, r["out"])
+    assert {l.name for l in bad.lines if not l.ok} == {"Không mở Outlook, không gửi thư nào",
+                                                       "Mỗi phòng một file và một thư nháp", "File của case không bị sửa"}

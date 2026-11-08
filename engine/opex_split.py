@@ -11,6 +11,11 @@ Recipients come from the catalogue's department sheet ('Email', 'CC'). Lines wit
 to be assigned (the rule 'Email kế toán', when the catalogue has it). A department without an address still gets its
 workbook and a draft with no recipient, and is named, so it is never left out in silence.
 
+Pay is personal data (Nghị định 13/2023): a department's workbook never carries the lines of a sensitive element
+(salary, bonus, allowances, social insurance, by default; the catalogue adds more with the rule 'Yếu tố nhạy cảm').
+Each such element is one line there, with its amount and line count; the detail stays with HR. The accounting file
+for unassigned lines keeps every line.
+
 Each workbook carries 'clicky-opex|<month>|<department>' in its keywords, so the file a department sends back is
 known for what it is even when it was renamed.
 """
@@ -24,6 +29,7 @@ from typing import Optional
 
 from engine.fpa import UNASSIGNED, Variance, _month_text
 from engine.monthly_report import fmt
+from engine.tables import key
 
 ZERO = Decimal(0)
 REPLIES = ("Đúng", "Sai", "Cần hỏi")
@@ -31,6 +37,16 @@ SUMMARY = "Tổng hợp"
 DETAIL = "Chi tiết"
 STATUS = "SƠ BỘ"
 TAG = "clicky-opex"
+HELD = "Chi tiết do phòng nhân sự giữ"
+# Words that make a cost element personal (pay), in its name or group as printed: tones kept, since folded
+# 'luong' is also 'lượng' (chất lượng) and 'thuong' is also 'thương mại'.
+SENSITIVE_WORDS = ("lương", "tiền công", "thưởng", "phụ cấp", "bhxh", "bhyt", "bhtn", "kpcđ", "kpcd", "bảo hiểm xã hội",
+                   "bảo hiểm y tế", "bảo hiểm thất nghiệp", "kinh phí công đoàn", "chi phí nhân viên", "salary", "wage",
+                   "wages", "bonus", "payroll", "allowance")
+# The same, for codes and names typed without tones: the start of the folded text, spaces removed.
+SENSITIVE_CODES = ("luong", "tienluong", "tiencong", "thuong", "phucap", "bhxh", "bhyt", "bhtn", "kpcd", "salary",
+                   "wage", "bonus", "payroll")
+SENSITIVE_ACCOUNTS = ("6411", "6421")            # VAS 'chi phí nhân viên' of selling and of administration
 
 
 @dataclass
@@ -87,8 +103,49 @@ def split(v: Variance, gl: list, config=None) -> list:
             pack(e.dept).details.append(Detail(e.where, e.element or (f"TK {e.account}" if e.account else ""),
                                                e.account, e.ref, e.text, e.amount))
     for p in packs.values():
+        if p.dept:                                   # accounting (unassigned lines) keeps every line
+            p.details = _hold(p.details, config)
         p.details.sort(key=lambda d: (d.element, d.account, d.where))
     return sorted(packs.values(), key=lambda p: (p.dept == "", p.dept))
+
+
+def _extra(config) -> tuple:
+    listed = config.rule("yeu to nhay cam", default="") if config is not None else ""
+    return tuple(key(x) for x in re.split(r"[;,\n]", str(listed or "")) if key(x))
+
+
+def sensitive(element: str, account: str = "", config=None) -> bool:
+    """A cost element whose lines name people and their pay: by its name or group (tones kept), its code, an
+    account of staff cost, or the catalogue's rule 'Yếu tố nhạy cảm' (codes or words)."""
+    import unicodedata
+    info = (getattr(config, "elements", {}) or {}).get(element, {}) if config is not None else {}
+    printed = [unicodedata.normalize("NFC", str(x or "")).lower() for x in (info.get("ten"), info.get("nhom"))]
+    if any(re.search(rf"(?<!\w){re.escape(w)}(?!\w)", t) for t in printed if t for w in SENSITIVE_WORDS):
+        return True
+    has_tones = lambda t: key(t) != t                                     # noqa: E731
+    bare = [key(element).replace(" ", "")] + [key(t).replace(" ", "") for t in printed if t and not has_tones(t)]
+    if any(b.startswith(SENSITIVE_CODES) for b in bare if b):
+        return True
+    extra = _extra(config)
+    folded = [key(element)] + [key(t) for t in printed if t]
+    if any(w and (w == f or re.search(rf"(^| ){re.escape(w)}( |$)", f)) for w in extra for f in folded if f):
+        return True
+    return any(a and a.startswith(SENSITIVE_ACCOUNTS) for a in (account, str(info.get("tk", "") or "")))
+
+
+def _hold(details: list, config) -> list:
+    """The lines of each sensitive element folded into one: its amount and how many lines, no reference, no text."""
+    out, held = [], {}
+    for d in details:
+        if sensitive(d.element, d.account, config):
+            held.setdefault(d.element, []).append(d)
+        else:
+            out.append(d)
+    for element, ds in held.items():
+        accounts = sorted({d.account for d in ds if d.account})
+        out.append(Detail("", element, ", ".join(accounts), "", f"{HELD} ({len(ds)} dòng)",
+                          sum((d.amount for d in ds), ZERO)))
+    return out
 
 
 def no_address(packs: list) -> list:

@@ -5,14 +5,19 @@ to the Drafts folder with .Save(). The user opens Drafts, reads each one and pre
 and never .Display, because a shown compose window can be sent by a stray Enter or a mail rule.
 
 The mail item is wrapped in _NoSend, which passes through only what a draft needs and raises on Send and Display,
-so a later change cannot send by mistake. Drafts sit in the user's own mailbox; nothing goes to Clicky's AI.
+so a later change cannot send by mistake. Nothing goes to Clicky's AI.
 
-Without Outlook (not installed, blocked, another PC) each draft is written next to its workbook as an .eml file
-marked unsent, which Outlook or any mail program opens as a new message for the user to check and send.
+An Outlook draft is not only on this PC: with Exchange or Microsoft 365 the Drafts folder is on the company mail
+server, so a saved draft (its body and attachment) syncs there like any email the user writes. Where that is not
+wanted, the setting 'drafts' = 'eml' or the environment CLICKY_OUTLOOK=0 skips Outlook entirely (it is never
+started): each draft is then an .eml file next to its workbook, marked unsent, which Outlook or any mail program
+opens as a new message for the user to check and send. The rehearsal robot always runs with CLICKY_OUTLOOK=0,
+because the test PC's Outlook is a company mailbox. The same .eml is written when Outlook is not there or refuses.
 """
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from dataclasses import dataclass
 from email.message import EmailMessage
@@ -59,6 +64,17 @@ class Saved:
     how: str            # "outlook", "eml" or "" when it could not be saved
     path: str = ""      # the .eml file, for "eml"
     why: str = ""       # plain words when it could not be saved
+
+
+def use_outlook() -> bool:
+    """False when the user or the robot asked for .eml files only: Outlook is then never started."""
+    if os.environ.get("CLICKY_OUTLOOK", "").strip() == "0":
+        return False
+    try:
+        from storage import setting
+        return str(setting("drafts", "auto") or "auto").strip().lower() != "eml"
+    except Exception:                        # noqa: BLE001 - no settings: the default
+        return True
 
 
 def _outlook():
@@ -111,7 +127,7 @@ def to_eml(d, path: Path) -> Path:
 def save_all(drafts: list, folder: Path, outlook: Optional[Callable] = None) -> list:
     """Every draft saved, one Saved each, in order. outlook() gives the Application (tests pass a fake).
     One that Outlook refuses is written as .eml instead; nothing is ever sent."""
-    app = (outlook or _outlook)()
+    app = (outlook or _outlook)() if use_outlook() else None
     out = []
     for i, d in enumerate(drafts):
         if app is not None:

@@ -217,6 +217,16 @@ Clicky ghi các sự kiện: `bod_start` (`folder` là mã thư mục, không ph
 
 `show_book` và `close_book` mang `book` (8 ký tự hex của sha1 đường dẫn, không bao giờ là tên file) và `pack` (đúng khi là bộ BOD). Dòng kiểm "File nguồn mở để chỉ ô đã đóng, không lưu" đếm theo từng file: bộ BOD được phép để mở, mọi file khác đã `show_book` phải có `close_book` cùng `book`, và không lần đóng nào có `saved` đúng. Bản cài chưa ghi `close_book` hoặc `book` thì dòng này hiện CHƯA KIỂM ĐƯỢC, không tính là đạt.
 
+### Diễn tập tách chi phí cho các phòng
+
+```
+python tools\dien_tap\opex_robot.py --thu-muc <thu_muc_case_gia_lap>
+```
+
+Robot chép case sang thư mục kết quả, rồi mở Clicky với `--opex-split <case>`, `CLICKY_SCENE_LOG`, `CLICKY_LOCAL_ONLY=1` và **`CLICKY_OUTLOOK=0`**. Biến cuối là bắt buộc: Outlook trên máy test là hộp thư công ty, thư nháp lưu vào Outlook sẽ đồng bộ lên máy chủ thư của công ty. Có `CLICKY_OUTLOOK=0`, Clicky không mở Outlook, mỗi thư nháp là một file `.eml` cạnh file chi phí của phòng. Không chạy tay `--opex-split` trên máy test mà thiếu biến này.
+
+**Cổng ĐẠT:** tách xong, không mở Outlook và không gửi thư nào, mỗi phòng một file và một `.eml`, đã khớp sổ cân đối khi case có bảng cân đối, file của case không bị sửa. Mã thoát: 0 = ĐẠT, 1 = KHÔNG ĐẠT, 2 = không chạy được.
+
 ### Power Query khởi động trong lúc đọc phiếu (bản 82a0f2f trở đi)
 
 Trong lúc phiếu nhận file chờ chị bấm, Clicky mở một sổ ẩn của riêng nó ở chế độ chỉ đọc, `%LOCALAPPDATA%\Clicky\khoi-dong\clicky-khoi-dong.xlsx`, để Power Query khởi động sẵn. Robot không tính sổ này là file của người dùng. Robot chỉ hỏi Excel đúng tên này và không đọc tên file nào khác.
