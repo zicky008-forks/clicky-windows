@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal
+from pathlib import Path
 from typing import Optional
 
 from engine.bod_check import fiscal_year, fy_months
@@ -94,11 +95,20 @@ def plan_choices(plans: list) -> list:
     return [out[k] for k in sorted(out)]
 
 
+def is_forecast_plan(p: Plan) -> bool:
+    """A forecast or revised estimate (LE T09, FC2, AOPR): never the target the month is compared with, even when it
+    is approved and newer. The catalogue's 'Bản kế hoạch' or the user's pick still chooses any version by name."""
+    from engine import roles
+    return roles.is_forecast(p.version) or roles.is_forecast(Path(p.file).stem)
+
+
 def choose_plan(plans: list, version: Optional[str] = None, file: Optional[str] = None) -> tuple:
     """(Plan or None, the only one in the folder?). One approved plan among several is the one; otherwise asked."""
     found = plan_choices(plans)
     if version:
         found = [p for p in found if key(p.version) == key(version)]
+    elif not file:
+        found = [p for p in found if not is_forecast_plan(p)]   # the month is held against the annual plan only
     if file:
         found = [p for p in found if p.file == file]
     if len(found) > 1:

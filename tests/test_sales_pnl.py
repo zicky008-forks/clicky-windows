@@ -156,12 +156,15 @@ def test_a_printed_plan_total_is_checked_never_added(tmp_path):
 
 
 def test_two_plan_versions_are_asked_never_picked(tmp_path):
-    rows = ss.plan_rows("AOP", total=None) + ss.plan_rows("AOPR1", total=None)[1:]
+    rows = ss.plan_rows("AOP", total=None) + ss.plan_rows("AOP2", total=None)[1:]
     b = _load(tmp_path, plan={"KH theo ma hang": rows})
     with pytest.raises(PickVersion) as asked:
         _pnl(b)
-    assert asked.value.versions == ["AOP", "AOPR1"]
-    assert _pnl(b, version="AOPR1").version == "AOPR1"
+    assert asked.value.versions == ["AOP", "AOP2"]
+    assert _pnl(b, version="AOP2").version == "AOP2"
+    rows = ss.plan_rows("AOP", total=None) + ss.plan_rows("LE T09", total=None)[1:]
+    b = _load(tmp_path / "le", plan={"KH theo ma hang": rows})
+    assert _pnl(b).version == "AOP" and _pnl(b, version="LE T09").version == "LE T09"   # a forecast only by name
 
 
 def test_mixed_units_without_a_sku_catalogue_wait_for_one(tmp_path):

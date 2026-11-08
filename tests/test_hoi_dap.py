@@ -448,3 +448,22 @@ def test_a_follow_up_with_a_new_department_keeps_the_line_and_time(named):
     assert (b.query.intent, b.query.target, b.query.time) == ("dept", "Kinh doanh", None)
     c = hoi_dap.answer(named, "còn doanh thu?", first.query)
     assert (c.query.intent, c.query.line, c.query.time) == ("line", "revenue", "ytd")
+
+
+def test_the_month_is_compared_with_the_annual_plan_never_the_newer_approved_forecast(tmp_path):
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "dien_tap"))
+    import tao_case_chi_phi
+    d = tao_case_chi_phi.make(tmp_path / "case", forecast=True)            # AOP and LE T09 (approved 20/09/2026)
+    m = fpa_report.compute(d)
+    assert m.costs.plan.version == "AOP" and m.costs.plan.file == "AOP_2026.csv"
+    out = fpa_report.write(m)
+    wb = load_workbook(out["xlsx"], read_only=True)
+    basis = wb["P&L"]["A2"].value
+    receipt = " ".join(str(v) for r in wb["Phieu nhan file"].iter_rows(values_only=True) for v in r if v is not None)
+    wb.close()
+    assert basis.startswith("Kế hoạch: file AOP_2026.csv, phiên bản AOP") and "LE T09" not in basis
+    assert "AOP" in receipt
+    assert hoi_dap.plan_version(hoi_dap.read(out["xlsx"])) == "AOP"
+    named = fpa_report.compute(d, version="LE T09")                         # chosen by name it is still used
+    assert named.costs.plan.version == "LE T09"

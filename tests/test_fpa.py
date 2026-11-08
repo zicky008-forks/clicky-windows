@@ -64,10 +64,17 @@ def test_nothing_is_left_out_in_silence(bundle):
 
 
 def test_two_plan_versions_are_asked_never_picked(tmp_path):
-    b = bod_inputs.load(fs.folder(tmp_path / "F01", versions=("AOP", "AOPR1")), fy_start=1)
+    b = bod_inputs.load(fs.folder(tmp_path / "F01", versions=("AOP", "AOP2")), fy_start=1)
     with pytest.raises(fpa.PickVersion) as asked:
         fpa.compute(b.gl, b.plans, fy_start=1)
-    assert asked.value.versions == ["AOP", "AOPR1"]
+    assert asked.value.versions == ["AOP", "AOP2"]
+    v = fpa.compute(b.gl, b.plans, version="AOP2", fy_start=1)
+    assert v.version == "AOP2" and _line(v.month, "MKT", "QC").plan == fs.plan_month("MKT", "QC", 10)
+
+
+def test_a_revised_or_forecast_version_is_never_the_target_unless_named(tmp_path):
+    b = bod_inputs.load(fs.folder(tmp_path / "F01", versions=("AOP", "AOPR1")), fy_start=1)
+    assert fpa.compute(b.gl, b.plans, fy_start=1).version == "AOP"           # AOPR is a revised estimate
     v = fpa.compute(b.gl, b.plans, version="AOPR1", fy_start=1)
     assert v.version == "AOPR1" and _line(v.month, "MKT", "QC").plan == fs.plan_month("MKT", "QC", 10)
 
