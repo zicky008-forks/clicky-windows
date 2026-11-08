@@ -86,19 +86,39 @@ class Month:
         return next((r for r in self.pnl if r.code == code), None)
 
 
+def _terms(text: str) -> set:
+    words = [w for w in key(text).split() if not w.isdigit()]
+    return {w for w in words if len(w) >= 5} | {f"{a} {b}" for a, b in zip(words, words[1:])}
+
+
+def code_words(code: str, gl: list) -> set:
+    """What a department code is known by: the code and its parts, the site, division or channel of its ledger
+    lines, and the words its voucher descriptions share (in at least half of its lines and in few other lines):
+    'Chi phí VP Miền Trung T10' -> 'mien trung'."""
+    from collections import Counter
+    words = {key(code)} | {key(x) for x in re.split(r"[-_./ ]+", str(code)) if len(x) >= 2}
+    mine = [e for e in gl if e.dept == code]
+    for e in mine:
+        words |= {key(x) for x in (e.site, e.division, e.channel) if x and len(key(x)) >= 2}
+    texts = [_terms(e.text) for e in mine if e.text]
+    others = [_terms(e.text) for e in gl if e.dept != code and e.text]
+    if texts:
+        here = Counter(t for ts in texts for t in ts)
+        there = Counter(t for ts in others for t in ts)
+        words |= {t for t, n in here.items() if n * 2 >= len(texts) and there[t] <= max(1, len(others) * 0.05)}
+    words.discard("")
+    return words
+
+
 def notes_about(notes: list, codes: list, gl: list) -> list:
     """The plan's notes that speak of the department codes in question: a note that names the code (or a part of
-    it, 'KD1' in 'KD1-MB'), or the site, division or channel its ledger lines carry. A note about something else is
-    never quoted beside the question."""
+    it, 'KD1' in 'KD1-MB'), the site, division or channel its ledger lines carry, or the words its voucher
+    descriptions share. A note about something else is never quoted beside the question."""
     if not codes or not notes:
         return []
     words = set()
     for c in codes:
-        words |= {key(c)} | {key(x) for x in re.split(r"[-_./ ]+", str(c)) if len(x) >= 2}
-        for e in gl:
-            if e.dept == c:
-                words |= {key(x) for x in (e.site, e.division, e.channel) if x and len(key(x)) >= 2}
-    words.discard("")
+        words |= code_words(c, gl)
 
     def names(n: str) -> bool:
         text = f" {key(n)} "
