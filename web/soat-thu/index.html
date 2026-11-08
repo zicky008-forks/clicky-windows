@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- connect-src 'self': this page can only fetch its own files, so a dropped file cannot be sent anywhere. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self' blob:; connect-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; form-action 'none'; base-uri 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Clicky soát thử</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2.5 29.5 23Q16 29 2.5 23Z' fill='%232563eb' stroke='white' stroke-width='1.4'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f6f8fc; --card: #ffffff; --ink: #172036; --soft: #5a6478; --line: #dfe5ef;
+    --blue: #2563eb; --blue-ink: #ffffff; --blue-soft: #e8efff;
+    --red: #b42318; --red-soft: #fdecea; --green: #16794c; --green-soft: #e6f5ee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10141d; --card: #181e2a; --ink: #e9edf5; --soft: #a3adbf; --line: #2a3242;
+      --blue: #6b9bff; --blue-ink: #0d1424; --blue-soft: #1d2a47;
+      --red: #ff8a80; --red-soft: #3a1d1d; --green: #5fd39a; --green-soft: #173126;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 18px/1.5 "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; min-height: 100vh;
+    display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; color: var(--soft); font-size: 16px; }
+  header svg { width: 30px; height: 30px; flex: none; }
+  header b { color: var(--ink); }
+  .screen { display: none; flex: 1; flex-direction: column; gap: 18px; }
+  .screen.on { display: flex; }
+  h1 { font-size: 30px; line-height: 1.25; margin: 8px 0 0; }
+  h2 { font-size: 24px; line-height: 1.3; margin: 0; }
+  p { margin: 0; }
+  .soft { color: var(--soft); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 22px; }
+  .promises { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  .promises li { display: flex; gap: 10px; align-items: center; }
+  .promises li::before { content: "✓"; color: var(--green); font-weight: 700; }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: auto; padding-top: 12px; }
+  button, .button { font: inherit; border-radius: 12px; padding: 14px 22px; cursor: pointer; border: 1px solid var(--line);
+    background: var(--card); color: var(--ink); text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
+  button.main, .button.main { background: var(--blue); color: var(--blue-ink); border-color: var(--blue); font-weight: 600; }
+  button:disabled { opacity: .45; cursor: default; }
+  button:focus-visible, .button:focus-visible, .slot:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+  .slots { display: grid; gap: 14px; }
+  .slot { border: 2px dashed var(--line); border-radius: 16px; padding: 20px; background: var(--card); cursor: pointer; }
+  .slot.drag { border-color: var(--blue); background: var(--blue-soft); }
+  .slot.filled { border-style: solid; border-color: var(--green); }
+  .slot .label { font-weight: 600; }
+  .slot .file { color: var(--soft); font-size: 16px; word-break: break-all; }
+  .slot.filled .file { color: var(--green); }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .link { background: none; border: none; padding: 4px 0; color: var(--blue); text-decoration: underline; cursor: pointer; }
+  .big { font-size: 28px; line-height: 1.3; font-weight: 700; }
+  .tag { align-self: flex-start; display: inline-block; font-size: 14px; padding: 3px 10px; border-radius: 99px; background: var(--blue-soft); color: var(--blue); }
+  .tag.red { background: var(--red-soft); color: var(--red); }
+  .tag.green { background: var(--green-soft); color: var(--green); }
+  .dots { display: flex; gap: 6px; }
+  .dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--line); }
+  .dots i.on { background: var(--blue); }
+  .spinner { width: 46px; height: 46px; border-radius: 50%; border: 5px solid var(--blue-soft); border-top-color: var(--blue);
+    animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+  .status { font-size: 15px; color: var(--soft); min-height: 22px; }
+  details { border-top: 1px solid var(--line); padding-top: 12px; }
+  summary { cursor: pointer; font-weight: 600; }
+  details ol { padding-left: 22px; margin: 10px 0 0; display: grid; gap: 8px; }
+  footer { margin-top: 28px; font-size: 14px; color: var(--soft); border-top: 1px solid var(--line); padding-top: 14px; }
+  .error { background: var(--red-soft); color: var(--red); border-radius: 12px; padding: 14px 16px; }
+  @media (max-width: 420px) { h1 { font-size: 26px; } .big { font-size: 24px; } button, .button { width: 100%; justify-content: center; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2.5 29.5 23Q16 29.5 2.5 23Z" fill="#2563eb" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/><path d="M11.9 10.5h8.2M8.1 16.5h15.8" stroke="#cfe0ff" stroke-width="1.3"/></svg>
+    <span><b>Clicky</b> · soát sổ trước khi gửi sếp</span>
+  </header>
+
+  <!-- 1. Welcome: one promise, two buttons -->
+  <section class="screen on" id="s-welcome" aria-live="polite">
+    <h1>Soát sổ tháng trong 1 phút, ngay trên máy chị.</h1>
+    <ul class="promises">
+      <li>Không cài đặt, không cần tài khoản</li>
+      <li>File không rời máy chị</li>
+      <li>Số do máy tính đúng từng đồng, không phải AI đoán</li>
+    </ul>
+    <p class="status" id="boot-status">Đang chuẩn bị bộ máy soát…</p>
+    <div class="actions">
+      <button class="main" id="btn-sample">Thử với file mẫu</button>
+      <button id="btn-own">Soát file của tôi</button>
+    </div>
+  </section>
+
+  <!-- 2. Drop two trial balances -->
+  <section class="screen" id="s-drop">
+    <h2>Kéo 2 file bảng cân đối tài khoản vào đây</h2>
+    <p class="soft">Xuất từ MISA, Fast, Bravo hoặc Excel. Dạng .xlsx hoặc .csv.</p>
+    <div class="slots">
+      <div class="slot" id="slot-cur" tabindex="0" role="button" aria-label="Chọn file sổ tháng này">
+        <div class="label">Sổ tháng này</div>
+        <div class="file">Kéo file vào, hoặc bấm để chọn</div>
+      </div>
+      <div class="slot" id="slot-prev" tabindex="0" role="button" aria-label="Chọn file sổ tháng trước">
+        <div class="label">Sổ tháng trước</div>
+        <div class="file">Kéo file vào, hoặc bấm để chọn</div>
+      </div>
+    </div>
+    <div class="row"><button class="link" id="btn-swap" hidden>Đổi chỗ hai file</button></div>
+    <div class="error" id="drop-error" hidden></div>
+    <input type="file" id="pick" accept=".xlsx,.xlsm,.csv,.xls" hidden>
+    <div class="actions">
+      <button class="main" id="btn-run" disabled>Soát ngay</button>
+      <button id="btn-back">Quay lại</button>
+    </div>
+  </section>
+
+  <!-- 3. Working -->
+  <section class="screen" id="s-work" aria-live="polite">
+    <div class="spinner" role="img" aria-label="Đang soát"></div>
+    <h2>Clicky đang soát…</h2>
+    <p class="soft">Đang chạy trên máy chị. Không file nào được gửi đi.</p>
+  </section>
+
+  <!-- 4. One idea per screen -->
+  <section class="screen" id="s-card" aria-live="polite">
+    <div class="dots" id="dots"></div>
+    <span class="tag" id="card-tag"></span>
+    <p class="big" id="card-title"></p>
+    <p id="card-body"></p>
+    <div class="actions">
+      <button class="main" id="btn-next">Tiếp</button>
+    </div>
+  </section>
+
+  <!-- 5. Take the report, next step -->
+  <section class="screen" id="s-done">
+    <h2>Báo cáo tháng đã sẵn sàng</h2>
+    <p>File Excel có công thức, nguồn từng số, sheet kiểm tra và câu hỏi xác minh. Mở ra là thấy.</p>
+    <div class="actions" style="margin-top:0;padding-top:0">
+      <button class="main" id="btn-download">Tải báo cáo Excel</button>
+    </div>
+    <details id="questions">
+      <summary>Câu hỏi nên xác minh trước khi giải thích với sếp</summary>
+      <ol id="question-list"></ol>
+    </details>
+    <div class="card">
+      <p><b>Muốn Clicky sửa giúp và ra biên bản đối chiếu?</b></p>
+      <p class="soft">Bản cài trên máy chỉ vào đúng ô cần sửa trong Excel, ghi biên bản “Sơ bộ / Chính thức”, và nhớ cách làm cho tháng sau.</p>
+      <div class="row" style="margin-top:12px" id="cta"></div>
+    </div>
+    <div class="actions">
+      <button id="btn-again">Soát file khác</button>
+    </div>
+  </section>
+
+  <section class="screen" id="s-error">
+    <h2>Chưa soát được</h2>
+    <p class="error" id="error-text"></p>
+    <div class="actions"><button class="main" id="btn-retry">Thử lại</button></div>
+  </section>
+
+  <footer>
+    Trang này chỉ tải file của chính nó. File chị kéo vào được đọc ngay trong trình duyệt và không gửi đi đâu.
+    Muốn tự kiểm: sau khi trang mở xong, chị ngắt mạng rồi soát, vẫn chạy bình thường.
+    File mẫu là số liệu tự dựng để thử, không phải của công ty nào.
+  </footer>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

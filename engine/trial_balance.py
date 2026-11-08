@@ -1,0 +1,190 @@
+"""Read a trial balance (Bảng cân đối tài khoản / cân đối phát sinh) from spreadsheet rows.
+
+Works on plain rows (lists of cell values) so the same code serves Excel over COM,
+an .xlsx file and tests. Amounts are Decimal: the engine never uses floats for money.
+Exports from MISA, Fast, Bravo and SAP differ in titles and header layout, so the
+header is found by keywords rather than fixed positions.
+"""
+import re
+import unicodedata
+from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
+from typing import Optional
+
+ZERO = Decimal(0)
+COLUMNS = ("open_dr", "open_cr", "dr", "cr", "close_dr", "close_cr")
+
+
+def fold(text) -> str:
+    """Lowercase without Vietnamese accents: 'Số dư đầu kỳ' → 'so du dau ky'."""
+    s = unicodedata.normalize("NFD", str(text or "")).replace("đ", "d").replace("Đ", "D")
+    return re.sub(r"\s+", " ", "".join(c for c in s if unicodedata.category(c) != "Mn")).strip().lower()
+
+
+def parse_amount(value):
+    """Return (Decimal, was_text). Accepts 1.234.567 / 1,234,567 / (1.000) / '-' / blanks."""
+    if value is None or value == "":
+        return ZERO, False
+    if isinstance(value, bool):
+        raise ValueError("boolean is not an amount")
+    if isinstance(value, (int, float, Decimal)):
+        return Decimal(str(value)), False
+    s = str(value).strip().replace(" ", "").replace(" ", "")
+    if s in ("", "-", "–"):
+        return ZERO, True
+    negative = s.startswith("(") and s.endswith(")") or s.startswith("-")
+    s = s.strip("()-")
+    if re.fullmatch(r"\d{1,3}(\.\d{3})+(,\d+)?", s):        # 1.234.567,5 (Vietnamese)
+        s = s.replace(".", "").replace(",", ".")
+    elif re.fullmatch(r"\d{1,3}(,\d{3})+(\.\d+)?", s):      # 1,234,567.5
+        s = s.replace(",", "")
+    try:
+        amount = Decimal(s)
+    except InvalidOperation as exc:
+        raise ValueError(f"not an amount: {value!r}") from exc
+    return (-amount if negative else amount), True
+
+
+@dataclass
+class Line:
+    account: str
+    name: str
+    row: int                       # 1-based row in the source sheet
+    open_dr: Decimal = ZERO
+    open_cr: Decimal = ZERO
+    dr: Decimal = ZERO
+    cr: Decimal = ZERO
+    close_dr: Decimal = ZERO
+    close_cr: Decimal = ZERO
+    ytd_dr: Decimal = ZERO         # Lũy kế từ đầu năm, when the export carries it beside the month's movement
+    ytd_cr: Decimal = ZERO
+    leaf: bool = True
+
+
+@dataclass
+class TrialBalance:
+    sheet: str
+    lines: list
+    header_row: int
+    columns: dict                  # field → 1-based source column
+    text_amounts: list = field(default_factory=list)   # (row, column field) stored as text
+    period: Optional[str] = None
+    skipped: list = field(default_factory=list)        # (row, raw account cell, movement) rows with money but no readable code
+
+    @property
+    def leaves(self):
+        return [l for l in self.lines if l.leaf]
+
+    @property
+    def has_ytd(self) -> bool:
+        """The export carries year-to-date movement columns beside the month's."""
+        return "ytd_dr" in self.columns and "ytd_cr" in self.columns
+
+
+# Section headers that sit above the Nợ/Có row in two-row headers.
+# TT99 (S06-DN) and monthly or quarterly exports say "đầu tháng / cuối tháng", "đầu quý / cuối quý".
+# Many exports add "Lũy kế từ đầu năm" (or "Phát sinh lũy kế") columns beside the month's: read first, since the
+# words also hold "phát sinh" and "đầu năm". A sheet whose only movement is the year to date keeps it as dr/cr.
+_SECTIONS = (("ytd", ("luy ke", "tu dau nam", "year to date", "ytd", "cumulative")),
+             ("open", ("dau ky", "dau nam", "dau thang", "dau quy", "opening", "beginning")),
+             ("move", ("phat sinh", "trong ky", "trong thang", "trong quy", "movement", "during", "period")),
+             ("close", ("cuoi ky", "cuoi nam", "cuoi thang", "cuoi quy", "closing", "ending")))
+
+
+def _side(text: str) -> Optional[str]:
+    words = set(re.findall(r"[a-z]+", fold(text)))
+    if words & {"no", "debit", "dr"}:
+        return "dr"
+    if words & {"co", "credit", "cr"}:
+        return "cr"
+    return None
+
+
+def _section(text: str) -> Optional[str]:
+    t = fold(text)
+    for key, words in _SECTIONS:
+        if any(w in t for w in words):
+            return key
+    return None
+
+
+def _find_header(rows):
+    for r, row in enumerate(rows[:40]):
+        cells = [fold(c) for c in row]
+        acct = next((i for i, c in enumerate(cells) if c in ("so hieu tk", "so hieu tai khoan", "ma tk", "ma tai khoan",
+                                                              "tai khoan", "so tk", "account", "account no", "tk")), None)
+        if acct is None:
+            continue
+        # Sections may be on this row with Nợ/Có below (MISA), or both on one row.
+        below = rows[r + 1] if r + 1 < len(rows) else []
+        columns, current = {}, None
+        width = max(len(row), len(below))
+        for i in range(width):
+            top = row[i] if i < len(row) else ""
+            sub = below[i] if i < len(below) else ""
+            if fold(top):                 # merged section cells leave the next cells blank
+                current = _section(top)
+            side = _side(sub) or _side(top)
+            sec = current
+            if side and sec:
+                key = {"ytd": "ytd_", "open": "open_", "move": "", "close": "close_"}[sec] + side
+                columns.setdefault(key, i)
+        for side in ("dr", "cr"):
+            if side not in columns and "ytd_" + side in columns:
+                columns[side] = columns.pop("ytd_" + side)
+        if len(columns) >= 4 and "dr" in columns and "cr" in columns:
+            name = next((i for i, c in enumerate(cells) if "ten" in c or "name" in c), acct + 1)
+            data_start = r + 2 if any(_side(c) for c in below) else r + 1
+            return r, data_start, acct, name, columns
+    raise ValueError("Không tìm thấy dòng tiêu đề có cột Tài khoản và Phát sinh Nợ/Có")
+
+
+# 3–10 digits, optionally with detail segments: 6421, 6421.01, 3331-1, 1121_VCB is not (letters).
+ACCOUNT = re.compile(r"\d{3,10}(?:[.\-]\d{1,6})*")
+
+
+def _is_total(text: str) -> bool:
+    t = fold(text)
+    return any(w in t for w in ("tong", "cong", "total"))
+
+
+def read_trial_balance(rows, sheet: str = "TB") -> TrialBalance:
+    rows = [list(r) for r in rows]
+    header, start, acct_col, name_col, columns = _find_header(rows)
+    lines, text_amounts, skipped = [], [], []
+    for r in range(start, len(rows)):
+        row = rows[r]
+        raw = row[acct_col] if acct_col < len(row) else None
+        account = str(raw).strip() if raw is not None else ""
+        if isinstance(raw, float) and raw.is_integer():
+            account = str(int(raw))
+        if not ACCOUNT.fullmatch(account):
+            # Totals, blank and title rows carry no account; anything else with money on it
+            # would silently leave the report, so it is kept for the checks to report.
+            if account and re.search(r"\d", account) and not _is_total(account):
+                moved = ZERO
+                for key, c in columns.items():
+                    try:
+                        moved += abs(parse_amount(row[c] if c < len(row) else None)[0])
+                    except ValueError:
+                        pass
+                if moved:
+                    skipped.append((r + 1, account, moved))
+            continue
+        line = Line(account=account, name=str(row[name_col] or "").strip() if name_col < len(row) else "", row=r + 1)
+        for key, c in columns.items():
+            amount, was_text = parse_amount(row[c] if c < len(row) else None)
+            if was_text and amount:
+                text_amounts.append((r + 1, key))
+            setattr(line, key, amount)
+        lines.append(line)
+    # A code is a parent when another code starts with it. Codes that start with it sort straight after it, so
+    # only the next distinct code needs a look: n log n, not n² (a ledger with thousands of sub-accounts took
+    # seconds per read, and the month close reads each trial balance several times).
+    codes = sorted({l.account for l in lines})
+    parents = {a for a, b in zip(codes, codes[1:]) if b.startswith(a)}
+    for l in lines:
+        l.leaf = l.account not in parents
+    return TrialBalance(sheet=sheet, lines=lines, header_row=header + 1,
+                        columns={k: v + 1 for k, v in columns.items()}, text_amounts=text_amounts,
+                        skipped=skipped)

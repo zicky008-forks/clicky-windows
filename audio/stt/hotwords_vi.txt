@@ -1,0 +1,12 @@
+# Finance words the offline recognizer tends to mishear. One phrase per line, optional " :score" (default 1.5).
+# Keep this short: every hotword pulls the decoder toward itself, and too many hurt plain speech.
+âm :2.0
+slide :2.0
+marketing :2.0
+biên lợi nhuận :1.5
+tê ca :2.0
+tài khoản :1.0
+lãi vay :1.5
+thuế :1.0
+quý ba :1.0
+giá vốn :1.0

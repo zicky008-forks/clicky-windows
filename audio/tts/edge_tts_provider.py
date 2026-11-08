@@ -10,6 +10,15 @@ from audio.playback import play_mp3_async
 
 # High-quality Microsoft neural voice — no API key required
 VOICE = "en-US-AvaNeural"
+# Used for Vietnamese sentences when the chosen voice is not Vietnamese.
+VI_VOICE = "vi-VN-HoaiMyNeural"
+
+
+def voice_for(text: str, chosen: str) -> str:
+    from audio.tts.sapi_tts_provider import text_language
+    if text_language(text) == "vi-VN" and not chosen.lower().startswith("vi-"):
+        return VI_VOICE
+    return chosen
 
 
 class EdgeTTSProvider(BaseTTS):
@@ -47,7 +56,7 @@ class EdgeTTSProvider(BaseTTS):
             return
 
         async def synthesize():
-            communicate = edge_tts.Communicate(text, self._voice, rate=f"{int(setting('speech_rate', 0)) * 10:+d}%")
+            communicate = edge_tts.Communicate(text, voice_for(text, self._voice), rate=f"{int(setting('speech_rate', 0)) * 10:+d}%")
             buf = io.BytesIO()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
@@ -64,7 +73,8 @@ class EdgeTTSProvider(BaseTTS):
             status = getattr(exc, 'status', None)
             logging.getLogger('clicky.voice').warning('Edge unavailable: %s, status=%s; using Windows speech', type(exc).__name__, status)
             if self._on_fallback:
-                self._on_fallback('Edge voice is unavailable' + (f' (HTTP {status})' if status else '') + '. Using offline Windows voice for this session. Reapply Edge in Voice settings to retry.')
+                self._on_fallback('Giọng Microsoft online không dùng được trên mạng này' + (f' (HTTP {status})' if status else '')
+                                  + '. Lần này Clicky dùng giọng Windows trên máy. Chọn lại giọng online trong Settings → Voice để thử lại.')
             await self._fallback.speak(text)
             return
 

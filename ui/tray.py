@@ -6,21 +6,49 @@ from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QBrush
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QObject
 
 from config import cfg
-from storage import setting
+from storage import set_setting, setting
+import tech_mode
+
+QUIT = "Thoát Clicky"
+SETTINGS = "Cài đặt…"
 
 
-def _make_tray_icon(color: QColor) -> QIcon:
-    """Generate a simple coloured circle as the tray icon.
+def non_la_pixmap(size: int, color: QColor) -> QPixmap:
+    """The nón lá (conical hat) drawn at ``size`` px: the one Clicky symbol (tray, welcome, cards).
     Must be called AFTER QApplication exists (Qt requirement)."""
-    px = QPixmap(QSize(22, 22))
+    from PyQt6.QtGui import QPainterPath, QPen
+    from PyQt6.QtCore import QPointF
+    px = QPixmap(QSize(size, size))
     px.fill(Qt.GlobalColor.transparent)
     painter = QPainter(px)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.scale(size / 22.0, size / 22.0)              # drawn on the 22 px tray grid
+    hat = QPainterPath()
+    hat.moveTo(11, 2)                                   # apex
+    hat.lineTo(20.5, 16.5)
+    hat.quadTo(QPointF(11, 20.5), QPointF(1.5, 16.5))   # curved brim
+    hat.closeSubpath()
     painter.setBrush(QBrush(color))
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawEllipse(3, 3, 16, 16)
+    painter.setPen(QPen(QColor(255, 255, 255, 220), 1.0))
+    painter.drawPath(hat)
+    painter.setPen(QPen(QColor(255, 255, 255, 150), 1.0))
+    painter.drawLine(QPointF(7.2, 11.2), QPointF(14.8, 11.2))   # one woven ring
     painter.end()
-    return QIcon(px)
+    return px
+
+
+def _make_tray_icon(color: QColor) -> QIcon:
+    """Tray icon: a nón lá (conical hat) in the state colour, matching the app icon."""
+    return QIcon(non_la_pixmap(22, color))
+
+
+def tooltip() -> str:
+    try:
+        from ui.panel import _hotkey_label
+        key = _hotkey_label()
+    except Exception:
+        key = cfg.hotkey
+    return f"Clicky · giữ {key} để nói, hoặc nháy đúp để mở"
 
 
 class TrayManager(QObject):
@@ -34,6 +62,7 @@ class TrayManager(QObject):
     on_toggle_slow_mode   = pyqtSignal(bool)
     on_toggle_quiz_mode   = pyqtSignal(bool)
     on_toggle_privacy     = pyqtSignal(bool)
+    on_toggle_recording   = pyqtSignal(bool)
     on_switch_provider    = pyqtSignal(str)     # "claude" | "openai" | "copilot" | ...
     on_copilot_login      = pyqtSignal()
     on_copilot_refresh    = pyqtSignal()
@@ -60,23 +89,25 @@ class TrayManager(QObject):
     on_set_response_language = pyqtSignal(str)  # "" = auto-detect, else ISO code
     on_set_stt_language      = pyqtSignal(str)  # "" = auto-detect, else ISO code
     on_set_custom_instructions = pyqtSignal(str)
+    on_outgoing_log = pyqtSignal()
+    on_present      = pyqtSignal()          # Trợ lý bên cạnh: follow a slide show, answer from the question bank
+    on_settings     = pyqtSignal()
+    on_toggle_local_only = pyqtSignal(bool)  # "Chỉ chạy trên máy, không gửi gì"
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
         # Icons MUST be created after QApplication exists
         self._icons = {
-            "idle":      _make_tray_icon(QColor(80, 80, 120)),
+            "idle":      _make_tray_icon(QColor(0x25, 0x63, 0xEB)),
             "listening": _make_tray_icon(QColor(50, 200, 100)),
-            "thinking":  _make_tray_icon(QColor(0, 120, 255)),
+            "thinking":  _make_tray_icon(QColor(124, 58, 237)),
             "speaking":  _make_tray_icon(QColor(255, 140, 0)),
         }
 
         self._tray = QSystemTrayIcon()
         self._tray.setIcon(self._icons["idle"])
-        self._tray.setToolTip(
-            f"Clicky - AI Companion\nPress {cfg.hotkey} and just talk"
-        )
+        self._tray.setToolTip(tooltip())
         self._search_enabled = setting("web_search", False)
         # Mirrors the persisted mic mode — off by default, so Clicky only
         # listens while you're actually asking it something.
@@ -111,6 +142,11 @@ class TrayManager(QObject):
             "QMenu::item:selected { background: rgb(0,90,200); border-radius: 4px; }"
             "QMenu::separator { height: 1px; background: rgb(55,55,70); margin: 4px 8px; }"
         )
+        if not tech_mode.on():
+            self._fill_plain_menu(menu)
+            self._tray.setContextMenu(menu)
+            self._menu = menu
+            return
 
         providers = cfg.describe()
         info = menu.addAction(
@@ -127,6 +163,19 @@ class TrayManager(QObject):
 
         stop_action = menu.addAction("Stop (Esc)")
         stop_action.triggered.connect(self.on_stop)
+
+        # What Clicky sent to the AI, after masking names and IDs.
+        outgoing_log = menu.addAction("Nhật ký gửi đi")
+        outgoing_log.triggered.connect(self.on_outgoing_log)
+
+        present_action = menu.addAction("Trình bày báo cáo (trợ lý bên cạnh)…")
+        present_action.triggered.connect(self.on_present)
+
+        # Off by default: Clicky's windows stay out of screenshots and screen recordings.
+        recording_action = menu.addAction("Cho phép quay màn hình Clicky (để quay demo)")
+        recording_action.setCheckable(True)
+        recording_action.setChecked(bool(setting("allow_screen_recording", False)))
+        recording_action.triggered.connect(self._toggle_recording)
 
         menu.addSeparator()
 
@@ -285,12 +334,34 @@ class TrayManager(QObject):
 
         menu.addSeparator()
 
-        quit_action = menu.addAction("Quit Clicky")
+        menu.addAction(SETTINGS).triggered.connect(self.on_settings)
+        quit_action = menu.addAction(QUIT)
         quit_action.triggered.connect(self.on_quit)
 
         self._tray.setContextMenu(menu)
         # Keep refs to prevent GC
         self._menu = menu
+
+    def _fill_plain_menu(self, menu: QMenu):
+        """The menu a beta user sees: plain Vietnamese, no AI provider, key, model or engine."""
+        from office.outgoing import LOCAL_ONLY_LABEL, local_only, local_only_forced
+        menu.addAction("Mở Clicky").triggered.connect(self.on_show_panel)
+        menu.addAction("Dừng (Esc)").triggered.connect(self.on_stop)
+        menu.addSeparator()
+        menu.addAction("Trình bày báo cáo (trợ lý bên cạnh)…").triggered.connect(self.on_present)
+        menu.addAction("Nhật ký gửi đi").triggered.connect(self.on_outgoing_log)
+        local = menu.addAction(LOCAL_ONLY_LABEL)
+        local.setCheckable(True)
+        local.setChecked(local_only())
+        local.setEnabled(not local_only_forced())
+        local.triggered.connect(self.on_toggle_local_only)
+        recording = menu.addAction("Cho phép quay màn hình Clicky (để quay demo)")
+        recording.setCheckable(True)
+        recording.setChecked(bool(setting("allow_screen_recording", False)))
+        recording.triggered.connect(self._toggle_recording)
+        menu.addSeparator()
+        menu.addAction(SETTINGS).triggered.connect(self.on_settings)
+        menu.addAction(QUIT).triggered.connect(self.on_quit)
 
     def hide_icon(self):
         """Remove the tray icon from the notification area. MUST run before
@@ -547,6 +618,10 @@ class TrayManager(QObject):
             "Quiz Mode: ON" if checked else "Quiz Mode: OFF"
         )
         self.on_toggle_quiz_mode.emit(checked)
+
+    def _toggle_recording(self, checked: bool):
+        set_setting("allow_screen_recording", checked)
+        self.on_toggle_recording.emit(checked)
 
     def _toggle_privacy(self, checked: bool):
         self._privacy_enabled = checked
