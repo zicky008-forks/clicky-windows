@@ -294,18 +294,27 @@ def _timing_month(before: list, a: dict, p: dict, thr: Decimal, left: Decimal) -
 
 def _waiting_on_codes(v) -> set:
     """The month lines that wait on a department code question: the lines of a code the catalogue does not hold,
-    and the lines of the same cost element in other departments on the other side of plan (the cost may belong
-    there). Classing either 'vượt' or 'thấp hơn' before the answer would be a guess."""
+    and the lines of the same cost element where the cost may belong. When the code reads like a known department
+    ('KD1' beside 'KD'), every line of that department x element waits, whichever side of plan it is on; otherwise
+    the same element in other departments on the other side of plan. Classing any of them before the answer would
+    be a guess."""
     codes = set((getattr(v, "unknown", {}) or {}).get("bộ phận", []) or [])
     if not codes:
         return set()
+    known = {l.dept for l in v.month if l.dept and l.dept not in codes}
     out = set()
     for l in v.month:
-        if l.dept in codes and abs(l.variance) > 0:
-            out.add((l.dept, l.element))
-            for o in v.month:
-                if o.element == l.element and o.dept not in codes and o.variance and (o.variance > 0) != (l.variance > 0):
-                    out.add((o.dept, o.element))
+        if l.dept not in codes or not l.variance:
+            continue
+        out.add((l.dept, l.element))
+        c = key(l.dept).replace(" ", "")
+        like = {d for d in known if len(key(d)) >= 2 and (c.startswith(key(d).replace(" ", ""))
+                                                          or key(d).replace(" ", "").startswith(c))}
+        for o in v.month:
+            if o.element != l.element or o.dept in codes or not o.dept:
+                continue
+            if (o.dept in like) or (not like and o.variance and (o.variance > 0) != (l.variance > 0)):
+                out.add((o.dept, o.element))
     return out
 
 

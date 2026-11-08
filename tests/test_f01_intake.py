@@ -266,7 +266,8 @@ def test_the_fpa_receipt_has_its_own_words_never_the_bod_reviews(tmp_path):
     assert "BOD" not in words.replace("Bao cao BOD T09.xlsx", "") and "nhóm" not in words and "soát bộ" not in words
     why = {r[0]: r[4] for r in rows}
     assert why["Bao cao BOD T09.xlsx"] == "bản trình Ban Giám đốc: báo cáo FP&A không lấy số từ bản trình"
-    assert why["Ghi chu.xlsx"].startswith("em không nhận ra bảng số liệu nào dùng cho báo cáo FP&A trong file này")
+    assert why["Ghi chu.xlsx"].startswith("file không có bảng số liệu nào báo cáo FP&A tháng cần")
+    assert {r[0]: r[1] for r in rows}["Ghi chu.xlsx"] == bod_inputs.WORKING_ROLE
     assert why["KeHoach_2026.xlsx"].endswith("Vì vậy cột kế hoạch cần số kế hoạch theo tháng")
     assert out["verified"]
 
@@ -564,9 +565,9 @@ def test_working_files_are_named_as_such_in_the_written_receipt(tmp_path):
     wb.close()
     assert set(working) <= set(bod_inputs.load(d, purpose="fpa").working)
     for n in working:
-        assert rows[n][1] == "File làm việc của chị, không lấy số", n
-    assert rows["So chi tiet nhap kho.xlsx"][1] != "File làm việc của chị, không lấy số"
-    assert rows["Thue thu nhap ca nhan.xlsx"][1] != "File làm việc của chị, không lấy số"
+        assert rows[n][1] == bod_inputs.WORKING_ROLE and rows[n][4] == bod_inputs.WORKING_WHY, n
+    assert rows["So chi tiet nhap kho.xlsx"][4] != bod_inputs.WORKING_WHY        # 'nhập kho' is not a draft
+    assert rows["Thue thu nhap ca nhan.xlsx"][4] != bod_inputs.WORKING_WHY
 
 
 def test_a_working_file_has_the_fpa_wording(tmp_path):
@@ -575,9 +576,9 @@ def test_a_working_file_has_the_fpa_wording(tmp_path):
     ss.write_xlsx(d / "So chi tiet nhap kho.xlsx", {"S": [["Mã hàng", "SL"], ["A", 1]]})
     m = fpa_report.compute(d)
     rows = {r[0]: r for r in fpa_report.file_rows(m)[1:]}
-    assert rows["Working T10 FPA.xlsx"][1] == "File làm việc của chị, không lấy số"
+    assert rows["Working T10 FPA.xlsx"][1] == bod_inputs.WORKING_ROLE
     assert rows["Working T10 FPA.xlsx"][4] == bod_inputs.WORKING_WHY
-    assert rows["So chi tiet nhap kho.xlsx"][1] == "Không dùng"     # 'nhập' (stock in) is not a draft
+    assert rows["So chi tiet nhap kho.xlsx"][4] != bod_inputs.WORKING_WHY     # 'nhập' (stock in) is not a draft
 
 
 # ── K15: every reason in the receipt is plain Vietnamese, never a folded key ──
@@ -597,6 +598,47 @@ def test_the_forecast_files_actual_months_are_said_in_plain_words(tmp_path):
     rows = fpa_report.file_rows(m)[1:]
     row = next(r for r in rows if r[0] == "LE_T09_2026.csv")
     assert "số thực tế ghi trong file" in row[4] and "bản thuc te" not in row[4], row
+    assert "em lấy từ sổ chi tiết chi phí" in row[4]
     texts = [str(x) for r in rows for x in r[1:] if isinstance(x, str)] + list(m.said)
     for t in texts:
         assert not FOLDED.search(t), t
+    fs.write_csv(d / "TB T10 2026.csv", fs.tb_rows())            # the month now comes from the trial balance
+    m = fpa_report.compute(d, version="AOP")
+    row = next(r for r in fpa_report.file_rows(m)[1:] if r[0] == "LE_T09_2026.csv")
+    assert "em lấy từ bảng cân đối số phát sinh" in row[4], row
+
+
+def test_any_spreadsheet_with_no_table_is_the_users_work_said_gently(tmp_path):
+    # a name no list holds: the month takes no figure from it, and the receipt never says "không nhận ra"
+    d = _folder(tmp_path, "k7any", {"KH": fs.plan_rows("AOP")[:-1]})
+    ss.write_xlsx(d / "Lam_bao_cao_T10.xlsx", {"Tong hop": [["BÁO CÁO T10"], ["Chỉ tiêu", "T10", "T9"], ["Doanh thu", 5, 4]]})
+    ss.write_xlsx(d / "Qwerty 7.xlsx", {"S": [["x", "y"], [1, 2]]})
+    m = fpa_report.compute(d)
+    out = fpa_report.write(m, tmp_path / "out")
+    wb = load_workbook(out["xlsx"], read_only=True)
+    rows = {r[0]: r for r in wb[fpa_report.RECEIPT].iter_rows(values_only=True) if r and r[0]}
+    wb.close()
+    for n in ("Lam_bao_cao_T10.xlsx", "Qwerty 7.xlsx"):
+        assert rows[n][1] == bod_inputs.WORKING_ROLE, rows[n]
+        assert "không nhận ra" not in str(rows[n][4])
+    assert rows["KeHoach_AOP_2026.xlsx"][1] != bod_inputs.WORKING_ROLE
+
+
+# ── K16: the code question quotes only the notes about that code ─────────────
+
+def test_the_code_question_quotes_the_note_about_that_code_only(tmp_path):
+    d = _folder(tmp_path, "k16", None, tb=False)
+    plan = [["KẾ HOẠCH CHI PHÍ 2026"], ["Bộ phận KD gồm cả nhóm bán hàng online (mã KD9 trên sổ cũ)"],
+            ["Ghi chú", "Số liệu đã làm tròn đến nghìn đồng"], ["Phạm vi", "Không gồm chi phí lãi vay"]] \
+        + fs.plan_rows("AOP")[:-1]
+    ss.write_xlsx(d / "KeHoach_AOP_2026.xlsx", {"KH": plan})
+    rows = fs.gl_rows()
+    rows.append(["20/10/2026", "X1", "10", "2026", "6411", "331", "KD9", "LUONG", "Lương nhóm online", "7000000"])
+    fs.write_csv(d / "SoChiTietChiPhi_2026.csv", rows)
+    m = fpa_report.compute(d)
+    asked = next(x for x in m.costs.left_out() if "Mã bộ phận" in x)
+    assert "KD9" in asked and "nhóm bán hàng online (mã KD9 trên sổ cũ)" in asked
+    assert "làm tròn" not in asked and "lãi vay" not in asked
+    waiting = [c for c in m.classified if c.pending]
+    # KD9 reads like KD: every KD x LUONG line waits on the answer, whichever side of plan; MKT's does not
+    assert {(c.line.dept, c.line.element) for c in waiting} == {("KD9", "LUONG"), ("KD", "LUONG")}

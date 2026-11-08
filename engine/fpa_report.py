@@ -86,6 +86,26 @@ class Month:
         return next((r for r in self.pnl if r.code == code), None)
 
 
+def notes_about(notes: list, codes: list, gl: list) -> list:
+    """The plan's notes that speak of the department codes in question: a note that names the code (or a part of
+    it, 'KD1' in 'KD1-MB'), or the site, division or channel its ledger lines carry. A note about something else is
+    never quoted beside the question."""
+    if not codes or not notes:
+        return []
+    words = set()
+    for c in codes:
+        words |= {key(c)} | {key(x) for x in re.split(r"[-_./ ]+", str(c)) if len(x) >= 2}
+        for e in gl:
+            if e.dept == c:
+                words |= {key(x) for x in (e.site, e.division, e.channel) if x and len(key(x)) >= 2}
+    words.discard("")
+
+    def names(n: str) -> bool:
+        text = f" {key(n)} "
+        return any(f" {w} " in text for w in words)
+    return [n for n in notes if names(n)][:2]
+
+
 def fiscal_start(folder: Path, b, version: Optional[str] = None, plan_file: Optional[str] = None) -> tuple:
     """(first month of the fiscal year, the sentence that says how it was found): engine.fiscal, with the trial
     balance's year to date of operating costs when the folder has one, and the plan that will be compared against
@@ -124,7 +144,7 @@ def compute(folder: Path, version: Optional[str] = None, plan_file: Optional[str
     costs = fpa.compute(b.gl, b.plans, version=version, fy_start=fy, config=b.config,
                         plan_file=plan_file) if b.gl else None
     if costs is not None and costs.plan is not None:
-        costs.scope_notes = list(b.plan_notes.get(costs.plan.file, []))
+        costs.scope_notes = notes_about(b.plan_notes.get(costs.plan.file, []), costs.unknown.get("bộ phận", []), b.gl)
     sales = None
     if b.sales:
         sales = sales_pnl.compute(b.sales, b.sku_plans, b.plans, period=costs.period if costs else None,
@@ -540,11 +560,20 @@ def _not_compared(m, also_used=()) -> dict:
     return {f: {v: len(rows - used_lines.get(f, set())) for v, rows in vs.items()} for f, vs in by.items()}
 
 
-def _version_words(version: str, role: str) -> str:
+def actual_source(m) -> str:
+    """Where the month's actual comes from, in the receipt's words."""
+    if getattr(m, "tb", None) is not None and getattr(m, "tb_not_used", None) is None:
+        return "bảng cân đối số phát sinh"
+    if getattr(m, "costs", None) is not None:
+        return "sổ chi tiết chi phí" + (" và sổ bán hàng" if getattr(m, "sales", None) is not None else "")
+    return "sổ bán hàng"
+
+
+def _version_words(version: str, role: str, source: str = "sổ chi tiết chi phí") -> str:
     """Why a version's lines are left out, in the receipt's words: never the folded key ('thuc te')."""
     from engine import roles
     if key(version) in fpa.NOT_PLAN_VERSIONS:
-        return "là số thực tế ghi trong file: đọc, không dùng, số thực tế em lấy từ sổ chi tiết"
+        return f"là số thực tế ghi trong file: đọc, không dùng, số thực tế em lấy từ {source}"
     kind = "bản dự báo" if role.startswith(roles.FORECAST) else "bản"
     return f"của {kind} {version}: {NOT_COMPARED}"
 
@@ -569,7 +598,7 @@ def file_rows(m, also_used=()) -> list:
                 take[v] = min(n, left)
                 left -= take[v]
             other[name] = {v: n - take[v] for v, n in aside.items()}
-            said = "; ".join(f"{n} dòng {_version_words(v, role)}" for v, n in take.items() if n)
+            said = "; ".join(f"{n} dòng {_version_words(v, role, actual_source(m))}" for v, n in take.items() if n)
             why = "; ".join(x for x in (why, said) if x)
             if moved == used or name not in compared:
                 role = f"{role} · {NOT_COMPARED}"
@@ -583,7 +612,8 @@ def file_rows(m, also_used=()) -> list:
         if name != tb_file:
             if m.tb_not_used is not None and name == m.tb_not_used[0]:
                 why = m.tb_not_used[1]
-            role = "File làm việc của chị, không lấy số" if name in getattr(m.bundle, "working", []) else "Không dùng"
+            from engine.bod_inputs import WORKING_ROLE
+            role = WORKING_ROLE if name in getattr(m.bundle, "working", []) else "Không dùng"
             out.append([name, role, 0, 0, why])
     return out
 

@@ -1318,6 +1318,8 @@ def load(folder: Path, fy_start: int = 7, purpose: str = "bod") -> Bundle:
             b.plan_notes[p.name] = notes
         if not used:
             b.unused.append((p.name, _unused_reason(hint, sheets, purpose)))
+            if purpose == "fpa" and hint != "tb":
+                b.working.append(p.name)      # a spreadsheet with no table the month uses: the user's own work
     if b.segment_map:                                           # the map names departments and cost elements
         depts, elements = segment_gl.catalogue(b.segment_map)
         for code, name in depts.items():
@@ -1458,8 +1460,8 @@ def _unused_reason_fpa(hint: str, sheets: dict) -> str:
     for rows in sheets.values():
         for r in rows[:5]:
             cols += [str(v) for v in r or [] if isinstance(v, str) and v.strip()]
-    return "em không nhận ra bảng số liệu nào dùng cho báo cáo FP&A trong file này" + (
-        f" (các cột đầu: {', '.join(cols[:6])})" if cols else "")
+    return "file không có bảng số liệu nào báo cáo FP&A tháng cần (sổ chi tiết, kế hoạch, bán hàng, tỷ giá)" + (
+        f"; các cột đầu: {', '.join(cols[:6])}" if cols else "")
 
 
 def _resolve_years(b: Bundle, pending: list, fy_start: int) -> None:
@@ -1514,6 +1516,8 @@ def working_inside(sheets: dict) -> bool:
     return False
 
 
+# The receipt's role for a spreadsheet the FP&A month takes no figure from: said gently, never "không nhận ra".
+WORKING_ROLE = "File làm việc hoặc báo cáo của chị, em không lấy số từ đây"
 WORKING_WHY = "file làm việc (bản nháp) của chị: báo cáo FP&A không lấy số từ file nháp"
 
 # The key-value info sheet a plan file often carries: 'Trạng thái | Đã duyệt', 'Phiên bản | v4', 'Ngày duyệt | ...'.
@@ -1546,11 +1550,17 @@ NOTE_KEYS = ("ghi chu", "pham vi", "pham vi ngan sach", "luu y", "note", "notes"
 
 
 def scope_notes(sheets: dict) -> list:
-    """The plan's own notes on what it covers: 'Ghi chú: ...', 'Phạm vi | ...' in the first rows, or the text rows
-    of a sheet named 'Ghi chú' / 'Phạm vi'. As printed, at most five."""
+    """The plan's own notes on what it covers: 'Ghi chú: ...', 'Phạm vi | ...' in the first rows, the text rows of a
+    sheet named 'Ghi chú' / 'Phạm vi', and the description lines between a sheet's title and its table. As printed,
+    at most twelve: the question that quotes them keeps only the ones about its code (engine.fpa_report)."""
     out = []
     for name, rows in sheets.items():
         whole = key(name) in NOTE_KEYS
+        head = next((i for i, r in enumerate(rows[:15])
+                     if sum(1 for v in (r or []) if v is not None and str(v).strip()) >= 3), None)
+        lines = [[str(v).strip() for v in (r or []) if isinstance(v, str) and str(v).strip()] for r in rows[:head or 0]]
+        lines = [t for t in lines if len(t) == 1]
+        out += [t[0] for t in lines[1:]]                       # under the title, above the table
         for r in rows[:40]:
             texts = [str(v).strip() for v in (r or []) if isinstance(v, str) and str(v).strip()]
             if not texts:
@@ -1562,7 +1572,7 @@ def scope_notes(sheets: dict) -> list:
                 out.append(" ".join(texts[1:]))
             elif any(first.startswith(k + " ") for k in NOTE_KEYS) and re.match(r"^[^:]{2,25}:\s*\S", texts[0]):
                 out.append(texts[0].split(":", 1)[1].strip())
-    return list(dict.fromkeys(out))[:5]
+    return list(dict.fromkeys(out))[:12]
 
 
 RESOLUTION_RE = re.compile(r"\b(can cu|nghi quyet|quyet dinh|bien ban hop|resolution|decision)\b")
