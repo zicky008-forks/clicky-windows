@@ -795,6 +795,7 @@ def main():
     from office.bod_skill import args as bod_args
     from office.opex_skill import args as opex_args, reply_args as opex_reply_args
     from office.fpa_skill import args as fpa_args
+    from office.forecast_skill import args as forecast_args
     from office.drop import args as drop_args
 
     # ── Global hotkey ─────────────────────────────────────────────────────────
@@ -864,6 +865,8 @@ def main():
         QTimer.singleShot(800, lambda: manager.submit_bod_review(bod_args(sys.argv)))
     elif fpa_args(sys.argv):
         QTimer.singleShot(800, lambda: manager.submit_fpa(fpa_args(sys.argv)))
+    elif forecast_args(sys.argv):
+        QTimer.singleShot(800, lambda: manager.submit_forecast(forecast_args(sys.argv)))
     elif opex_args(sys.argv):
         QTimer.singleShot(800, lambda: manager.submit_opex(opex_args(sys.argv)))
     elif opex_reply_args(sys.argv):

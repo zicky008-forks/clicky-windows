@@ -74,6 +74,7 @@ class Month:
     opex_gap: tuple = (ZERO, ZERO)              # (month, year to date): books less cost detail, not explained
     tb_not_used: Optional[tuple] = None         # (file, why) for a trial balance that cannot give the month
     checks: list = field(default_factory=list)  # [(code, name, result, note, stop)] by the company's check codes
+    version: Optional[str] = None               # the plan version asked for; None: the only or the approved one
 
     def row(self, code: str) -> Optional[PnlRow]:
         return next((r for r in self.pnl if r.code == code), None)
@@ -85,23 +86,25 @@ def _fy_start(config, default: int = 7) -> int:
     return int(fy) if fy is not None and 1 <= int(fy) <= 12 else default
 
 
-def compute(folder: Path) -> Month:
-    """Read the folder and compute the month. Raises fpa.PickVersion when the plan must be chosen by the user."""
+def compute(folder: Path, version: Optional[str] = None) -> Month:
+    """Read the folder and compute the month against the plan version (the only or the approved one when None).
+    Raises fpa.PickVersion when the plan must be chosen by the user."""
     from engine import bod_inputs
     folder = Path(folder)
     b = bod_inputs.load(folder)
     fy = _fy_start(b.config)
     if fy != 7:
         b = bod_inputs.load(folder, fy_start=fy)
-    costs = fpa.compute(b.gl, b.plans, fy_start=fy, config=b.config) if b.gl else None
+    costs = fpa.compute(b.gl, b.plans, version=version, fy_start=fy, config=b.config) if b.gl else None
     sales = None
     if b.sales:
         sales = sales_pnl.compute(b.sales, b.sku_plans, b.plans, period=costs.period if costs else None,
-                                  fy_start=fy, config=b.config, plan_tables=b.sku_plan_totals)
+                                  version=version, fy_start=fy, config=b.config, plan_tables=b.sku_plan_totals)
     period = (costs or sales).period if (costs or sales) else None
     if not period:
         raise ValueError("thư mục không có sổ chi tiết chi phí hay sổ bán hàng nào có tháng")
     m = Month(folder, period, b, costs, sales)
+    m.version = version
     m.tb = trial_balance_in(folder, b.unused)
     if m.tb is not None and m.tb.ytd_only:
         m.tb_not_used = (m.tb.file, "Bảng cân đối này chỉ có số lũy kế từ đầu năm, không có số phát sinh tháng; em "
@@ -231,8 +234,8 @@ def _plan_only(m: Month) -> Optional[object]:
     b = m.bundle
     if not b.sku_plans:
         return None
-    return sales_pnl.compute([], b.sku_plans, b.plans, period=m.period, fy_start=_fy_start(b.config), config=b.config,
-                             plan_tables=b.sku_plan_totals)
+    return sales_pnl.compute([], b.sku_plans, b.plans, period=m.period, version=m.version,
+                             fy_start=_fy_start(b.config), config=b.config, plan_tables=b.sku_plan_totals)
 
 
 def _pnl(m: Month) -> list:
