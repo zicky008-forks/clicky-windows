@@ -14,6 +14,8 @@ import io
 import shutil
 import sys
 import tarfile
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -41,6 +43,27 @@ LICENCE = {"70k": "Apache-2.0", "30m": "CC-BY-NC-ND-4.0: chỉ dùng thử nội
            "piper-vais1000": "Giọng: dữ liệu VAIS-1000 CC BY 4.0 (https://ieee-dataport.org/documents/"
                              "vais-1000-vietnamese-speech-synthesis-corpus); tinh chỉnh từ giọng lessac (cần luật sư xem)"}
 KEEP = (".onnx", "tokens.txt", "bpe.model", "MODEL_CARD")
+# GitHub release downloads sometimes answer 502/503/504 or drop the connection; the build should not fail on one.
+WAITS = (5, 20, 60)
+
+
+def download(url: str, waits=WAITS, opener=urllib.request.urlopen, sleep=time.sleep) -> bytes:
+    """The bytes at url, retried after each wait on a server error (5xx), a timeout or a dropped connection.
+    A client error (404, 403) is raised at once: retrying cannot fix a wrong address."""
+    for attempt, wait in enumerate((*waits, None), 1):
+        try:
+            return opener(url, timeout=600).read()
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or wait is None:
+                raise
+            why = f"HTTP {e.code}"
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            if wait is None:
+                raise
+            why = type(e).__name__
+        print(f"Lần {attempt} lỗi ({why}), thử lại sau {wait} giây", file=sys.stderr)
+        sleep(wait)
+    raise AssertionError("unreachable")
 
 
 def fetch(name: str, out: Path) -> Path:
@@ -48,7 +71,7 @@ def fetch(name: str, out: Path) -> Path:
     stem = path.rsplit("/", 1)[-1]
     url = BASE + path + ".tar.bz2"
     print(f"Tải {url}")
-    data = urllib.request.urlopen(url, timeout=600).read()
+    data = download(url)
     got = hashlib.sha256(data).hexdigest()
     if got != sha:
         raise SystemExit(f"SHA-256 không khớp cho {stem}: {got}")
