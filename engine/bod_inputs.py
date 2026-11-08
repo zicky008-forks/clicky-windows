@@ -197,7 +197,9 @@ def month_key(thang, ngay=None, nam=None, fy_start: int = 7) -> Optional[str]:
 CONFIG_SPECS = {
     "depts": {"ma": ["phong ban ma", "ma phong ban", "ma pb", "ma"], "ten": ["phong ban ten", "ten phong ban", "ten"],
               "khoi": ["khoi", "division"], "cha": ["phong cha", "ma cha", "cap tren"],
-              "khong_cat": ["khong cat", "mien cat", "bao ve", "khong cat giam", "danh sach khong cat"]},
+              "khong_cat": ["khong cat", "mien cat", "bao ve", "khong cat giam", "danh sach khong cat"],
+              "email": ["email", "e mail", "dia chi email", "thu dien tu", "email nguoi nhan", "nguoi nhan"],
+              "cc": ["cc", "email cc", "cc email", "dong gui", "gui kem"]},
     "elements": {"ma": ["cost element ma", "ma cost element", "ma ce", "ma khoan muc", "ma"],
                  "ten": ["cost element ten", "ten cost element", "ten khoan muc", "ten"],
                  "tk": ["tai khoan", "tk", "so hieu tk", "account"], "nhom": ["nhom", "group cost", "nhom chi phi"],
@@ -222,7 +224,7 @@ SKU_SPEC = {"ma_hang": SKU_WORDS, "ten_hang": SKU_NAME_WORDS,
 
 @dataclass
 class Config:
-    depts: dict = field(default_factory=dict)        # code -> {"ten", "khoi", "cha", "khong_cat": bool}
+    depts: dict = field(default_factory=dict)        # code -> {"ten", "khoi", "cha", "khong_cat": bool, "email", "cc"}
     elements: dict = field(default_factory=dict)     # code -> {"ten", "tk", "nhom", "dong"}
     channels: dict = field(default_factory=dict)     # folded code or name -> (name as printed, base text)
     channel_aliases: dict = field(default_factory=dict)  # folded name -> {folded code, folded name}
@@ -296,13 +298,15 @@ def read_config(path: Path) -> Config:
                 continue
             if kind == "depts" and "ma" in t.columns and "ten" in t.columns and not ({"tk", "mau_so"} & set(t.columns)):
                 # a cost element sheet also has ma/ten: departments need a division, parent or no-cut column
-                if not ({"khoi", "cha", "khong_cat"} & set(t.columns)) or "cost element" in key(sheet) or "khoan muc" in key(sheet):
+                if not ({"khoi", "cha", "khong_cat", "email"} & set(t.columns)) or "cost element" in key(sheet) or "khoan muc" in key(sheet):
                     continue
                 for _, v in t.rows:
                     code = str(t.get(v, "ma", "")).strip()
                     if code:
                         cfg.depts[code] = {"ten": str(t.get(v, "ten", code)).strip(), "khoi": str(t.get(v, "khoi", "")).strip(),
-                                           "cha": str(t.get(v, "cha", "")).strip(), "khong_cat": _truthy(t.get(v, "khong_cat", ""))}
+                                           "cha": str(t.get(v, "cha", "")).strip(), "khong_cat": _truthy(t.get(v, "khong_cat", "")),
+                                           "email": str(t.get(v, "email", "") or "").strip(),
+                                           "cc": str(t.get(v, "cc", "") or "").strip()}
             elif kind == "elements" and "ma" in t.columns and ("tk" in t.columns or "nhom" in t.columns) and "mau_so" not in t.columns:
                 if "phong ban" in key(sheet) or "kenh" in key(sheet):
                     continue

@@ -996,6 +996,29 @@ class CompanionManager(QObject):
         self.stop()
         self._request_future = self._submit(self._process_bod(folder))
 
+    def submit_opex(self, folder: str, replies: bool = False):
+        """Split the month's costs per department (or read their answers) in a folder, e.g. from
+        Clicky.exe --opex-split / --opex-replies."""
+        self.stop()
+        self._request_future = self._submit(self._process_opex(folder, replies))
+
+    async def _process_opex(self, folder: str, replies: bool = False):
+        from office import opex_skill
+        self._current_task = asyncio.current_task()
+        self._cancel_flag = False
+        self._emit_state(AppState.THINKING)
+        try:
+            await (opex_skill.run_replies if replies else opex_skill.run)(self, Path(folder))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("opex split failed")
+            self.sig_error.emit("Em chưa tách được chi phí cho các phòng. File của chị chưa bị thay đổi gì.")
+        finally:
+            if self._current_task is asyncio.current_task():
+                self._current_task = None
+                self._emit_state(AppState.IDLE)
+
     async def _process_bod(self, folder: str):
         from office import bod_skill
         self._current_task = asyncio.current_task()

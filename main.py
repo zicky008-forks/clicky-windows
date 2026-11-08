@@ -793,6 +793,7 @@ def main():
     tray.on_present.connect(_pick_present)
     _present_cli = present_args(sys.argv)
     from office.bod_skill import args as bod_args
+    from office.opex_skill import args as opex_args, reply_args as opex_reply_args
     from office.drop import args as drop_args
 
     # ── Global hotkey ─────────────────────────────────────────────────────────
@@ -860,6 +861,10 @@ def main():
         QTimer.singleShot(800, lambda: manager.submit_drop([drop_args(sys.argv)]))
     elif bod_args(sys.argv):
         QTimer.singleShot(800, lambda: manager.submit_bod_review(bod_args(sys.argv)))
+    elif opex_args(sys.argv):
+        QTimer.singleShot(800, lambda: manager.submit_opex(opex_args(sys.argv)))
+    elif opex_reply_args(sys.argv):
+        QTimer.singleShot(800, lambda: manager.submit_opex(opex_reply_args(sys.argv), replies=True))
     elif _present_cli:
         QTimer.singleShot(600, lambda: _start_present(_present_cli["spec"], _present_cli["xlsx"], _present_cli["deck"]))
     elif not _setting("start_hidden", False):
