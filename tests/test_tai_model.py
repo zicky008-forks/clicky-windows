@@ -47,3 +47,29 @@ def test_gives_up_after_the_last_wait():
     with pytest.raises(urllib.error.HTTPError):
         tai_model.download("https://x", waits=(1, 2), opener=open_, sleep=lambda s: None)
     assert len(calls) == 3
+
+
+def test_cached_archive_is_used_without_the_network(tmp_path):
+    import hashlib
+    data = b"archive"
+    sha = hashlib.sha256(data).hexdigest()
+    (tmp_path / "m.tar.bz2").write_bytes(data)
+
+    def offline(url):
+        raise AssertionError("the network was used")
+    assert tai_model.archive("https://x/m.tar.bz2", sha, tmp_path, get=offline) == data
+
+
+def test_bad_cache_is_replaced_by_a_checked_download(tmp_path):
+    import hashlib
+    data = b"good"
+    sha = hashlib.sha256(data).hexdigest()
+    (tmp_path / "m.tar.bz2").write_bytes(b"corrupt")
+    assert tai_model.archive("https://x/m.tar.bz2", sha, tmp_path, get=lambda u: data) == data
+    assert (tmp_path / "m.tar.bz2").read_bytes() == data
+
+
+def test_download_with_the_wrong_sha_is_refused_and_not_cached(tmp_path):
+    with pytest.raises(SystemExit):
+        tai_model.archive("https://x/m.tar.bz2", "0" * 64, tmp_path, get=lambda u: b"other")
+    assert not (tmp_path / "m.tar.bz2").exists()
