@@ -56,9 +56,11 @@ def test_nothing_is_left_out_in_silence(bundle):
                             "1 dòng chi phí sau tháng 10/2026, tổng 3.000.000 đ"]
     _file, _role, rows, skipped = next(r for r in bundle.receipt if r[1] == "Sổ chi tiết chi phí")
     blank = next(i for i, r in enumerate(fs.gl_rows(), 1) if r[9] == "")
-    assert skipped == [(blank, "không có số tiền")] and rows == len(fs.gl_rows()) - 1
+    total = len(fs.gl_rows())
+    assert sorted(skipped) == [(blank, "không có số tiền"), (total, "dòng tổng")]      # the printed total is not added
+    assert rows == len(fs.gl_rows()) - 2
     in_figures = sum(len(l.actual_from) for l in v.ytd)
-    assert in_figures + len(v.outside) + len(v.no_month) + len(skipped) == rows
+    assert in_figures + len(v.outside) + len(v.no_month) + 1 == rows                  # + the row without an amount
 
 
 def test_two_plan_versions_are_asked_never_picked(tmp_path):
@@ -109,3 +111,40 @@ def test_accounts_finer_or_coarser_than_the_books_are_summed_to_the_books_level(
     m = fpa.match_books(bundle.gl, read_trial_balance(rows), fs.PERIOD)
     assert m.ok, [(g.account, g.books, g.detail) for g in m.gaps]
     assert {l.account for l in m.lines} >= {"6411", "6421"} and "6421.01" not in {l.account for l in m.lines}
+
+
+def test_the_plan_compared_against_is_named_with_why(bundle):
+    v = fpa.compute(bundle.gl, bundle.plans, fy_start=1)
+    assert v.basis == "Kế hoạch: file AOP_2026.csv, phiên bản AOP, bản kế hoạch duy nhất trong thư mục"
+
+
+def test_two_drafts_of_one_plan_are_asked_unless_one_says_it_was_approved(tmp_path):
+    drafts = {"AOP_2026.csv": fs.plan_rows("AOP"), "AOP_2026_v2.csv": fs.plan_rows("AOP", scale=2)}
+    b = bod_inputs.load(fs.folder(tmp_path / "a", plans=drafts), fy_start=1)
+    with pytest.raises(fpa.PickVersion) as asked:
+        fpa.compute(b.gl, b.plans, fy_start=1)                        # never by file name or date modified
+    assert asked.value.versions == ["AOP (AOP_2026.csv)", "AOP (AOP_2026_v2.csv)"]
+    v = fpa.compute(b.gl, b.plans, fy_start=1, plan_file="AOP_2026.csv")
+    assert _line(v.month, "MKT", "QC").plan == fs.plan_month("MKT", "QC", 10)      # never both added
+    drafts["AOP_2026.csv"] = fs.plan_rows("AOP", approved="15/12/2025")
+    b = bod_inputs.load(fs.folder(tmp_path / "b", plans=drafts), fy_start=1)
+    v = fpa.compute(b.gl, b.plans, fy_start=1)
+    assert v.plan.file == "AOP_2026.csv" and v.basis.endswith("duyệt ngày 15/12/2025")
+    assert _line(v.ytd, "HC", "LUONG").plan == sum(fs.plan_month("HC", "LUONG", m) for m in range(1, 11))
+
+
+def test_codes_missing_from_the_catalogue_are_named_and_still_counted(bundle):
+    config = bod_inputs.Config(depts={"KD": {"ten": "Kinh doanh"}, "HC": {"ten": "Hành chính"}},
+                               elements={c: {"ten": n} for c, n in fs.ELEMENTS.items() if c != "QC"})
+    v = fpa.compute(bundle.gl, bundle.plans, fy_start=1, config=config)
+    assert v.unknown == {"bộ phận": ["MKT"], "yếu tố chi phí": ["QC"]}
+    assert "Mã bộ phận chưa có trong danh mục: MKT; em vẫn tính theo mã, cần chị cho biết gán vào đâu" in v.left_out()
+    assert _line(v.month, "MKT", "QC").actual == 400 * M and _line(v.month, "KD", "LUONG").label == "Kinh doanh · Lương"
+
+
+def test_a_detail_line_without_a_cost_element_is_grouped_by_account_and_said(bundle):
+    e = next(x for x in bundle.gl if x.period == fs.PERIOD and x.element == "THUE")
+    e.element = ""
+    v = fpa.compute(bundle.gl, bundle.plans, fy_start=1)
+    assert _line(v.month, "HC", "TK 6427").actual == e.amount and v.no_element == [e.where]
+    assert "1 dòng chi phí không có mã yếu tố chi phí, em tạm xếp theo tài khoản" in v.left_out()

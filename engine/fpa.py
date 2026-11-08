@@ -25,11 +25,54 @@ _NOT_PLAN = {"ly", "thuc te", "actual"}
 
 
 class PickVersion(ValueError):
-    """More than one plan version and none chosen: Clicky asks, it never picks."""
+    """More than one plan and nothing says which one was approved: Clicky asks, it never picks (not by file name,
+    not by date modified). versions are the labels to ask with; choices the (version, file) behind each."""
 
-    def __init__(self, versions: list):
-        super().__init__("chọn phiên bản kế hoạch: " + ", ".join(versions))
-        self.versions = versions
+    def __init__(self, choices: list):
+        clash = len({key(v) for v, _f in choices}) < len(choices)        # one version in two files
+        self.choices = choices
+        self.versions = [f"{v} ({f})" if clash else v for v, f in choices]
+        super().__init__("chọn bản kế hoạch: " + ", ".join(self.versions))
+
+
+@dataclass
+class Plan:
+    version: str
+    file: str
+    approved: str = ""              # 'YYYY-MM-DD' when the file says it was approved
+
+    def basis(self, only: bool) -> str:
+        said = f"Kế hoạch: file {self.file}, phiên bản {self.version}"
+        if self.approved:
+            return said + f", duyệt ngày {self.approved[8:10]}/{self.approved[5:7]}/{self.approved[:4]}"
+        return said + (", bản kế hoạch duy nhất trong thư mục" if only else "")
+
+
+def plan_choices(plans: list) -> list:
+    """Each plan in the folder: one per version and file, last year's actual left out."""
+    out = {}
+    for r in plans:
+        v = (r.version or "").strip()
+        if not v or key(v) in _NOT_PLAN:
+            continue
+        p = out.setdefault((key(v), r.file), Plan(v, r.file))
+        p.approved = max(p.approved, r.approved or "")
+    return [out[k] for k in sorted(out)]
+
+
+def choose_plan(plans: list, version: Optional[str] = None, file: Optional[str] = None) -> tuple:
+    """(Plan or None, the only one in the folder?). One approved plan among several is the one; otherwise asked."""
+    found = plan_choices(plans)
+    if version:
+        found = [p for p in found if key(p.version) == key(version)]
+    if file:
+        found = [p for p in found if p.file == file]
+    if len(found) > 1:
+        approved = [p for p in found if p.approved]
+        if len(approved) != 1:
+            raise PickVersion([(p.version, p.file) for p in found])
+        return approved[0], False
+    return (found[0] if found else None), len(plan_choices(plans)) == 1
 
 
 @dataclass
@@ -83,10 +126,14 @@ class Variance:
     period: str                                         # "YYYY-MM"
     months: list                                        # the year to date, ending with period
     version: str
+    plan: Optional[Plan] = None                         # the plan compared against; None when the folder has none
+    basis: str = ""                                     # which plan and why, for the report and the Biên bản
     month: list = field(default_factory=list)           # [Line]
     ytd: list = field(default_factory=list)             # [Line]
     no_month: list = field(default_factory=list)        # [(where, amount)] detail lines without a readable month
     outside: list = field(default_factory=list)         # [(where, period, amount)] detail outside the year to date
+    unknown: dict = field(default_factory=dict)         # {"bộ phận": [codes], "yếu tố chi phí": [codes]} not in the catalogue
+    no_element: list = field(default_factory=list)      # [where] detail lines without a cost element (grouped by account)
 
     @staticmethod
     def totals(lines: list) -> tuple:
@@ -110,21 +157,20 @@ class Variance:
                        f"tổng {fmt(sum(a for _, _, a in later))} đ")
         if earlier:
             out.append(f"{len(earlier)} dòng chi phí trước năm tài chính này, tổng {fmt(sum(a for _, _, a in earlier))} đ")
+        if self.no_element:
+            out.append(f"{len(self.no_element)} dòng chi phí không có mã yếu tố chi phí, em tạm xếp theo tài khoản")
+        for what, codes in self.unknown.items():
+            if codes:
+                out.append(f"Mã {what} chưa có trong danh mục: {', '.join(codes[:5])}"
+                           + (f" và {len(codes) - 5} mã khác" if len(codes) > 5 else "")
+                           + "; em vẫn tính theo mã, cần chị cho biết gán vào đâu")
+        if self.plan is None:
+            out.append("Không có file kế hoạch: em chỉ có số thực hiện, chưa so được với kế hoạch")
         return out
 
 
 def _month_text(period: str) -> str:
     return f"{period[5:7]}/{period[:4]}"
-
-
-def plan_versions(plans: list) -> list:
-    """The plan versions in the folder, last year's actual left out."""
-    seen = {}
-    for r in plans:
-        v = (r.version or "").strip()
-        if v and key(v) not in _NOT_PLAN:
-            seen.setdefault(key(v), v)
-    return sorted(seen.values())
 
 
 def latest_month(entries: list) -> Optional[str]:
@@ -149,23 +195,20 @@ def _element_of(entry) -> str:
 
 
 def compute(gl: list, plans: list, period: Optional[str] = None, version: Optional[str] = None, fy_start: int = 1,
-            config=None) -> Variance:
+            config=None, plan_file: Optional[str] = None) -> Variance:
     """Actual (the cost detail) against plan, by department x cost element, for period and the year to date.
 
-    period defaults to the latest month of the detail. version must name the plan when the folder holds more than
-    one (PickVersion otherwise). fy_start is the month the fiscal year starts (1: the calendar year)."""
-    versions = plan_versions(plans)
-    if version is None:
-        if len(versions) > 1:
-            raise PickVersion(versions)
-        version = versions[0] if versions else ""
+    period defaults to the latest month of the detail. version (and plan_file) name the plan when the folder holds
+    more than one and only one of them says it was approved (PickVersion otherwise). fy_start is the month the
+    fiscal year starts (1: the calendar year)."""
+    chosen, only = choose_plan(plans, version, plan_file)
     period = period or latest_month(gl)
     if not period:
         raise ValueError("không có dòng chi phí nào có tháng")
     fy = fiscal_year(period, fy_start)
     year = fy_months(fy, fy_start)
     months = year[:year.index(period) + 1]
-    v = Variance(period, months, version)
+    v = Variance(period, months, chosen.version if chosen else "", chosen, chosen.basis(only) if chosen else "")
     depts, elements = _names(config)
     month, ytd = {}, {}
 
@@ -182,20 +225,28 @@ def compute(gl: list, plans: list, period: Optional[str] = None, version: Option
         if e.period not in months:
             v.outside.append((e.where, e.period, e.amount))
             continue
+        if not e.element:
+            v.no_element.append(e.where)
         targets = [line(ytd, e.dept, _element_of(e))] + ([line(month, e.dept, _element_of(e))] if e.period == period else [])
         for t in targets:
             t.actual += e.amount
             t.actual_from.append(e.where)
             if e.account:
                 t.accounts.add(e.account)
-    want = key(version)
-    for r in plans:
-        if key(r.version or "") != want or r.month not in months:
+    for r in plans if chosen else []:
+        if key(r.version or "") != key(chosen.version) or r.file != chosen.file or r.month not in months:
             continue
         targets = [line(ytd, r.dept, r.element)] + ([line(month, r.dept, r.element)] if r.month == period else [])
         for t in targets:
             t.plan += r.amount
             t.plan_from.append(r.where)
+    known_depts = set(getattr(config, "depts", {}) or {})
+    known_elements = set(getattr(config, "elements", {}) or {})
+    if known_depts:
+        v.unknown["bộ phận"] = sorted({d for d, _e in ytd if d and d not in known_depts})
+    if known_elements:
+        v.unknown["yếu tố chi phí"] = sorted({e for _d, e in ytd if e and e not in known_elements
+                                              and not e.startswith("TK ")})
     order = lambda l: (l.dept == "", l.dept, l.element)       # noqa: E731 - unassigned last
     v.month = sorted(month.values(), key=order)
     v.ytd = sorted(ytd.values(), key=order)

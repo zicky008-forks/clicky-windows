@@ -65,14 +65,19 @@ def gl_rows() -> list:
     rows.append(["02/11/2026", "PC90005", "11", "2026", a, "331", d, e, "Thuê văn phòng T11", str(amount)])
     d, e, a, amount = NO_MONTH
     rows.append(["", "PK90006", "", "", a, "214", d, e, "Khấu hao điều chỉnh", str(amount)])
+    printed = sum(int(r[9]) for r in rows[1:] if r[9])
+    rows.append(["", "", "", "", "", "", "", "", "Tổng cộng", str(printed)])     # a printed total: never added in
     return rows
 
 
-def plan_rows(version: str = "AOP") -> list:
-    rows = [PLAN_HEADER]
+def plan_rows(version: str = "AOP", approved: str = "", scale: int = 1) -> list:
+    """The plan file; approved writes a 'Ngày duyệt' column, scale makes a different draft of the same plan."""
+    rows = [PLAN_HEADER + (["Ngày duyệt"] if approved else [])]
     for month in range(1, 13):
         for dept, element, _a, _p in PLAN:
-            rows.append([version, "2026", str(month), dept, element, str(plan_month(dept, element, month))])
+            rows.append([version, "2026", str(month), dept, element, str(plan_month(dept, element, month) * scale)]
+                        + ([approved] if approved else []))
+    rows.append(["", "", "", "", "Tổng cộng", str(sum(int(r[5]) for r in rows[1:]))])
     return rows
 
 
@@ -114,9 +119,10 @@ def write_csv(path: Path, rows: list) -> Path:
     return path
 
 
-def folder(path: Path, versions=("AOP",)) -> Path:
+def folder(path: Path, versions=("AOP",), plans: dict = None) -> Path:
+    """versions: one plan file per version. plans: {file name: rows} instead, for drafts of one version."""
     path.mkdir(parents=True, exist_ok=True)
     write_csv(path / "SoChiTietChiPhi_2026.csv", gl_rows())
-    for v in versions:
-        write_csv(path / f"{v}_2026.csv", plan_rows(v))
+    for name, rows in (plans or {f"{v}_2026.csv": plan_rows(v) for v in versions}).items():
+        write_csv(path / name, rows)
     return path
