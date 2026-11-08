@@ -30,15 +30,15 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/clicky-model-cache
-          key: models-${{ hashFiles('tools/giong_noi/tai_model.py') }}
-          restore-keys: models-
+          key: models-v2-${{ hashFiles('tools/giong_noi/tai_model.py') }}
+          restore-keys: models-v2-
       - run: python tools/giong_noi/tai_model.py --model 70k --out voice/asr-vi
       - run: python tools/giong_noi/tai_model.py --model piper-vais1000 --out voice/tts-piper-vi
       - if: steps.models.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ~/clicky-model-cache
-          key: models-${{ hashFiles('tools/giong_noi/tai_model.py') }}
+          key: models-v2-${{ hashFiles('tools/giong_noi/tai_model.py') }}
       - run: python tools/giong_noi/tai_vieneu.py --precision both --out voice/vieneu
       - name: Sizes
         shell: pwsh
