@@ -14,48 +14,12 @@ from engine import bod_inputs, fpa, opex_feedback, opex_split
 from office import opex_skill, outlook_drafts
 
 M = fs.M
-DEPT_SHEET = [["Mã phòng ban", "Tên phòng ban", "Khối", "Email", "CC"],
-              ["KD", "Kinh doanh", "Thương mại", "kd@example.com", "truongkd@example.com"],
-              ["MKT", "Marketing", "Thương mại", "mkt@example.com", ""],
-              ["HC", "Hành chính", "Hỗ trợ", "", ""]]
-ELEMENT_SHEET = [["Mã khoản mục", "Tên khoản mục", "Tài khoản"]] + [[c, n, a] for c, n, a in (
-    ("LUONG", "Lương", "6411"), ("KH", "Khấu hao", "6414"), ("CTP", "Công tác phí", "6418"), ("QC", "Quảng cáo", "6418"),
-    ("THUE", "Thuê văn phòng", "6427"))]
-RULES = [["Tham số", "Giá trị"], ["Tháng bắt đầu năm tài chính", 1], ["Email kế toán", "ketoan@example.com"],
-         ["Người gửi", "Phòng FP&A"], ["Hạn phản hồi", "18/11/2026"]]
-
-
-def _xlsx(path: Path, sheets: dict) -> Path:
-    from openpyxl import Workbook
-    wb = Workbook()
-    wb.remove(wb.active)
-    for name, rows in sheets.items():
-        ws = wb.create_sheet(name)
-        for r in rows:
-            ws.append(r)
-    wb.save(path)
-    return path
-
-
-# Pay lines that name a person: they must never reach a department's file or its draft
-PAYROLL = [["25/10/2026", "PL77701", "10", "2026", "6411", "3341", "KD", "LUONG", "Lương T10 – Nguyễn Văn An", "25000000"],
-           ["25/10/2026", "PL77702", "10", "2026", "6411", "3341", "KD", "LUONG", "Thưởng KPI – Trần Thị Bình", "8000000"]]
-PAYROLL_TOTAL = 33 * M
-PERSONAL = ("Nguyễn Văn An", "Trần Thị Bình", "PL77701", "PL77702")
+PAYROLL_TOTAL, PERSONAL = fs.PAYROLL_TOTAL, fs.PERSONAL
+_xlsx = fs.write_xlsx
 
 
 def case(tmp_path, tb=True, shift=None, payroll=False) -> Path:
-    d = fs.folder(tmp_path / "F01")
-    if payroll:
-        rows = fs.gl_rows()
-        rows[-1:-1] = PAYROLL
-        rows[-1][9] = str(int(rows[-1][9]) + PAYROLL_TOTAL)
-        fs.write_csv(d / "SoChiTietChiPhi_2026.csv", rows)
-        shift = dict(shift or {}, **{"6411": (shift or {}).get("6411", 0) + PAYROLL_TOTAL})
-    _xlsx(d / "Danh muc.xlsx", {"Phòng ban": DEPT_SHEET, "Khoản mục": ELEMENT_SHEET, "Tham số": RULES})
-    if tb:
-        fs.write_csv(d / "TB T10 2026.csv", fs.tb_rows(shift))
-    return d
+    return fs.opex_folder(tmp_path / "F01", tb=tb, shift=shift, payroll=payroll)
 
 
 class FakeItem:
@@ -395,3 +359,31 @@ def test_the_robot_runs_without_outlook_and_grades_a_real_run(tmp_path, monkeypa
     bad = opex_robot.grade([e for e in events if e["event"] != "drafts_saved"], False, r["out"])
     assert {l.name for l in bad.lines if not l.ok} == {"Không mở Outlook, không gửi thư nào",
                                                        "Mỗi phòng một file và một thư nháp", "File của case không bị sửa"}
+
+
+def test_the_robot_case_has_pay_lines_and_a_leak_fails_the_run(tmp_path, monkeypatch):
+    import json
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "dien_tap"))
+    import opex_robot
+    import tao_case_chi_phi
+    assert opex_robot.PERSONAL == fs.PERSONAL == tao_case_chi_phi.PERSONAL
+    d = tao_case_chi_phi.make(tmp_path / "case")
+    with pytest.raises(FileExistsError):
+        tao_case_chi_phi.make(d)                                  # never written over
+    assert tao_case_chi_phi.main(["--out", str(d)]) == 2
+    assert any(x in (d / "SoChiTietChiPhi_2026.csv").read_text(encoding="utf-8-sig") for x in fs.PERSONAL)
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    monkeypatch.setenv("CLICKY_OUTLOOK", "0")
+    r = opex_skill.prepare(d)
+    assert r["matched"].ok                                        # the books move with the pay lines
+    events = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()] + [{"event": "story_end"}]
+    res = opex_robot.grade(events, True, r["out"])
+    assert res.ok, res.markdown("x")
+    eml = sorted(r["out"].glob("*.eml"))[0]
+    eml.write_bytes(eml.read_bytes().replace(b"X-Unsent: 1", "X-Unsent: 1\nX-Note: PL77701".encode()))
+    bad = opex_robot.grade(events, True, r["out"])
+    [line] = [l for l in bad.lines if not l.ok]
+    assert line.name == "Không lộ tên người hay chứng từ lương" and eml.name in line.detail
+    assert not any(x in line.detail for x in fs.PERSONAL)          # the robot never repeats a name

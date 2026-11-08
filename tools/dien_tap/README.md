@@ -220,12 +220,15 @@ Clicky ghi các sự kiện: `bod_start` (`folder` là mã thư mục, không ph
 ### Diễn tập tách chi phí cho các phòng
 
 ```
-python tools\dien_tap\opex_robot.py --thu-muc <thu_muc_case_gia_lap>
+python tools\dien_tap\tao_case_chi_phi.py --out <thu_muc_moi>
+python tools\dien_tap\opex_robot.py --thu-muc <thu_muc_moi>
 ```
+
+Lệnh đầu tạo case giả lập (một công ty bịa): sổ chi tiết chi phí 2026, AOP, danh mục có email từng phòng (phòng Hành chính cố ý không có email), bảng cân đối tháng 10 khớp sổ, và hai dòng lương có tên người. Thư mục phải chưa có sẵn, lệnh không bao giờ ghi đè.
 
 Robot chép case sang thư mục kết quả, rồi mở Clicky với `--opex-split <case>`, `CLICKY_SCENE_LOG`, `CLICKY_LOCAL_ONLY=1` và **`CLICKY_OUTLOOK=0`**. Biến cuối là bắt buộc: Outlook trên máy test là hộp thư công ty, thư nháp lưu vào Outlook sẽ đồng bộ lên máy chủ thư của công ty. Có `CLICKY_OUTLOOK=0`, Clicky không mở Outlook, mỗi thư nháp là một file `.eml` cạnh file chi phí của phòng. Không chạy tay `--opex-split` trên máy test mà thiếu biến này.
 
-**Cổng ĐẠT:** tách xong, không mở Outlook và không gửi thư nào, mỗi phòng một file và một `.eml`, đã khớp sổ cân đối khi case có bảng cân đối, file của case không bị sửa. Mã thoát: 0 = ĐẠT, 1 = KHÔNG ĐẠT, 2 = không chạy được.
+**Cổng ĐẠT:** tách xong, không mở Outlook và không gửi thư nào, mỗi phòng một file và một `.eml`, đã khớp sổ cân đối khi case có bảng cân đối, không file hay thư nháp nào của phòng có tên người hoặc số chứng từ lương (robot chỉ nêu tên file bị lộ, không nhắc lại tên người), file của case không bị sửa. Mã thoát: 0 = ĐẠT, 1 = KHÔNG ĐẠT, 2 = không chạy được.
 
 ### Power Query khởi động trong lúc đọc phiếu (bản 82a0f2f trở đi)
 
