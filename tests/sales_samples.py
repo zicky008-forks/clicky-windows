@@ -118,7 +118,7 @@ def october_plan() -> dict:
     return out
 
 
-def tb_rows(shift: dict = None) -> list:
+def tb_rows(shift: dict = None, extra: list = ()) -> list:
     """October trial balance: 5111 Có is gross revenue, 5211 Nợ the MT discounts, 632 Nợ the cost of goods sold."""
     gross = ck = cogs = 0
     for r in ledger_rows()[1:-1]:
@@ -133,7 +133,37 @@ def tb_rows(shift: dict = None) -> list:
             ["521", "Các khoản giảm trừ doanh thu", 0, 0, ck, ck, 0, 0],
             ["5211", "Chiết khấu thương mại", 0, 0, ck, ck, 0, 0],
             ["632", "Giá vốn hàng bán", 0, 0, cogs, cogs, 0, 0],
-            ["911", "Xác định kết quả kinh doanh", 0, 0, 0, 0, 0, 0]]
+            ["911", "Xác định kết quả kinh doanh", 0, 0, 0, 0, 0, 0]] + [list(r) for r in extra]
+
+
+GL_HEADER = ["Ngày CT", "Số CT", "Tháng", "Năm", "TK Nợ", "TK Có", "Mã phòng ban", "Mã khoản mục", "Diễn giải",
+             "Số tiền"]
+
+
+def gl_rows(ledger: list = None, extra: list = (), closing: bool = True) -> list:
+    """The general ledger's revenue and cost postings for October, as accounting books them from the invoices:
+    Nợ 131 / Có 5111 gross, Nợ 5211 / Có 131 the discount, Nợ 632 / Có 156 the cost; then the closing entries."""
+    rows, n = [GL_HEADER], 0
+    gross = ck = cogs = 0
+    for r in (ledger or ledger_rows())[1:-1]:
+        if not r[0].endswith("/10/2026"):
+            continue
+        g, d, c = int(r[7]), int(r[8]), int(r[10])
+        n += 1
+        rows.append([r[0], r[1], "10", "2026", "131", "5111", "", "", f"Doanh thu {r[3]}", str(g)])
+        if d:
+            rows.append([r[0], r[1], "10", "2026", "5211", "131", "", "", f"Chiết khấu {r[3]}", str(d)])
+        if c > 0:
+            rows.append([r[0], f"XK{n:05d}", "10", "2026", "632", "156", "", "", f"Giá vốn {r[3]}", str(c)])
+        elif c < 0:
+            rows.append([r[0], f"NK{n:05d}", "10", "2026", "156", "632", "", "", f"Hàng trả lại {r[3]}", str(-c)])
+        gross, ck, cogs = gross + g, ck + d, cogs + c
+    rows += [list(x) for x in extra]
+    if closing:
+        rows += [["31/10/2026", "KC001", "10", "2026", "5111", "5211", "", "", "Kết chuyển chiết khấu", str(ck)],
+                 ["31/10/2026", "KC002", "10", "2026", "5111", "911", "", "", "Kết chuyển doanh thu", str(gross - ck)],
+                 ["31/10/2026", "KC003", "10", "2026", "911", "632", "", "", "Kết chuyển giá vốn", str(cogs)]]
+    return rows
 
 
 def write_csv(path: Path, rows: list) -> Path:
@@ -154,9 +184,11 @@ def write_xlsx(path: Path, sheets: dict) -> Path:
     return path
 
 
-def folder(path: Path, ledger: list = None, plan: dict = None, catalogue: list = None) -> Path:
-    """plan: {sheet: rows} of the AOP workbook, the plan by SKU by default."""
+def folder(path: Path, ledger: list = None, plan: dict = None, catalogue: list = None, gl: list = None) -> Path:
+    """plan: {sheet: rows} of the AOP workbook, the plan by SKU by default. gl: the general ledger's rows."""
     path.mkdir(parents=True, exist_ok=True)
+    if gl is not None:
+        write_csv(path / "SoCai_GL_T10_2026.csv", gl)
     write_csv(path / "SoBanHang_2026.csv", ledger or ledger_rows())
     write_xlsx(path / "KeHoach_AOP_2026.xlsx", plan or {"KH theo ma hang": plan_rows()})
     write_xlsx(path / "DanhMuc.xlsx", {"Ma hang": catalogue or catalogue_rows()})

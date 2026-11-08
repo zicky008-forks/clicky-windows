@@ -89,7 +89,7 @@ def test_the_ledger_matches_the_books(tmp_path):
     m = sales_pnl.match_books(b.sales, read_trial_balance(ss.tb_rows()), ss.PERIOD, b.config)
     assert m.ok and [l.code for l in m.lines] == ["revenue", "cogs"]
     rev, cogs = sum(x[1] for x in ss.october().values()), sum(x[2] for x in ss.october().values())
-    assert m.sentence() == (f"Tháng 10/2026: doanh thu thuần khớp sổ cân đối, {fmt(rev)} đ (Có TK 511 trừ Nợ TK 521); "
+    assert m.sentence() == (f"Tháng 10/2026: doanh thu thuần khớp sổ cân đối, {fmt(rev)} đ (Có TK 5111 trừ Nợ TK 521); "
                             f"giá vốn hàng bán khớp sổ cân đối, {fmt(cogs)} đ (Nợ TK 632).")
 
 

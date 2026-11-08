@@ -334,14 +334,24 @@ def _plan_issues(v: SalesPnl, chosen: Plan, plans: list, tables: list) -> list:
             got[0] += r.amount
             got[1].append(r.where)
     attr = {"revenue": "plan_revenue", "cogs": "plan_cogs", "gp": "plan_gp"}
+    held = [h for file, t, _rows in tables if file == chosen.file for h in getattr(t, "held", [])
+            if key(h[1]) == key(chosen.version) and h[2] == v.period]
+    held_amount = {"revenue": sum((h[3] for h in held), ZERO), "cogs": sum((h[4] for h in held), ZERO)}
+    held_amount["gp"] = held_amount["revenue"] - held_amount["cogs"]
     for code, (said, where) in sorted(stated.items(), key=lambda x: [c for c, _n in LINES].index(x[0])):
         made = sum((getattr(l, attr[code]) for l in v.month if l.plan_from), ZERO)
         if abs(made - said) > VND_TOLERANCE:
             name = dict(LINES)[code].lower()
-            out.append(f"File kế hoạch {chosen.file} ghi {name} tháng {_month_text(v.period)} là {fmt(said)} đ "
-                       f"({', '.join(where[:2])}), nhưng cộng các dòng mã hàng được {fmt(made)} đ, lệch "
-                       f"{fmt(made - said)} đ. Em dùng các dòng mã hàng cho cầu nối, chênh lệch này không đưa vào "
-                       "phần cơ cấu; cần chị cho biết số nào đúng")
+            text = (f"File kế hoạch {chosen.file} ghi {name} tháng {_month_text(v.period)} là {fmt(said)} đ "
+                    f"({', '.join(where[:2])}), nhưng cộng các dòng mã hàng được {fmt(made)} đ, lệch "
+                    f"{fmt(made - said)} đ.")
+            if held:
+                cells = ", ".join(h[0] for h in held[:3]) + (f" và {len(held) - 3} dòng khác" if len(held) > 3 else "")
+                exact = abs(made + held_amount[code] - said) <= VND_TOLERANCE
+                text += (f" {'Chênh lệch này bằng đúng' if exact else 'Có'} {len(held)} dòng kế hoạch không có sản lượng "
+                         f"({cells}, {name} {fmt(held_amount[code])} đ) em chưa cộng vì cầu nối cần sản lượng.")
+            out.append(text + " Em dùng các dòng mã hàng cho cầu nối, chênh lệch này không đưa vào phần cơ cấu; "
+                              "cần chị cho biết số nào đúng")
     for file, t, rows in tables:
         if file != chosen.file:
             continue
@@ -378,6 +388,11 @@ def _printed_totals(file: str, t, rows: list) -> list:
 
 # ── Against the books ─────────────────────────────────────────────────────────
 
+GOODS = ("5111", "5112")                # sale of goods and of finished products: what a sales ledger holds
+OTHER_REVENUE = "doanh thu khác, không có trong sổ bán hàng"
+CLOSING = "911"
+
+
 @dataclass
 class SalesBookLine:
     code: str                       # 'revenue' or 'cogs'
@@ -385,77 +400,221 @@ class SalesBookLine:
     books: Decimal
     ledger: Optional[Decimal]       # None when the ledger has no cost of goods sold
     accounts: list = field(default_factory=list)     # the books' accounts it is made of
-    rows: list = field(default_factory=list)         # trial balance rows
+    rows: list = field(default_factory=list)         # trial balance rows, or ledger cells ('Sheet!row')
     how: str = ""                                    # how the books' figure is read, in plain words
+    causes: list = field(default_factory=list)       # [(what, amount)] known items that make up the gap exactly
 
     @property
     def diff(self) -> Optional[Decimal]:
         return None if self.ledger is None else self.ledger - self.books
 
     @property
+    def unexplained(self) -> Optional[Decimal]:
+        return None if self.diff is None else self.diff - sum((a for _w, a in self.causes), ZERO)
+
+    @property
     def ok(self) -> bool:
-        return self.diff is not None and abs(self.diff) <= VND_TOLERANCE
+        """Matched, or the gap is exactly items the books hold and the sales ledger does not (said as a note)."""
+        return self.unexplained is not None and abs(self.unexplained) <= VND_TOLERANCE
+
+    def note(self) -> str:
+        """'Lưu ý: ...' when the gap is explained, '' otherwise."""
+        if not self.ok or not self.causes:
+            return ""
+        what = "; ".join(f"{w} {fmt(-a)} đ" for w, a in self.causes)
+        more = "cao hơn" if self.diff < 0 else "thấp hơn"
+        return (f"Lưu ý: {self.name.lower()} trên sổ {more} sổ bán hàng {fmt(abs(self.diff))} đ, bằng đúng {what}. "
+                "Đây không phải lỗi, sổ bán hàng không ghi các khoản này")
 
 
 @dataclass
 class SalesBookMatch:
     period: str
+    source: str = "sổ cân đối"                      # or 'sổ cái' when matched to the ledger's postings
     lines: list = field(default_factory=list)
+    other: list = field(default_factory=list)        # [(account, amount)] revenue the sales ledger does not hold
+    receipt: dict = field(default_factory=dict)      # GL match: {"total", "used", "left": [(reason, count, amount)]}
 
     @property
     def ok(self) -> bool:
         return bool(self.lines) and all(l.ok for l in self.lines)
 
+    def notes(self) -> list:
+        out = [l.note() for l in self.lines if l.note()]
+        if self.other:
+            out.append("Lưu ý: " + ", ".join(f"TK {a} {fmt(x)} đ" for a, x in self.other) + f" là {OTHER_REVENUE}, "
+                       "em không so với sổ bán hàng")
+        return out
+
     def sentence(self) -> str:
-        month = _month_text(self.period)
+        month, src = _month_text(self.period), self.source
         parts = []
         for l in self.lines:
             if l.ledger is None:
-                parts.append(f"{l.name.lower()} sổ cân đối {fmt(l.books)} đ, sổ bán hàng không có cột giá vốn nên em chưa khớp được")
+                parts.append(f"{l.name.lower()} {src} {fmt(l.books)} đ, sổ bán hàng không có cột giá vốn nên em chưa khớp được")
+            elif abs(l.diff) <= VND_TOLERANCE:
+                parts.append(f"{l.name.lower()} khớp {src}, {fmt(l.books)} đ ({l.how})")
             elif l.ok:
-                parts.append(f"{l.name.lower()} khớp sổ cân đối, {fmt(l.books)} đ ({l.how})")
+                parts.append(f"{l.name.lower()} {src} {fmt(l.books)} đ ({l.how}), sổ bán hàng {fmt(l.ledger)} đ, "
+                             "chênh lệch đã rõ nguyên nhân")
             else:
-                parts.append(f"{l.name.lower()} lệch sổ cân đối: sổ cân đối {fmt(l.books)} đ ({l.how}), sổ bán hàng "
+                parts.append(f"{l.name.lower()} lệch {src}: {src} {fmt(l.books)} đ ({l.how}), sổ bán hàng "
                              f"{fmt(l.ledger)} đ, lệch {fmt(l.diff)} đ")
         if not parts:
-            return f"Em chưa khớp được doanh thu tháng {month} với sổ cân đối: không có tài khoản doanh thu, giá vốn."
+            return f"Em chưa khớp được doanh thu tháng {month} với {src}: không có tài khoản doanh thu, giá vốn."
         return f"Tháng {month}: " + "; ".join(parts) + "."
 
 
-def _accounts(config, words: tuple, default: str) -> tuple:
+def _accounts(config, words: tuple, default: tuple) -> tuple:
     said = config.rule(*words) if config is not None and hasattr(config, "rule") else None
-    return tuple(p.strip() for p in re.split(r"[;,\s]+", str(said)) if p.strip()) if said else (default,)
+    return tuple(p.strip() for p in re.split(r"[;,\s]+", str(said)) if p.strip()) if said else default
+
+
+def _revenue_accounts(config, accounts: list) -> tuple:
+    """(accounts the sales ledger is matched to, the other revenue accounts). The catalogue can name them; else a
+    chart that splits 511 matches the goods accounts (5111, 5112) and names the rest (5113 services, 5117 investment
+    property, 5118 other) as revenue the ledger does not hold."""
+    said = _accounts(config, ("tk", "doanh thu"), ())
+    if said:
+        return said, ()
+    revenue = sorted({a for a in accounts if a.startswith("511")})
+    goods = tuple(g for g in GOODS if any(a.startswith(g) for a in revenue))
+    if not goods:
+        return ("511",), ()
+    return goods, tuple(sorted({a for a in revenue if not a.startswith(GOODS) and a != "511"}))
+
+
+def _ledger_figures(rows: list) -> dict:
+    net = sum((s.net for s in rows), ZERO)
+    have = bool(rows) and all(s.cogs is not None for s in rows)
+    returns = sum((s.cogs for s in rows if s.cogs is not None and s.cogs < 0), ZERO)
+    return {"net": net, "gross": net + sum((s.deductions for s in rows), ZERO), "deducted": any(s.deductions for s in rows),
+            "cogs": sum((s.cogs for s in rows), ZERO) if have else None, "returns": returns}
+
+
+def _explain(line: SalesBookLine, candidates: list) -> None:
+    """Keep the smallest set of known items that makes the gap exactly; nothing when none does."""
+    from engine.bod_review import explain_gap
+    if line.diff is None or abs(line.diff) <= VND_TOLERANCE:
+        return
+    # An item that is most of the figure is the figure itself (the ledger missing it is a real gap), never a cause.
+    candidates = [(w, a) for w, a in candidates if abs(a) * 2 <= abs(line.books)]
+    chosen, rest = explain_gap(line.diff, candidates)
+    if abs(rest) <= VND_TOLERANCE:
+        line.causes = list(chosen)
 
 
 def match_books(sales: list, tb, period: str, config=None) -> SalesBookMatch:
     """The month's sales ledger against the trial balance.
 
-    Net revenue in the books is Phát sinh Có of 511 less Phát sinh Nợ of 521 (the deductions); the Nợ of 511 is the
-    closing entry to 911 and the transfer of 521, so it is not read. A chart of accounts without 521 (TT133) books
-    deductions on the Nợ of 511 with the closing entry, where they cannot be told apart, so the ledger's gross revenue
-    is matched to 511 instead. Cost of goods sold is Phát sinh Nợ of 632. The catalogue can name other accounts
-    ('TK doanh thu', 'TK giảm trừ', 'TK giá vốn')."""
+    Net revenue in the books is Phát sinh Có of the goods accounts (5111, 5112; all of 511 when it is not split)
+    less Phát sinh Nợ of 521; the Nợ of 511 is the closing entry to 911 and the transfer of 521, so it is not read.
+    Other 511 accounts (5113, 5117, 5118) are named as revenue the ledger does not hold. A chart without 521
+    (TT133) books deductions on the Nợ of 511 with the closing entry, so the ledger's gross revenue is matched.
+
+    Cost of goods sold is Phát sinh Nợ of 632, which is gross: an inventory provision (Nợ 632 / Có 2294) is in it,
+    and goods returned (Nợ 156 / Có 632) are not taken out, while a sales ledger nets returns. A gap that is exactly
+    the provision, the ledger's returns, or both, is said as a note, never as an error."""
     m = SalesBookMatch(period)
     rows = [s for s in sales if s.month == period]
-    rev_acc = _accounts(config, ("tk", "doanh thu"), "511")
-    ded_acc = _accounts(config, ("tk", "giam tru"), "521")
-    cogs_acc = _accounts(config, ("tk", "gia von"), "632")
-    under = lambda prefixes: [l for l in tb.leaves if l.account.startswith(prefixes)]    # noqa: E731
+    led = _ledger_figures(rows)
+    leaves = tb.leaves
+    rev_acc, other_acc = _revenue_accounts(config, [l.account for l in leaves])
+    ded_acc = _accounts(config, ("tk", "giam tru"), ("521",))
+    cogs_acc = _accounts(config, ("tk", "gia von"), ("632",))
+    under = lambda prefixes: [l for l in leaves if prefixes and l.account.startswith(prefixes)]    # noqa: E731
     rev, ded, cogs = under(rev_acc), under(ded_acc), under(cogs_acc)
+    m.other = [(l.account, l.cr) for l in under(other_acc) if l.cr]
     if rev:
         books = sum((l.cr for l in rev), ZERO) - sum((l.dr for l in ded), ZERO)
-        if ded or not any(s.deductions for s in rows):
-            ledger, name = sum((s.net for s in rows), ZERO), LINES[0][1]
+        if ded or not led["deducted"]:
+            ledger, name = led["net"], LINES[0][1]
             how = f"Có TK {'/'.join(rev_acc)}" + (f" trừ Nợ TK {'/'.join(ded_acc)}" if ded else "")
         else:                                   # deductions on the Nợ of 511, with the closing entry: match gross
-            ledger, name = sum((s.net + s.deductions for s in rows), ZERO), "Doanh thu trước giảm trừ"
+            ledger, name = led["gross"], "Doanh thu trước giảm trừ"
             how = (f"Có TK {'/'.join(rev_acc)}; giảm trừ ghi bên Nợ TK {'/'.join(rev_acc)} cùng bút toán kết chuyển "
                    "nên em khớp doanh thu trước giảm trừ")
         m.lines.append(SalesBookLine("revenue", name, books, ledger, [l.account for l in rev + ded],
                                      [l.row for l in rev + ded], how))
     if cogs:
-        have = rows and all(s.cogs is not None for s in rows)
-        m.lines.append(SalesBookLine("cogs", LINES[1][1], sum((l.dr for l in cogs), ZERO),
-                                     sum((s.cogs for s in rows), ZERO) if have else None, [l.account for l in cogs],
-                                     [l.row for l in cogs], f"Nợ TK {'/'.join(cogs_acc)}"))
+        line = SalesBookLine("cogs", LINES[1][1], sum((l.dr for l in cogs), ZERO), led["cogs"],
+                             [l.account for l in cogs], [l.row for l in cogs], f"Nợ TK {'/'.join(cogs_acc)}")
+        provision = sum((l.cr for l in under(("2294",))), ZERO)
+        _explain(line, [("trích lập dự phòng giảm giá hàng tồn kho (Có TK 2294)", -provision),
+                        ("giá vốn hàng bán bị trả lại mà sổ bán hàng đã trừ", led["returns"])])
+        m.lines.append(line)
+    return m
+
+
+def match_gl(sales: list, postings: list, period: str, config=None) -> SalesBookMatch:
+    """The month's sales ledger (AR12) against the general ledger's postings on revenue, deductions and cost of
+    goods sold. Closing entries (đối ứng 911) and the transfer of 521 into 511 are left out with that reason; other
+    511 revenue is named; every other posting on those accounts is in a figure, so used + left out = total.
+
+    The GL nets what the trial balance cannot: cost of goods sold is Nợ less Có of 632, so returns are netted as in
+    the sales ledger. A gap that is exactly one or more groups of postings by contra account (a provision against
+    2294, unearned revenue released from 3387) is said as a note."""
+    m = SalesBookMatch(period, "sổ cái")
+    rows = [s for s in sales if s.month == period]
+    led = _ledger_figures(rows)
+    month = [p for p in postings if p.period == period]
+    rev_acc, other_acc = _revenue_accounts(config, [p.account for p in month])
+    ded_acc = _accounts(config, ("tk", "giam tru"), ("521",))
+    cogs_acc = _accounts(config, ("tk", "gia von"), ("632",))
+    scope = tuple(rev_acc) + tuple(other_acc) + tuple(ded_acc) + tuple(cogs_acc) + (("511",) if other_acc else ())
+    mine = [p for p in month if p.account.startswith(scope)]
+    left = {}
+
+    def leave(p, reason):
+        n, amt = left.get(reason, (0, ZERO))
+        left[reason] = (n + 1, amt + p.dr + p.cr)
+
+    used = {"rev": [], "ded": [], "cogs": []}
+    for p in mine:
+        if p.contra.startswith(CLOSING):
+            leave(p, "kết chuyển cuối kỳ (đối ứng TK 911)")
+        elif p.account.startswith(rev_acc) and p.contra.startswith(ded_acc) or \
+                p.account.startswith(ded_acc) and p.contra.startswith(rev_acc):
+            leave(p, "kết chuyển giảm trừ doanh thu (521 sang 511)")
+        elif p.account.startswith(rev_acc):
+            used["rev"].append(p)
+        elif other_acc and p.account.startswith(other_acc):
+            leave(p, f"TK {p.account[:4]}: {OTHER_REVENUE}")
+            m.other.append((p.account, p.cr - p.dr))
+        elif p.account.startswith(ded_acc):
+            used["ded"].append(p)
+        elif p.account.startswith(cogs_acc):
+            used["cogs"].append(p)
+        else:
+            leave(p, "tài khoản doanh thu chưa rõ loại")
+    other = {}
+    for a, x in m.other:
+        other[a] = other.get(a, ZERO) + x
+    m.other = sorted(other.items())
+    m.receipt = {"total": len(mine), "used": sum(len(x) for x in used.values()),
+                 "left": [(r, n, a) for r, (n, a) in sorted(left.items())]}
+
+    def groups(ps, sign):
+        g = {}
+        for p in ps:
+            k = (p.contra or "?", "Nợ" if p.dr else "Có")
+            g[k] = g.get(k, ZERO) + sign * (p.dr - p.cr)
+        return g
+
+    if used["rev"] or used["ded"]:
+        books = sum((p.cr - p.dr for p in used["rev"]), ZERO) - sum((p.dr - p.cr for p in used["ded"]), ZERO)
+        how = f"Có trừ Nợ TK {'/'.join(rev_acc)}" + (f", trừ giảm trừ TK {'/'.join(ded_acc)}" if used["ded"] else "")
+        line = SalesBookLine("revenue", LINES[0][1], books, led["net"], sorted({p.account for p in used["rev"] + used["ded"]}),
+                             [p.where for p in used["rev"] + used["ded"]], how)
+        g = groups(used["rev"], -1)
+        g.update({(c, s): v for (c, s), v in groups(used["ded"], 1).items()})
+        _explain(line, [(f"bút toán {side} TK {'/'.join(rev_acc)} đối ứng TK {c}", -v) for (c, side), v in g.items()])
+        m.lines.append(line)
+    if used["cogs"]:
+        line = SalesBookLine("cogs", LINES[1][1], sum((p.dr - p.cr for p in used["cogs"]), ZERO), led["cogs"],
+                             sorted({p.account for p in used["cogs"]}), [p.where for p in used["cogs"]],
+                             f"Nợ trừ Có TK {'/'.join(cogs_acc)}")
+        g = groups(used["cogs"], 1)
+        _explain(line, [(f"bút toán {side} TK {'/'.join(cogs_acc)} đối ứng TK {c}", -v) for (c, side), v in g.items()])
+        m.lines.append(line)
     return m

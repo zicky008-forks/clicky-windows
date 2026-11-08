@@ -391,6 +391,42 @@ def read_gl(t: Table, cost_prefixes=("6",), fy_start: int = 7) -> list:
 
 
 @dataclass
+class Posting:
+    """One side of a ledger line: the account, the amount on its Nợ or Có side and the account on the other side.
+    A 'TK Nợ | TK Có | Số tiền' row is two postings; a single-account row is one (a negative amount is a Có)."""
+    period: str
+    account: str
+    dr: Decimal = ZERO
+    cr: Decimal = ZERO
+    contra: str = ""
+    where: str = ""
+    text: str = ""
+
+
+def read_postings(t: Table, fy_start: int = 7) -> list:
+    """Every posting of a ledger table, both sides, for matching to the books. Rows without an amount are left to
+    read_gl, which names them on the receipt."""
+    out = []
+    for n, v in t.rows:
+        amount = num(t.get(v, "tien"))
+        if amount is None:
+            continue
+        period = month_key(t.get(v, "thang"), t.get(v, "ngay"), t.get(v, "nam"), fy_start) or ""
+        text, where = str(t.get(v, "dien_giai", "") or "").strip(), f"{t.sheet}!{n}"
+        dr, cr = str(t.get(v, "tk_no", "") or "").strip(), str(t.get(v, "tk_co", "") or "").strip()
+        if dr or cr:
+            if dr:
+                out.append(Posting(period, dr, dr=amount, contra=cr, where=where, text=text))
+            if cr:
+                out.append(Posting(period, cr, cr=amount, contra=dr, where=where, text=text))
+            continue
+        acct = str(t.get(v, "tk", "") or "").strip()
+        if acct:
+            out.append(Posting(period, acct, dr=max(amount, ZERO), cr=max(-amount, ZERO), where=where, text=text))
+    return out
+
+
+@dataclass
 class PlanRow:
     version: str
     month: str
@@ -648,12 +684,16 @@ def read_sku_plan(t: Table, default_version: str = "", fy_start: int = 7, file_f
     _per_unit(t, "gia_von", "don_gia_von")
     _per_unit(t, "dt", "don_gia")
     qty_unit = header_unit(t, "sl")
-    out = []
+    out, held = [], t.held                               # [(where, version, month, revenue, cogs)] rows without volume
     for n, v in t.rows:
         qty, price, cost = num(t.get(v, "sl")), num(t.get(v, "don_gia")), num(t.get(v, "don_gia_von"))
         revenue, cogs = num(t.get(v, "dt")), num(t.get(v, "gia_von"))
         if qty is None:
             t.skipped.append((n, "không có sản lượng"))
+            if revenue is not None:                      # kept aside: the plan's stated totals may count it
+                month, _no, _fy = _plan_month(t.get(v, "thang"), t.get(v, "nam"), fy_start)
+                held.append((f"{t.sheet}!{n}", str(t.get(v, "phien_ban", default_version) or default_version).strip(),
+                             month, revenue, cogs or ZERO))
             continue
         if revenue is None and price is None:
             t.skipped.append((n, "không có doanh thu hay giá bán"))
@@ -682,6 +722,7 @@ class Bundle:
     plans: list = field(default_factory=list)          # PlanRow, every version (AOP, revised, last year)
     fx: dict = field(default_factory=dict)
     sales: list = field(default_factory=list)
+    postings: list = field(default_factory=list)       # Posting, both sides of every ledger line (match to the books)
     sku_plans: list = field(default_factory=list)      # SkuPlanRow, every version
     sku_plan_totals: list = field(default_factory=list)  # (file, Table, [SkuPlanRow]) of each plan-by-SKU table
     cut: list = field(default_factory=list)            # (sheet, rows) of the cut parameters, read by the reviewer
@@ -859,6 +900,7 @@ def load(folder: Path, fy_start: int = 7) -> Bundle:
                     got = _try_gl(rows, sheet, fy_start)
                     if got:
                         b.gl += got[1]
+                        b.postings += read_postings(got[0], fy_start)
                         b.receipt.append((p.name, "Sổ chi tiết chi phí", len(got[0].rows), got[0].skipped))
                 elif kind == "plan":
                     got = _try_plan(rows, sheet, "LY" if prior and version == "" else version, fy_start, file_fy)

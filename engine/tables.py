@@ -60,6 +60,7 @@ class Table:
     rows: list = field(default_factory=list)      # [(row number, values)] data rows
     skipped: list = field(default_factory=list)   # [(row number, reason)]
     totals: list = field(default_factory=list)    # [(row number, values)] total rows, kept to check against
+    held: list = field(default_factory=list)      # rows a reader skipped but keeps aside to explain a total with
 
     def get(self, values, name, default=None):
         i = self.columns.get(name)
