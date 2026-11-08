@@ -9,7 +9,7 @@ from openpyxl import load_workbook
 
 import fpa_samples as fs
 import sales_samples as ss
-from engine import forecast, fpa, saved_check
+from engine import forecast, fpa, fpa_report, saved_check
 from test_fpa_report import RULES, _with_ytd
 
 M = 1_000_000
@@ -209,6 +209,9 @@ def test_the_receipt_gives_the_reason_for_every_line_left_out(tmp_path):
         assert (r[3] == 0) == (not r[4]) or r[1] == "Không dùng", r                  # every line left out has a reason
     gl = next(r for r in files if r[0] == "SoChiTietChiPhi_2026.csv")
     assert gl[3] and "không có số tiền" in gl[4]
+    for name in ("AOP_2026.csv", "LE_T09_2026.csv"):            # the forecast takes both: never "not compared"
+        r = next(r for r in files if r[0] == name)
+        assert fpa_report.NOT_COMPARED not in (r[1] + str(r[4] or "")) and r[2] > 0, r
 
 
 def test_the_robot_grades_a_real_run_against_its_own_sum_of_the_case(tmp_path, monkeypatch):

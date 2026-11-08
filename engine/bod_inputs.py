@@ -15,9 +15,13 @@ from typing import Optional
 
 from engine.bod_review import Entry
 from engine.trial_balance import fold
-from engine.tables import Table, find_header, header_texts, key, read_table, sheets_of
+from engine.tables import HEADER_SCAN, Table, find_header, header_texts, key, matches, read_table, sheets_of
 
 ZERO = Decimal(0)
+
+# A cost element column under its management-reporting names, in a plan, a ledger or the catalogue.
+ELEMENT_WORDS = ["yeu to chi phi", "yeu to chi phi quan tri", "ma yeu to", "ma yeu to chi phi", "nhom chi phi",
+                 "nhom chi phi quan tri", "cost element"]
 
 GL_SPEC = {
     "ngay": ["ngay ct", "ngay chung tu", "ngay hach toan", "ngay", "posting date", "date"],
@@ -29,7 +33,7 @@ GL_SPEC = {
     "kenh": ["kenh", "channel", "kenh ban", "kenh phan phoi"],
     "pb": ["phong ban ma", "ma phong ban", "ma pb", "cost center", "trung tam chi phi", "ma bo phan"],
     "pb_ten": ["phong ban ten", "ten phong ban", "phong ban"],
-    "ce": ["cost element ma", "ma cost element", "ma khoan muc", "cost element", "ma ce"],
+    "ce": ["cost element ma", "ma cost element", "ma khoan muc", "cost element", "ma ce"] + ELEMENT_WORDS,
     "ce_ten": ["cost element ten", "ten cost element", "ten khoan muc"],
     "tk_no": ["tk no", "tai khoan no", "no tk", "debit account"],
     "tk_co": ["tk co", "tai khoan co", "co tk", "credit account"],
@@ -54,7 +58,7 @@ PLAN_SPEC = {
     "site": ["site", "phap nhan", "nha may", "don vi", "plant", "chi nhanh", "entity"],
     "khoi": ["khoi", "division", "khoi kinh doanh", "nganh hang"],
     "pb": ["phong ban ma", "ma phong ban", "ma pb", "phong ban", "cost center", "ma bo phan"],
-    "ce": ["cost element ma", "ma cost element", "ma ce", "cost element", "ma khoan muc"],
+    "ce": ["cost element ma", "ma cost element", "ma ce", "cost element", "ma khoan muc"] + ELEMENT_WORDS,
     "dong": ["dong bod", "dong bao cao", "chi tieu", "khoan muc bod", "khoan muc", "hang muc", "noi dung", "line item"],
     "kenh": ["kenh", "channel", "kenh phan phoi"],
     "tien": ["so tien vnd", "so tien", "gia tri", "amount", "thanh tien"],
@@ -207,8 +211,8 @@ CONFIG_SPECS = {
               "khong_cat": ["khong cat", "mien cat", "bao ve", "khong cat giam", "danh sach khong cat"],
               "email": ["email", "e mail", "dia chi email", "thu dien tu", "email nguoi nhan", "nguoi nhan"],
               "cc": ["cc", "email cc", "cc email", "dong gui", "gui kem"]},
-    "elements": {"ma": ["cost element ma", "ma cost element", "ma ce", "ma khoan muc", "ma", "khoan muc", "yeu to chi phi",
-                        "ma yeu to", "cost element"],
+    "elements": {"ma": ["cost element ma", "ma cost element", "ma ce", "ma khoan muc", "ma", "khoan muc"]
+                 + [w for w in ELEMENT_WORDS if not w.startswith("nhom")],     # 'Nhóm chi phí' is the group here
                  "ten": ["cost element ten", "ten cost element", "ten khoan muc", "ten"],
                  "tk": ["tai khoan", "tk", "so hieu tk", "account"], "nhom": ["nhom", "group cost", "nhom chi phi"],
                  "dong": ["dong bod", "dong bao cao"]},
@@ -258,6 +262,9 @@ class Config:
     units: dict = field(default_factory=dict)        # (SKU or "", folded unit) -> (factor to the standard, folded standard)
     rules: dict = field(default_factory=dict)        # folded key -> value
     rule_text: dict = field(default_factory=dict)    # folded key -> key as printed
+    # Every sheet keyed by account: [{"sheet", "accounts": [account as printed], "columns": {header: [text]}}].
+    # Which column holds the cost element is decided with the plan in hand (pair_codes), not by its header.
+    account_maps: list = field(default_factory=list)
 
     def rule(self, *words, default=None):
         """First rule whose key contains every word (folded)."""
@@ -343,9 +350,50 @@ def _pack(cfg, sku: str, std: str, value, header: str) -> None:
         cfg.units.setdefault((sku, big), (n, std))                    # 1 thùng = 24 lon
 
 
+ACCOUNT_HEAD = ["so hieu tk", "so hieu tai khoan", "tai khoan", "tk", "ma tk", "ma tai khoan", "account",
+                "account code", "gl account", "tai khoan ke toan"]
+# The account's own name is never the cost element, whatever else the sheet calls it.
+ACCOUNT_NAME_HEAD = ["ten tai khoan", "ten tk", "account name", "ten tai khoan ke toan"]
+
+
+def account_name_head(header: str, sheet_by_account: bool = True) -> bool:
+    """'Tên tài khoản', or a bare 'Tên' / 'Diễn giải' on a sheet keyed by account."""
+    return matches(header, ACCOUNT_NAME_HEAD) >= 2 or (sheet_by_account and key(header) in ("ten", "dien giai"))
+ACCOUNT_RE = re.compile(r"^\d{3,}[x*]*$")
+
+
+def account_prefix(text) -> str:
+    """'6411xx' -> '6411': an account written with x for 'any sub-account'."""
+    return re.sub(r"[x*]+$", "", str(text or "").strip().lower())
+
+
+def _read_account_map(cfg: Config, rows: list, sheet: str) -> None:
+    """Keep a sheet whose rows are keyed by account, with its other text columns, for pair_codes to choose from."""
+    for r, values in enumerate(rows[:HEADER_SCAN]):
+        heads = ["" if v is None else str(v).strip() for v in (values or [])]
+        acc = next((c for c, h in enumerate(heads) if h and matches(h, ACCOUNT_HEAD) == 3), None)
+        if acc is None:
+            continue
+        data = [list(x or []) for x in rows[r + 1:]]
+        data = [x for x in data if acc < len(x) and ACCOUNT_RE.match(str(x[acc] or "").strip().lower())]
+        if len(data) < 2:
+            continue
+        cols = {}
+        for c, h in enumerate(heads):
+            if c == acc or not h or account_name_head(h) or matches(h, ACCOUNT_HEAD) == 3:
+                continue
+            texts = ["" if c >= len(x) or x[c] is None else str(x[c]).strip() for x in data]
+            if any(texts) and not any(isinstance(x[c], (int, float)) for x in data if c < len(x) and x[c] is not None):
+                cols[h] = texts
+        if cols:
+            cfg.account_maps.append({"sheet": sheet, "accounts": [str(x[acc]).strip() for x in data], "columns": cols})
+        return
+
+
 def read_config(path: Path) -> Config:
     cfg = Config()
     for sheet, rows in sheets_of(path).items():
+        _read_account_map(cfg, rows, sheet)
         for r in rows:                       # every 'term | what it means' pair, for rules named elsewhere
             texts = [str(v).strip() for v in (r or []) if isinstance(v, str) and str(v).strip()]
             for a, b in zip(texts, texts[1:]):
@@ -371,10 +419,15 @@ def read_config(path: Path) -> Config:
             elif kind == "elements" and "ma" in t.columns and ("tk" in t.columns or "nhom" in t.columns) and "mau_so" not in t.columns:
                 if "phong ban" in key(sheet) or "kenh" in key(sheet):
                     continue
+                # 'Tên tài khoản' names the account, never the element: such a sheet maps accounts to elements
+                account_name = "ten" in t.columns and account_name_head(t.headers[t.columns["ten"]], False)
                 for _, v in t.rows:
                     code = str(t.get(v, "ma", "")).strip()
+                    if code and code in cfg.elements and account_name:
+                        continue                          # one element, many accounts: the account map pairs them
                     if code:
-                        cfg.elements[code] = {"ten": str(t.get(v, "ten", code)).strip(), "tk": str(t.get(v, "tk", "")).strip(),
+                        name = code if account_name else str(t.get(v, "ten", code)).strip()
+                        cfg.elements[code] = {"ten": name, "tk": str(t.get(v, "tk", "")).strip(),
                                               "nhom": str(t.get(v, "nhom", "")).strip(), "dong": str(t.get(v, "dong", "")).strip()}
             elif kind == "channels" and {"kenh", "mau_so"} <= set(t.columns):
                 for _, v in t.rows:
@@ -1019,7 +1072,8 @@ def hint_of(stem: str) -> str:
 
 def name_key(stem: str) -> str:
     """'DanhMuc_CauHinh' -> 'danh muc cau hinh': file names are often written in CamelCase."""
-    return key(re.sub(r"(?<=[a-zà-ỹđ])(?=[A-ZÀ-ỸĐ])", " ", str(stem)))
+    from engine.tables import _split_camel             # by letter case: 'nháp' is one word, 'ChiPhí' two
+    return key(_split_camel(str(stem)))
 
 
 def _try_fx(rows, sheet, hint, fy_start):
@@ -1268,17 +1322,41 @@ def load(folder: Path, fy_start: int = 7, purpose: str = "bod") -> Bundle:
     return b
 
 
+def element_column(cfg: Config, plan_values: set) -> dict:
+    """{account prefix: cost element} from the catalogue's account maps. The element column is found by its role,
+    not its header: its values repeat across accounts and are the plan's (or the catalogue's) cost elements. The
+    account's own name is never it. A column that matches nothing the plan or the catalogue knows maps nothing."""
+    known = {key(c) for c in cfg.elements} | {key(e.get("ten", "")) for e in cfg.elements.values() if e.get("ten")}
+    best, best_score = None, (0, 0, 0)
+    for m in cfg.account_maps:
+        for header, texts in m["columns"].items():
+            values = {key(t) for t in texts if t}
+            score = (len(values & plan_values), len(values & known), len([t for t in texts if t]) - len(values))
+            if (score[0] or (not plan_values and score[1])) and score > best_score:
+                best, best_score = (m, header), score
+    if best is None:
+        return {}
+    m, header = best
+    out = {}
+    for account, text in zip(m["accounts"], m["columns"][header]):
+        if text:
+            out.setdefault(account_prefix(account), set()).add(text)
+    return out
+
+
 def pair_codes(b: Bundle) -> None:
     """Actual and plan meet on the same department x cost element codes. A ledger line with no cost element takes
-    the one the catalogue gives its account (sheet 'Khoản mục' with 'Tài khoản'; the longest account prefix, and
-    only when one element has it). A department or element written by its name, in the plan or the ledger, takes
-    the catalogue's code for that name. Nothing is guessed: a name or account the catalogue does not hold stays."""
+    the one the catalogue gives its account (an account map sheet, its element column chosen by element_column;
+    else sheet 'Khoản mục' with 'Tài khoản'; the longest account prefix, and only when one element has it). A
+    department or element written by its name, in the plan or the ledger, takes the catalogue's code for that
+    name. Nothing is guessed: a name or account the catalogue does not hold stays."""
     cfg = b.config
     by_account = {}
     for code, e in cfg.elements.items():
-        tk = str(e.get("tk", "") or "").strip()
+        tk = account_prefix(e.get("tk", ""))
         if tk:
             by_account.setdefault(tk, set()).add(code)
+    by_account.update(element_column(cfg, {key(r.element) for r in b.plans if r.element}))
     element_names = {key(e.get("ten", "")): c for c, e in cfg.elements.items() if e.get("ten")}
     dept_names = {key(d.get("ten", "")): c for c, d in cfg.depts.items() if d.get("ten")}
 
@@ -1397,7 +1475,12 @@ def _resolve_years(b: Bundle, pending: list, fy_start: int) -> None:
 
 
 # A working file of the user's ('Working T10', 'Bản nháp', 'Draft', 'Làm việc', 'WIP'): never a source of figures.
-WORKING_RE = re.compile(r"\b(working|wip|draft|ban nhap|lam viec|file tam|tam tinh)\b")
+# A file name that says it is the user's own working copy: 'Working', 'Workings', 'WIP', 'Draft2', '(bản nháp)',
+# 'nháp', 'đang làm', 'bản sao', 'Copy of'. 'Nhập' as in stock in, import, data entry or income is not a draft.
+WORKING_RE = re.compile(
+    r"\b(?:workings?|work file|wip|drafts?|ban nhap|dang lam|lam viec|file tam|tam tinh|ban sao|copy|backup"
+    r"|(?<!thu )(?<!xuat )(?<!phieu )(?<!hang )(?<!so )(?<!tk )nhap"
+    r"(?! (?:kho|khau|lieu|hang|du lieu|vat tu|nguyen lieu|xuat|ton)\b))(?:\d+|v\d+)?\b")
 WORKING_WHY = "file làm việc (bản nháp) của chị: báo cáo FP&A không lấy số từ file nháp"
 
 # The key-value info sheet a plan file often carries: 'Trạng thái | Đã duyệt', 'Phiên bản | v4', 'Ngày duyệt | ...'.
@@ -1419,7 +1502,42 @@ def file_info(sheets: dict) -> dict:
             for name, words in INFO_KEYS.items():
                 if name not in out and k in words:
                     out[name] = cells[1]
+    if "approved" not in out:
+        when = resolution_date(sheets)
+        if when:
+            out["approved"] = when
     return out if ({"version", "approved"} & set(out)) or key(out.get("status", "")).find("duyet") >= 0 else {}
+
+
+RESOLUTION_RE = re.compile(r"\b(can cu|nghi quyet|quyet dinh|bien ban hop|resolution|decision)\b")
+APPROVAL_WORDS_RE = re.compile(r"\b(phe duyet|duyet|thong qua|ban hanh|approv\w*|ke hoach|ngan sach|aop|budget)\b")
+_DATE_AFTER_NGAY = (re.compile(r"\bngay\s+(\d{1,2})\s*[/.-]\s*(\d{1,2})\s*[/.-]\s*(\d{4})\b"),
+                    re.compile(r"\bngay\s+(\d{1,2})\s+thang\s+(\d{1,2})\s+nam\s+(\d{4})\b"),
+                    re.compile(r"(?<![\d/])(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})(?![\d/])"))
+
+
+def resolution_date(sheets: dict) -> str:
+    """The approval date a plan states in its 'Căn cứ Nghị quyết số 12/2026/NQ-HĐQT ngày 15/09/2026 ...' or
+    'Quyết định ... ngày 15 tháng 9 năm 2026' line, in the first rows of any sheet: 'YYYY-MM-DD', else ''. A line
+    that names the approval or the plan wins over one that does not; then the latest date."""
+    import datetime as dt
+    found = []
+    for rows in sheets.values():
+        for r in rows[:40]:
+            text = key(" ".join(str(v) for v in (r or []) if isinstance(v, str) and v.strip()))
+            if not text or not RESOLUTION_RE.search(text):
+                continue
+            raw = " ".join(fold(str(v)).lower() for v in (r or []) if isinstance(v, str) and v.strip())
+            for rx in _DATE_AFTER_NGAY:
+                hit = rx.search(raw)
+                if hit:
+                    try:
+                        when = dt.date(int(hit.group(3)), int(hit.group(2)), int(hit.group(1)))
+                    except ValueError:
+                        continue
+                    found.append((bool(APPROVAL_WORDS_RE.search(text)), when.isoformat()))
+                    break
+    return max(found)[1] if found else ""
 
 
 def apply_info(info: dict, rows: list) -> None:

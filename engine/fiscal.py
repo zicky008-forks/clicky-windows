@@ -25,25 +25,39 @@ def _from_rule(config) -> Optional[int]:
     return int(fy) if fy is not None and 1 <= int(fy) <= 12 else None
 
 
-def _from_plan_columns(b) -> Optional[tuple]:
+def _agreed(hits: list, chosen) -> Optional[tuple]:
+    """hits: [(first month, file, version)]. With a plan chosen, only its own; else the month every plan agrees on,
+    with the files that say it. Plans that disagree say nothing (the next evidence decides)."""
+    if chosen is not None:
+        from engine.tables import key
+        mine = [h for h in hits if h[1] == chosen[0] and (h[2] is None or key(h[2] or "") == key(chosen[1] or ""))]
+        return (mine[0][0], mine[0][1]) if mine else None       # another version's months are not this plan's
+    starts = {h[0] for h in hits}
+    if len(starts) != 1:
+        return None
+    files = list(dict.fromkeys(h[1] for h in hits))
+    return hits[0][0], ", ".join(files)
+
+
+def _from_plan_columns(b, chosen=None) -> Optional[tuple]:
     """A plan printed with one column per month: the first of twelve months is the year's first."""
-    for file, order in getattr(b, "month_orders", []):
-        if len(order) >= 12 and len(set(order[:12])) == 12:
-            return order[0], file
-    return None
+    hits = [(order[0], file, None) for file, order in getattr(b, "month_orders", [])
+            if len(order) >= 12 and len(set(order[:12])) == 12]
+    return _agreed(hits, chosen)
 
 
-def _from_plan_months(b) -> Optional[tuple]:
+def _from_plan_months(b, chosen=None) -> Optional[tuple]:
     """A plan version whose rows name twelve straight months (with their year): the earliest is the year's first."""
     by = {}
     for r in list(b.plans) + list(b.sku_plans):
         if r.month and r.month_no is None:               # the row named its year, not only a month
             by.setdefault((r.file, r.version), set()).add(r.month)
-    for (file, _v), months in sorted(by.items()):
+    hits = []
+    for (file, v), months in sorted(by.items(), key=lambda x: (x[0][0], str(x[0][1] or ""))):
         ms = sorted(months)
         if len(ms) == 12 and _straight(ms):
-            return int(ms[0][5:]), file
-    return None
+            hits.append((int(ms[0][5:]), file, v))
+    return _agreed(hits, chosen)
 
 
 def _straight(ms: list) -> bool:
@@ -80,16 +94,17 @@ def _from_ledger(b) -> Optional[int]:
     return int(months[0][5:]) if months[0][:4] != months[-1][:4] else None
 
 
-def start(b, tb=None, period: Optional[str] = None, books_ytd: Optional[Decimal] = None) -> tuple:
-    """(first month of the fiscal year, the receipt's sentence)."""
+def start(b, tb=None, period: Optional[str] = None, books_ytd: Optional[Decimal] = None, chosen=None) -> tuple:
+    """(first month of the fiscal year, the receipt's sentence). chosen: (file, version) of the plan compared against,
+    when known: its months are the evidence, not another version's."""
     n = _from_rule(b.config)
     if n is not None:
         return n, f"Năm tài chính bắt đầu từ {_month_text(n)}, theo danh mục của chị."
-    hit = _from_plan_columns(b)
+    hit = _from_plan_columns(b, chosen)
     if hit:
         return hit[0], f"Năm tài chính bắt đầu từ {_month_text(hit[0])}: file kế hoạch {hit[1]} xếp cột tháng từ " \
                        f"{_month_text(hit[0])}."
-    hit = _from_plan_months(b)
+    hit = _from_plan_months(b, chosen)
     if hit:
         return hit[0], f"Năm tài chính bắt đầu từ {_month_text(hit[0])}: file kế hoạch {hit[1]} có đủ 12 tháng bắt " \
                        f"đầu từ {_month_text(hit[0])}."

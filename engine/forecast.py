@@ -453,7 +453,8 @@ def write(f: Forecast, out: Optional[Path] = None) -> dict:
         for what, mo, label in f.filled:
             rs.append([label, _month_text(mo), what])
         rs.append([])
-    for line in fpa_report.file_rows(f.month):
+    used = {n for v in (f.target, f.basis) if v is not None for n in v.files}     # the forecast takes both
+    for line in fpa_report.file_rows(f.month, also_used=used):
         rs.append(line)
 
     log = audit.AuditLog(period=month)
