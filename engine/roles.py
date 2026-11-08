@@ -2,7 +2,8 @@
 
     Số chính thức          the trial balances: every number in the report comes from here
     Chi tiết để giải thích  sales exports: explain and cross-check the figures, never replace them
-    Kế hoạch               budget / plan files
+    Kế hoạch               budget / plan files (the annual plan)
+    Dự báo                 a forecast or revised estimate (LE, FC, ước, dự báo): the months still to come, never the plan
     Lý do                  emails, letters, documents: the why behind a figure
     Ghi chú                photos, pasted text, notes, queries to check: read to understand, no figure taken
 
@@ -18,8 +19,20 @@ from pathlib import Path
 from engine.trial_balance import fold
 
 OFFICIAL, DETAIL, PLAN, REASON, NOTE = "Số chính thức", "Chi tiết để giải thích", "Kế hoạch", "Lý do", "Ghi chú"
+FORECAST = "Dự báo"
 _PLAN_WORDS = ("ke hoach", "kehoach", "plan", "budget", "ngan sach", "ngansach", "du toan", "dutoan", "target", "chi tieu",
                "forecast", "du bao", "dubao")
+# A version or file named as a forecast or a revised plan, on folded text ('LE T09', 'Uoc TH 2026', 'FC2'). Shared by
+# the intake (the file's role) and engine.forecast (which version gives the months to come).
+FORECAST_WORDS = re.compile(r"\b(le|fc|rf|forecast|du bao|dubao|uoc|uoc tinh|uoc th|aopr|revised|reforecast|"
+                            r"dieu chinh|cap nhat|muf|rolling)\d*\b")
+
+
+def is_forecast(text: str) -> bool:
+    """A version name or file name that says forecast or revised estimate (folded or not)."""
+    t = fold(str(text)).replace("_", " ").replace("-", " ")
+    t = re.sub(r"\b(ban|gia|hang|khach|kenh|cua hang|le phi) le\b", " ", t)     # bán lẻ, giá lẻ: retail, not LE
+    return bool(FORECAST_WORDS.search(t))
 _REASON_SUFFIXES = {".eml", ".msg", ".docx", ".doc", ".pdf", ".rtf"}
 _NOTE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".heic", ".txt", ".m", ".pq", ".md"}
 
@@ -55,6 +68,8 @@ def of_file(name: str, *, trial_balance: bool = False, orders: bool = False) -> 
     if orders:
         return DETAIL
     suffix = Path(name).suffix.lower()
+    if suffix in (".xlsx", ".xlsm", ".xls", ".csv") and is_forecast(Path(name).stem):
+        return FORECAST
     if suffix in (".xlsx", ".xlsm", ".xls", ".csv") and is_plan(name):
         return PLAN
     if suffix in _REASON_SUFFIXES:

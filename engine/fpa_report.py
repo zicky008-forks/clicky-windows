@@ -19,6 +19,7 @@ written by the LLM.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
@@ -27,6 +28,7 @@ from typing import Optional
 from engine import fpa, opex_split, sales_pnl, variance_class
 from engine.fpa import _month_text
 from engine.monthly_report import fmt
+from engine.tables import key
 
 ZERO = Decimal(0)
 STATUS = "SƠ BỘ"
@@ -48,6 +50,8 @@ class PnlRow:
     source: str                  # where the month's actual comes from, in plain words
     ytd_source: str = ""         # where the year to date comes from
     ytd_books: bool = False      # the year to date is the trial balance's
+    has_plan: bool = True        # False: no plan in the folder holds this line; its plan cells stay blank
+    plan_source: str = ""        # where the plan comes from when it is not the usual table (a P&L line total)
 
     @property
     def variance(self) -> Decimal:
@@ -73,6 +77,8 @@ class Month:
     said: list = field(default_factory=list)    # the receipt's sentences, books against ledgers first
     opex_gap: tuple = (ZERO, ZERO)              # (month, year to date): books less cost detail, not explained
     tb_not_used: Optional[tuple] = None         # (file, why) for a trial balance that cannot give the month
+    fy: int = 1                                 # the month the fiscal year starts (engine.fiscal)
+    fy_said: str = ""                           # how that was found, for the receipt
     checks: list = field(default_factory=list)  # [(code, name, result, note, stop)] by the company's check codes
     version: Optional[str] = None               # the plan version asked for; None: the only or the approved one
 
@@ -80,10 +86,20 @@ class Month:
         return next((r for r in self.pnl if r.code == code), None)
 
 
-def _fy_start(config, default: int = 7) -> int:
-    from engine.bod_inputs import num
-    fy = num(config.rule("thang bat dau")) or num(config.rule("nien do"))
-    return int(fy) if fy is not None and 1 <= int(fy) <= 12 else default
+def fiscal_start(folder: Path, b) -> tuple:
+    """(first month of the fiscal year, the sentence that says how it was found): engine.fiscal, with the trial
+    balance's year to date of operating costs when the folder has one."""
+    from engine import fiscal
+    from engine.sales_pnl import latest_month as sales_month
+    period = fpa.latest_month(b.gl) or sales_month(b.sales)
+    tb, books_ytd = None, None
+    try:
+        tb = trial_balance_in(folder, list(b.unused))
+        if tb is not None and tb.has_ytd and not getattr(tb, "ytd_only", False):
+            books_ytd = books_figures(tb, b.config, "ytd_")["opex"]
+    except Exception:                    # noqa: BLE001 - the trial balance is read again, and named, by compute
+        tb = None
+    return fiscal.start(b, tb, period, books_ytd)
 
 
 def compute(folder: Path, version: Optional[str] = None) -> Month:
@@ -91,10 +107,10 @@ def compute(folder: Path, version: Optional[str] = None) -> Month:
     Raises fpa.PickVersion when the plan must be chosen by the user."""
     from engine import bod_inputs
     folder = Path(folder)
-    b = bod_inputs.load(folder)
-    fy = _fy_start(b.config)
+    b = bod_inputs.load(folder, purpose="fpa")
+    fy, fy_said = fiscal_start(folder, b)
     if fy != 7:
-        b = bod_inputs.load(folder, fy_start=fy)
+        b = bod_inputs.load(folder, fy_start=fy, purpose="fpa")
     costs = fpa.compute(b.gl, b.plans, version=version, fy_start=fy, config=b.config) if b.gl else None
     sales = None
     if b.sales:
@@ -103,7 +119,7 @@ def compute(folder: Path, version: Optional[str] = None) -> Month:
     period = (costs or sales).period if (costs or sales) else None
     if not period:
         raise ValueError("thư mục không có sổ chi tiết chi phí hay sổ bán hàng nào có tháng")
-    m = Month(folder, period, b, costs, sales)
+    m = Month(folder, period, b, costs, sales, fy=fy, fy_said=fy_said)
     m.version = version
     m.tb = trial_balance_in(folder, b.unused)
     if m.tb is not None and m.tb.ytd_only:
@@ -115,9 +131,9 @@ def compute(folder: Path, version: Optional[str] = None) -> Month:
     if m.tb is not None and sales is not None:
         m.sales_books = sales_pnl.match_books(b.sales, m.tb, period, b.config)
     m.pnl = _pnl(m)
-    if costs is not None:
+    if costs is not None and split_planned(m):           # no plan by department: no variance to classify
         rev = m.row("revenue")
-        driver = (rev.actual, rev.plan) if rev is not None and rev.plan else None
+        driver = (rev.actual, rev.plan) if rev is not None and rev.plan and rev.has_plan else None
         m.classified = variance_class.classify(costs, b.gl, b.plans, b.config, driver)
     m.checks = company_checks(m)
     m.said = _said(m)
@@ -125,6 +141,8 @@ def compute(folder: Path, version: Optional[str] = None) -> Month:
 
 
 PASS, FAIL, NOT_RUN, ASK = "ĐẠT", "KHÔNG ĐẠT", "CHƯA KIỂM", "CẦN GIẢI TRÌNH"
+NO_PLAN = "chưa có kế hoạch"
+OPEX_TOTAL = re.compile(r"^(tong )?(chi phi hoat dong|opex|operating (expenses?|costs?))\b")
 
 
 def company_checks(m: Month) -> list:
@@ -234,8 +252,8 @@ def _plan_only(m: Month) -> Optional[object]:
     b = m.bundle
     if not b.sku_plans:
         return None
-    return sales_pnl.compute([], b.sku_plans, b.plans, period=m.period, version=m.version,
-                             fy_start=_fy_start(b.config), config=b.config, plan_tables=b.sku_plan_totals)
+    return sales_pnl.compute([], b.sku_plans, b.plans, period=m.period, version=m.version, fy_start=m.fy,
+                             config=b.config, plan_tables=b.sku_plan_totals)
 
 
 def _pnl(m: Month) -> list:
@@ -272,11 +290,13 @@ def _pnl(m: Month) -> list:
                 row.ytd_actual = by[code] if by[code] is not None else ZERO
                 row.ytd_source, row.ytd_books = f"{ytd_book} ({by['how'][code]})", True
             out.append(row)
+    _plans_by_line(m, out)
     if len(out) == 2:
         r, c = out
         ya = None if r.ytd_actual is None or c.ytd_actual is None else r.ytd_actual - c.ytd_actual
         out.append(PnlRow("gp", "Lợi nhuận gộp", r.actual - c.actual, r.plan - c.plan, ya, r.ytd_plan - c.ytd_plan,
-                          "doanh thu thuần trừ giá vốn", "doanh thu thuần trừ giá vốn", r.ytd_books and c.ytd_books))
+                          "doanh thu thuần trừ giá vốn", "doanh thu thuần trừ giá vốn", r.ytd_books and c.ytd_books,
+                          r.has_plan and c.has_plan))
     if m.costs is not None:
         led_a, p = fpa.Variance.totals(m.costs.month)
         led_ya, yp = fpa.Variance.totals(m.costs.ytd)
@@ -289,13 +309,60 @@ def _pnl(m: Month) -> list:
             row.ytd_source, row.ytd_books = f"{ytd_book} ({by['how']['opex']})", True
         m.opex_gap = (row.actual - led_a, row.ytd_actual - led_ya)
         out.append(row)
+        _plans_by_line(m, [row])
     gp, opex = next((r for r in out if r.code == "gp"), None), next((r for r in out if r.code == "opex"), None)
     if gp is not None and opex is not None:
         ya = None if gp.ytd_actual is None else gp.ytd_actual - opex.ytd_actual
         out.append(PnlRow("op", "Lợi nhuận hoạt động", gp.actual - opex.actual, gp.plan - opex.plan, ya,
                           gp.ytd_plan - opex.ytd_plan, "lợi nhuận gộp trừ chi phí", "lợi nhuận gộp trừ chi phí",
-                          gp.ytd_books and opex.ytd_books))
+                          gp.ytd_books and opex.ytd_books, gp.has_plan and opex.has_plan))
     return out
+
+
+def split_planned(m: Month) -> bool:
+    """The chosen plan has lines by department x cost element: the split, and its variances, can be read."""
+    return m.costs is not None and any(l.plan_from for l in m.costs.ytd)
+
+
+def _plans_by_line(m: Month, rows: list) -> None:
+    """A P&L row whose usual plan (by SKU for revenue and cost of goods sold, by department x cost element for the
+    operating costs) has nothing takes the plan file's own line ('Doanh thu thuần', 'Chi phí bán hàng' + 'Chi phí
+    quản lý', T01 .. T12), said as such. With neither, the row has no plan: its plan cells stay blank (rule 4: an
+    empty plan is not a variance the size of the actual)."""
+    b = m.bundle
+    try:
+        chosen = m.costs.plan if m.costs is not None else fpa.choose_plan(b.plans, m.version)[0]
+    except fpa.PickVersion:
+        chosen = None
+    months = m.costs.months if m.costs is not None else (m.sales.months if m.sales is not None else [m.period])
+    lines = {}
+    for r in b.plans if chosen is not None else []:
+        if key(r.version or "") != key(chosen.version) or r.file != chosen.file or r.month not in months:
+            continue
+        code = fpa.pnl_line(r) or ("opex" if fpa.opex_line(r) else "")
+        if code == "opex" and OPEX_TOTAL.match(key(r.line)):
+            code = "opex total"                   # 'Chi phí hoạt động' beside its parts: one or the other, not both
+        if code:
+            got = lines.setdefault(code, [ZERO, ZERO])
+            got[1] += r.amount
+            if r.month == m.period:
+                got[0] += r.amount
+    if "opex total" in lines:
+        lines["opex"] = lines.pop("opex total")
+    if m.sales is not None:
+        sku_planned = any(l.plan_from for l in m.sales.ytd)
+    else:
+        plan_only = _plan_only(m)
+        sku_planned = plan_only is not None and any(l.plan_from for l in plan_only.ytd)
+    for row in rows:
+        planned = split_planned(m) if row.code == "opex" else sku_planned if row.code in ("revenue", "cogs") else True
+        if planned:
+            continue
+        if row.code in lines:
+            row.plan, row.ytd_plan = lines[row.code]
+            row.plan_source = f"dòng {row.name.lower()} trên file kế hoạch {chosen.file}"
+        else:
+            row.plan, row.ytd_plan, row.has_plan = ZERO, ZERO, False
 
 
 def _said(m: Month) -> list:
@@ -341,6 +408,17 @@ def _said(m: Month) -> list:
     if m.costs is not None and m.opex_gap[1] != m.opex_gap[0] and m.row("opex").ytd_books:
         out.append(f"Chi phí lũy kế theo sổ cân đối khác sổ chi tiết {fmt(m.opex_gap[1])} đ; bảng chi phí theo bộ phận "
                    f"ghi phần này ở dòng “{GAP_LINE}”.")
+    if m.fy_said:
+        out.append(m.fy_said)
+    none = [r.name.lower() for r in m.pnl if not r.has_plan and r.code in ("revenue", "cogs", "opex")]
+    if none:
+        out.append(f"Thư mục chưa có kế hoạch cho {', '.join(none)}: em để trống cột kế hoạch và chênh lệch của các "
+                   "dòng đó, không coi cả số thực hiện là chênh lệch.")
+    for r in m.pnl:
+        if r.plan_source:
+            out.append(f"Kế hoạch {r.name.lower()} lấy theo {r.plan_source}"
+                       + (", chưa chia theo bộ phận, nên bảng chi phí theo bộ phận để trống cột kế hoạch."
+                          if r.code == "opex" else "."))
     if m.costs is not None:
         out += [x + "." for x in m.costs.left_out()]
     if m.sales is not None:
@@ -426,8 +504,13 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
     ws.append(["Chỉ tiêu", f"Thực hiện T{month}", "Kế hoạch", "Chênh lệch", "%", ytd_head, "Kế hoạch lũy kế",
                "Chênh lệch lũy kế", "%", "Nguồn số tháng", "Nguồn số lũy kế"])
     for r in m.pnl:
-        ws.append([r.name, r.actual, r.plan, r.variance, _pct(r.variance, r.plan), r.ytd_actual, r.ytd_plan,
-                   r.ytd_variance, _pct(r.ytd_variance, r.ytd_plan), r.source, r.ytd_source])
+        if r.has_plan:
+            ws.append([r.name, r.actual, r.plan, r.variance, _pct(r.variance, r.plan), r.ytd_actual, r.ytd_plan,
+                       r.ytd_variance, _pct(r.ytd_variance, r.ytd_plan), r.source, r.ytd_source]
+                      + ([f"Kế hoạch: {r.plan_source}"] if r.plan_source else []))
+        else:
+            ws.append([r.name, r.actual, None, None, None, r.ytd_actual, None, None, None, r.source, r.ytd_source,
+                       NO_PLAN])
         expect[f"'{PNL}'!B{ws.max_row}"] = r.actual
         if r.ytd_actual is not None:
             expect[f"'{PNL}'!F{ws.max_row}"] = r.ytd_actual
@@ -441,19 +524,26 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
                    "Số thực chất", "Thực hiện lũy kế", "Kế hoạch lũy kế", "Chênh lệch lũy kế"])
         ytd = {(l.dept, l.element): l for l in m.costs.ytd}
         by = {(c.line.dept, c.line.element): c for c in m.classified}
+        split = split_planned(m)                 # without a plan by department its plan cells stay blank
         for l in m.costs.month:
             y = ytd.get((l.dept, l.element))
             c = by.get((l.dept, l.element))
-            cs.append([l.dept_name or l.dept or fpa.UNASSIGNED, l.element_name or l.element, l.actual, l.plan,
-                       l.variance, l.pct, c.verdict if c else "", c.underlying if c and c.material else None,
-                       y.actual if y else ZERO, y.plan if y else ZERO, y.variance if y else ZERO])
+            cs.append([l.dept_name or l.dept or fpa.UNASSIGNED, l.element_name or l.element, l.actual,
+                       l.plan if split else None, l.variance if split else None, l.pct if split else None,
+                       c.verdict if c else "", c.underlying if c and c.material else None,
+                       y.actual if y else ZERO, (y.plan if y else ZERO) if split else None,
+                       (y.variance if y else ZERO) if split else None])
         gap, ygap = m.opex_gap
         if gap or ygap:                          # the books less the detail: the table still adds up to the P&L
-            cs.append([GAP_LINE, "", gap, ZERO, gap, None, "", None, ygap, ZERO, ygap])
+            cs.append([GAP_LINE, "", gap, ZERO if split else None, gap if split else None, None, "", None, ygap,
+                       ZERO if split else None, ygap if split else None])
             expect[f"'{COSTS}'!C{cs.max_row}"] = gap
         opex = m.row("opex")
         a, p, ya, yp = opex.actual, opex.plan, opex.ytd_actual, opex.ytd_plan
-        cs.append(["Tổng cộng", "", a, p, a - p, None, "", None, ya, yp, ya - yp])
+        if opex.has_plan:
+            cs.append(["Tổng cộng", "", a, p, a - p, None, "", None, ya, yp, ya - yp])
+        else:
+            cs.append(["Tổng cộng", "", a, None, None, None, "", None, ya, None, None])
         expect[f"'{COSTS}'!C{cs.max_row}"] = a
         expect[f"'{COSTS}'!I{cs.max_row}"] = ya
 

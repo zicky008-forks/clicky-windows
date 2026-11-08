@@ -77,7 +77,8 @@ def beats_for(m, out: dict) -> list:
     beats = [Beat(f"Em đã làm báo cáo FP&A tháng {month}"
                   + (", mở lại kiểm tra thấy khớp." if ok else ", nhưng mở lại chưa khớp, chị đừng dùng bản này."),
                   mark="ok" if ok else "bad", label=op.name if op else "Báo cáo FP&A",
-                  value=f"{fmt(op.actual)} đ" if op else "", note=f"Kế hoạch {fmt(op.plan)} đ" if op else "")]
+                  value=f"{fmt(op.actual)} đ" if op else "",
+                  note=(f"Kế hoạch {fmt(op.plan)} đ" if op.has_plan else "Chưa có kế hoạch") if op else "")]
     beats.append(_books(m))
     stopped = [c[0] for c in m.checks if c[2] == fpa_report.FAIL and c[4]]
     if stopped:

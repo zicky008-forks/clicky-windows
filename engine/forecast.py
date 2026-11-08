@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 from engine import fpa, fpa_report, sales_pnl
+from engine import roles as file_roles
 from engine.bod_check import fiscal_year, fy_months
 from engine.fpa import PickVersion, _month_text
 from engine.monthly_report import fmt
@@ -33,8 +34,7 @@ ZERO = Decimal(0)
 STATUS = "SƠ BỘ"
 OUT_PREFIX = "Clicky_Forecast"
 PNL, COSTS, RECEIPT = "Du bao KQKD", "Chi phi theo bo phan", "Phieu nhan file"
-FORECAST_WORDS = re.compile(r"\b(le|fc|rf|forecast|du bao|uoc|uoc tinh|aopr|revised|reforecast|dieu chinh|"
-                            r"cap nhat|muf|rolling)\b")
+FORECAST_WORDS = file_roles.FORECAST_WORDS                # one regex for the file role and the forecast version
 GAP_LINE = "Chênh lệch lũy kế sổ cân đối và sổ chi tiết"
 COST, SALES = "chi phí", "doanh thu và giá vốn"
 LINE_WORDS = {COST: "dòng chi phí (bộ phận × yếu tố)", SALES: "dòng doanh thu và giá vốn (mã hàng × kênh)"}
@@ -56,7 +56,7 @@ class Version:
 
     @property
     def forecast(self) -> bool:
-        return bool(FORECAST_WORDS.search(key(self.version)))
+        return file_roles.is_forecast(self.version)
 
     def said(self) -> str:
         when = f", duyệt ngày {self.approved[8:10]}/{self.approved[5:7]}/{self.approved[:4]}" if self.approved else ""
@@ -146,7 +146,7 @@ def _cost_plan(plans: list, version: Optional[Version], month: str) -> dict:
     if version is None:
         return out
     for r in plans:
-        if key(r.version or "") == key(version.version) and r.month == month and not fpa.pnl_line(r):
+        if key(r.version or "") == key(version.version) and r.month == month and not fpa.summary_line(r):
             k = (r.dept, r.element)
             out[k] = out.get(k, ZERO) + r.amount
     return out
@@ -205,10 +205,10 @@ def _sales_month(b, month: str, version: Optional[Version], fy: int, with_actual
 def compute(folder: Path) -> Forecast:
     from engine import bod_inputs
     folder = Path(folder)
-    b = bod_inputs.load(folder)
-    fy = fpa_report._fy_start(b.config)
+    b = bod_inputs.load(folder, purpose="fpa")
+    fy, _how = fpa_report.fiscal_start(folder, b)              # said in the receipt by the month report
     if fy != 7:
-        b = bod_inputs.load(folder, fy_start=fy)
+        b = bod_inputs.load(folder, fy_start=fy, purpose="fpa")
     target, basis = roles(b.plans, b.sku_plans, b.config)
     m = fpa_report.compute(folder, version=target.version if target else None)
     year = fy_months(fiscal_year(m.period, fy), fy)

@@ -30,6 +30,21 @@ PNL_LINE = {"revenue": re.compile(r"^(doanh thu thuan|dtt|net revenue|net sales|
             "gp": re.compile(r"^(loi nhuan gop|lai gop|lng|gross profit|gross margin)\b")}
 
 
+# Operating cost totals a P&L plan states by line ('Chi phí bán hàng', 'Chi phí quản lý doanh nghiệp').
+OPEX_LINE = re.compile(r"^(tong )?(chi phi (ban hang|quan ly|hoat dong|qldn|bh|ql)|cp ?(ban hang|quan ly|bh|ql|qldn)\b|"
+                       r"cpbh|cpql|opex|operating (expenses?|costs?)|selling|general (and|&) admin)")
+
+
+def summary_line(row) -> bool:
+    """A plan row that names a P&L line and no department or cost element: a figure of the P&L, never a line of
+    the split by department x cost element."""
+    return not (getattr(row, "dept", "") or getattr(row, "element", "")) and bool(key(getattr(row, "line", "") or ""))
+
+
+def opex_line(row) -> bool:
+    return summary_line(row) and bool(OPEX_LINE.match(key(getattr(row, "line", "") or "")))
+
+
 def pnl_line(row) -> str:
     """'revenue', 'cogs' or 'gp' for a plan row that is a P&L line with no department or cost element, else ''."""
     if getattr(row, "dept", "") or getattr(row, "element", ""):
@@ -250,7 +265,7 @@ def compute(gl: list, plans: list, period: Optional[str] = None, version: Option
     for r in plans if chosen else []:
         if key(r.version or "") != key(chosen.version) or r.file != chosen.file or r.month not in months:
             continue
-        if pnl_line(r):                                 # revenue, cost of goods sold, gross profit: not a cost line
+        if summary_line(r):                             # a P&L line (revenue, a cost total): not a line of the split
             continue
         targets = [line(ytd, r.dept, r.element)] + ([line(month, r.dept, r.element)] if r.month == period else [])
         for t in targets:
