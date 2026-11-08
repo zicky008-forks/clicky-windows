@@ -70,11 +70,14 @@ def gl_rows() -> list:
     return rows
 
 
-def plan_rows(version: str = "AOP", approved: str = "", scale: int = 1) -> list:
-    """The plan file; approved writes a 'Ngày duyệt' column, scale makes a different draft of the same plan."""
+def plan_rows(version: str = "AOP", approved: str = "", scale: int = 1, drop=()) -> list:
+    """The plan file; approved writes a 'Ngày duyệt' column, scale makes a different draft of the same plan, drop
+    leaves out lines given as (month, dept, element)."""
     rows = [PLAN_HEADER + (["Ngày duyệt"] if approved else [])]
     for month in range(1, 13):
         for dept, element, _a, _p in PLAN:
+            if (month, dept, element) in drop:
+                continue
             rows.append([version, "2026", str(month), dept, element, str(plan_month(dept, element, month) * scale)]
                         + ([approved] if approved else []))
     rows.append(["", "", "", "", "Tổng cộng", str(sum(int(r[5]) for r in rows[1:]))])

@@ -145,3 +145,67 @@ def test_the_chat_words_the_robot_flag_and_the_beats(tmp_path, monkeypatch):
     assert texts[1] == "Các tháng còn lại em lấy theo bản LE T09, duyệt ngày 20/09/2026, so với kế hoạch năm."
     assert texts[-1].endswith("File của chị em không sửa gì.") and "không gửi đi đâu" in texts[-1]
     assert [e for e, _d in logged] == ["forecast_start", "forecast"] and str(d) not in repr(logged)
+
+
+def test_a_line_the_forecast_lacks_is_taken_from_the_annual_plan_counted_and_said(tmp_path, monkeypatch):
+    gone = (11, "MKT", "QC")
+    le = fs.plan_rows("LE T09", approved="20/09/2026", scale=2, drop=[gone])
+    f = forecast.compute(case(tmp_path, plans={"AOP_2026.csv": fs.plan_rows("AOP"), "LE_T09_2026.csv": le}))
+    assert [x for x in f.fallback if x[0] == "chi phí"] == [] and [(w, m) for w, m, _l in f.filled] == [
+        ("chi phí", "2026-11")]
+    aop_line = fs.plan_month("MKT", "QC", 11)
+    assert f.row("opex").months["2026-11"] == plan_total(["2026-11"], scale=2) - 2 * aop_line + aop_line
+    assert f.row("opex").months["2026-12"] == plan_total(["2026-12"], scale=2)
+    said = " ".join(f.said)
+    assert ("Bản LE T09 không có 1 dòng chi phí (bộ phận × yếu tố) của tháng 11/2026; em lấy theo kế hoạch năm cho "
+            "các dòng đó") in said
+    out = forecast.write(f)
+    assert out["verified"]
+    rows = list(load_workbook(out["xlsx"])["Phieu nhan file"].iter_rows(values_only=True))
+    at = next(i for i, r in enumerate(rows) if r[0] == "Dòng LE T09 không có, em lấy theo AOP")
+    assert rows[at + 1][1:3] == ("11/2026", "chi phí") and rows[at + 1][0] == f.filled[0][2]
+    from office import forecast_skill
+    texts = [b.text for b in forecast_skill.beats_for(f, out)]
+    assert any(t.startswith("Bản LE T09 thiếu 1 dòng so với kế hoạch năm") for t in texts)
+
+
+def test_a_sku_line_the_forecast_lacks_is_taken_from_the_annual_plan(tmp_path):
+    d = case(tmp_path, sku_le=True)
+    le = [r if i == 0 else r[:5] + [r[5] * 2] + r[6:] for i, r in enumerate(ss.plan_rows("LE T09", total=None))]
+    le = [r for r in le if not (r[2] == 12 and (r[3], r[4]) == ("NC01", "MT"))]
+    ss.write_xlsx(d / "KeHoach_LE_T09_2026.xlsx", {"KH theo ma hang": le})
+    f = forecast.compute(d)
+    assert [(w, m, l) for w, m, l in f.filled] == [("doanh thu và giá vốn", "2026-12", "NC01 · MT")]
+
+    def month(mo, factor, keep=lambda k: True):
+        return sum(ss.plan_month(s, c, mo) * ss.SKUS[s][1] * factor for (s, c) in ss.PLAN_QTY if keep((s, c)))
+    nc01_mt = ss.plan_month("NC01", "MT", 12) * ss.SKUS["NC01"][1]
+    assert f.row("revenue").months["2026-12"] == month(12, 2, lambda k: k != ("NC01", "MT")) + nc01_mt
+    assert f.row("revenue").months["2026-11"] == month(11, 2)
+    assert "dòng doanh thu và giá vốn (mã hàng × kênh) của tháng 12/2026" in " ".join(f.said)
+
+
+def test_a_forecast_the_catalogue_names_but_the_folder_lacks_stops_with_one_sentence(tmp_path):
+    from office import forecast_skill
+    from office.fpa_skill import Stop
+    d = case(tmp_path, rules=RULES + [["Bản dự báo", "LE T07"]])
+    with pytest.raises(forecast.NamedVersionMissing) as missing:
+        forecast.compute(d)
+    assert missing.value.named == "LE T07" and missing.value.found == ["AOP", "LE T09"]
+    with pytest.raises(Stop) as stop:
+        forecast_skill.prepare(d)
+    assert stop.value.beat.text == ("Danh mục của chị ghi Bản dự báo là “LE T07”, nhưng thư mục không có bản đó; em "
+                                    "chỉ thấy: AOP, LE T09. Chị sửa danh mục hoặc chép bản đó vào thư mục, rồi làm lại.")
+    assert not any(p.name.startswith(forecast.OUT_PREFIX) for p in d.iterdir())
+
+
+def test_the_receipt_gives_the_reason_for_every_line_left_out(tmp_path):
+    f = forecast.compute(case(tmp_path))
+    rows = list(load_workbook(forecast.write(f)["xlsx"])["Phieu nhan file"].iter_rows(values_only=True))
+    head = rows.index(("File", "Vai trò", "Dòng đã dùng", "Dòng bỏ", "Lý do bỏ"))
+    files = [r for r in rows[head + 1:] if r[0]]
+    assert {r[0] for r in files} >= {"SoChiTietChiPhi_2026.csv", "AOP_2026.csv", "LE_T09_2026.csv", "TB T10 2026.csv"}
+    for r in files:
+        assert (r[3] == 0) == (not r[4]) or r[1] == "Không dùng", r                  # every line left out has a reason
+    gl = next(r for r in files if r[0] == "SoChiTietChiPhi_2026.csv")
+    assert gl[3] and "không có số tiền" in gl[4]

@@ -7,9 +7,10 @@ annual plan. One new workbook, marked SƠ BỘ, reopened and checked before it c
   own line and is said, never spread over the months.
 - The months still to come: the latest forecast version in the folder (a plan version named as a forecast or a
   revised plan: LE, FC, forecast, dự báo, ước, AOPR, revised, điều chỉnh), else the annual plan. Several forecasts
-  are told apart by their approval date only; with none approved, the user is asked (fpa.PickVersion). A month the
-  forecast has no figures for is taken from the annual plan and said. The catalogue rule "Bản dự báo" names the
-  version and wins.
+  are told apart by their approval date only; with none approved, the user is asked (fpa.PickVersion). A line the
+  forecast has no figure for (department x cost element, or SKU x channel, for one month) is taken from the annual
+  plan, counted and said; a whole month missing is said as a month. The catalogue rule "Bản dự báo" names the
+  version and wins; a named version that is not in the folder stops the forecast (NamedVersionMissing).
 - Against: the annual plan (AOP), the version not named as a forecast; several are told apart by approval, else asked.
 
 Full year = year to date + the months to come. Amounts are Decimal; every sentence is code; nothing is sent.
@@ -35,6 +36,16 @@ PNL, COSTS, RECEIPT = "Du bao KQKD", "Chi phi theo bo phan", "Phieu nhan file"
 FORECAST_WORDS = re.compile(r"\b(le|fc|rf|forecast|du bao|uoc|uoc tinh|aopr|revised|reforecast|dieu chinh|"
                             r"cap nhat|muf|rolling)\b")
 GAP_LINE = "Chênh lệch lũy kế sổ cân đối và sổ chi tiết"
+COST, SALES = "chi phí", "doanh thu và giá vốn"
+LINE_WORDS = {COST: "dòng chi phí (bộ phận × yếu tố)", SALES: "dòng doanh thu và giá vốn (mã hàng × kênh)"}
+
+
+class NamedVersionMissing(Exception):
+    """The catalogue names a forecast version the folder does not hold: asked, never guessed."""
+
+    def __init__(self, named: str, found: list):
+        self.named, self.found = named, found
+        super().__init__(named)
 
 
 @dataclass
@@ -74,6 +85,8 @@ def roles(plans: list, sku_plans: list, config=None) -> tuple:
         target = approved
     if named:
         basis = [v for v in found if key(v.version) == key(named)]
+        if not basis:
+            raise NamedVersionMissing(str(named), [v.version for v in found])
     else:
         basis = [v for v in found if v.forecast]
         if len(basis) > 1:
@@ -115,6 +128,7 @@ class Forecast:
     rows: list = field(default_factory=list)        # [Row]: revenue, cogs, gp, opex, op
     costs: list = field(default_factory=list)       # [(dept, element, label, Row)]
     fallback: list = field(default_factory=list)    # (what, month) the forecast had no figures for: annual plan used
+    filled: list = field(default_factory=list)      # (what, month, line) the forecast lacked in a month it has: plan used
     missing: list = field(default_factory=list)     # (what, month) no plan at all had figures for: 0, and said
     said: list = field(default_factory=list)
 
@@ -136,6 +150,44 @@ def _cost_plan(plans: list, version: Optional[Version], month: str) -> dict:
             k = (r.dept, r.element)
             out[k] = out.get(k, ZERO) + r.amount
     return out
+
+
+def _sku_plan(sku_plans: list, version: Optional[Version], month: str) -> dict:
+    """{(sku, channel): [revenue, cogs]} of the version's plan by SKU for one month, from the file sales_pnl would
+    choose for that version; {} when it has none that month."""
+    if version is None:
+        return {}
+    rows = [r for r in sku_plans if key(r.version or "") == key(version.version) and r.month == month]
+    if not rows:
+        return {}
+    chosen, _only = fpa.choose_plan(sku_plans, version.version)
+    out = {}
+    for r in rows:
+        if chosen is None or r.file == chosen.file:
+            k = (r.sku, key(r.channel))
+            got = out.setdefault(k, [ZERO, ZERO, r.sku + (f" · {r.channel}" if r.channel else "")])
+            got[0] += r.revenue
+            got[1] += r.cogs
+    return out
+
+
+def _fill(f: Forecast, what: str, month: str, basis: dict, plan: dict, label) -> dict:
+    """The forecast's lines for the month, each line it lacks taken from the annual plan and noted. A month the
+    forecast has nothing for is noted as a month; a month no plan has anything for is noted as missing."""
+    if f.basis is f.target:
+        got = dict(plan)
+    elif not basis:
+        got = dict(plan)
+        if got:
+            f.fallback.append((what, month))
+    else:
+        got = dict(basis)
+        for k in sorted(set(plan) - set(basis), key=str):
+            got[k] = plan[k]
+            f.filled.append((what, month, label(k, plan[k])))
+    if not got:
+        f.missing.append((what, month))
+    return got
 
 
 def _sales_month(b, month: str, version: Optional[Version], fy: int, with_actual: bool) -> Optional[dict]:
@@ -181,13 +233,8 @@ def compute(folder: Path) -> Forecast:
             for k, amt in _cost_plan(b.plans, target, mo).items():
                 line(k).plan[mo] = line(k).plan.get(mo, ZERO) + amt
         for mo in f.rest:
-            got = _cost_plan(b.plans, rest_from, mo)
-            if not got and rest_from is not target:
-                got = _cost_plan(b.plans, target, mo)
-                if got:
-                    f.fallback.append(("chi phí", mo))
-            if not got:
-                f.missing.append(("chi phí", mo))
+            got = _fill(f, COST, mo, _cost_plan(b.plans, rest_from, mo), _cost_plan(b.plans, target, mo),
+                        lambda k, _v: names.get(k) or " · ".join(x for x in k if x) or fpa.UNASSIGNED)
             for k, amt in got.items():
                 line(k).months[mo] = line(k).months.get(mo, ZERO) + amt
         for r in lines.values():
@@ -227,15 +274,10 @@ def compute(folder: Path) -> Forecast:
                     if l.code in ("revenue", "cogs"):
                         (rev if l.code == "revenue" else cogs).months[mo] = l.actual
         for mo in f.rest:
-            got = _sales_month(b, mo, rest_from, fy, with_actual=False)
-            if got is None and rest_from is not target:
-                got = _sales_month(b, mo, target, fy, with_actual=False)
-                if got is not None:
-                    f.fallback.append(("doanh thu và giá vốn", mo))
-            if got is None:
-                f.missing.append(("doanh thu và giá vốn", mo))
-            for r in (rev, cogs):
-                r.months[mo] = got[r.code][1] if got else ZERO
+            got = _fill(f, SALES, mo, _sku_plan(b.sku_plans, rest_from, mo), _sku_plan(b.sku_plans, target, mo),
+                        lambda _k, v: v[2])
+            rev.months[mo] = sum((v[0] for v in got.values()), ZERO)
+            cogs.months[mo] = sum((v[1] for v in got.values()), ZERO)
         for r in (rev, cogs):
             books = m.row(r.code)
             r.months[m.period] = books.actual
@@ -287,6 +329,14 @@ def _said(f: Forecast) -> list:
     for what, months in by_what.items():
         out.append(f"{f.basis.version} không có số {what} tháng {', '.join(_month_text(m) for m in months)}; em lấy "
                    "theo kế hoạch năm cho các tháng đó.")
+    by_what = {}
+    for what, mo, _line in f.filled:
+        by_what.setdefault(what, []).append(mo)
+    for what, months in by_what.items():
+        span = sorted(set(months))
+        out.append(f"Bản {f.basis.version} không có {len(months)} {LINE_WORDS[what]} của "
+                   f"{'tháng' if len(span) == 1 else 'các tháng'} {', '.join(_month_text(m) for m in span)}; em lấy "
+                   "theo kế hoạch năm cho các dòng đó (từng dòng ghi trong Phiếu nhận file).")
     by_what = {}
     for what, mo in f.missing:
         by_what.setdefault(what, []).append(mo)
@@ -394,12 +444,13 @@ def write(f: Forecast, out: Optional[Path] = None) -> dict:
     for s in f.said:
         rs.append([s])
     rs.append([])
-    rs.append(["File", "Vai trò", "Dòng đã dùng", "Dòng bỏ"])
-    for name, role, used, skipped in f.month.bundle.receipt:
-        rs.append([name, role, used, len(skipped)])
-    tb_file = getattr(f.month.tb, "file", None) if f.month.tb is not None else None
-    if tb_file:
-        rs.append([tb_file, "Bảng cân đối số phát sinh: số chính thức của tháng", len(f.month.tb.lines), 0])
+    if f.filled:
+        rs.append([f"Dòng {f.basis.version} không có, em lấy theo {f.target.version}", "Tháng", "Loại"])
+        for what, mo, label in f.filled:
+            rs.append([label, _month_text(mo), what])
+        rs.append([])
+    for line in fpa_report.file_rows(f.month):
+        rs.append(line)
 
     log = audit.AuditLog(period=month)
     for name, _role, used, skipped in f.month.bundle.receipt:

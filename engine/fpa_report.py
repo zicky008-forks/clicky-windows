@@ -383,6 +383,27 @@ def _pct(variance: Optional[Decimal], plan: Decimal) -> Optional[Decimal]:
     return None if not plan or variance is None else (variance / abs(plan) * 100).quantize(Decimal("0.1"))
 
 
+
+def file_rows(m) -> list:
+    """The receipt's file table: every file read, the lines used and left out with the reason, and every file not
+    used with why. Used + left out = the file's lines (rule 4)."""
+    from collections import Counter
+    out = [["File", "Vai trò", "Dòng đã dùng", "Dòng bỏ", "Lý do bỏ"]]
+    for name, role, used, skipped in m.bundle.receipt:
+        why = "; ".join(f"{n} dòng: {w}" for w, n in Counter(w for _r, w in skipped).items())
+        out.append([name, role, used, len(skipped), why])
+    tb_file = getattr(m.tb, "file", None) if m.tb is not None else None
+    if tb_file:
+        skipped = len(getattr(m.tb, "skipped", []) or [])
+        out.append([tb_file, "Bảng cân đối số phát sinh: số chính thức của tháng", len(m.tb.lines), skipped,
+                    f"{skipped} dòng có số mà không đọc được số hiệu tài khoản" if skipped else ""])
+    for name, why in m.bundle.unused:
+        if name != tb_file:
+            if m.tb_not_used is not None and name == m.tb_not_used[0]:
+                why = m.tb_not_used[1]
+            out.append([name, "Không dùng", 0, 0, why])
+    return out
+
 def write(m: Month, out: Optional[Path] = None) -> dict:
     """The workbook in a new folder; reopened and every key figure checked. Returns {"xlsx", "verified", "diffs"}."""
     from openpyxl import Workbook
@@ -488,21 +509,8 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
         for x in c.problems + c.open:
             rs.append([x])
     rs.append([])
-    rs.append(["File", "Vai trò", "Dòng đã dùng", "Dòng bỏ", "Lý do bỏ"])
-    from collections import Counter
-    for name, role, used, skipped in m.bundle.receipt:
-        why = "; ".join(f"{n} dòng: {w}" for w, n in Counter(w for _r, w in skipped).items())
-        rs.append([name, role, used, len(skipped), why])
-    tb_file = getattr(m.tb, "file", None) if m.tb is not None else None
-    if tb_file:
-        skipped = len(getattr(m.tb, "skipped", []) or [])
-        rs.append([tb_file, "Bảng cân đối số phát sinh: số chính thức của tháng", len(m.tb.lines), skipped,
-                   f"{skipped} dòng có số mà không đọc được số hiệu tài khoản" if skipped else ""])
-    for name, why in m.bundle.unused:
-        if name != tb_file:
-            if m.tb_not_used is not None and name == m.tb_not_used[0]:
-                why = m.tb_not_used[1]
-            rs.append([name, "Không dùng", 0, 0, why])
+    for line in file_rows(m):
+        rs.append(line)
 
     log = audit.AuditLog(period=month)
     for name, _role, used, skipped in m.bundle.receipt:

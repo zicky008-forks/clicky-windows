@@ -30,6 +30,10 @@ def prepare(folder: Path) -> tuple:
     from office.fpa_skill import Stop
     try:
         f = forecast.compute(folder)
+    except forecast.NamedVersionMissing as exc:
+        raise Stop(Beat(f"Danh mục của chị ghi Bản dự báo là “{exc.named}”, nhưng thư mục không có bản đó"
+                        + (f"; em chỉ thấy: {', '.join(exc.found)}" if exc.found else "") + ". Chị sửa danh mục hoặc "
+                        "chép bản đó vào thư mục, rồi làm lại.", mark="warn"))
     except fpa.PickVersion as exc:
         raise Stop(Beat("Thư mục có nhiều bản kế hoạch hoặc dự báo mà không rõ bản nào đã duyệt: "
                         + ", ".join(exc.versions) + ". Chị cho em biết dùng bản nào.", mark="warn"))
@@ -38,7 +42,8 @@ def prepare(folder: Path) -> tuple:
             from exc
     out = forecast.write(f)
     scene_log.record("forecast", verified=out["verified"], cells=out["cells"], lines=len(f.rows), done=len(f.done),
-                     rest=len(f.rest), fallback=len(f.fallback), missing=len(f.missing),
+                     rest=len(f.rest), fallback=len(f.fallback), filled=len(f.filled),
+                     missing=len(f.missing),
                      basis_is_plan=f.basis is f.target)
     return f, out
 
@@ -63,6 +68,9 @@ def beats_for(f, out: dict) -> list:
     if f.fallback or f.missing:
         beats.append(Beat(f"Có {len(f.fallback) + len(f.missing)} tháng bản dự báo thiếu số; em ghi từng tháng trong "
                           "Phiếu nhận file.", mark="warn"))
+    if f.filled:
+        beats.append(Beat(f"Bản {f.basis.version} thiếu {len(f.filled)} dòng so với kế hoạch năm; em lấy số kế hoạch "
+                          "năm cho các dòng đó và ghi từng dòng trong Phiếu nhận file.", mark="warn"))
     if f.month.tb is None:
         beats.append(Beat("Thư mục chưa có bảng cân đối số phát sinh, nên số thực hiện lấy từ các sổ chi tiết, chưa "
                           "khớp với sổ.", mark="warn"))
