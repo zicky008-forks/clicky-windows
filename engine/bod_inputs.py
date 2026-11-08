@@ -302,11 +302,12 @@ def read_gl(t: Table, cost_prefixes=("6",), fy_start: int = 7) -> list:
             continue
         acct = str(t.get(v, "tk", "") or "").strip()
         dr, cr = str(t.get(v, "tk_no", "") or "").strip(), str(t.get(v, "tk_co", "") or "").strip()
+        side = ""
         if dr or cr:
             if _cost_account(dr, cost_prefixes):
-                acct = dr
+                acct, side = dr, "dr"
             elif _cost_account(cr, cost_prefixes):
-                acct, amount = cr, -amount
+                acct, amount, side = cr, -amount, "cr"
             else:
                 acct = dr or cr
         period = month_key(t.get(v, "thang"), t.get(v, "ngay"), t.get(v, "nam"), fy_start)
@@ -319,7 +320,7 @@ def read_gl(t: Table, cost_prefixes=("6",), fy_start: int = 7) -> list:
                          element=str(t.get(v, "ce", "") or "").strip(),
                          account=acct, usd=fc if fc is not None and (cur in ("", "USD")) else None,
                          ref=str(t.get(v, "so_ct", "") or "").strip(), text=str(t.get(v, "dien_giai", "") or "").strip(),
-                         where=f"{t.sheet}!{n}"))
+                         where=f"{t.sheet}!{n}", side=side))
     return out
 
 

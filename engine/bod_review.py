@@ -79,6 +79,7 @@ class Entry:
     ref: str = ""
     text: str = ""
     where: str = ""             # "Sheet!row" in the source file
+    side: str = ""              # "dr" / "cr": the side the cost account was posted on, when the detail says it
 
 
 def explain_gap(gap: Decimal, groups: list, max_groups: int = 4) -> tuple:
