@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import io
+import os
 import shutil
 import sys
 import tarfile
@@ -66,15 +67,32 @@ def download(url: str, waits=WAITS, opener=urllib.request.urlopen, sleep=time.sl
     raise AssertionError("unreachable")
 
 
-def fetch(name: str, out: Path) -> Path:
+def archive(url: str, sha: str, cache: Path = None, get=download) -> bytes:
+    """The archive at url, checked against sha. With a cache folder (the build keeps one between runs), an archive
+    already there with the right SHA-256 is used without the network, and a fresh download is stored there."""
+    name = url.rsplit("/", 1)[-1]
+    kept = cache / name if cache else None
+    if kept and kept.is_file():
+        data = kept.read_bytes()
+        if hashlib.sha256(data).hexdigest() == sha:
+            print(f"Dùng bản đã lưu {kept}")
+            return data
+    print(f"Tải {url}")
+    data = get(url)
+    got = hashlib.sha256(data).hexdigest()
+    if got != sha:
+        raise SystemExit(f"SHA-256 không khớp cho {name}: {got}")
+    if kept:
+        kept.parent.mkdir(parents=True, exist_ok=True)
+        kept.write_bytes(data)
+    return data
+
+
+def fetch(name: str, out: Path, cache: Path = None) -> Path:
     path, sha, shippable = MODELS[name]
     stem = path.rsplit("/", 1)[-1]
     url = BASE + path + ".tar.bz2"
-    print(f"Tải {url}")
-    data = download(url)
-    got = hashlib.sha256(data).hexdigest()
-    if got != sha:
-        raise SystemExit(f"SHA-256 không khớp cho {stem}: {got}")
+    data = archive(url, sha, cache)
     tmp = out.with_name(out.name + ".tmp")
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
@@ -107,8 +125,10 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", choices=sorted(MODELS), default="70k")
     ap.add_argument("--out", type=Path, default=Path("voice") / "asr-vi")
+    ap.add_argument("--cache", type=Path, default=os.environ.get("CLICKY_MODEL_CACHE") or None,
+                    help="folder that keeps downloaded archives between builds")
     a = ap.parse_args(argv)
-    fetch(a.model, a.out)
+    fetch(a.model, a.out, Path(a.cache).expanduser() if a.cache else None)
     return 0
 
 
