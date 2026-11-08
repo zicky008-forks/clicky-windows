@@ -31,12 +31,6 @@ REPLY_TRIGGER = (r"(ph[ảa]n\s*h[ồo]i|tr[ảa]\s*l[ờơo]i).{0,30}chi\s*ph[�
 OUT_PREFIX = "Clicky_chi_phi_phong_ban"
 
 
-def _fy_start(config, default: int = 7) -> int:
-    from engine.bod_inputs import num
-    fy = num(config.rule("thang bat dau")) or num(config.rule("nien do"))
-    return int(fy) if fy is not None and 1 <= int(fy) <= 12 else default
-
-
 def _trial_balance(folder: Path, unused: list):
     """The trial balance in the folder, if one is there (a file the cost reader left for the month close)."""
     from engine.bod_inputs import hint_of
@@ -79,10 +73,11 @@ def prepare(folder: Path, outlook=None) -> dict:
     Returns what the beats need. Raises Stop with the one sentence when it must not go on."""
     from engine import bod_inputs, fpa, opex_feedback, opex_split
     from office import outlook_drafts
-    b = bod_inputs.load(folder)
-    fy = _fy_start(b.config)
+    b = bod_inputs.load(folder, purpose="fpa")
+    from engine.fpa_report import fiscal_start
+    fy, _how = fiscal_start(Path(folder), b)
     if fy != 7:
-        b = bod_inputs.load(folder, fy_start=fy)
+        b = bod_inputs.load(folder, fy_start=fy, purpose="fpa")
     if not b.gl:
         raise Stop(Beat("Em không thấy sổ chi tiết chi phí nào trong thư mục này, nên chưa tách được cho các phòng.",
                         mark="warn"))

@@ -58,9 +58,9 @@ def test_nothing_is_left_out_in_silence(bundle):
     blank = next(i for i, r in enumerate(fs.gl_rows(), 1) if r[9] == "")
     total = len(fs.gl_rows())
     assert sorted(skipped) == [(blank, "không có số tiền"), (total, "dòng tổng")]      # the printed total is not added
-    assert rows == len(fs.gl_rows()) - 2
+    assert rows + len(skipped) == len(fs.gl_rows()) - 1                                # used + left out = the lines
     in_figures = sum(len(l.actual_from) for l in v.ytd)
-    assert in_figures + len(v.outside) + len(v.no_month) + 1 == rows                  # + the row without an amount
+    assert in_figures + len(v.outside) + len(v.no_month) == rows                       # each used row gives a figure
 
 
 def test_two_plan_versions_are_asked_never_picked(tmp_path):

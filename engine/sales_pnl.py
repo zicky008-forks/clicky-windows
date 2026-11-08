@@ -52,7 +52,7 @@ def standard_qty(config, sku: str, unit: str, qty: Optional[Decimal]) -> tuple:
         hit = generic if generic and generic[1] == key(std) else None
     if hit is None:
         return None, std, "no factor"
-    return qty * hit[0], std, ""
+    return (qty * hit[0] / hit[2] if len(hit) > 2 else qty * hit[0]), std, ""
 
 
 # ── Lines ─────────────────────────────────────────────────────────────────────

@@ -62,7 +62,7 @@ def test_every_row_is_used_or_skipped_with_its_reason(bundle):
     else:
         assert reasons == ["dòng tổng", "không có số tiền", "tổ hợp tài khoản có 3 phân đoạn, file ánh xạ ghi 5"]
     in_figures = len(bundle.postings)
-    assert in_figures + len([r for r in skipped if r[1] != "dòng tổng"]) == used
+    assert in_figures == used                                          # used counts only rows that gave a figure
 
 
 def test_the_cost_lines_match_the_books(bundle):

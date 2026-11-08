@@ -293,6 +293,8 @@ def _unused_files(folder: Path, used: set, workbook: Optional[str], roles: dict)
         roles[p.name] = role
         if role == roles_mod.PLAN:
             why = "vai trò Kế hoạch; báo cáo tháng này chưa so với kế hoạch, em không lấy số từ file này"
+        elif role == roles_mod.FORECAST:
+            why = "vai trò Dự báo (bản ước các tháng còn lại); báo cáo tháng này không dùng, em không lấy số từ file này"
         elif role == roles_mod.REASON:
             why = "vai trò Lý do (email, văn bản): chỉ để hiểu nguyên nhân, em không lấy số từ file này"
         elif suffix in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".heic"):
