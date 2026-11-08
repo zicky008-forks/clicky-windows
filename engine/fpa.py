@@ -96,10 +96,11 @@ def plan_choices(plans: list) -> list:
 
 
 def is_forecast_plan(p: Plan) -> bool:
-    """A forecast or revised estimate (LE T09, FC2, AOPR): never the target the month is compared with, even when it
-    is approved and newer. The catalogue's 'Bản kế hoạch' or the user's pick still chooses any version by name."""
+    """A forecast (LE T09, FC2, dự báo): never the target the month is compared with, even when it is approved and
+    newer. A revised plan (AOPR) is not one: beside the annual plan it is asked. The catalogue's 'Bản kế hoạch' or the
+    user's pick still chooses any version by name."""
     from engine import roles
-    return roles.is_forecast(p.version) or roles.is_forecast(Path(p.file).stem)
+    return roles.is_estimate(p.version) or roles.is_estimate(Path(p.file).stem)
 
 
 def choose_plan(plans: list, version: Optional[str] = None, file: Optional[str] = None) -> tuple:

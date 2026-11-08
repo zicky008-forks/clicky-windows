@@ -28,6 +28,18 @@ FORECAST_WORDS = re.compile(r"\b(le|fc|rf|forecast|du bao|dubao|uoc|uoc tinh|uoc
                             r"dieu chinh|cap nhat|muf|rolling)\d*\b")
 
 
+# The forecasts alone: never the target a month is compared with. A revised plan (AOPR, 'điều chỉnh', 'cập nhật')
+# is not one of them: it is often the board's revised budget, so with the annual plan beside it Clicky asks.
+ESTIMATE_WORDS = re.compile(r"\b(le|fc|rf|forecast|du bao|dubao|uoc|uoc tinh|uoc th|reforecast|muf|rolling)\d*\b")
+
+
+def is_estimate(text: str) -> bool:
+    """A version or file name that says forecast or estimate, not a revised plan (folded or not)."""
+    t = fold(str(text)).replace("_", " ").replace("-", " ")
+    t = re.sub(r"\b(ban|gia|hang|khach|kenh|cua hang|le phi) le\b", " ", t)     # bán lẻ, giá lẻ: retail, not LE
+    return bool(ESTIMATE_WORDS.search(t))
+
+
 def is_forecast(text: str) -> bool:
     """A version name or file name that says forecast or revised estimate (folded or not)."""
     t = fold(str(text)).replace("_", " ").replace("-", " ")

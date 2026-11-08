@@ -64,19 +64,23 @@ def test_nothing_is_left_out_in_silence(bundle):
 
 
 def test_two_plan_versions_are_asked_never_picked(tmp_path):
-    b = bod_inputs.load(fs.folder(tmp_path / "F01", versions=("AOP", "AOP2")), fy_start=1)
-    with pytest.raises(fpa.PickVersion) as asked:
-        fpa.compute(b.gl, b.plans, fy_start=1)
-    assert asked.value.versions == ["AOP", "AOP2"]
-    v = fpa.compute(b.gl, b.plans, version="AOP2", fy_start=1)
-    assert v.version == "AOP2" and _line(v.month, "MKT", "QC").plan == fs.plan_month("MKT", "QC", 10)
-
-
-def test_a_revised_or_forecast_version_is_never_the_target_unless_named(tmp_path):
     b = bod_inputs.load(fs.folder(tmp_path / "F01", versions=("AOP", "AOPR1")), fy_start=1)
-    assert fpa.compute(b.gl, b.plans, fy_start=1).version == "AOP"           # AOPR is a revised estimate
+    with pytest.raises(fpa.PickVersion) as asked:                         # a revised plan may be the board's target
+        fpa.compute(b.gl, b.plans, fy_start=1)
+    assert asked.value.versions == ["AOP", "AOPR1"]
     v = fpa.compute(b.gl, b.plans, version="AOPR1", fy_start=1)
     assert v.version == "AOPR1" and _line(v.month, "MKT", "QC").plan == fs.plan_month("MKT", "QC", 10)
+
+
+def test_a_forecast_version_is_never_the_target_unless_named(tmp_path):
+    b = bod_inputs.load(fs.folder(tmp_path / "F01", versions=("AOP", "LE T09")), fy_start=1)
+    assert fpa.compute(b.gl, b.plans, fy_start=1).version == "AOP"           # no question
+    v = fpa.compute(b.gl, b.plans, version="LE T09", fy_start=1)
+    assert v.version == "LE T09"
+    assert [fpa.is_forecast_plan(fpa.Plan(n, f)) for n, f in (("AOP", "AOP_2026.csv"), ("AOPR1", "AOPR.csv"),
+                                                                 ("Điều chỉnh", "KH.csv"), ("FC2", "KH.csv"),
+                                                                 ("2026", "Du bao 2026.csv"), ("Ước TH", "KH.csv"))] \
+        == [False, False, False, True, True, True]
 
 
 def test_the_detail_matches_the_books_and_the_written_down_cost_is_said(bundle):
