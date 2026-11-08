@@ -996,6 +996,28 @@ class CompanionManager(QObject):
         self.stop()
         self._request_future = self._submit(self._process_bod(folder))
 
+    def submit_fpa(self, folder: str):
+        """The FP&A month report for a folder, e.g. from Clicky.exe --fpa-report."""
+        self.stop()
+        self._request_future = self._submit(self._process_fpa(folder))
+
+    async def _process_fpa(self, folder: str):
+        from office import fpa_skill
+        self._current_task = asyncio.current_task()
+        self._cancel_flag = False
+        self._emit_state(AppState.THINKING)
+        try:
+            await fpa_skill.run(self, Path(folder))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("FP&A report failed")
+            self.sig_error.emit("Em chưa làm được báo cáo FP&A. File của chị chưa bị thay đổi gì.")
+        finally:
+            if self._current_task is asyncio.current_task():
+                self._current_task = None
+                self._emit_state(AppState.IDLE)
+
     def submit_opex(self, folder: str, replies: bool = False):
         """Split the month's costs per department (or read their answers) in a folder, e.g. from
         Clicky.exe --opex-split / --opex-replies."""
