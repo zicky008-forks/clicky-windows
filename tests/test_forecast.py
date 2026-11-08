@@ -209,3 +209,34 @@ def test_the_receipt_gives_the_reason_for_every_line_left_out(tmp_path):
         assert (r[3] == 0) == (not r[4]) or r[1] == "Không dùng", r                  # every line left out has a reason
     gl = next(r for r in files if r[0] == "SoChiTietChiPhi_2026.csv")
     assert gl[3] and "không có số tiền" in gl[4]
+
+
+def test_the_robot_grades_a_real_run_against_its_own_sum_of_the_case(tmp_path, monkeypatch):
+    import json
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "dien_tap"))
+    import forecast_robot
+    import tao_case_chi_phi
+    from office import forecast_skill
+    d = tao_case_chi_phi.make(tmp_path / "case", forecast=True)
+    assert tao_case_chi_phi.main(["--out", str(d), "--du-bao"]) == 2          # never written over
+    env = forecast_robot.robot_env(tmp_path / "x.jsonl")
+    assert env["CLICKY_LOCAL_ONLY"] == "1" and env["CLICKY_OUTLOOK"] == "0" and "cau-hinh-robot" in env["CLICKY_CONFIG_DIR"]
+    expected = forecast_robot.expected_full_year(d)
+    month, dept, element = tao_case_chi_phi.FORECAST_MISSING
+    rest = 2 * plan_total(REST) - fs.plan_month(dept, element, month)      # the line the forecast lacks: AOP, once
+    assert expected - rest == forecast.compute(d).row("opex").ytd
+    log = tmp_path / "scene.jsonl"
+    monkeypatch.setenv("CLICKY_SCENE_LOG", str(log))
+    f, out = forecast_skill.prepare(d)
+    assert f.row("opex").full(f.rest) == expected
+    events = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()] + [{"event": "story_end"}]
+    assert forecast_robot.finished(events)
+    res = forecast_robot.grade(events, True, out["xlsx"].parent, expected)
+    assert res.ok, res.markdown("x")
+    bad = forecast_robot.grade([e for e in events if e["event"] != "forecast"], False, out["xlsx"].parent,
+                               expected + 1)
+    assert {l.name for l in bad.lines if not l.ok} == {"Làm xong dự báo, mở lại kiểm tra thấy khớp",
+                                                       "Chi phí cả năm ước đúng từng đồng",
+                                                       "Nói rõ dòng bản dự báo thiếu lấy theo kế hoạch năm",
+                                                       "File của case không bị sửa"}

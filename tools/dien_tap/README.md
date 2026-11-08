@@ -232,6 +232,27 @@ Robot chép case sang thư mục kết quả, rồi mở Clicky với `--opex-sp
 
 **Cổng ĐẠT:** tách xong, không mở Outlook và không gửi thư nào, mỗi phòng một file và một `.eml`, đã khớp sổ cân đối khi case có bảng cân đối, không file hay thư nháp nào của phòng có tên người hoặc số chứng từ lương (robot chỉ nêu tên file bị lộ, không nhắc lại tên người), file của case không bị sửa. Mã thoát: 0 = ĐẠT, 1 = KHÔNG ĐẠT, 2 = không chạy được.
 
+### Diễn tập dự báo cả năm gửi HO
+
+```
+python tools\dien_tap\tao_case_chi_phi.py --out <thu_muc_moi> --du-bao
+python tools\dien_tap\forecast_robot.py --thu-muc <thu_muc_moi>
+```
+
+`--du-bao` thêm vào case chi phí ở trên một bản dự báo bịa `LE_T09_2026.csv` (đã duyệt 20/09/2026), cố ý thiếu một dòng bộ phận × yếu tố của tháng 11. Clicky phải lấy dòng đó theo kế hoạch năm và nói ra.
+
+Robot chép case sang thư mục kết quả, tự cộng số cả năm từ chính các file của case (không dùng code của Clicky). Cách cộng: sổ chi tiết từ tháng 1 đến tháng 10 (Nợ 6xx cộng, Có 6xx trừ), rồi tháng 11 và 12 theo bản dự báo, dòng thiếu thì lấy theo AOP. Sau đó robot mở Clicky với `--forecast <case>`, `CLICKY_SCENE_LOG`, `CLICKY_LOCAL_ONLY=1`, `CLICKY_OUTLOOK=0`, và không dùng thư mục cấu hình công ty trên máy.
+
+**Cổng ĐẠT:**
+
+- bản dự báo đã mở lại kiểm tra khớp;
+- ô "Cả năm ước" của dòng Chi phí hoạt động bằng đúng từng đồng số robot tự cộng;
+- Phiếu nhận file nói rõ một dòng chi phí lấy theo kế hoạch năm;
+- file của case không bị sửa;
+- không có `forecast_error`.
+
+Mã thoát: 0 = ĐẠT, 1 = KHÔNG ĐẠT, 2 = không chạy được.
+
 ### Power Query khởi động trong lúc đọc phiếu (bản 82a0f2f trở đi)
 
 Trong lúc phiếu nhận file chờ chị bấm, Clicky mở một sổ ẩn của riêng nó ở chế độ chỉ đọc, `%LOCALAPPDATA%\Clicky\khoi-dong\clicky-khoi-dong.xlsx`, để Power Query khởi động sẵn. Robot không tính sổ này là file của người dùng. Robot chỉ hỏi Excel đúng tên này và không đọc tên file nào khác.
