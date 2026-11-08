@@ -5,7 +5,7 @@ come from the map file.
 
 The map workbook (a file named 'Ánh xạ', 'mapping', 'phân đoạn' or 'segment'):
 - a segments sheet: 'Thứ tự | Tên phân đoạn | Vai trò', one row per segment in order. Vai trò is one of Công ty,
-  Bộ phận, Tài khoản, Khối, Kênh, Sản phẩm, or anything else (kept, not used);
+  Bộ phận, Tài khoản, Yếu tố chi phí, Khối, Kênh, Sản phẩm, or anything else (kept, not used);
 - a map sheet: 'Phân đoạn | Mã | Bộ phận | Tên bộ phận | Yếu tố chi phí | Tên yếu tố | TK'. Phân đoạn names the
   segment (by its role or its name); Mã is a code, or a prefix ending in '*'; the other columns say what it maps to;
 - optionally a 'Tham số | Giá trị' sheet with 'Dấu phân cách' (else it is found from the data) and 'TK chi phí hoạt
@@ -35,12 +35,13 @@ ZERO = Decimal(0)
 MAP_WORDS = ("anh xa", "mapping", "phan doan", "segment")
 ROLES = {"site": ("cong ty", "phap nhan", "company", "entity", "don vi", "legal entity"),
          "dept": ("bo phan", "phong ban", "cost center", "cost centre", "trung tam chi phi", "department"),
+         "element": ("yeu to chi phi", "yeu to", "cost element", "khoan muc chi phi"),
          "account": ("tai khoan", "account", "natural account", "tk"),
          "division": ("khoi", "division", "business unit", "bu", "nganh hang", "nganh"),
          "channel": ("kenh", "channel"),
          "sku": ("san pham", "product", "ma hang", "sku")}
 ROLE_TEXT = {"site": "công ty", "dept": "bộ phận", "account": "tài khoản", "division": "khối", "channel": "kênh",
-             "sku": "sản phẩm"}
+             "sku": "sản phẩm", "element": "yếu tố chi phí"}
 SEGMENTS_SPEC = {"thu_tu": ["thu tu", "vi tri", "stt", "position", "segment number", "so thu tu"],
                  "ten": ["ten phan doan", "segment name", "ten", "phan doan"],
                  "vai_tro": ["vai tro", "y nghia", "role", "dung lam", "loai"]}
@@ -303,6 +304,9 @@ def _look(g: SegmentGL, smap: SegmentMap, roles: dict, parts: list) -> dict:
     account = acct_row.get("tk") or code.get("account", "")
     element = acct_row.get("yeu_to", "")
     cost = bool(element or account.startswith(smap.opex))
+    # Else the cost element is a segment of its own: mapped when the map has its codes, else its code as printed.
+    # It never makes a balance sheet line a cost.
+    element = element or (looked.get("element", {}) or {}).get("yeu_to", "") or code.get("element", "")
     for role, c in missing:
         # An account the map lacks is said on every line. Other segments matter on the cost lines only (a balance
         # sheet line carries a default cost centre); a department fpa names itself, against the map's departments.

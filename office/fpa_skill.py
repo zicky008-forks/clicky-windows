@@ -70,7 +70,7 @@ def _books(m) -> Beat:
 def beats_for(m, out: dict) -> list:
     from engine.fpa import _month_text
     from engine.monthly_report import fmt
-    from engine import variance_class
+    from engine import fpa_report, variance_class
     month = _month_text(m.period)
     op = m.row("op") or m.row("gp") or m.row("opex")
     ok = out["verified"]
@@ -79,6 +79,10 @@ def beats_for(m, out: dict) -> list:
                   mark="ok" if ok else "bad", label=op.name if op else "Báo cáo FP&A",
                   value=f"{fmt(op.actual)} đ" if op else "", note=f"Kế hoạch {fmt(op.plan)} đ" if op else "")]
     beats.append(_books(m))
+    stopped = [c[0] for c in m.checks if c[2] == fpa_report.FAIL and c[4]]
+    if stopped:
+        beats.append(Beat(f"Kiểm {', '.join(stopped)} không đạt. Theo cấu hình của chị, em dừng ở đây, chưa làm bước "
+                          "sau.", mark="bad"))
     if m.classified:
         material = [c for c in m.classified if c.material]
         _r, _u, alarms = variance_class.summary(m.classified)

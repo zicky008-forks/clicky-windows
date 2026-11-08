@@ -73,6 +73,7 @@ class Month:
     said: list = field(default_factory=list)    # the receipt's sentences, books against ledgers first
     opex_gap: tuple = (ZERO, ZERO)              # (month, year to date): books less cost detail, not explained
     tb_not_used: Optional[tuple] = None         # (file, why) for a trial balance that cannot give the month
+    checks: list = field(default_factory=list)  # [(code, name, result, note, stop)] by the company's check codes
 
     def row(self, code: str) -> Optional[PnlRow]:
         return next((r for r in self.pnl if r.code == code), None)
@@ -115,8 +116,63 @@ def compute(folder: Path) -> Month:
         rev = m.row("revenue")
         driver = (rev.actual, rev.plan) if rev is not None and rev.plan else None
         m.classified = variance_class.classify(costs, b.gl, b.plans, b.config, driver)
+    m.checks = company_checks(m)
     m.said = _said(m)
     return m
+
+
+PASS, FAIL, NOT_RUN, ASK = "ĐẠT", "KHÔNG ĐẠT", "CHƯA KIỂM", "CẦN GIẢI TRÌNH"
+
+
+def company_checks(m: Month) -> list:
+    """The checks this report can run, by the codes of the company's kiem_tra.yaml: the operating costs against the
+    books (the check on account 641/642), the cost lines left on the value printed for a missing code, the year to
+    date against the books, and the variances above threshold. A check the company names that this step does not
+    run is left to its own step."""
+    from engine import company_config
+    c = m.bundle.company
+    if c is None:
+        return []
+    out = []
+
+    def add(code, result, note):
+        k = c.check(code)
+        if k is not None:
+            out.append((code, k.name, result, note, k.stop))
+    month = _month_text(m.period)
+    opex = m.row("opex")
+    for k in c.checks.values():
+        kind = k.kind
+        if kind == "chi_phi_khop_so":
+            if m.cost_books is None:
+                add(k.code, NOT_RUN, "thư mục chưa có bảng cân đối số phát sinh")
+            elif m.cost_books.ok:
+                add(k.code, PASS, f"chi phí tháng {month} khớp sổ cân đối")
+            else:
+                add(k.code, FAIL, f"lệch {fmt(m.opex_gap[0])} đ; xem dòng {GAP_LINE}")
+        elif kind == "anh_xa_du" and m.costs is not None:
+            if not c.unmapped:
+                add(k.code, NOT_RUN, "cấu hình chưa ghi giá trị hiện ra khi thiếu mã")
+            else:
+                bad = company_config.unmapped_lines(c, m.bundle.gl, m.period)
+                add(k.code, PASS if not bad else FAIL,
+                    f"{len(bad)} dòng chi phí còn {' / '.join(c.unmapped)}, {fmt(sum((e.amount for e in bad), ZERO))} đ"
+                    if bad else "không còn dòng chi phí nào thiếu mã")
+        elif kind == "luy_ke_khop_so" and opex is not None:
+            if not opex.ytd_books:
+                add(k.code, NOT_RUN, "bảng cân đối không có cột lũy kế")
+            else:
+                add(k.code, PASS if not m.opex_gap[1] else FAIL,
+                    "lũy kế khớp sổ cân đối" if not m.opex_gap[1] else f"lũy kế lệch {fmt(m.opex_gap[1])} đ")
+        elif kind == "chenh_lech_giai_trinh" and m.classified:
+            _r, _u, alarms = variance_class.summary(m.classified)
+            amount, pct = k.threshold or variance_class.thresholds(m.bundle.config)
+            limit = " và ".join(x for x in ((f"{fmt(amount)} đ" if amount is not None else ""),
+                                              (f"{pct}%" if pct is not None else "")) if x)
+            add(k.code, PASS if not alarms else ASK,
+                f"ngưỡng {limit}; {len(alarms)} dòng còn chênh thật cần phòng ban giải trình" if alarms
+                else f"ngưỡng {limit}; mọi dòng trên ngưỡng đã có nguyên nhân")
+    return out
 
 
 def trial_balance_in(folder: Path, unused: list):
@@ -296,6 +352,10 @@ def _said(m: Month) -> list:
                 out.append(f"Cầu nối lợi nhuận gộp tính trên sổ bán hàng: chênh lệch {fmt(ledger_gap)} đ. Chênh lệch "
                            f"trên báo cáo (theo sổ cân đối) là {fmt(gp.variance)} đ; phần khác {fmt(gp.variance - ledger_gap)} "
                            "đ là chênh lệch giữa sổ cân đối và sổ bán hàng nêu ở trên.")
+    stopped = [c for c in m.checks if c[2] == FAIL and c[4]]
+    if stopped:
+        out.append(f"Kiểm {', '.join(c[0] for c in stopped)} không đạt, mà cấu hình công ty ghi phải dừng: em chưa làm "
+                   "bước sau cho đến khi chị xử lý xong.")
     if m.classified:
         reported, underlying, alarms = variance_class.summary(m.classified)
         small = sum(1 for c in m.classified if not c.material)
@@ -413,6 +473,17 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
     rs.append([])
     for s in m.said:
         rs.append([s])
+    if m.checks:
+        rs.append([])
+        rs.append(["Kiểm tra theo cấu hình công ty", "Tên", "Kết quả", "Ghi chú", "Không đạt thì dừng"])
+        for code, name, result, note, stop in m.checks:
+            rs.append([code, name, result, note, "Có" if stop else "Không"])
+    c = m.bundle.company
+    if c is not None and (c.problems or c.open):
+        rs.append([])
+        rs.append(["Cấu hình công ty: điểm cần chị xác nhận"])
+        for x in c.problems + c.open:
+            rs.append([x])
     rs.append([])
     rs.append(["File", "Vai trò", "Dòng đã dùng", "Dòng bỏ", "Lý do bỏ"])
     from collections import Counter

@@ -730,6 +730,7 @@ class Bundle:
     postings: list = field(default_factory=list)       # Posting, both sides of every ledger line (match to the books)
     segment_map: object = None                         # engine.segment_gl.SegmentMap, when the folder has one
     segment_gls: list = field(default_factory=list)  # SegmentGL of each segmented ledger read (its unknown codes)
+    company: object = None                             # engine.company_config.Company, when the PC has one
     sku_plans: list = field(default_factory=list)      # SkuPlanRow, every version
     sku_plan_totals: list = field(default_factory=list)  # (file, Table, [SkuPlanRow]) of each plan-by-SKU table
     cut: list = field(default_factory=list)            # (sheet, rows) of the cut parameters, read by the reviewer
@@ -872,6 +873,13 @@ def load(folder: Path, fy_start: int = 7) -> Bundle:
                               + len(b.config.skus), []))
         else:
             rest.append(p)
+    # The company's own configuration (kept on the PC, outside the folder): its variance threshold, and its account
+    # segments when the folder has no map file that says them.
+    from engine import company_config
+    b.company = company_config.find()
+    company_config.apply(b.company, b.config)
+    if b.segment_map is None and b.company is not None and b.company.segments:
+        b.segment_map = company_config.segment_map(b.company)
     fy = b.config.rule("thang bat dau") or b.config.rule("nien do")
     fy_start = int(num(fy)) if num(fy) is not None and 1 <= int(num(fy)) <= 12 else fy_start
     pending = []                                                # (plan rows, prior?) whose year comes from the detail
