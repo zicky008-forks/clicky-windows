@@ -126,3 +126,48 @@ def folder(path: Path, versions=("AOP",), plans: dict = None) -> Path:
     for name, rows in (plans or {f"{v}_2026.csv": plan_rows(v) for v in versions}).items():
         write_csv(path / name, rows)
     return path
+
+
+# The catalogue of the opex split case: department addresses (Hành chính has none), cost elements, the rules.
+DEPT_SHEET = [["Mã phòng ban", "Tên phòng ban", "Khối", "Email", "CC"],
+              ["KD", "Kinh doanh", "Thương mại", "kd@example.com", "truongkd@example.com"],
+              ["MKT", "Marketing", "Thương mại", "mkt@example.com", ""],
+              ["HC", "Hành chính", "Hỗ trợ", "", ""]]
+ELEMENT_SHEET = [["Mã khoản mục", "Tên khoản mục", "Tài khoản"]] + [[c, n, a] for c, n, a in (
+    ("LUONG", "Lương", "6411"), ("KH", "Khấu hao", "6414"), ("CTP", "Công tác phí", "6418"), ("QC", "Quảng cáo", "6418"),
+    ("THUE", "Thuê văn phòng", "6427"))]
+RULES = [["Tham số", "Giá trị"], ["Tháng bắt đầu năm tài chính", 1], ["Email kế toán", "ketoan@example.com"],
+         ["Người gửi", "Phòng FP&A"], ["Hạn phản hồi", "18/11/2026"]]
+# Pay lines that name a person: they must never reach a department's file or its draft
+PAYROLL = [["25/10/2026", "PL77701", "10", "2026", "6411", "3341", "KD", "LUONG", "Lương T10 – Nguyễn Văn An", "25000000"],
+           ["25/10/2026", "PL77702", "10", "2026", "6411", "3341", "KD", "LUONG", "Thưởng KPI – Trần Thị Bình", "8000000"]]
+PAYROLL_TOTAL = 33 * M
+PERSONAL = ("Nguyễn Văn An", "Trần Thị Bình", "PL77701", "PL77702")
+
+
+def write_xlsx(path: Path, sheets: dict) -> Path:
+    from openpyxl import Workbook
+    wb = Workbook()
+    wb.remove(wb.active)
+    for name, rows in sheets.items():
+        ws = wb.create_sheet(name)
+        for r in rows:
+            ws.append(r)
+    wb.save(path)
+    return path
+
+
+def opex_folder(path: Path, tb=True, shift=None, payroll=False) -> Path:
+    """The opex split case: cost detail, AOP, catalogue and (tb) the October trial balance that matches it.
+    payroll adds two pay lines that name a person; the books move with them, so the split still matches."""
+    d = folder(path)
+    if payroll:
+        rows = gl_rows()
+        rows[-1:-1] = PAYROLL
+        rows[-1][9] = str(int(rows[-1][9]) + PAYROLL_TOTAL)
+        write_csv(d / "SoChiTietChiPhi_2026.csv", rows)
+        shift = dict(shift or {}, **{"6411": (shift or {}).get("6411", 0) + PAYROLL_TOTAL})
+    write_xlsx(d / "Danh muc.xlsx", {"Phòng ban": DEPT_SHEET, "Khoản mục": ELEMENT_SHEET, "Tham số": RULES})
+    if tb:
+        write_csv(d / "TB T10 2026.csv", tb_rows(shift))
+    return d
