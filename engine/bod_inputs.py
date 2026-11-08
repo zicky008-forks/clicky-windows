@@ -1038,6 +1038,7 @@ class Bundle:
     month_orders: list = field(default_factory=list)   # [(file, [month numbers])] of plans printed with month columns
     plan_checks: list = field(default_factory=list)    # sentences: a plan file that disagrees with its own totals
     working: list = field(default_factory=list)        # names of working files (bản nháp, working) left out
+    plan_notes: dict = field(default_factory=dict)     # plan file -> its 'Ghi chú' / 'Phạm vi' texts, as printed
 
 
 PACK_WORDS = ("pack", "bod", "ban nhap", "bao cao hdqt", "trinh")
@@ -1207,7 +1208,7 @@ def load(folder: Path, fy_start: int = 7, purpose: str = "bod") -> Bundle:
     for p in rest:
         k = name_key(p.stem)
         hint = hint_of(p.stem)
-        if purpose == "fpa" and WORKING_RE.search(k):
+        if purpose == "fpa" and working_name(p.stem):
             b.unused.append((p.name, WORKING_WHY))
             b.working.append(p.name)
             continue
@@ -1223,6 +1224,10 @@ def load(folder: Path, fy_start: int = 7, purpose: str = "bod") -> Bundle:
         except Exception as exc:                               # noqa: BLE001 - say it, never skip in silence
             b.unused.append((p.name, f"không đọc được: {exc}"))
             continue
+        if purpose == "fpa" and working_inside(sheets):
+            b.unused.append((p.name, WORKING_WHY))
+            b.working.append(p.name)
+            continue
         file_years = fiscal_years(p.stem) or fiscal_years(k)
         file_fy = file_years[0] if file_years and file_years[1] else None
         prior = hint == "prior"
@@ -1231,6 +1236,7 @@ def load(folder: Path, fy_start: int = 7, purpose: str = "bod") -> Bundle:
             version = ""                        # a last-year file that names no version: its rows are last year's actual
         used = False
         info = file_info(sheets)
+        notes = scope_notes(sheets)
         first_plan, first_sku = len(b.plans), len(b.sku_plans)
         if hint == "cut":
             for sheet, rows in sheets.items():
@@ -1308,6 +1314,8 @@ def load(folder: Path, fy_start: int = 7, purpose: str = "bod") -> Bundle:
         if info and (len(b.plans) > first_plan or len(b.sku_plans) > first_sku):
             apply_info(info, b.plans[first_plan:] + b.sku_plans[first_sku:])
             b.receipt.append((p.name, "Thông tin phiên bản (trạng thái, phiên bản, ngày duyệt)", len(info), []))
+        if notes and (len(b.plans) > first_plan or len(b.sku_plans) > first_sku):
+            b.plan_notes[p.name] = notes
         if not used:
             b.unused.append((p.name, _unused_reason(hint, sheets, purpose)))
     if b.segment_map:                                           # the map names departments and cost elements
@@ -1478,9 +1486,34 @@ def _resolve_years(b: Bundle, pending: list, fy_start: int) -> None:
 # A file name that says it is the user's own working copy: 'Working', 'Workings', 'WIP', 'Draft2', '(bản nháp)',
 # 'nháp', 'đang làm', 'bản sao', 'Copy of'. 'Nhập' as in stock in, import, data entry or income is not a draft.
 WORKING_RE = re.compile(
-    r"\b(?:workings?|work file|wip|drafts?|ban nhap|dang lam|lam viec|file tam|tam tinh|ban sao|copy|backup"
+    r"\b(?:workings?|work ?file|work ?papers?|wip|drafts?|ban ?nhap|dang ?lam|lam ?viec|file ?tam|tam ?tinh|ban ?sao"
+    r"|copy|backup"
     r"|(?<!thu )(?<!xuat )(?<!phieu )(?<!hang )(?<!so )(?<!tk )nhap"
     r"(?! (?:kho|khau|lieu|hang|du lieu|vat tu|nguyen lieu|xuat|ton)\b))(?:\d+|v\d+)?\b")
+# Said inside the file, in a sheet name or a title cell: unambiguous words only ('nháp' alone is also a plan's status).
+WORKING_INSIDE_RE = re.compile(r"\b(?:working ?file|work ?papers?|working papers?|file ?lam ?viec|ban ?lam ?viec"
+                               r"|khong gui|do not send|wip)\b")
+
+
+def working_name(stem: str) -> bool:
+    """The file name says it is the user's working copy. 'T10Working', 'BCQT_T10_lamviec' count too."""
+    k = name_key(stem)
+    spaced = re.sub(r"(?<=\d)(?=[a-z])|(?<=[a-z])(?=\d)", " ", k)
+    return bool(WORKING_RE.search(k) or WORKING_RE.search(spaced))
+
+
+def working_inside(sheets: dict) -> bool:
+    """A sheet name or a title cell in the first rows says it: 'FILE LÀM VIỆC - không gửi', sheet 'Working'."""
+    for name, rows in sheets.items():
+        if WORKING_INSIDE_RE.search(key(name)) or key(name) in ("working", "workings"):
+            return True
+        for r in rows[:5]:
+            for v in (r or [])[:3]:
+                if isinstance(v, str) and WORKING_INSIDE_RE.search(key(v)):
+                    return True
+    return False
+
+
 WORKING_WHY = "file làm việc (bản nháp) của chị: báo cáo FP&A không lấy số từ file nháp"
 
 # The key-value info sheet a plan file often carries: 'Trạng thái | Đã duyệt', 'Phiên bản | v4', 'Ngày duyệt | ...'.
@@ -1507,6 +1540,29 @@ def file_info(sheets: dict) -> dict:
         if when:
             out["approved"] = when
     return out if ({"version", "approved"} & set(out)) or key(out.get("status", "")).find("duyet") >= 0 else {}
+
+
+NOTE_KEYS = ("ghi chu", "pham vi", "pham vi ngan sach", "luu y", "note", "notes", "scope", "budget scope")
+
+
+def scope_notes(sheets: dict) -> list:
+    """The plan's own notes on what it covers: 'Ghi chú: ...', 'Phạm vi | ...' in the first rows, or the text rows
+    of a sheet named 'Ghi chú' / 'Phạm vi'. As printed, at most five."""
+    out = []
+    for name, rows in sheets.items():
+        whole = key(name) in NOTE_KEYS
+        for r in rows[:40]:
+            texts = [str(v).strip() for v in (r or []) if isinstance(v, str) and str(v).strip()]
+            if not texts:
+                continue
+            first = key(texts[0])
+            if whole and len(texts) == 1 and first not in NOTE_KEYS:
+                out.append(texts[0])
+            elif first in NOTE_KEYS and len(texts) >= 2:
+                out.append(" ".join(texts[1:]))
+            elif any(first.startswith(k + " ") for k in NOTE_KEYS) and re.match(r"^[^:]{2,25}:\s*\S", texts[0]):
+                out.append(texts[0].split(":", 1)[1].strip())
+    return list(dict.fromkeys(out))[:5]
 
 
 RESOLUTION_RE = re.compile(r"\b(can cu|nghi quyet|quyet dinh|bien ban hop|resolution|decision)\b")

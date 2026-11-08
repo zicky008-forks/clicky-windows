@@ -123,6 +123,8 @@ def compute(folder: Path, version: Optional[str] = None, plan_file: Optional[str
     version = version or (str(b.config.rule("ban ke hoach") or "").strip() or None)
     costs = fpa.compute(b.gl, b.plans, version=version, fy_start=fy, config=b.config,
                         plan_file=plan_file) if b.gl else None
+    if costs is not None and costs.plan is not None:
+        costs.scope_notes = list(b.plan_notes.get(costs.plan.file, []))
     sales = None
     if b.sales:
         sales = sales_pnl.compute(b.sales, b.sku_plans, b.plans, period=costs.period if costs else None,
@@ -483,10 +485,13 @@ def _said(m: Month) -> list:
                    "bước sau cho đến khi chị xử lý xong.")
     if m.classified:
         reported, underlying, alarms = variance_class.summary(m.classified)
-        small = sum(1 for c in m.classified if not c.material)
+        small = sum(1 for c in m.classified if not c.material and not c.pending)
+        waiting = sum(1 for c in m.classified if c.pending)
         out.append(f"Chi phí: {len([c for c in m.classified if c.material])} dòng chênh trên ngưỡng, số báo cáo "
                    f"{fmt(reported)} đ, số thực chất {fmt(underlying)} đ; {len(alarms)} dòng cần hỏi; "
-                   f"{small} dòng dưới ngưỡng, không phải bất thường.")
+                   f"{small} dòng dưới ngưỡng, không phải bất thường."
+                   + (f" {waiting} dòng {variance_class.PENDING}: em chưa xếp loại vì mã bộ phận còn chờ chị trả lời."
+                      if waiting else ""))
     return out
 
 
@@ -535,6 +540,15 @@ def _not_compared(m, also_used=()) -> dict:
     return {f: {v: len(rows - used_lines.get(f, set())) for v, rows in vs.items()} for f, vs in by.items()}
 
 
+def _version_words(version: str, role: str) -> str:
+    """Why a version's lines are left out, in the receipt's words: never the folded key ('thuc te')."""
+    from engine import roles
+    if key(version) in fpa.NOT_PLAN_VERSIONS:
+        return "là số thực tế ghi trong file: đọc, không dùng, số thực tế em lấy từ sổ chi tiết"
+    kind = "bản dự báo" if role.startswith(roles.FORECAST) else "bản"
+    return f"của {kind} {version}: {NOT_COMPARED}"
+
+
 def file_rows(m, also_used=()) -> list:
     """The receipt's file table: every file read, the lines used and left out with the reason, and every file not
     used with why. Used + left out = the file's lines (rule 4). A plan version read but not compared against is
@@ -555,7 +569,7 @@ def file_rows(m, also_used=()) -> list:
                 take[v] = min(n, left)
                 left -= take[v]
             other[name] = {v: n - take[v] for v, n in aside.items()}
-            said = "; ".join(f"{n} dòng: bản {v}, {NOT_COMPARED}" for v, n in take.items() if n)
+            said = "; ".join(f"{n} dòng {_version_words(v, role)}" for v, n in take.items() if n)
             why = "; ".join(x for x in (why, said) if x)
             if moved == used or name not in compared:
                 role = f"{role} · {NOT_COMPARED}"

@@ -3,6 +3,7 @@ Phát sinh Có and its month-end closing entry, plans printed wide by month (by 
 standard cost, by department x cost element), a folder with no plan, and a fiscal year the folder only implies.
 Every file's used + left-out lines add up to its lines, and every figure is checked against the generator's own
 arithmetic."""
+import re
 from decimal import Decimal
 from pathlib import Path
 
@@ -549,9 +550,11 @@ def test_the_approval_date_is_read_from_the_resolution_line(tmp_path):
 def test_working_files_are_named_as_such_in_the_written_receipt(tmp_path):
     d = _folder(tmp_path, "k7", {"KH": fs.plan_rows("AOP")[:-1]})
     working = ["FPA_T10_Workings.xlsx", "BC FPA T10 (nháp).xlsx", "BCQT_T10_dang_lam.xlsx", "Copy of AOP_2026.xlsx",
-               "Bao cao T10 - Ban sao.xlsx", "T10_draft2.xlsx"]
+               "Bao cao T10 - Ban sao.xlsx", "T10_draft2.xlsx", "T10Working.xlsx", "BCQT_T10_lamviec.xlsx"]
     for n in working:
         ss.write_xlsx(d / n, {"P&L": [["Chỉ tiêu", "T10"], ["Chi phí", 1]]})
+    ss.write_xlsx(d / "Tinh toan T10.xlsx", {"P&L": [["FILE LÀM VIỆC - không gửi"], ["Chỉ tiêu", "T10"], ["Chi phí", 1]]})
+    working.append("Tinh toan T10.xlsx")                     # said inside the file, not in its name
     ss.write_xlsx(d / "So chi tiet nhap kho.xlsx", {"S": [["Mã hàng", "SL"], ["A", 1]]})
     ss.write_xlsx(d / "Thue thu nhap ca nhan.xlsx", {"S": [["Mã NV", "Thuế"], ["A", 1]]})
     m = fpa_report.compute(d)
@@ -559,6 +562,7 @@ def test_working_files_are_named_as_such_in_the_written_receipt(tmp_path):
     wb = load_workbook(out["xlsx"], read_only=True)
     rows = {r[0]: r for r in wb[fpa_report.RECEIPT].iter_rows(values_only=True) if r and r[0]}
     wb.close()
+    assert set(working) <= set(bod_inputs.load(d, purpose="fpa").working)
     for n in working:
         assert rows[n][1] == "File làm việc của chị, không lấy số", n
     assert rows["So chi tiet nhap kho.xlsx"][1] != "File làm việc của chị, không lấy số"
@@ -574,3 +578,25 @@ def test_a_working_file_has_the_fpa_wording(tmp_path):
     assert rows["Working T10 FPA.xlsx"][1] == "File làm việc của chị, không lấy số"
     assert rows["Working T10 FPA.xlsx"][4] == bod_inputs.WORKING_WHY
     assert rows["So chi tiet nhap kho.xlsx"][1] == "Không dùng"     # 'nhập' (stock in) is not a draft
+
+
+# ── K15: every reason in the receipt is plain Vietnamese, never a folded key ──
+
+FOLDED = re.compile(r"\b(thuc te|ke hoach|nam truoc|du bao|phong ban|khoan muc|khong dung|chua|duoc|dong|ban sao|"
+                    r"ban nhap|so lieu|tai khoan)\b")
+
+
+def test_the_forecast_files_actual_months_are_said_in_plain_words(tmp_path):
+    d = fs.folder(tmp_path / "k15")
+    le = [fs.PLAN_HEADER]
+    for r in fs.plan_rows("AOP")[1:-1]:
+        mo = int(r[2])
+        le.append(["Thực tế" if mo <= 9 else "LE T09"] + r[1:])
+    fs.write_csv(d / "LE_T09_2026.csv", le)
+    m = fpa_report.compute(d, version="AOP")
+    rows = fpa_report.file_rows(m)[1:]
+    row = next(r for r in rows if r[0] == "LE_T09_2026.csv")
+    assert "số thực tế ghi trong file" in row[4] and "bản thuc te" not in row[4], row
+    texts = [str(x) for r in rows for x in r[1:] if isinstance(x, str)] + list(m.said)
+    for t in texts:
+        assert not FOLDED.search(t), t

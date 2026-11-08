@@ -84,7 +84,7 @@ def test_each_story_gets_its_cause_and_the_underlying_figure():
     c = _run()
     late = c[("HC", "THUE")]
     assert (late.reported, late.underlying, late.verdict, late.alarm) == (100 * M, 0, "lệch thời điểm", False)
-    assert "Các tháng trước còn 100.000.000 đ kế hoạch chưa chi" in late.sentence()
+    assert "Tháng 09/2026 kế hoạch 100.000.000 đ mà mới chi 0 đ; tháng này chi bù 100.000.000 đ" in late.sentence()
     early = c[("MKT", "SK")]
     assert (early.reported, early.underlying, early.verdict) == (200 * M, 0, "lệch thời điểm")
     assert "ở tháng 12/2026" in early.sentence()
@@ -168,3 +168,47 @@ def test_summary_reports_both_figures():
     reported, underlying, alarms = vc.summary(list(_run().values()))
     assert reported == (100 + 200 + 30 - 40 + 20 + 60 + 12) * M and underlying == (60 + 12) * M
     assert sorted((a.line.dept, a.line.element) for a in alarms) == [("HC", "DIEN"), ("KD", "QC")]
+
+
+def _story(actuals: dict, per_month=100, dept="HC", el="THUE"):
+    plans = [PlanRow("AOP", m, D(per_month * M), dept=dept, element=el, file="AOP.xlsx", where=f"AOP!{m}")
+             for m in MONTHS]
+    gl = [Entry(m, D(a * M), dept=dept, element=el, account="642", ref=f"PC{i}", text=f"{el} {m}", where=f"GL!{i + 2}")
+          for i, (m, a) in enumerate(sorted(actuals.items()))]
+    return gl, plans
+
+
+def test_ordinary_noise_before_a_big_month_is_never_timing():
+    # every month a little under plan (each gap above the 5 triệu threshold), then October well over: no month had
+    # its plan high and its actual low, so nothing is taken out as timing; "có thể lệch thời điểm" is said instead
+    noise = [95, 92, 96, 94, 93, 97, 95, 94, 96]
+    gl, plans = _story({**{m: a for m, a in zip(DONE, noise)}, PERIOD: 150})
+    v = fpa.compute(gl, plans, period=PERIOD)
+    c = vc.classify(v, gl, plans, CONFIG)[0]
+    assert not c.causes and c.underlying == 50 * M and c.alarm and c.verdict == "vượt kế hoạch"
+    assert "Có thể lệch thời điểm" in c.sentence() and "em chưa trừ phần này" in c.sentence()
+    # the same October after a month whose plan was not spent: that month is named, and the catch-up taken out
+    gl, plans = _story({**{m: 100 for m in DONE}, "2026-09": 40, PERIOD: 160})
+    v = fpa.compute(gl, plans, period=PERIOD)
+    c = vc.classify(v, gl, plans, CONFIG)[0]
+    assert [x.kind for x in c.causes] == [vc.LATE] and c.causes[0].amount == 60 * M and "Tháng 09/2026" in c.sentence()
+
+
+def test_lines_waiting_on_a_department_code_are_not_classified():
+    from engine.bod_inputs import Config
+    cfg = Config(depts={"KD": {"ten": "Kinh doanh"}, "MKT": {"ten": "Marketing"}})
+    plans = [PlanRow("AOP", m, D(100 * M), dept=d, element="QC", file="AOP.xlsx", where=f"AOP!{d}{m}")
+             for m in MONTHS for d in ("KD", "MKT")]
+    gl = []
+    for i, m in enumerate(DONE):
+        gl.append(Entry(m, D((40 if m == PERIOD else 100) * M), dept="KD", element="QC", account="641", where=f"GL!{i}"))
+        gl.append(Entry(m, D(100 * M), dept="MKT", element="QC", account="641", where=f"GL!m{i}"))
+    gl.append(Entry(PERIOD, D(60 * M), dept="KD1", element="QC", account="641", where="GL!x"))   # a code not listed
+    v = fpa.compute(gl, plans, period=PERIOD, config=cfg)
+    v.scope_notes = ["Kế hoạch KD gồm cả kênh online (mã cũ KD1)"]
+    got = {(c.line.dept, c.line.element): c for c in vc.classify(v, gl, plans, cfg)}
+    assert got[("KD1", "QC")].pending and got[("KD", "QC")].pending and not got[("MKT", "QC")].pending
+    assert got[("KD", "QC")].verdict == vc.PENDING and not got[("KD", "QC")].alarm
+    assert vc.summary(list(got.values()))[2] == []                 # not counted in the lines to ask about
+    asked = next(x for x in v.left_out() if "Mã bộ phận" in x)
+    assert "KD1" in asked and "“Kế hoạch KD gồm cả kênh online (mã cũ KD1)”" in asked
