@@ -148,3 +148,12 @@ def test_a_detail_line_without_a_cost_element_is_grouped_by_account_and_said(bun
     v = fpa.compute(bundle.gl, bundle.plans, fy_start=1)
     assert _line(v.month, "HC", "TK 6427").actual == e.amount and v.no_element == [e.where]
     assert "1 dòng chi phí không có mã yếu tố chi phí, em tạm xếp theo tài khoản" in v.left_out()
+
+
+def test_a_plan_pnl_line_is_not_a_cost_line(bundle):
+    """'Lợi nhuận gộp', 'Doanh thu thuần' in the plan file belong to the sales P&L, never to the cost matrix."""
+    for line in ("Lợi nhuận gộp", "Doanh thu thuần", "Giá vốn hàng bán"):
+        bundle.plans.append(bod_inputs.PlanRow("AOP", fs.PERIOD, Decimal(900 * M), line=line, file="AOP_2026.csv"))
+    v = fpa.compute(bundle.gl, bundle.plans, fy_start=1)
+    assert not any(l.dept == "" and l.element == "" for l in v.month + v.ytd)
+    assert v.totals(v.month)[1] == sum(fs.plan_month(d, e, 10) for d, e, _a, _p in fs.PLAN)

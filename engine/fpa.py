@@ -9,6 +9,7 @@ a department are counted and named.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Optional
@@ -22,6 +23,19 @@ ZERO = Decimal(0)
 UNASSIGNED = "Chưa gán bộ phận"
 # Versions that hold last year's actual, not a plan.
 _NOT_PLAN = {"ly", "thuc te", "actual"}
+# Plan lines a P&L states (folded 'Chỉ tiêu'): revenue, cost of goods sold, gross profit. They belong to the sales
+# P&L (engine.sales_pnl), not to the department x cost element matrix.
+PNL_LINE = {"revenue": re.compile(r"^(doanh thu thuan|dtt|net revenue|net sales|doanh thu)\b"),
+            "cogs": re.compile(r"^(gia von|gvhb|cogs|cost of goods)"),
+            "gp": re.compile(r"^(loi nhuan gop|lai gop|lng|gross profit|gross margin)\b")}
+
+
+def pnl_line(row) -> str:
+    """'revenue', 'cogs' or 'gp' for a plan row that is a P&L line with no department or cost element, else ''."""
+    if getattr(row, "dept", "") or getattr(row, "element", ""):
+        return ""
+    k = key(getattr(row, "line", "") or "")
+    return next((code for code, rx in PNL_LINE.items() if rx.match(k)), "")
 
 
 class PickVersion(ValueError):
@@ -235,6 +249,8 @@ def compute(gl: list, plans: list, period: Optional[str] = None, version: Option
                 t.accounts.add(e.account)
     for r in plans if chosen else []:
         if key(r.version or "") != key(chosen.version) or r.file != chosen.file or r.month not in months:
+            continue
+        if pnl_line(r):                                 # revenue, cost of goods sold, gross profit: not a cost line
             continue
         targets = [line(ytd, r.dept, r.element)] + ([line(month, r.dept, r.element)] if r.month == period else [])
         for t in targets:

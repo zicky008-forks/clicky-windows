@@ -64,6 +64,15 @@ FX_SPEC = {
     "ty_gia": ["ty gia", "rate", "gia tri"],
 }
 
+SKU_WORDS = ["ma hang", "ma sp", "ma san pham", "sku", "ma hang hoa", "ma hh", "item code", "product code", "ma vat tu",
+             "ma vt", "ma thanh pham"]
+SKU_NAME_WORDS = ["ten hang", "ten san pham", "ten sp", "ten hang hoa", "product name", "item name", "ten vat tu"]
+QTY_WORDS = ["so luong", "sl", "san luong", "qty", "quantity", "volume", "san luong ban"]
+UNIT_WORDS = ["dvt", "don vi tinh", "dv tinh", "uom", "unit of measure"]
+UNIT_COST_WORDS = ["don gia von", "gia von don vi", "unit cost", "gia thanh don vi", "cost per unit"]
+UNIT_PRICE_WORDS = ["don gia", "gia ban", "gia ban thuan", "unit price", "net price", "gia ban binh quan", "price"]
+COGS_WORDS = ["gia von", "gia von hang ban", "tri gia von", "cogs", "cost of goods sold", "tien von", "gvhb"]
+
 SALES_SPEC = {
     "ngay": ["ngay hd", "ngay hoa don", "ngay ct", "ngay chung tu", "ngay", "date", "invoice date"],
     "thang": ["thang", "ky", "period", "month"],
@@ -78,6 +87,29 @@ SALES_SPEC = {
            "doanh thu gop", "doanh thu ban hang", "amount"],
     "ck": ["chiet khau", "giam gia", "discount", "ck thuong mai"],
     "tra_lai": ["tra lai", "hang ban bi tra lai", "returns", "hang tra lai"],
+    "ma_hang": SKU_WORDS,
+    "ten_hang": SKU_NAME_WORDS,
+    "sl": QTY_WORDS,
+    "dvt": UNIT_WORDS,
+    "don_gia_von": UNIT_COST_WORDS,           # before gia_von: 'Đơn giá vốn' is a cost per unit, not the cost
+    "gia_von": COGS_WORDS,
+}
+
+# The plan by SKU: volume with a price and a cost per unit, or revenue and cost of goods sold.
+SKU_PLAN_SPEC = {
+    "phien_ban": PLAN_SPEC["phien_ban"],
+    "nam": PLAN_SPEC["nam"],
+    "thang": PLAN_SPEC["thang"],
+    "kenh": PLAN_SPEC["kenh"],
+    "ma_hang": SKU_WORDS,
+    "ten_hang": SKU_NAME_WORDS,
+    "sl": QTY_WORDS,
+    "dvt": UNIT_WORDS,
+    "don_gia_von": UNIT_COST_WORDS,
+    "don_gia": UNIT_PRICE_WORDS,
+    "dt": ["doanh thu thuan", "dtt", "net revenue", "net sales", "doanh thu", "revenue", "doanh so"],
+    "gia_von": COGS_WORDS,
+    "ngay_duyet": PLAN_SPEC["ngay_duyet"],
 }
 
 
@@ -178,6 +210,13 @@ CONFIG_SPECS = {
     "rules": {"tham_so": ["tham so", "quy tac", "ten tham so", "khoa", "muc", "noi dung"],
               "gia_tri": ["gia tri", "value", "thiet lap"]},
 }
+# SKUs and their units: 'Mã hàng | ĐVT chuẩn' and, where a SKU is sold in other units, 'ĐVT | Hệ số quy đổi'
+# (1 ĐVT = hệ số ĐVT chuẩn). A row without a SKU converts that unit for every SKU with that standard unit.
+SKU_SPEC = {"ma_hang": SKU_WORDS, "ten_hang": SKU_NAME_WORDS,
+            "dvt_chuan": ["dvt chuan", "don vi chuan", "don vi tinh chuan", "dvt co so", "dvt quy doi", "base unit",
+                          "standard unit"],
+            "dvt": UNIT_WORDS + ["dvt ban", "dvt khac", "don vi ban"],
+            "he_so": ["he so quy doi", "he so", "ty le quy doi", "quy doi", "conversion factor", "factor"]}
 
 
 @dataclass
@@ -193,6 +232,8 @@ class Config:
         said = [m for m in self.meanings.get(key(term), []) if key(m) != key(term)]
         return f"{term} ({'; '.join(said)})" if said else term
     bod: list = field(default_factory=list)          # [{"dong", "tk", "ce", "nhom"}]
+    skus: dict = field(default_factory=dict)         # SKU code -> {"ten", "dvt": standard unit as printed}
+    units: dict = field(default_factory=dict)        # (SKU or "", folded unit) -> (factor to the standard, folded standard)
     rules: dict = field(default_factory=dict)        # folded key -> value
     rule_text: dict = field(default_factory=dict)    # folded key -> key as printed
 
@@ -215,6 +256,29 @@ def _truthy(v) -> bool:
     return key(v) in ("x", "co", "yes", "y", "true", "1", "khong cat", "dung")
 
 
+def _read_skus(cfg: Config, rows: list, sheet: str) -> bool:
+    """The SKU catalogue and unit conversions in one sheet; True when the sheet is one."""
+    t = read_table(rows, sheet, SKU_SPEC, 2)
+    if t is None or not ({"dvt_chuan", "dvt"} & set(t.columns)) or not ({"ma_hang", "he_so"} & set(t.columns)):
+        return False
+    if "ma_hang" in t.columns and any(w in key(t.headers[t.columns["ma_hang"]]).split() for w in ("khach", "kh", "ncc")):
+        return False
+    for n, v in t.rows:
+        sku = str(t.get(v, "ma_hang", "") or "").strip()
+        std = str(t.get(v, "dvt_chuan", "") or "").strip()
+        unit = str(t.get(v, "dvt", "") or "").strip()
+        factor = num(t.get(v, "he_so"))
+        if not std and unit and factor in (None, 1):
+            std = unit                                      # a catalogue with one unit column: it is the standard
+        if sku and std:
+            cfg.skus.setdefault(sku, {"ten": str(t.get(v, "ten_hang", "") or "").strip(), "dvt": std})
+        if unit and std and factor and key(unit) != key(std):
+            cfg.units[(sku, key(unit))] = (factor, key(std))
+        elif sku and not std:
+            t.skipped.append((n, "không có đơn vị tính chuẩn"))
+    return True
+
+
 def read_config(path: Path) -> Config:
     cfg = Config()
     for sheet, rows in sheets_of(path).items():
@@ -222,6 +286,8 @@ def read_config(path: Path) -> Config:
             texts = [str(v).strip() for v in (r or []) if isinstance(v, str) and str(v).strip()]
             for a, b in zip(texts, texts[1:]):
                 cfg.meanings.setdefault(key(a), []).append(b)
+        if _read_skus(cfg, rows, sheet):     # a SKU sheet's 'Mã hàng | Tên | Nhóm hàng' is not a cost element list
+            continue
         for kind, spec in CONFIG_SPECS.items():
             need = 2
             t = read_table(rows, sheet, spec, need)
@@ -495,21 +561,114 @@ class Sale:
     site: str = ""
     division: str = ""
     channel: str = ""
+    sku: str = ""
+    qty: Optional[Decimal] = None       # in the row's unit
+    unit: str = ""                      # as printed: the row's ĐVT, else the one in the quantity header ('SL (thùng)')
+    cogs: Optional[Decimal] = None      # None when the ledger has no cost of goods sold
+    where: str = ""                     # 'Sheet!row'
+    name: str = ""
+    deductions: Decimal = ZERO          # discounts and returns the row nets off its gross revenue
+
+
+def header_unit(t: Table, field_name: str) -> str:
+    """The unit a column header names in brackets or after a slash: 'Số lượng (thùng)' -> 'thùng'."""
+    if field_name not in t.columns:
+        return ""
+    h = str(t.headers[t.columns[field_name]] or "")
+    m = re.search(r"\(([^)]+)\)\s*$", h) or re.search(r"/\s*([^/()]+)$", h)
+    return m.group(1).strip() if m else ""
+
+
+def _not_a_customer(t: Table) -> None:
+    """'Mã khách hàng' holds every word of 'mã hàng': it is the customer, never the SKU."""
+    if "ma_hang" in t.columns and any(w in key(t.headers[t.columns["ma_hang"]]).split() for w in ("khach", "kh", "ncc")):
+        del t.columns["ma_hang"]
+
+
+def _per_unit(t: Table, total: str, unit: str) -> None:
+    """A money column whose header says per unit ('Giá vốn/thùng', 'Giá vốn mỗi thùng') is the unit figure."""
+    if total in t.columns and unit not in t.columns:
+        h = str(t.headers[t.columns[total]] or "")
+        if "/" in h or re.search(r"\b(moi|per|1)\b", key(h)):
+            t.columns[unit] = t.columns.pop(total)
 
 
 def read_sales(t: Table, fy_start: int = 7) -> list:
+    _not_a_customer(t)
+    _per_unit(t, "gia_von", "don_gia_von")
+    qty_unit = header_unit(t, "sl")
     out = []
     for n, v in t.rows:
         net = num(t.get(v, "dt_thuan"))
+        deductions = abs(num(t.get(v, "ck")) or ZERO) + abs(num(t.get(v, "tra_lai")) or ZERO)
         if net is None:
             gross = num(t.get(v, "dt"))
             if gross is None:
                 t.skipped.append((n, "không có doanh thu"))
                 continue
-            net = gross - abs(num(t.get(v, "ck")) or ZERO) - abs(num(t.get(v, "tra_lai")) or ZERO)
+            net = gross - deductions
+        qty = num(t.get(v, "sl"))
+        cogs = num(t.get(v, "gia_von"))
+        unit_cost = num(t.get(v, "don_gia_von"))
+        if cogs is None and unit_cost is not None and qty is not None:
+            cogs = qty * unit_cost
         out.append(Sale(month_key(t.get(v, "thang"), t.get(v, "ngay"), t.get(v, "nam"), fy_start) or "", net,
                         str(t.get(v, "phap_nhan", "") or "").strip(), str(t.get(v, "khoi", "") or "").strip(),
-                        str(t.get(v, "kenh", "") or "").strip()))
+                        str(t.get(v, "kenh", "") or "").strip(), str(t.get(v, "ma_hang", "") or "").strip(), qty,
+                        str(t.get(v, "dvt", "") or "").strip() or qty_unit, cogs, f"{t.sheet}!{n}",
+                        str(t.get(v, "ten_hang", "") or "").strip(), deductions))
+    return out
+
+
+@dataclass
+class SkuPlanRow:
+    """One SKU (x channel) of the plan for one month, in the row's unit."""
+    version: str
+    month: str
+    sku: str
+    qty: Decimal
+    revenue: Decimal
+    cogs: Decimal
+    channel: str = ""
+    unit: str = ""
+    price: Optional[Decimal] = None      # per unit, when the file gives it
+    cost: Optional[Decimal] = None       # per unit, when the file gives it
+    where: str = ""
+    file: str = ""
+    approved: str = ""
+    month_no: Optional[int] = None
+    fy: Optional[int] = None
+    name: str = ""
+    no_cost: bool = False                # the file gives no cost for it: its planned cost is 0 and it is said
+
+
+def read_sku_plan(t: Table, default_version: str = "", fy_start: int = 7, file_fy: Optional[int] = None) -> list:
+    """A long plan table by SKU: volume, and a price and cost per unit or the revenue and cost they make."""
+    _not_a_customer(t)
+    _per_unit(t, "gia_von", "don_gia_von")
+    _per_unit(t, "dt", "don_gia")
+    qty_unit = header_unit(t, "sl")
+    out = []
+    for n, v in t.rows:
+        qty, price, cost = num(t.get(v, "sl")), num(t.get(v, "don_gia")), num(t.get(v, "don_gia_von"))
+        revenue, cogs = num(t.get(v, "dt")), num(t.get(v, "gia_von"))
+        if qty is None:
+            t.skipped.append((n, "không có sản lượng"))
+            continue
+        if revenue is None and price is None:
+            t.skipped.append((n, "không có doanh thu hay giá bán"))
+            continue
+        month, month_no, fy = _plan_month(t.get(v, "thang"), t.get(v, "nam"), fy_start)
+        out.append(SkuPlanRow(
+            str(t.get(v, "phien_ban", default_version) or default_version).strip(), month,
+            str(t.get(v, "ma_hang", "") or "").strip(), qty,
+            revenue if revenue is not None else qty * price,
+            cogs if cogs is not None else qty * cost if cost is not None else ZERO,
+            str(t.get(v, "kenh", "") or "").strip(), str(t.get(v, "dvt", "") or "").strip() or qty_unit,
+            price if revenue is None else None, cost if cogs is None else None,
+            f"{t.sheet}!{n}", approved=day_of(t.get(v, "ngay_duyet")) if t.get(v, "ngay_duyet") else "",
+            month_no=month_no, fy=fy or file_fy, name=str(t.get(v, "ten_hang", "") or "").strip()))
+        out[-1].no_cost = cogs is None and cost is None
     return out
 
 
@@ -523,6 +682,8 @@ class Bundle:
     plans: list = field(default_factory=list)          # PlanRow, every version (AOP, revised, last year)
     fx: dict = field(default_factory=dict)
     sales: list = field(default_factory=list)
+    sku_plans: list = field(default_factory=list)      # SkuPlanRow, every version
+    sku_plan_totals: list = field(default_factory=list)  # (file, Table, [SkuPlanRow]) of each plan-by-SKU table
     cut: list = field(default_factory=list)            # (sheet, rows) of the cut parameters, read by the reviewer
     packs: list = field(default_factory=list)          # paths of BOD drafts
     receipt: list = field(default_factory=list)        # [(file, role, used rows, skipped [(row, reason)])]
@@ -595,6 +756,18 @@ def _try_plan(rows, sheet, version, fy_start, file_fy):
     return (t, out) if out else None
 
 
+def _try_sku_plan(rows, sheet, version, fy_start, file_fy, planned: bool):
+    """A plan by SKU: a SKU, a volume and a revenue or price, in a file named as a plan or with a version column.
+    Without either it is a sales ledger, read by _try_sales."""
+    t = read_table(rows, sheet, SKU_PLAN_SPEC, 3)
+    if t is None or not {"ma_hang", "sl"} <= set(t.columns) or not ({"dt", "don_gia"} & set(t.columns)):
+        return None
+    if not (planned or "phien_ban" in t.columns) or not ({"thang"} & set(t.columns)):
+        return None
+    out = read_sku_plan(t, version, fy_start, file_fy)
+    return (t, out) if out else None
+
+
 def _try_sales(rows, sheet, fy_start):
     t = read_table(rows, sheet, SALES_SPEC, 3)
     if t is None or not ({"dt_thuan", "dt"} & set(t.columns)) or not ({"kenh", "phap_nhan", "khoi"} & set(t.columns)):
@@ -628,7 +801,8 @@ def load(folder: Path, fy_start: int = 7) -> Bundle:
     for p in files:                                            # configuration first: its rules shape the rest
         if any(w in name_key(p.stem) for w in ("danh muc", "cau hinh", "config")):
             b.config = read_config(p)
-            b.receipt.append((p.name, "Cấu hình", len(b.config.depts) + len(b.config.elements) + len(b.config.channels), []))
+            b.receipt.append((p.name, "Cấu hình", len(b.config.depts) + len(b.config.elements) + len(b.config.channels)
+                              + len(b.config.skus), []))
         else:
             rest.append(p)
     fy = b.config.rule("thang bat dau") or b.config.rule("nien do")
@@ -663,8 +837,20 @@ def load(folder: Path, fy_start: int = 7) -> Bundle:
                  "plan": ("plan", "gl", "sales", "fx"), "fx": ("fx", "plan", "gl", "sales"),
                  "gl": ("gl", "plan", "sales", "fx")}.get(hint, ("fx", "gl", "plan", "sales"))
         for sheet, rows in sheets.items():
-            for kind in order:
-                if kind == "fx":
+            for kind in ("sku_plan",) + order:
+                if kind == "sku_plan":
+                    got = _try_sku_plan(rows, sheet, version, fy_start, file_fy, hint in ("plan", "prior"))
+                    if got:
+                        t, plan_rows = got
+                        for r in plan_rows:
+                            r.file = p.name
+                            if prior:
+                                r.version = r.version if r.version and r.version != "LY" else "thuc te"
+                        pending.append((plan_rows, prior))
+                        b.sku_plans += plan_rows
+                        b.sku_plan_totals.append((p.name, t, plan_rows))
+                        b.receipt.append((p.name, "Kế hoạch theo mã hàng", len(t.rows), t.skipped))
+                elif kind == "fx":
                     got = _try_fx(rows, sheet, hint, fy_start)
                     if got:
                         b.fx.update(got[1])
@@ -703,7 +889,7 @@ def load(folder: Path, fy_start: int = 7) -> Bundle:
 
 
 def _sale_key(s: Sale) -> tuple:
-    return s.month, s.net, key(s.site), key(s.division), key(s.channel)
+    return s.month, s.net, key(s.site), key(s.division), key(s.channel), key(s.sku), s.qty, s.cogs
 
 
 def _drop_sales_copies(b: Bundle, sources: list) -> list:
