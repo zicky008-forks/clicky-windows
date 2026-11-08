@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Optional
 
+from engine import opex_split
 from engine.bod_check import fiscal_year, fy_months
 from engine.fpa import _element_of, _month_text, pnl_line
 from engine.monthly_report import fmt
@@ -78,6 +79,8 @@ class Classified:
             return VERDICT[max(self.causes, key=lambda c: abs(c.amount)).kind]
         if abs(self.underlying) <= self.threshold:
             return VERDICT[SMALL]
+        if self.flex is not None:                    # a variable cost is judged against the flexed plan
+            return "vượt ngân sách linh hoạt" if self.underlying > 0 else "thấp hơn ngân sách linh hoạt"
         return "vượt kế hoạch" if self.underlying > 0 else "thấp hơn kế hoạch"
 
     @property
@@ -177,6 +180,7 @@ def classify(v, gl: list, plans: list, config=None, driver: Optional[tuple] = No
                  f"ngân sách linh hoạt {fmt(c.flex)} đ, phần theo sản lượng {fmt(c.flex - l.plan)} đ."))
         if not c.material:
             continue
+        private = opex_split.sensitive(l.element, next(iter(l.accounts), "") if l.accounts else "", config)
         mine = entries.get(k, [])
         now = [e for e in mine if e.period == v.period]
         earlier = [e for e in mine if e.period in before]
@@ -195,9 +199,13 @@ def classify(v, gl: list, plans: list, config=None, driver: Optional[tuple] = No
             for e in sorted((e for e in now if e.amount < 0), key=lambda e: e.amount):
                 hit = next((x for x in earlier if x.amount == -e.amount), None)
                 if hit is not None and abs(e.amount) <= abs(left):
+                    refs = (not private) and bool(e.ref or hit.ref)
                     take(CORRECTION, e.amount, f"Có {fmt(-e.amount)} đ ghi giảm"
-                         + (f" ({e.ref})" if e.ref else "") + f" điều chỉnh bút toán tháng {_month_text(hit.period)}"
-                         + (f" ({hit.ref})" if hit.ref else "") + ", không phải tiết kiệm.", [e.where, hit.where])
+                         + (f" ({e.ref})" if refs and e.ref else "")
+                         + f" điều chỉnh bút toán tháng {_month_text(hit.period)}"
+                         + (f" ({hit.ref})" if refs and hit.ref else "")
+                         + (f" ({opex_split.HELD.lower()})" if private else "") + ", không phải tiết kiệm.",
+                         [e.where, hit.where])
         # timing, late: the year to date before this month is on the other side of plan
         prev = sum((a.get(m, ZERO) - p.get(m, ZERO) for m in before), ZERO)
         gaps = [m for m in before if abs(a.get(m, ZERO) - p.get(m, ZERO)) > thr
@@ -226,10 +234,15 @@ def classify(v, gl: list, plans: list, config=None, driver: Optional[tuple] = No
                     continue                                  # a one-off is one line about the size of what is left
                 if any(_same(x.amount, e.amount) for x in earlier):
                     continue                                  # the same kind of line came before: not a one-off
-                named = ", ".join(x for x in (e.ref, e.text) if x)
-                take(ONE_OFF, min(abs(e.amount), abs(left)) * (1 if left > 0 else -1),
-                     "Khoản một lần" + (f" ({named})" if named else "")
-                     + f": {fmt(e.amount)} đ, các tháng trước không có khoản tương tự.", [e.where])
+                part = min(abs(e.amount), abs(left)) * (1 if left > 0 else -1)
+                if private:                           # pay names people: no reference, no text in a sentence
+                    text = (f"Khoản một lần ở {l.element_name or l.element}: {fmt(e.amount)} đ "
+                            f"({opex_split.HELD.lower()}), các tháng trước không có khoản tương tự.")
+                else:
+                    named = ", ".join(x for x in (e.ref, e.text) if x)
+                    text = ("Khoản một lần" + (f" ({named})" if named else "")
+                            + f": {fmt(e.amount)} đ, các tháng trước không có khoản tương tự.")
+                take(ONE_OFF, part, text, [e.where])
                 break
     return out
 

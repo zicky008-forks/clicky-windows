@@ -93,7 +93,7 @@ def test_each_story_gets_its_cause_and_the_underlying_figure():
     assert "PC7777, Phạt chậm nộp hồ sơ" in once.sentence() and once.causes[0].where
     fix = c[("HC", "LUONG")]
     assert (fix.reported, fix.underlying, fix.verdict, fix.alarm) == (-40 * M, 0, "điều chỉnh bút toán", False)
-    assert "điều chỉnh bút toán tháng 09/2026 (PK500), không phải tiết kiệm" in fix.sentence()
+    assert "điều chỉnh bút toán tháng 09/2026 (chi tiết do phòng nhân sự giữ), không phải tiết kiệm" in fix.sentence()
     freight = c[("KD", "VC")]
     assert (freight.reported, freight.flex, freight.underlying, freight.verdict) == (20 * M, 120 * M, 0, "theo sản lượng")
     over = c[("KD", "QC")]
@@ -118,7 +118,36 @@ def test_a_variable_cost_on_plan_when_volume_fell_is_over_the_flexed_plan():
     gl, plans = year(clean=True)
     v = fpa.compute(gl, plans, fy_start=1, config=CONFIG)
     x = next(c for c in vc.classify(v, gl, plans, CONFIG, (D(800 * M), D(1000 * M))) if c.line.element == "VC")
-    assert (x.reported, x.flex, x.underlying, x.material, x.verdict) == (0, 80 * M, 20 * M, True, "vượt kế hoạch")
+    assert (x.reported, x.flex, x.underlying, x.material, x.verdict) == (0, 80 * M, 20 * M, True,
+                                                                         "vượt ngân sách linh hoạt")
+
+
+def test_a_variable_cost_below_the_flexed_plan_says_so():
+    gl, plans = year(clean=True)
+    v = fpa.compute(gl, plans, fy_start=1, config=CONFIG)
+    x = next(c for c in vc.classify(v, gl, plans, CONFIG, (D(1300 * M), D(1000 * M))) if c.line.element == "VC")
+    assert (x.reported, x.flex, x.underlying, x.verdict) == (0, 130 * M, -30 * M, "thấp hơn ngân sách linh hoạt")
+    assert x.sentence().endswith("Số thực chất chênh -30.000.000 đ, thấp hơn ngân sách linh hoạt.")
+
+
+def test_a_one_off_or_correction_on_pay_never_names_the_person():
+    gl, plans = year()
+    for e in gl:
+        if (e.dept, e.element, e.ref) == ("HC", "LUONG", "PK500"):
+            e.text = "Thưởng – Nguyễn Văn An"
+    plans += [PlanRow("AOP", m, D(0), dept="KD", element="THUONG", file="AOP.xlsx") for m in MONTHS]
+    gl.append(Entry(PERIOD, D(25 * M), dept="KD", element="THUONG", account="6421", ref="PC8888",
+                    text="Thưởng dự án – Trần Thị Bình", where="GL!999"))
+    cfg = Config(rules={"yeu to bien doi": "VC"}, elements={"THUONG": {"ten": "Thưởng"}, "LUONG": {"ten": "Lương"}})
+    v = fpa.compute(gl, plans, fy_start=1, config=cfg)
+    c = {(x.line.dept, x.line.element): x for x in vc.classify(v, gl, plans, cfg, REVENUE)}
+    bonus, fix = c[("KD", "THUONG")], c[("HC", "LUONG")]
+    assert bonus.verdict == "khoản một lần" and fix.verdict == "điều chỉnh bút toán"
+    said = bonus.sentence() + fix.sentence()
+    for secret in ("Trần Thị Bình", "Nguyễn Văn An", "PC8888", "PK500", "PK610"):
+        assert secret not in said, secret
+    assert "Khoản một lần ở Thưởng: 25.000.000 đ (chi tiết do phòng nhân sự giữ)" in bonus.sentence()
+    assert bonus.causes[0].where == ["GL!999"]                      # the audit trail keeps the cell
 
 
 def test_without_a_driver_a_variable_cost_is_judged_on_plan():
