@@ -796,6 +796,7 @@ def main():
     from office.opex_skill import args as opex_args, reply_args as opex_reply_args
     from office.fpa_skill import args as fpa_args
     from office.forecast_skill import args as forecast_args
+    from office.hoi_dap_skill import args as hoi_dap_args
     from office.drop import args as drop_args
 
     # ── Global hotkey ─────────────────────────────────────────────────────────
@@ -867,6 +868,8 @@ def main():
         QTimer.singleShot(800, lambda: manager.submit_fpa(fpa_args(sys.argv)))
     elif forecast_args(sys.argv):
         QTimer.singleShot(800, lambda: manager.submit_forecast(forecast_args(sys.argv)))
+    elif hoi_dap_args(sys.argv):
+        QTimer.singleShot(800, lambda: manager.submit_hoi_dap(*hoi_dap_args(sys.argv)))
     elif opex_args(sys.argv):
         QTimer.singleShot(800, lambda: manager.submit_opex(opex_args(sys.argv)))
     elif opex_reply_args(sys.argv):

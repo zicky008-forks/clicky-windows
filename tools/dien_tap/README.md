@@ -253,6 +253,35 @@ Robot chép case sang thư mục kết quả, tự cộng số cả năm từ ch
 
 Mã thoát: 0 = ĐẠT, 1 = KHÔNG ĐẠT, 2 = không chạy được.
 
+### Diễn tập hỏi đáp BOD
+
+```
+python tools\dien_tap\tao_case_chi_phi.py --out <thu_muc_moi> --du-bao
+python tools\dien_tap\hoi_dap_robot.py --thu-muc <thu_muc_moi>
+```
+
+Robot chép case sang thư mục kết quả và tự viết file câu hỏi `cau-hoi-bod.txt` gồm 10 câu. Trong đó có câu hỏi tiếp (dòng bắt đầu bằng `+`), một bộ phận không có trong báo cáo, câu về giá bán (case không có sổ bán hàng nên không có cầu nối), câu về cùng kỳ năm trước và một câu lạc đề.
+
+Robot mở Clicky ba lần, lần lượt với `--fpa-report <case>`, `--forecast <case>` và `--hoi-dap <case> --cau-hoi cau-hoi-bod.txt`. Lần nào cũng có `CLICKY_LOCAL_ONLY=1`, `CLICKY_OUTLOOK=0` và không dùng cấu hình công ty trên máy. Sau đó robot hỏi lại đúng các câu đó qua hàm chat của Clicky để so với câu trả lời trong file.
+
+**Cổng ĐẠT** (robot đọc file bằng code riêng của robot):
+
+- câu nào cũng có trả lời và trạng thái;
+- mọi số trích ra đúng bằng ô của nó trong báo cáo hoặc bản dự báo đã lưu;
+- không có số nào trong câu trả lời mà thiếu nguồn;
+- chi phí hoạt động tháng, lũy kế và cả năm ước đúng từng đồng với số robot tự cộng từ file của case;
+- câu hỏi về bộ phận được trả lời bằng các dòng của đúng bộ phận đó, không bao giờ trả lời bằng tổng chi phí;
+- câu báo cáo chưa có số thì ghi "chưa có số" và không có con số nào;
+- câu lạc đề thì ghi "không hiểu câu hỏi";
+- hỏi trong chat ra đúng câu trả lời như trong file;
+- báo cáo không bị sửa (sha256 trùng với mã mà mọi câu trả lời ghi), file của case không bị sửa;
+- nhật ký không ghi lời câu hỏi, chỉ ghi số câu và trạng thái;
+- bản hỏi đáp đã mở lại kiểm tra khớp, và không có lỗi.
+
+Mã thoát: 0 = ĐẠT, 1 = KHÔNG ĐẠT, 2 = không chạy được.
+
+Trong chat, người dùng gõ `hỏi: <câu hỏi>` để hỏi mới, hoặc `hỏi tiếp: <câu hỏi>` để hỏi tiếp câu vừa rồi. Câu trả lời lấy số từ báo cáo FP&A mới nhất mà Clicky đã làm trong thư mục, và từng câu được ghi vào `hoi-dap.jsonl` cạnh báo cáo.
+
 ### Power Query khởi động trong lúc đọc phiếu (bản 82a0f2f trở đi)
 
 Trong lúc phiếu nhận file chờ chị bấm, Clicky mở một sổ ẩn của riêng nó ở chế độ chỉ đọc, `%LOCALAPPDATA%\Clicky\khoi-dong\clicky-khoi-dong.xlsx`, để Power Query khởi động sẵn. Robot không tính sổ này là file của người dùng. Robot chỉ hỏi Excel đúng tên này và không đọc tên file nào khác.

@@ -1040,6 +1040,28 @@ class CompanionManager(QObject):
                 self._current_task = None
                 self._emit_state(AppState.IDLE)
 
+    def submit_hoi_dap(self, folder: str, questions: str):
+        """Every BOD question of a file answered from the saved report, e.g. from Clicky.exe --hoi-dap --cau-hoi."""
+        self.stop()
+        self._request_future = self._submit(self._process_hoi_dap(folder, questions))
+
+    async def _process_hoi_dap(self, folder: str, questions: str):
+        from office import hoi_dap_skill
+        self._current_task = asyncio.current_task()
+        self._cancel_flag = False
+        self._emit_state(AppState.THINKING)
+        try:
+            await hoi_dap_skill.run(self, Path(folder), Path(questions))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("BOD Q&A failed")
+            self.sig_error.emit("Em chưa trả lời được file câu hỏi. Báo cáo của chị không bị thay đổi gì.")
+        finally:
+            if self._current_task is asyncio.current_task():
+                self._current_task = None
+                self._emit_state(AppState.IDLE)
+
     def submit_opex(self, folder: str, replies: bool = False):
         """Split the month's costs per department (or read their answers) in a folder, e.g. from
         Clicky.exe --opex-split / --opex-replies."""

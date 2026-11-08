@@ -54,8 +54,10 @@ def load_all() -> list[dict]:
         _try_import(f)
 
     # Built-in skills imported as modules, so they also load from the frozen .exe
-    from office import (bod_skill, drop, forecast_skill, fpa_skill, lich_skill, month_close, opex_skill, pq_skill,
-                        report_skill, sample)
+    from office import (bod_skill, drop, forecast_skill, fpa_skill, hoi_dap_skill, lich_skill, month_close, opex_skill,
+                        pq_skill, report_skill, sample)
+    for skill in hoi_dap_skill.SKILLS:        # "hỏi: …" first: the question's own words may name any other skill
+        _register(dict(skill))
     for skill in bod_skill.SKILLS:            # "soát bộ BOD" before "báo cáo" words
         _register(dict(skill))
     for skill in lich_skill.SKILLS:           # "hôm nay làm gì": the month's calendar
