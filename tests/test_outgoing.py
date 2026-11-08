@@ -442,3 +442,10 @@ def test_card_shows_the_three_consent_lines(qt_app):
     assert card.consent_text() == {"to": "Anthropic, công ty làm AI Claude", "where": "api.anthropic.com",
                                    "what": "1 dòng số liệu đã che tên"}
     card.send_button.click()
+
+
+def test_the_bien_ban_clock_can_be_fixed_for_a_comparison(monkeypatch):
+    """CI 11-08: two runs straddled 07:58 → 07:59 and the Biên bản rows differed, though audit.now was fixed."""
+    from engine import audit
+    monkeypatch.setattr(audit, "now", lambda: "09:30")
+    assert audit.Change("C1", "x", 0, 1, "y").at == "09:30"

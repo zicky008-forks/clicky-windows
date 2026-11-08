@@ -39,7 +39,7 @@ class Change:
     reason: str
     agreed: str = AUTO
     source: str = ""
-    at: str = field(default_factory=now)
+    at: str = field(default_factory=lambda: now())     # looked up at each change, so a test can fix the clock
 
 
 @dataclass
