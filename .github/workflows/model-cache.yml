@@ -1,0 +1,45 @@
+name: Voice model cache
+# Actions caches are scoped to a branch: one saved inside a pull request run is invisible to every
+# other pull request. This job saves the SHA-checked model archives on a branch (main, or the
+# integration branch), where every pull request into it can restore them. build.yml and
+# voice-check.yml restore this cache, so an upstream outage of the model downloads does not break them.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1'          # weekly, so the cache on main is never evicted for disuse
+  push:
+    branches: [main, claude/project-thread-vrczum]
+    paths:
+      - tools/giong_noi/tai_model.py
+      - .github/workflows/model-cache.yml
+jobs:
+  seed:
+    runs-on: windows-latest        # the same OS as the jobs that restore it
+    timeout-minutes: 20
+    env:
+      PYTHONIOENCODING: utf-8
+      CLICKY_MODEL_CACHE: ~/clicky-model-cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - id: models
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/clicky-model-cache
+          key: models-v2-${{ hashFiles('tools/giong_noi/tai_model.py') }}
+          restore-keys: models-v2-
+      # One step per archive: pwsh only fails a step on its last command's exit code, so a failed download
+      # in a multi-line step was missed and a partial cache was saved. A failed step stops the job before saving.
+      - if: steps.models.outputs.cache-hit != 'true'
+        run: python -m pip install sentencepiece
+      - if: steps.models.outputs.cache-hit != 'true'
+        run: python tools/giong_noi/tai_model.py --model 70k --out "$env:RUNNER_TEMP/asr-vi"
+      - if: steps.models.outputs.cache-hit != 'true'
+        run: python tools/giong_noi/tai_model.py --model piper-vais1000 --out "$env:RUNNER_TEMP/tts-piper-vi"
+      - if: steps.models.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/clicky-model-cache
+          key: models-v2-${{ hashFiles('tools/giong_noi/tai_model.py') }}
