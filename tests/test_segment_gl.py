@@ -100,3 +100,69 @@ def test_a_closing_journal_is_kept_for_the_books_and_never_counted_as_a_cost(tmp
     assert _line(v, "Kinh doanh · Lương").actual == 420 * M                 # the closing entry is not a cost
     assert _line(v, "Hành chính · Lương").actual == 311 * M                 # 'kết chuyển' in a description is
     assert any(p.contra == "911" and p.cr == 420 * M for p in b.postings)
+
+
+# ── Shapes an ERP export really has ─────────────────────────────────────────
+
+def _load_a(tmp_path, extra):
+    return bod_inputs.load(sg.folder(tmp_path / "A", "A", extra), fy_start=1)
+
+
+def test_a_journal_that_posts_to_911_is_closing_whatever_its_category(tmp_path):
+    close = [sg._a("0000", "511100", dr=sg.REVENUE, journal="JE-KC", category="Manual", text="Kết chuyển"),
+             sg._a("0000", "911000", cr=sg.REVENUE, journal="JE-KC", category="Manual", text="Kết chuyển"),
+             sg._a("0000", "911000", dr=420 * M, journal="JE-KC2", category="Manual", text="Kết chuyển"),
+             sg._a("2100", "641100", cr=420 * M, journal="JE-KC2", category="Manual", text="Kết chuyển")]
+    b = _load_a(tmp_path, close)
+    v = fpa.compute(b.gl, [], fy_start=1, config=b.config)
+    assert _line(v, "Kinh doanh · Lương").actual == 420 * M                 # not zeroed by the closing entry
+    closing = [p for p in b.postings if p.contra == "911"]
+    assert len(closing) == 4 and {p.account for p in closing} == {"5111", "911", "6411"}
+
+
+def test_a_provision_journal_in_segment_form_is_a_known_cause_not_a_warning(tmp_path):
+    from engine import sales_pnl
+    from engine.bod_inputs import Sale
+    provision = [sg._a("0000", "632000", dr=3 * M, journal="JE-DP", text="Trích lập dự phòng"),
+                 sg._a("0000", "229400", cr=3 * M, journal="JE-DP", text="Trích lập dự phòng")]
+    b = _load_a(tmp_path, provision)
+    sales = [Sale("2026-10", Decimal(sg.REVENUE), sku="X1", qty=Decimal(1), cogs=Decimal(sg.COGS), where="AR!2")]
+    m = sales_pnl.match_gl(sales, b.postings, "2026-10", b.config)
+    cogs = next(l for l in m.lines if l.code == "cogs")
+    assert m.ok and cogs.causes == [("trích lập dự phòng giảm giá hàng tồn kho (Có TK 2294)", -3 * M)]
+    assert m.warnings() == [] and m.notes()[0].startswith("Lưu ý: giá vốn hàng bán trên sổ cao hơn")
+
+
+def test_adjusting_and_13th_periods_are_named_never_merged_into_a_month(tmp_path):
+    adj = [sg._a("2100", "641100", dr=9 * M, period="ADJ-26", text="Điều chỉnh"),
+           sg._a("3100", "642700", dr=4 * M, period="DEC-26 ADJ", text="Điều chỉnh"),
+           sg._a("2200", "641800", dr=6 * M, period="13-2026", text="Kỳ 13")]
+    b = _load_a(tmp_path, adj)
+    v = fpa.compute(b.gl, [], fy_start=1, config=b.config)
+    assert _line(v, "Kinh doanh · Lương").actual == 420 * M and all(e.period <= "2026-12" for e in b.gl)
+    said = b.segment_gls[0].said()
+    assert said[:3] == ["Kỳ điều chỉnh 13-2026: 1 dòng, phát sinh Nợ 6.000.000 đ, em không gộp vào tháng nào; chị cho "
+                        "biết gộp vào tháng nào",
+                        "Kỳ điều chỉnh ADJ-26: 1 dòng, phát sinh Nợ 9.000.000 đ, em không gộp vào tháng nào; chị cho "
+                        "biết gộp vào tháng nào",
+                        "Kỳ điều chỉnh DEC-26 ADJ: 1 dòng, phát sinh Nợ 4.000.000 đ, em không gộp vào tháng nào; chị "
+                        "cho biết gộp vào tháng nào"]
+    assert bod_inputs.month_key("13-2026") is None and bod_inputs.month_key("10-2026") == "2026-10"
+
+
+def test_an_account_mapping_file_is_not_a_segment_map(tmp_path):
+    d = tmp_path / "F"
+    d.mkdir()
+    sg.write_xlsx(d / "mapping TK cũ mới.xlsx", {"Map": [["TK cũ", "TK mới"], ["6411", "64111"]]})
+    b = bod_inputs.load(d, fy_start=1)
+    assert b.segment_map is None and not any("Ánh xạ phân đoạn" in r[1] for r in b.receipt)
+    assert any(name == "mapping TK cũ mới.xlsx" for name, _why in b.unused)          # left in the normal flow
+
+
+def test_two_segment_maps_are_both_named_and_neither_used(tmp_path):
+    d = sg.folder(tmp_path / "A", "A")
+    sg.write_xlsx(d / "Segment mapping v2.xlsx", {"Segments": sg.B_SEGMENTS, "Map": sg.B_MAP})
+    b = bod_inputs.load(d, fy_start=1)
+    assert b.segment_map is None and b.segment_gls == []
+    named = [r for r in b.receipt if r[1].startswith("Ánh xạ phân đoạn, chưa dùng: thư mục có 2 file ánh xạ")]
+    assert sorted(r[0] for r in named) == ["AnhXa_PhanDoan.xlsx", "Segment mapping v2.xlsx"]

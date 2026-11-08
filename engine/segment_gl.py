@@ -28,6 +28,7 @@ from typing import Optional
 
 from engine.bod_inputs import CONFIG_SPECS, Posting, month_key, name_key, num
 from engine.bod_review import Entry
+from engine.monthly_report import fmt
 from engine.tables import Table, key, read_table, sheets_of
 
 ZERO = Decimal(0)
@@ -52,6 +53,7 @@ MAP_SPEC = {"phan_doan": ["phan doan", "segment", "vai tro"],
             "tk": ["tk vas", "tai khoan vas", "tk", "so hieu tk"],
             "ten": ["ten", "dien giai", "description", "ten hien thi"]}
 CLOSING = re.compile(r"\b(ket chuyen|closing|close|year end|cuoi nam)\b")
+ADJUSTING = re.compile(r"\b(adj|adjust\w*|dieu chinh|dc|13)\b")
 
 
 def is_map_file(stem: str) -> bool:
@@ -166,9 +168,11 @@ class SegmentGL:
     postings: list = field(default_factory=list)         # Posting: every line
     unknown: dict = field(default_factory=dict)          # role -> {code: lines} codes the map does not have
     delimiter: str = ""
+    adjusting: dict = field(default_factory=dict)        # period as printed -> (lines, Nợ total): adjusting periods
 
     def said(self) -> list:
-        out = []
+        out = [f"Kỳ điều chỉnh {label}: {n} dòng, phát sinh Nợ {fmt(amount)} đ, em không gộp vào tháng nào; "
+               "chị cho biết gộp vào tháng nào" for label, (n, amount) in sorted(self.adjusting.items())]
         for role, codes in self.unknown.items():
             if codes:
                 listed = sorted(codes)
@@ -211,6 +215,7 @@ def read_segment_gl(rows: list, sheet: str, smap: SegmentMap, fy_start: int = 7)
         return None
     g = SegmentGL(t, delimiter=delim)
     roles = {s.role: i for i, s in enumerate(smap.segments) if s.role}
+    lines = []
     for n, v in t.rows:
         if combo is not None:
             raw = str(v[combo]).strip() if combo < len(v) and v[combo] is not None else ""
@@ -227,19 +232,64 @@ def read_segment_gl(rows: list, sheet: str, smap: SegmentMap, fy_start: int = 7)
                 continue
             dr, cr = max(amount, ZERO), max(-amount, ZERO)
         dr, cr = dr or ZERO, cr or ZERO
-        _ingest(g, smap, roles, parts, dr, cr, t, v, n, fy_start)
+        period, adjusting = _period(t.get(v, "ky"), t.get(v, "ngay"), fy_start)
+        if adjusting:
+            n_adj, amt = g.adjusting.get(adjusting, (0, ZERO))
+            g.adjusting[adjusting] = (n_adj + 1, amt + dr)
+            t.skipped.append((n, f"kỳ điều chỉnh {adjusting}: em không gộp vào tháng nào"))
+            continue
+        lines.append(_Line(n, v, parts, dr, cr, period, _look(g, smap, roles, parts)))
+    _journals(lines, t)
+    for line in lines:
+        _ingest(g, smap, line, t)
     return g
 
 
-def _prefer_accounted(t: Table) -> None:
-    """'Accounted Dr/Cr' are in the books' currency; 'Entered Dr/Cr' in the document's. Take accounted when both."""
-    for f, word in (("ps_no", "accounted dr"), ("ps_co", "accounted cr")):
-        hit = next((c for c, h in enumerate(t.headers) if key(h) == word), None)
-        if hit is not None:
-            t.columns[f] = hit
+@dataclass
+class _Line:
+    n: int
+    v: list
+    parts: list
+    dr: Decimal
+    cr: Decimal
+    period: str
+    look: dict                          # what the map says: account, element, dept, names, missing codes
+    contra: str = ""
+    closing: bool = False
 
 
-def _ingest(g: SegmentGL, smap: SegmentMap, roles: dict, parts: list, dr, cr, t: Table, v, n: int, fy_start: int):
+def _period(ky, ngay, fy_start: int) -> tuple:
+    """(period 'YYYY-MM', '') or ('', the period as printed) for an adjusting or 13th period, or a period name that
+    cannot be read: those are named, never merged into a month by the GL date."""
+    text = str(ky or "").strip()
+    if text:
+        got = month_key(text, None, None, fy_start)
+        if got and 1 <= int(got[5:]) <= 12 and not ADJUSTING.search(key(text)):
+            return got, ""
+        return "", text
+    return month_key(None, ngay) or "", ""
+
+
+def _journals(lines: list, t: Table) -> None:
+    """Per journal (its name or number, within its period): every line of a journal that posts to 911 is a closing
+    entry, whatever its category says; and a line's contra account is the one account on the journal's other side,
+    when there is exactly one (a provision Nợ 632 / Có 2294 says 2294)."""
+    by = {}
+    for line in lines:
+        ref = str(t.get(line.v, "so_ct", "") or "").strip()
+        if ref:
+            by.setdefault((ref, line.period), []).append(line)
+    for group in by.values():
+        closing = any(l.look["account"].startswith("911") for l in group)
+        debit = {l.look["account"] for l in group if l.dr and not l.cr}
+        credit = {l.look["account"] for l in group if l.cr and not l.dr}
+        for l in group:
+            l.closing = closing
+            other = credit if l.dr and not l.cr else debit if l.cr and not l.dr else set()
+            l.contra = "911" if closing else (next(iter(other)) if len(other) == 1 else "")
+
+
+def _look(g: SegmentGL, smap: SegmentMap, roles: dict, parts: list) -> dict:
     code = {role: parts[i] for role, i in roles.items()}
     looked, missing = {}, []
     for role, c in code.items():
@@ -258,22 +308,34 @@ def _ingest(g: SegmentGL, smap: SegmentMap, roles: dict, parts: list, dr, cr, t:
         # sheet line carries a default cost centre); a department fpa names itself, against the map's departments.
         if role == "account" or (cost and role != "dept"):
             g.unknown.setdefault(role, Counter())[c] += 1
-    dept_row = looked.get("dept", {})
-    dept = dept_row.get("bo_phan") or code.get("dept", "")
     name = lambda role: (looked.get(role, {}) or {}).get("ten") or code.get(role, "")   # noqa: E731
-    period = month_key(t.get(v, "ky"), t.get(v, "ngay"), None, fy_start) or month_key(t.get(v, "ngay")) or ""
+    return {"account": account, "element": element, "cost": cost,
+            "dept": looked.get("dept", {}).get("bo_phan") or code.get("dept", ""),
+            "division": name("division"), "site": name("site"), "channel": name("channel")}
+
+
+def _prefer_accounted(t: Table) -> None:
+    """'Accounted Dr/Cr' are in the books' currency; 'Entered Dr/Cr' in the document's. Take accounted when both."""
+    for f, word in (("ps_no", "accounted dr"), ("ps_co", "accounted cr")):
+        hit = next((c for c, h in enumerate(t.headers) if key(h) == word), None)
+        if hit is not None:
+            t.columns[f] = hit
+
+
+def _ingest(g: SegmentGL, smap: SegmentMap, line: _Line, t: Table) -> None:
+    v, look = line.v, line.look
     text = str(t.get(v, "dien_giai", "") or "").strip()
-    where = f"{t.sheet}!{n}"
-    # Only a journal category or source that says closing marks a closing entry: 'kết chuyển' in a line's
-    # description is also how an allocation or a prepaid release is written, and that is a real cost.
-    closing = bool(CLOSING.search(key(t.get(v, "loai", "") or "")))
-    g.postings.append(Posting(period, account, dr=dr, cr=cr, contra="911" if closing else "", where=where, text=text))
-    if cost:
-        if closing:
-            return                                     # the closing entry to 911 is not a cost
-        g.entries.append(Entry(period, dr - cr, division=name("division"), site=name("site"), channel=name("channel"),
-                               dept=dept, element=element, account=account, ref=str(t.get(v, "so_ct", "") or "").strip(),
-                               text=text, where=where, side="cr" if cr and not dr else "dr"))
+    where = f"{t.sheet}!{line.n}"
+    # A closing journal: its category says so, or it posts to 911. Never its description: 'kết chuyển' is also how
+    # an allocation or a prepaid release is written, and that is a real cost.
+    closing = line.closing or bool(CLOSING.search(key(t.get(v, "loai", "") or "")))
+    g.postings.append(Posting(line.period, look["account"], dr=line.dr, cr=line.cr,
+                              contra="911" if closing else line.contra, where=where, text=text))
+    if look["cost"] and not closing:
+        g.entries.append(Entry(line.period, line.dr - line.cr, division=look["division"], site=look["site"],
+                               channel=look["channel"], dept=look["dept"], element=look["element"],
+                               account=look["account"], ref=str(t.get(v, "so_ct", "") or "").strip(), text=text,
+                               where=where, side="cr" if line.cr and not line.dr else "dr"))
 
 
 def catalogue(smap: SegmentMap) -> tuple:

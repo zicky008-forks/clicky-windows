@@ -31,7 +31,8 @@ A_MAP = [["Phân đoạn", "Mã", "Bộ phận", "Tên bộ phận", "Yếu tố
          ["Tài khoản", "642700", "", "", "THUE", "Thuê văn phòng", "6427"],
          ["Tài khoản", "5111*", "", "", "", "", "5111"], ["Tài khoản", "632000", "", "", "", "", "632"],
          ["Tài khoản", "131000", "", "", "", "", "131"], ["Tài khoản", "331000", "", "", "", "", "331"],
-         ["Tài khoản", "334000", "", "", "", "", "334"], ["Tài khoản", "156*", "", "", "", "", "156"]]
+         ["Tài khoản", "334000", "", "", "", "", "334"], ["Tài khoản", "156*", "", "", "", "", "156"],
+         ["Tài khoản", "2294*", "", "", "", "", "2294"], ["Tài khoản", "911*", "", "", "", "", "911"]]
 A_CC = {"KD": "2100", "MKT": "2200", "HC": "3100"}
 A_ACC = {"6411": "641100", "6418": "641800", "6421": "642100", "6427": "642700"}
 A_HEADER = ["Period", "GL Date", "Journal Name", "Category", "Account", "Line Description", "Accounted Dr",
@@ -43,7 +44,7 @@ def _a(cc, acct, dr=0, cr=0, period="OCT-26", text="", journal="JE-001", categor
             f"10-{cc}-{acct}-000-00", text, dr or "", cr or ""]
 
 
-def ledger_a() -> list:
+def ledger_a(extra: list = ()) -> list:
     rows = [A_HEADER]
     for dept, _e, vas, amount in OPEX:
         rows.append(_a(A_CC[dept], A_ACC[vas], dr=amount, text=f"Chi phí {dept}"))
@@ -61,6 +62,7 @@ def ledger_a() -> list:
     rows.append(_a(A_CC[d], A_ACC[vas], dr=amount, period="SEP-26", text="Thuê văn phòng T9"))
     rows.append(["OCT-26", "31/10/2026", "JE-002", "Manual", "10-2100-641100", "Thiếu phân đoạn", 1 * M, ""])
     rows.append(["OCT-26", "31/10/2026", "JE-003", "Manual", "10-2100-641100-000-00", "Dòng không có số tiền", "", ""])
+    rows += [list(r) for r in extra]
     rows.append(["Total", "", "", "", "", "", "", ""])
     return rows
 
@@ -138,11 +140,11 @@ def write_xlsx(path: Path, sheets: dict) -> Path:
     return path
 
 
-def folder(path: Path, layout: str = "A") -> Path:
+def folder(path: Path, layout: str = "A", extra: list = ()) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     if layout == "A":
         write_xlsx(path / "AnhXa_PhanDoan.xlsx", {"Phân đoạn": A_SEGMENTS, "Ánh xạ": A_MAP})
-        write_csv(path / "GL_T10_2026.csv", ledger_a())
+        write_csv(path / "GL_T10_2026.csv", ledger_a(extra))
     else:
         write_xlsx(path / "Segment mapping.xlsx", {"Segments": B_SEGMENTS, "Map": B_MAP, "Tham số": B_PARAMS})
         write_xlsx(path / "GL export Oct 2026.xlsx", {"GL": ledger_b()})

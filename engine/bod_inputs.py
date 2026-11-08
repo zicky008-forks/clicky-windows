@@ -168,7 +168,8 @@ def month_key(thang, ngay=None, nam=None, fy_start: int = 7) -> Optional[str]:
         return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}"
     m = re.fullmatch(r"(?:T|th|thang\s*)?(\d{1,2})[-/.](20\d\d)", s, re.I)
     if m:
-        return f"{int(m.group(2)):04d}-{int(m.group(1)):02d}"
+        # '13-2026' is a 13th (adjusting) period, never a month
+        return f"{int(m.group(2)):04d}-{int(m.group(1)):02d}" if 1 <= int(m.group(1)) <= 12 else None
     m = re.fullmatch(r"(?:T|th|thang\s*)?(\d{1,2})(?:\.0)?", s, re.I)
     if m and 1 <= int(m.group(1)) <= 12:
         month = int(m.group(1))
@@ -842,12 +843,24 @@ def load(folder: Path, fy_start: int = 7) -> Bundle:
                    and not p.name.startswith("~$"))
     rest = []
     from engine import segment_gl
-    maps = [p for p in files if segment_gl.is_map_file(p.stem)]
-    for p in maps:                                             # the segment map first: it says how to read the GL
-        b.segment_map = segment_gl.read_map(p)
-        b.receipt.append((p.name, "Ánh xạ phân đoạn", len(b.segment_map.segments)
-                          + sum(len(x) for x in b.segment_map.codes.values()), []))
-    files = [p for p in files if p not in maps]
+    maps = []                                                  # the segment map first: it says how to read the GL
+    for p in files:
+        if segment_gl.is_map_file(p.stem):
+            try:
+                found = segment_gl.read_map(p)
+            except Exception:                                  # noqa: BLE001 - not a map: it goes on as any file
+                continue
+            if found.segments:                                 # 'mapping TK cũ mới' maps accounts, not segments
+                maps.append((p, found))
+    for p, found in maps:
+        n = len(found.segments) + sum(len(x) for x in found.codes.values())
+        if len(maps) == 1:
+            b.segment_map = found
+            b.receipt.append((p.name, "Ánh xạ phân đoạn", n, []))
+        else:                                                  # two maps: never pick one by name or date
+            b.receipt.append((p.name, f"Ánh xạ phân đoạn, chưa dùng: thư mục có {len(maps)} file ánh xạ, chị chọn "
+                                      "một file", n, []))
+    files = [p for p in files if p not in [x for x, _m in maps]]
     for p in files:                                            # configuration first: its rules shape the rest
         if any(w in name_key(p.stem) for w in ("danh muc", "cau hinh", "config")):
             b.config = read_config(p)
