@@ -338,6 +338,91 @@ def test_actual_by_account_and_plan_by_element_name_pair_on_every_line(tmp_path)
     assert not [c for c in m.classified if c.material and c.verdict and "vượt" in c.verdict and not c.line.plan]
 
 
+# The cost element named only in a catalogue map: account -> element, many accounts per element, an account name
+# beside it. Synthetic sub-accounts; the element is found by what its column holds, never by its header.
+K8_MAP = (("641101", "Lương nhân viên bán hàng", "Lương"), ("641102", "Phụ cấp bán hàng", "Lương"),
+          ("641401", "Khấu hao xe bán hàng", "Khấu hao"), ("641801", "Chi phí bán hàng khác", "Chi khác"),
+          ("642101", "Lương quản lý", "Lương"), ("642401", "Khấu hao văn phòng", "Khấu hao"),
+          ("642701", "Dịch vụ thuê ngoài", "Chi khác"))
+K8_MAP_SPEND = {("KD", "641101"): 250, ("KD", "641102"): 50, ("KD", "641401"): 40, ("KD", "641801"): 55,
+                ("HC", "642101"): 280, ("HC", "642401"): 20, ("HC", "642701"): 115}
+
+
+def _map_folder(tmp_path, name, plan_element_head, map_head):
+    d = tmp_path / name
+    d.mkdir()
+    gl = [["Ngày CT", "Số CT", "Tháng", "Năm", "TK Nợ", "TK Có", "Mã phòng ban", "Diễn giải", "Số tiền"]]
+    for mo in range(1, 11):
+        for (dept, acct), v in K8_MAP_SPEND.items():
+            gl.append([f"20/{mo:02d}/2026", f"C{mo}{acct}{dept}", str(mo), "2026", acct, "331", dept, "Chi", str(v * M)])
+    fs.write_csv(d / "SoChiTiet_2026.csv", gl)
+    element = {a: e for a, _n, e in K8_MAP}
+    planned = {}
+    for (dept, acct), v in K8_MAP_SPEND.items():
+        planned[(dept, element[acct])] = planned.get((dept, element[acct]), 0) + v + 10
+    plan = [["Phiên bản", "Năm", "Tháng", "Mã phòng ban", plan_element_head, "Số tiền"]]
+    for mo in range(1, 13):
+        for (dept, e), v in sorted(planned.items()):
+            plan.append(["AOP", "2026", str(mo), dept, e, str(v * M)])
+    fs.write_csv(d / "AOP_2026.csv", plan)
+    fs.write_xlsx(d / "Danh muc.xlsx", {"Phòng ban": fs.DEPT_SHEET,
+                                        "Map TK": [map_head] + [[a, n, e] for a, n, e in K8_MAP]})
+    return d, planned
+
+
+def _pairs_on_every_line(d, planned):
+    m = fpa_report.compute(d)
+    lines = m.costs.ytd
+    assert sorted((l.dept, l.element) for l in lines) == sorted(planned)
+    assert not [l for l in lines if not l.actual or not l.plan]         # no "TK 6411xx", no line with one side only
+    kd = next(l for l in lines if (l.dept, l.element) == ("KD", "Lương"))
+    assert (kd.actual, kd.plan) == (3000 * M, 3200 * M) and kd.label == "Kinh doanh · Lương"
+    assert not [x for x in m.costs.left_out() if "không có mã yếu tố" in x]
+    return m
+
+
+def test_a_catalogue_map_gives_each_account_its_element_not_its_account_name(tmp_path):
+    d, planned = _map_folder(tmp_path, "k8map", "Yếu tố chi phí",
+                             ["Số hiệu TK", "Tên tài khoản", "Yếu tố chi phí quản trị"])
+    _pairs_on_every_line(d, planned)
+
+
+def test_the_element_column_is_found_by_what_it_holds_under_any_header(tmp_path):
+    # Other wording, same shapes: the plan says 'Nhóm chi phí' and the map's element column has a header no list
+    # holds, beside the account's name under 'Diễn giải' or 'Tên TK'.
+    d, planned = _map_folder(tmp_path, "k8other", "Nhóm chi phí", ["Tài khoản", "Diễn giải", "Phân loại QT"])
+    _pairs_on_every_line(d, planned)
+    d2, planned2 = _map_folder(tmp_path, "k8name", "Nhóm chi phí", ["Tài khoản", "Tên TK", "Phân loại QT"])
+    _pairs_on_every_line(d2, planned2)
+
+
+def test_accounts_written_with_x_map_every_sub_account(tmp_path):
+    d, planned = _map_folder(tmp_path, "k8x", "Yếu tố chi phí", ["Số hiệu TK", "Tên tài khoản", "Yếu tố chi phí quản trị"])
+    rows = [["Số hiệu TK", "Tên tài khoản", "Yếu tố chi phí quản trị"]] + [[a[:4] + "xx", n, e] for a, n, e in K8_MAP
+                                                                         if a.endswith("01")]
+    fs.write_xlsx(d / "Danh muc.xlsx", {"Phòng ban": fs.DEPT_SHEET, "Map TK": rows})
+    _pairs_on_every_line(d, planned)
+
+
+def test_a_plan_by_department_only_is_compared_at_department_level_and_said(tmp_path):
+    d, _planned = _map_folder(tmp_path, "k8dept", "Yếu tố chi phí", ["Số hiệu TK", "Tên tài khoản", "Yếu tố chi phí quản trị"])
+    plan = [["Phiên bản", "Năm", "Tháng", "Mã phòng ban", "Số tiền"]]
+    for mo in range(1, 13):
+        plan.append(["AOP", "2026", str(mo), "KD", str(400 * M)])
+        plan.append(["AOP", "2026", str(mo), "HC", str(420 * M)])
+    fs.write_csv(d / "AOP_2026.csv", plan)
+    m = fpa_report.compute(d)
+    by = {l.dept: l for l in m.costs.ytd}
+    assert sorted(by) == ["HC", "KD"] and all(l.element == fpa.DEPT_LEVEL for l in by.values())
+    assert (by["KD"].actual, by["KD"].plan) == (3950 * M, 4000 * M)
+    assert (by["HC"].actual, by["HC"].plan) == (4150 * M, 4200 * M)
+    assert {l.dept for l in m.costs.month} == {"HC", "KD"} and all(l.plan and l.actual for l in m.costs.month)
+    said = [x for x in m.costs.left_out() if "cấp cả bộ phận" in x]
+    assert len(said) == 2 and said[0].startswith("Hành chính")
+    for c in m.classified:                   # never -100% and 'over' for the same department
+        assert c.line.plan and c.line.actual
+
+
 # ── K9: every plan row in its year, the plan against its own totals ─────────
 
 def test_a_full_year_column_is_never_read_as_the_year_and_checks_the_months(tmp_path):
@@ -407,6 +492,77 @@ def test_after_asking_which_plan_the_answer_carries_the_report_through(tmp_path)
     fs.write_xlsx(d / "Danh muc.xlsx", {"Phòng ban": fs.DEPT_SHEET, "Khoản mục": fs.ELEMENT_SHEET,
                                         "Tham số": [["Tham số", "Giá trị"], ["Bản kế hoạch", "AOP v4"]]})
     assert fpa_report.compute(d).costs.version == "AOP v4"           # the catalogue rule names it
+
+
+# ── K11: a plan version read but not compared against is never 'used' ──────────
+
+def test_the_version_not_compared_is_read_not_used_and_lines_still_add_up(tmp_path):
+    d = _versions_folder(tmp_path, "k11")
+    m = fpa_report.compute(d)
+    assert m.costs.version == "AOP v4"
+    plan_row = lambda rows, n: next(r for r in rows if r[0] == n and r[1].startswith("Kế hoạch"))   # noqa: E731
+    rows = fpa_report.file_rows(m)[1:]
+    v3, v4 = plan_row(rows, "AOP_2026_v3.xlsx"), plan_row(rows, "AOP_2026_v4.xlsx")
+    assert fpa_report.NOT_COMPARED in v3[1] and v3[2] == 0 and fpa_report.NOT_COMPARED in v3[4]
+    assert fpa_report.NOT_COMPARED not in v4[1] and v4[2] > 0
+    assert v3[2] + v3[3] == v4[2] + v4[3]                           # the same lines, every one accounted for
+    # the forecast's basis is named by the step that uses it, never relabelled
+    kept = plan_row(fpa_report.file_rows(m, also_used={"AOP_2026_v3.xlsx"})[1:], "AOP_2026_v3.xlsx")
+    assert kept[2] == v4[2] and fpa_report.NOT_COMPARED not in kept[1]
+
+
+def test_the_fiscal_year_comes_from_the_plan_compared_against(tmp_path):
+    # v4 (approved) runs January to December with its year; the draft v3 is printed T07 .. T06. July is v3's, not
+    # the year of the plan the month is measured against.
+    d = _folder(tmp_path, "k11fy", None)
+    ss.write_xlsx(d / "AOP_2026_v4.xlsx", {"Thong tin": [["Phiên bản", "v4"], ["Trạng thái", "Đã duyệt"],
+                                                         ["Ngày duyệt", "15/09/2026"]],
+                                           "KH": fs.plan_rows("AOP")[:-1]})
+    order = T[6:] + T[:6]
+    wide = [["Mã phòng ban", "Mã khoản mục"] + order] + [[dp, el] + [1 * M] * 12 for dp, el, _a, _p in fs.PLAN]
+    ss.write_xlsx(d / "AOP_2026_v3.xlsx", {"Thong tin": [["Phiên bản", "v3"], ["Trạng thái", "Nháp"]], "KH": wide})
+    m = fpa_report.compute(d)
+    assert m.costs.version == "AOP v4" and m.fy == 1 and "AOP_2026_v4.xlsx" in m.fy_said
+    assert "AOP_2026_v3.xlsx" not in m.fy_said
+
+
+# ── K12: the approval date in a 'Căn cứ Nghị quyết ... ngày ...' line ────────
+
+def test_the_approval_date_is_read_from_the_resolution_line(tmp_path):
+    d = _folder(tmp_path, "k12", None)
+    for v, head in (("v3", [["KẾ HOẠCH CHI PHÍ NĂM 2026 (bản v3, nháp)"], ["Phiên bản", "v3"], ["Trạng thái", "Nháp"]]),
+                    ("v4", [["KẾ HOẠCH CHI PHÍ NĂM 2026"],
+                            ["Căn cứ Nghị quyết số 12/2026/NQ-HĐQT ngày 15/09/2026 của Hội đồng quản trị phê duyệt "
+                             "kế hoạch năm 2026"], ["Phiên bản", "v4"]])):
+        ss.write_xlsx(d / f"AOP_2026_{v}.xlsx", {"Thong tin": head, "KH": fs.plan_rows("AOP")[:-1]})
+    m = fpa_report.compute(d)
+    assert m.costs.version == "AOP v4" and "duyệt ngày 15/09/2026" in m.costs.basis
+    assert "không ghi ngày duyệt" not in m.costs.basis
+    # other wording: a Quyết định with the date written out, in two cells
+    assert bod_inputs.resolution_date({"S": [["Căn cứ", "Quyết định số 45/QĐ-TGĐ ngày 20 tháng 9 năm 2026"]]}) \
+        == "2026-09-20"
+    assert bod_inputs.resolution_date({"S": [["Kế hoạch 2026, lập ngày 01/08/2026"]]}) == ""
+
+
+# ── K7: the user's working files ─────────────────────────────────────────────
+
+def test_working_files_are_named_as_such_in_the_written_receipt(tmp_path):
+    d = _folder(tmp_path, "k7", {"KH": fs.plan_rows("AOP")[:-1]})
+    working = ["FPA_T10_Workings.xlsx", "BC FPA T10 (nháp).xlsx", "BCQT_T10_dang_lam.xlsx", "Copy of AOP_2026.xlsx",
+               "Bao cao T10 - Ban sao.xlsx", "T10_draft2.xlsx"]
+    for n in working:
+        ss.write_xlsx(d / n, {"P&L": [["Chỉ tiêu", "T10"], ["Chi phí", 1]]})
+    ss.write_xlsx(d / "So chi tiet nhap kho.xlsx", {"S": [["Mã hàng", "SL"], ["A", 1]]})
+    ss.write_xlsx(d / "Thue thu nhap ca nhan.xlsx", {"S": [["Mã NV", "Thuế"], ["A", 1]]})
+    m = fpa_report.compute(d)
+    out = fpa_report.write(m, tmp_path / "out")
+    wb = load_workbook(out["xlsx"], read_only=True)
+    rows = {r[0]: r for r in wb[fpa_report.RECEIPT].iter_rows(values_only=True) if r and r[0]}
+    wb.close()
+    for n in working:
+        assert rows[n][1] == "File làm việc của chị, không lấy số", n
+    assert rows["So chi tiet nhap kho.xlsx"][1] != "File làm việc của chị, không lấy số"
+    assert rows["Thue thu nhap ca nhan.xlsx"][1] != "File làm việc của chị, không lấy số"
 
 
 def test_a_working_file_has_the_fpa_wording(tmp_path):

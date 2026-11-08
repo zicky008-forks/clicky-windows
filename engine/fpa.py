@@ -21,6 +21,8 @@ from engine.tables import key
 
 ZERO = Decimal(0)
 UNASSIGNED = "Chưa gán bộ phận"
+# A department compared as a whole, because its actual and its plan do not meet on the same cost elements.
+DEPT_LEVEL = "Cả bộ phận"
 # Versions that hold last year's actual, not a plan.
 _NOT_PLAN = {"ly", "thuc te", "actual"}
 # Plan lines a P&L states (folded 'Chỉ tiêu'): revenue, cost of goods sold, gross profit. They belong to the sales
@@ -165,6 +167,7 @@ class Variance:
     outside: list = field(default_factory=list)         # [(where, period, amount)] detail outside the year to date
     unknown: dict = field(default_factory=dict)         # {"bộ phận": [codes], "yếu tố chi phí": [codes]} not in the catalogue
     no_element: list = field(default_factory=list)      # [where] detail lines without a cost element (grouped by account)
+    dept_level: list = field(default_factory=list)      # [(dept label, actual-only lines, plan-only lines)] merged
 
     @staticmethod
     def totals(lines: list) -> tuple:
@@ -195,6 +198,9 @@ class Variance:
                 out.append(f"Mã {what} chưa có trong danh mục: {', '.join(codes[:5])}"
                            + (f" và {len(codes) - 5} mã khác" if len(codes) > 5 else "")
                            + "; em vẫn tính theo mã, cần chị cho biết gán vào đâu")
+        for dept, actual_only, plan_only in self.dept_level:
+            out.append(f"{dept}: thực hiện và kế hoạch không ghép được theo yếu tố chi phí ({actual_only} yếu tố chỉ có "
+                       f"thực hiện, {plan_only} chỉ có kế hoạch), em so ở cấp cả bộ phận")
         if self.plan is None:
             out.append("Không có file kế hoạch: em chỉ có số thực hiện, chưa so được với kế hoạch")
         return out
@@ -273,17 +279,49 @@ def compute(gl: list, plans: list, period: Optional[str] = None, version: Option
         for t in targets:
             t.plan += r.amount
             t.plan_from.append(r.where)
+    _compare_by_dept(v, month, ytd, depts)
     known_depts = set(getattr(config, "depts", {}) or {})
     known_elements = set(getattr(config, "elements", {}) or {})
     if known_depts:
         v.unknown["bộ phận"] = sorted({d for d, _e in ytd if d and d not in known_depts})
     if known_elements:
         v.unknown["yếu tố chi phí"] = sorted({e for _d, e in ytd if e and e not in known_elements
-                                              and not e.startswith("TK ")})
+                                              and not e.startswith("TK ") and e != DEPT_LEVEL})
     order = lambda l: (l.dept == "", l.dept, l.element)       # noqa: E731 - unassigned last
     v.month = sorted(month.values(), key=order)
     v.ytd = sorted(ytd.values(), key=order)
     return v
+
+
+def _compare_by_dept(v: Variance, month: dict, ytd: dict, names: dict) -> None:
+    """A department whose year to date has lines with only an actual and lines with only a plan, and where either
+    no line pairs or one side has no cost element (the department only, or an account no element maps), does not
+    meet on the cost elements. Its unpaired lines
+    are merged into one line for the department, in the month and the year to date alike, so the report never says
+    -100% and 'over' for the same department. Lines that pair stay as they are. Said in left_out."""
+    for dept in sorted({d for d, _e in ytd if d}):
+        lines = [l for (d, _e), l in ytd.items() if d == dept]
+        actual_only = [l for l in lines if l.unplanned]
+        plan_only = [l for l in lines if l.unspent]
+        if not actual_only or not plan_only:
+            continue
+        paired = any(l.actual and l.plan for l in lines)
+        no_element = any(not l.element or l.element.startswith("TK ") for l in actual_only + plan_only)
+        if paired and not no_element:
+            continue                  # the elements do meet: a line spent with no plan is a finding of its own
+        merge = {(dept, l.element) for l in actual_only + plan_only}
+        for book in (ytd, month):
+            parts = [book.pop(k) for k in sorted(merge) if k in book]
+            if not parts:
+                continue
+            whole = book.setdefault((dept, DEPT_LEVEL), Line(dept, DEPT_LEVEL, names.get(dept, ""), DEPT_LEVEL))
+            for p in parts:
+                whole.actual += p.actual
+                whole.plan += p.plan
+                whole.actual_from += p.actual_from
+                whole.plan_from += p.plan_from
+                whole.accounts |= p.accounts
+        v.dept_level.append((names.get(dept, "") or dept, len(actual_only), len(plan_only)))
 
 
 # ── Actual against the books ──────────────────────────────────────────────────

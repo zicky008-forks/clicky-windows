@@ -86,9 +86,10 @@ class Month:
         return next((r for r in self.pnl if r.code == code), None)
 
 
-def fiscal_start(folder: Path, b) -> tuple:
+def fiscal_start(folder: Path, b, version: Optional[str] = None, plan_file: Optional[str] = None) -> tuple:
     """(first month of the fiscal year, the sentence that says how it was found): engine.fiscal, with the trial
-    balance's year to date of operating costs when the folder has one."""
+    balance's year to date of operating costs when the folder has one, and the plan that will be compared against
+    (the user's answer, the catalogue rule, the only or the approved one) when it is already clear."""
     from engine import fiscal
     from engine.sales_pnl import latest_month as sales_month
     period = fpa.latest_month(b.gl) or sales_month(b.sales)
@@ -99,7 +100,14 @@ def fiscal_start(folder: Path, b) -> tuple:
             books_ytd = books_figures(tb, b.config, "ytd_")["opex"]
     except Exception:                    # noqa: BLE001 - the trial balance is read again, and named, by compute
         tb = None
-    return fiscal.start(b, tb, period, books_ytd)
+    chosen = None
+    try:
+        plan, _only = fpa.choose_plan(b.plans, version or (str(b.config.rule("ban ke hoach") or "").strip() or None),
+                                      plan_file)
+        chosen = (plan.file, plan.version) if plan is not None else None
+    except fpa.PickVersion:
+        pass                             # asked later: until then only what every version agrees on counts
+    return fiscal.start(b, tb, period, books_ytd, chosen)
 
 
 def compute(folder: Path, version: Optional[str] = None, plan_file: Optional[str] = None) -> Month:
@@ -109,7 +117,7 @@ def compute(folder: Path, version: Optional[str] = None, plan_file: Optional[str
     from engine import bod_inputs
     folder = Path(folder)
     b = bod_inputs.load(folder, purpose="fpa")
-    fy, fy_said = fiscal_start(folder, b)
+    fy, fy_said = fiscal_start(folder, b, version, plan_file)
     if fy != 7:
         b = bod_inputs.load(folder, fy_start=fy, purpose="fpa")
     version = version or (str(b.config.rule("ban ke hoach") or "").strip() or None)
@@ -498,14 +506,60 @@ def _pct(variance: Optional[Decimal], plan: Decimal) -> Optional[Decimal]:
 
 
 
-def file_rows(m) -> list:
+NOT_COMPARED = "đọc, không dùng: không phải bản so sánh"
+
+
+def _row_of(where: str) -> str:
+    """'Sheet!F12' -> 'Sheet!12': a plan printed wide by month gives one figure per cell, the file one line."""
+    hit = re.match(r"^(.*)!\$?[A-Z]{1,3}\$?(\d+)$", where or "")
+    return f"{hit.group(1)}!{hit.group(2)}" if hit else (where or "")
+
+
+def _not_compared(m, also_used=()) -> dict:
+    """{plan file: {version: lines}} of the plan versions read but not compared against. A version is compared
+    when the costs or the sales are measured against it; also_used names files another step takes its figures
+    from (the forecast's basis). Nothing is moved when no plan was chosen."""
+    chosen = {(p.file, key(p.version or "")) for p in (getattr(m.costs, "plan", None), getattr(m.sales, "plan", None))
+              if p is not None}
+    if not chosen:
+        return {}
+    by = {}
+    for r in list(m.bundle.plans) + list(getattr(m.bundle, "sku_plans", [])):
+        if r.file in also_used or (r.file, key(r.version or "")) in chosen:
+            continue
+        by.setdefault(r.file, {}).setdefault(r.version or "không ghi phiên bản", set()).add(_row_of(r.where))
+    used_lines = {}
+    for r in list(m.bundle.plans) + list(getattr(m.bundle, "sku_plans", [])):
+        if (r.file, key(r.version or "")) in chosen or r.file in also_used:
+            used_lines.setdefault(r.file, set()).add(_row_of(r.where))
+    return {f: {v: len(rows - used_lines.get(f, set())) for v, rows in vs.items()} for f, vs in by.items()}
+
+
+def file_rows(m, also_used=()) -> list:
     """The receipt's file table: every file read, the lines used and left out with the reason, and every file not
-    used with why. Used + left out = the file's lines (rule 4)."""
+    used with why. Used + left out = the file's lines (rule 4). A plan version read but not compared against is
+    never 'used': its lines are left out with that reason (also_used: files another step takes figures from)."""
     from collections import Counter
+    from engine import roles
     out = [["File", "Vai trò", "Dòng đã dùng", "Dòng bỏ", "Lý do bỏ"]]
+    other = _not_compared(m, set(also_used))
+    compared = {p.file for p in (getattr(m.costs, "plan", None), getattr(m.sales, "plan", None)) if p is not None}
+    compared |= set(also_used)
     for name, role, used, skipped in m.bundle.receipt:
         why = "; ".join(f"{n} dòng: {w}" for w, n in Counter(w for _r, w in skipped).items())
-        out.append([name, role, used, len(skipped), why])
+        aside = {v: n for v, n in other.get(name, {}).items() if n}
+        moved = min(used, sum(aside.values())) if role.startswith((roles.PLAN, roles.FORECAST)) else 0
+        if moved:
+            take, left = {}, moved                   # a file read in two plan sheets: each takes its share once
+            for v, n in aside.items():
+                take[v] = min(n, left)
+                left -= take[v]
+            other[name] = {v: n - take[v] for v, n in aside.items()}
+            said = "; ".join(f"{n} dòng: bản {v}, {NOT_COMPARED}" for v, n in take.items() if n)
+            why = "; ".join(x for x in (why, said) if x)
+            if moved == used or name not in compared:
+                role = f"{role} · {NOT_COMPARED}"
+        out.append([name, role, used - moved, len(skipped) + moved, why])
     tb_file = getattr(m.tb, "file", None) if m.tb is not None else None
     if tb_file:
         skipped = len(getattr(m.tb, "skipped", []) or [])
