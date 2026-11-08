@@ -72,8 +72,10 @@ class Plan:
 
     def basis(self, only: bool) -> str:
         said = f"Kế hoạch: file {self.file}, phiên bản {self.version}"
-        if self.approved:
+        if self.approved and self.approved[:4].isdigit():
             return said + f", duyệt ngày {self.approved[8:10]}/{self.approved[5:7]}/{self.approved[:4]}"
+        if self.approved:
+            return said + ", đã duyệt (file không ghi ngày duyệt)"
         return said + (", bản kế hoạch duy nhất trong thư mục" if only else "")
 
 

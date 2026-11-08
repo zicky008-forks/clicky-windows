@@ -207,7 +207,8 @@ CONFIG_SPECS = {
               "khong_cat": ["khong cat", "mien cat", "bao ve", "khong cat giam", "danh sach khong cat"],
               "email": ["email", "e mail", "dia chi email", "thu dien tu", "email nguoi nhan", "nguoi nhan"],
               "cc": ["cc", "email cc", "cc email", "dong gui", "gui kem"]},
-    "elements": {"ma": ["cost element ma", "ma cost element", "ma ce", "ma khoan muc", "ma"],
+    "elements": {"ma": ["cost element ma", "ma cost element", "ma ce", "ma khoan muc", "ma", "khoan muc", "yeu to chi phi",
+                        "ma yeu to", "cost element"],
                  "ten": ["cost element ten", "ten cost element", "ten khoan muc", "ten"],
                  "tk": ["tai khoan", "tk", "so hieu tk", "account"], "nhom": ["nhom", "group cost", "nhom chi phi"],
                  "dong": ["dong bod", "dong bao cao"]},
@@ -440,7 +441,7 @@ def read_gl(t: Table, cost_prefixes=("6",), fy_start: int = 7) -> list:
     """Cost detail lines. With debit and credit account columns, a cost account on the credit side is a negative cost.
     An export with one account column and Phát sinh Nợ / Phát sinh Có: amount = Nợ - Có, the side kept (a cost
     written down is on Có); lines of other accounts and the closing entry against 911 are left out with the reason."""
-    out = []
+    out, rows = [], {}
     two_sided = "tien" not in t.columns
     for n, v in t.rows:
         amount, side = _amount(t, v)
@@ -483,7 +484,43 @@ def read_gl(t: Table, cost_prefixes=("6",), fy_start: int = 7) -> list:
                          account=acct, usd=fc if fc is not None and (cur in ("", "USD")) else None,
                          ref=str(t.get(v, "so_ct", "") or "").strip(), text=str(t.get(v, "dien_giai", "") or "").strip(),
                          where=f"{t.sheet}!{n}", side=side))
+        rows[id(out[-1])] = (n, day_of(t.get(v, "ngay")) if t.get(v, "ngay") else "")
+    if two_sided and "tk" in t.columns and not ({"tk_du", "tk_no", "tk_co"} & set(t.columns)):
+        out = _closing_without_contra(t, out, rows)
     return out
+
+
+CLOSING_TEXT = re.compile(r"\b(k ?c|ket chuyen)\b.*\b911\b|\b911\b.*\b(k ?c|ket chuyen)\b")
+CLOSING_NETS_WHY = ("bút toán kết chuyển cuối kỳ: dòng Có cuối tháng này bằng đúng chi phí còn lại của tài khoản "
+                    "trong tháng, không phải chi phí ghi giảm")
+
+
+def _closing_without_contra(t: Table, out: list, rows: dict) -> list:
+    """A one-account export with no contra column still carries the month-end closing entry, as a Có line on each
+    cost account. It is that entry when its text names the transfer to 911 ('K/C 911', 'kết chuyển sang 911'; never
+    'kết chuyển' alone, which is also how an allocation is written), or when it is the account's largest Có line on
+    the month's last posting day and the account nets to exactly zero with it. Left out with the reason, never
+    taken as a cost written down."""
+    closing = set()
+    for e in out:
+        if e.side == "cr" and CLOSING_TEXT.search(key(e.text)):
+            closing.add(id(e))
+    by = {}
+    for e in out:
+        if e.period and id(e) not in closing:
+            by.setdefault((e.account, e.period), []).append(e)
+    for group in by.values():
+        credits = [e for e in group if e.side == "cr"]
+        if not credits or sum((e.amount for e in group), ZERO) != 0:
+            continue
+        last = max(rows[id(e)][1] for e in group)
+        on_last = [e for e in credits if rows[id(e)][1] == last]
+        if last and on_last:
+            closing.add(id(min(on_last, key=lambda e: e.amount)))       # the largest Có (amounts are negative)
+    for e in out:
+        if id(e) in closing:
+            t.skipped.append((rows[id(e)][0], CLOSING_WHY if CLOSING_TEXT.search(key(e.text)) else CLOSING_NETS_WHY))
+    return [e for e in out if id(e) not in closing]
 
 
 @dataclass
@@ -627,6 +664,7 @@ def read_plan(t: Table, default_version: str = "", fy_start: int = 7, rows: Opti
             out.append(PlanRow(str(t.get(v, "phien_ban", default_version) or default_version).strip(), month, amount,
                                rate=num(t.get(v, "ty_gia")), where=cell_ref(t.sheet, t.columns["tien"], n), month_no=month_no,
                                fy=fy or file_fy, table_division=td, **_dims(t, v)))
+        check_totals(t, "", out, [t.columns["tien"]], None)
         return out
     from engine.bod_pack import fy_of, month_of, version_of
     from openpyxl.utils import get_column_letter
@@ -642,6 +680,9 @@ def read_plan(t: Table, default_version: str = "", fy_start: int = 7, rows: Opti
             continue
         value_cols.append((c, ver, mon, fy_of(k)))
     t.month_order = [mon for _c, _v, mon, _f in value_cols if mon is not None]
+    total_col = getattr(t, "year_total", None)
+    total_col = total_col if total_col is not None else total_column(t, rows)
+    month_cols = [c for c, _v, mon, _f in value_cols if mon is not None]
     out = []
     for n, v in t.rows:
         dims, hit = _dims(t, v), False
@@ -658,7 +699,66 @@ def read_plan(t: Table, default_version: str = "", fy_start: int = 7, rows: Opti
                                fy=fy or col_fy or file_fy, table_division=td, **dims))
         if not hit:
             t.skipped.append((n, "không có số tiền"))
+    if len(month_cols) == len(value_cols):              # months only: a full-year cell is the sum of the row
+        check_totals(t, "", out, month_cols, total_col)
     return out
+
+
+NOT_YEAR_WORDS = {"ca", "tong", "total", "luy", "cong", "so", "tien", "gia", "tri", "ngan", "sach", "amount", "kh",
+                  "ke", "hoach", "budget", "plan"}
+TOTAL_HEADER = re.compile(r"^(kh |ke hoach )?(ca nam|tong cong|tong|total|full year|fy total|cong|tong ca nam|"
+                          r"tong nam|tong ke hoach)( \d{4})?$")
+
+
+def year_column(t: Table) -> Optional[int]:
+    """A column the reader took as the year that is really a total ('Cả năm', 'Tổng KH năm'): it leaves the year
+    and is returned, to check the months against. A year column holds years, never amounts."""
+    c = t.columns.get("nam")
+    if c is None:
+        return None
+    words = set(key(t.headers[c] if c < len(t.headers) else "").split())
+    if words & NOT_YEAR_WORDS:
+        t.columns.pop("nam")
+        return c
+    return None
+
+
+def total_column(t: Table, rows: Optional[list]) -> Optional[int]:
+    """The plan table's own full-year column ('Cả năm', 'Tổng cộng'), when it prints one."""
+    headers = header_texts(rows, t.header_row - 1) if rows is not None else t.headers
+    used = set(t.columns.values())
+    return next((c for c, h in enumerate(headers) if c not in used and TOTAL_HEADER.match(key(h))), None)
+
+
+def check_totals(t: Table, file: str, out: list, value_cols: list, total_col: Optional[int]) -> None:
+    """Rule 4 for a plan: each row's months add up to the row's own full-year cell, and each month adds up to a
+    printed total row. Every difference is a sentence; nothing is absorbed."""
+    issues = []
+    if total_col is not None and value_cols:
+        for n, v in t.rows:
+            stated = num(v[total_col] if total_col < len(v) else None)
+            if stated is None:
+                continue
+            got = [num(v[c] if c < len(v) else None) for c in value_cols]
+            if any(x is not None for x in got):
+                made = sum((x for x in got if x is not None), ZERO)
+                if made != stated:
+                    issues.append(f"dòng {n}: các tháng cộng {_fmt(made)}, cột cả năm ghi {_fmt(stated)}")
+    for n, v in t.totals:
+        for c in value_cols:
+            stated = num(v[c] if c < len(v) else None)
+            if stated is None:
+                continue
+            made = sum((num(r[c] if c < len(r) else None) or ZERO for rn, r in t.rows), ZERO)
+            if made != stated:
+                issues.append(f"dòng tổng {n}, cột {c + 1}: các dòng cộng {_fmt(made)}, dòng tổng ghi {_fmt(stated)}")
+    if issues:
+        t.total_issues = issues
+
+
+def _fmt(x: Decimal) -> str:
+    from engine.monthly_report import fmt
+    return f"{fmt(x)} đ"
 
 
 def month_columns(t: Table, rows: list) -> list:
@@ -883,6 +983,8 @@ class Bundle:
     receipt: list = field(default_factory=list)        # [(file, role, used rows, skipped [(row, reason)])]
     unused: list = field(default_factory=list)         # [(file, reason)]
     month_orders: list = field(default_factory=list)   # [(file, [month numbers])] of plans printed with month columns
+    plan_checks: list = field(default_factory=list)    # sentences: a plan file that disagrees with its own totals
+    working: list = field(default_factory=list)        # names of working files (bản nháp, working) left out
 
 
 PACK_WORDS = ("pack", "bod", "ban nhap", "bao cao hdqt", "trinh")
@@ -951,6 +1053,9 @@ def _try_plan(rows, sheet, version, fy_start, file_fy, planned: bool = False):
             t = None
     if t is None or not ({"phien_ban", "dong", "pb", "ce"} & set(t.columns)):
         return None
+    if "pb" in t.columns and "dong" in t.columns and "ce" not in t.columns:
+        t.columns["ce"] = t.columns.pop("dong")       # a plan by department: its line column is the cost element
+    t.year_total = year_column(t)
     wide = 0 if "tien" in t.columns else plan_value_columns(t, rows)
     if "tien" not in t.columns and not wide:
         return None
@@ -1048,6 +1153,10 @@ def load(folder: Path, fy_start: int = 7, purpose: str = "bod") -> Bundle:
     for p in rest:
         k = name_key(p.stem)
         hint = hint_of(p.stem)
+        if purpose == "fpa" and WORKING_RE.search(k):
+            b.unused.append((p.name, WORKING_WHY))
+            b.working.append(p.name)
+            continue
         if any(w in k for w in PACK_WORDS) and p.suffix.lower() != ".csv":
             b.packs.append(p)
             if purpose == "fpa":
@@ -1067,6 +1176,8 @@ def load(folder: Path, fy_start: int = 7, purpose: str = "bod") -> Bundle:
         if prior and version not in ("AOP", "AOPR", "AOPR1", "AOPR2", "MUF"):
             version = ""                        # a last-year file that names no version: its rows are last year's actual
         used = False
+        info = file_info(sheets)
+        first_plan, first_sku = len(b.plans), len(b.sku_plans)
         if hint == "cut":
             for sheet, rows in sheets.items():
                 b.cut.append((sheet, rows))
@@ -1126,6 +1237,11 @@ def load(folder: Path, fy_start: int = 7, purpose: str = "bod") -> Bundle:
                                           used_rows(t), t.skipped))
                         if getattr(t, "month_order", None) and not prior:
                             b.month_orders.append((p.name, t.month_order))
+                        if getattr(t, "total_issues", None):
+                            b.plan_checks.append(f"File kế hoạch {p.name} (sheet {sheet}) không tự khớp: "
+                                                 + "; ".join(t.total_issues[:5])
+                                                 + (f"; và {len(t.total_issues) - 5} chỗ khác" if len(t.total_issues) > 5
+                                                    else "") + ". Em dùng số từng tháng, chị kiểm lại file")
                 else:
                     got = _try_sales(rows, sheet, fy_start)
                     if got:
@@ -1135,6 +1251,9 @@ def load(folder: Path, fy_start: int = 7, purpose: str = "bod") -> Bundle:
                 if got:
                     used = True
                     break
+        if info and (len(b.plans) > first_plan or len(b.sku_plans) > first_sku):
+            apply_info(info, b.plans[first_plan:] + b.sku_plans[first_sku:])
+            b.receipt.append((p.name, "Thông tin phiên bản (trạng thái, phiên bản, ngày duyệt)", len(info), []))
         if not used:
             b.unused.append((p.name, _unused_reason(hint, sheets, purpose)))
     if b.segment_map:                                           # the map names departments and cost elements
@@ -1145,7 +1264,39 @@ def load(folder: Path, fy_start: int = 7, purpose: str = "bod") -> Bundle:
             b.config.elements.setdefault(code, {"ten": name})
     b.sales = _drop_sales_copies(b, sales_sources)
     _resolve_years(b, pending, fy_start)
+    pair_codes(b)
     return b
+
+
+def pair_codes(b: Bundle) -> None:
+    """Actual and plan meet on the same department x cost element codes. A ledger line with no cost element takes
+    the one the catalogue gives its account (sheet 'Khoản mục' with 'Tài khoản'; the longest account prefix, and
+    only when one element has it). A department or element written by its name, in the plan or the ledger, takes
+    the catalogue's code for that name. Nothing is guessed: a name or account the catalogue does not hold stays."""
+    cfg = b.config
+    by_account = {}
+    for code, e in cfg.elements.items():
+        tk = str(e.get("tk", "") or "").strip()
+        if tk:
+            by_account.setdefault(tk, set()).add(code)
+    element_names = {key(e.get("ten", "")): c for c, e in cfg.elements.items() if e.get("ten")}
+    dept_names = {key(d.get("ten", "")): c for c, d in cfg.depts.items() if d.get("ten")}
+
+    def element_of_account(account: str) -> str:
+        hits = sorted((tk for tk in by_account if account.startswith(tk)), key=len, reverse=True)
+        return next(iter(by_account[hits[0]])) if hits and len(by_account[hits[0]]) == 1 else ""
+
+    def code(value: str, known: dict, names: dict) -> str:
+        return value if not value or value in known else names.get(key(value), value)
+    for e in b.gl:
+        if not e.element and e.account:
+            e.element = element_of_account(e.account)
+        e.element = code(e.element, cfg.elements, element_names)
+        e.dept = code(e.dept, cfg.depts, dept_names)
+    for r in b.plans:
+        if r.dept or r.element:
+            r.element = code(r.element, cfg.elements, element_names)
+            r.dept = code(r.dept, cfg.depts, dept_names)
 
 
 def _sale_key(s: Sale) -> tuple:
@@ -1243,6 +1394,50 @@ def _resolve_years(b: Bundle, pending: list, fy_start: int) -> None:
             if fy is None:
                 continue
             r.month = f"{fy if r.month_no >= fy_start else fy + 1:04d}-{r.month_no:02d}"
+
+
+# A working file of the user's ('Working T10', 'Bản nháp', 'Draft', 'Làm việc', 'WIP'): never a source of figures.
+WORKING_RE = re.compile(r"\b(working|wip|draft|ban nhap|lam viec|file tam|tam tinh)\b")
+WORKING_WHY = "file làm việc (bản nháp) của chị: báo cáo FP&A không lấy số từ file nháp"
+
+# The key-value info sheet a plan file often carries: 'Trạng thái | Đã duyệt', 'Phiên bản | v4', 'Ngày duyệt | ...'.
+INFO_KEYS = {"status": ("trang thai", "tinh trang", "status"),
+             "version": ("phien ban", "version", "ban so", "lan"),
+             "approved": ("ngay duyet", "ngay phe duyet", "approved", "approval date", "duyet ngay", "ngay ban hanh")}
+APPROVED_NO_DATE = "da duyet"          # approved, the file names no date: never ranked against a dated approval
+
+
+def file_info(sheets: dict) -> dict:
+    """{'status', 'version', 'approved'} from rows of exactly two cells, a known key then its value, in any sheet."""
+    out = {}
+    for rows in sheets.values():
+        for r in rows[:40]:
+            cells = [v for v in (r or []) if v is not None and str(v).strip()]
+            if len(cells) != 2 or not isinstance(cells[0], str):
+                continue
+            k = key(cells[0])
+            for name, words in INFO_KEYS.items():
+                if name not in out and k in words:
+                    out[name] = cells[1]
+    return out if ({"version", "approved"} & set(out)) or key(out.get("status", "")).find("duyet") >= 0 else {}
+
+
+def apply_info(info: dict, rows: list) -> None:
+    """The info sheet names the file's version ('v4': 'AOP v4' beside another AOP) and its approval."""
+    stated = str(info.get("version", "") or "").strip()
+    status = key(info.get("status", ""))
+    date = day_of(info["approved"]) if info.get("approved") else ""
+    approved = date or (APPROVED_NO_DATE if re.search(r"\b(da duyet|approved|phe duyet)\b", status) else "")
+    if re.search(r"\b(chua duyet|nhap|draft|cho duyet)\b", status):
+        approved = ""
+    for r in rows:
+        if stated:
+            if re.search(r"\b(aopr?|le|fc|muf|rf|forecast|budget|ke hoach|du bao)\b", key(stated)):
+                r.version = stated
+            elif key(stated) not in key(r.version or "").split():
+                r.version = f"{r.version} {stated}".strip()
+        if approved and not r.approved:
+            r.approved = approved
 
 
 def plan_role(stem: str, rows: list) -> str:
