@@ -106,7 +106,7 @@ def test_a_provision_in_the_general_ledger_is_a_note_by_its_contra_account(tmp_p
     provision = ["31/10/2026", "PK00777", "10", "2026", "632", "2294", "", "", "Trích lập dự phòng", str(3 * M)]
     b = _load(tmp_path, gl=ss.gl_rows(extra=[provision]))
     m = sales_pnl.match_gl(b.sales, b.postings, ss.PERIOD, b.config)
-    assert m.ok and _cogs(m).causes == [("bút toán Nợ TK 632 đối ứng TK 2294", -3 * M)]
+    assert m.ok and _cogs(m).causes == [("trích lập dự phòng giảm giá hàng tồn kho (Có TK 2294)", -3 * M)]
     assert m.notes()[0].startswith("Lưu ý: giá vốn hàng bán trên sổ cao hơn sổ bán hàng 3.000.000 đ")
 
 
@@ -117,6 +117,46 @@ def test_other_revenue_in_the_general_ledger_is_named_and_left_out_with_its_reas
     assert m.ok and m.other == [("5113", 5 * M)]
     assert ("TK 5113: doanh thu khác, không có trong sổ bán hàng", 1, 5 * M) in m.receipt["left"]
     assert m.receipt["used"] + sum(n for _r, n, _a in m.receipt["left"]) == m.receipt["total"]
+
+
+def _gl_line(no, co, amount, text="Điều chỉnh", ref="PK00888"):
+    return ["30/10/2026", ref, "10", "2026", no, co, "", "", text, str(amount)]
+
+
+def test_a_revenue_adjustment_with_no_invoice_is_a_warning_never_a_note(tmp_path):
+    """Có 5111 / Nợ 1388 with no AR12 line behind it is the cut-off item FP&A has to see: not ok, not 'không phải lỗi'."""
+    b = _load(tmp_path, gl=ss.gl_rows(extra=[_gl_line("1388", "5111", 6 * M)]))
+    m = sales_pnl.match_gl(b.sales, b.postings, ss.PERIOD, b.config)
+    rev = _rev(m)
+    assert not m.ok and rev.causes == [] and m.notes() == []
+    assert m.warnings() == ["Doanh thu thuần lệch -6.000.000 đ. Chênh lệch nằm ở bút toán Có TK 5111 đối ứng TK 1388 "
+                            f"(SoCai_GL_T10_2026!{len(ss.gl_rows(closing=False)) + 1}), không có trong sổ bán hàng; chị xem có đúng kỳ không"]
+
+
+def test_unearned_revenue_released_is_a_note_only_when_the_catalogue_says_so(tmp_path):
+    release = _gl_line("3387", "5111", 4 * M, "Kết chuyển doanh thu chưa thực hiện")
+    b = _load(tmp_path, gl=ss.gl_rows(extra=[release]))
+    m = sales_pnl.match_gl(b.sales, b.postings, ss.PERIOD, b.config)
+    assert not m.ok and m.warnings() and m.notes() == []
+    b.config.rules["3387 doanh thu chua thuc hien"] = "có"
+    m = sales_pnl.match_gl(b.sales, b.postings, ss.PERIOD, b.config)
+    assert m.ok and m.warnings() == [] and "doanh thu chưa thực hiện kết chuyển vào kỳ (Nợ TK 3387) 4.000.000 đ" in m.notes()[0]
+
+
+def test_two_unrelated_groups_that_happen_to_sum_to_the_gap_are_never_taken(tmp_path):
+    extra = [_gl_line("1388", "5111", 2 * M), _gl_line("3388", "5111", 4 * M, ref="PK00889")]
+    b = _load(tmp_path, gl=ss.gl_rows(extra=extra))
+    m = sales_pnl.match_gl(b.sales, b.postings, ss.PERIOD, b.config)
+    assert not m.ok and _rev(m).diff == -6 * M and _rev(m).suspect is None and m.warnings() == []
+
+
+def test_revenue_and_deduction_groups_on_the_same_contra_keep_their_own_amounts(tmp_path):
+    """Nợ 5111 / Có 131 (a return booked straight to revenue) and Nợ 5211 / Có 131 (the discounts) are two groups."""
+    b = _load(tmp_path, gl=ss.gl_rows(extra=[_gl_line("5111", "131", 1 * M, "Giảm giá trực tiếp")]))
+    m = sales_pnl.match_gl(b.sales, b.postings, ss.PERIOD, b.config)
+    rev = _rev(m)
+    assert rev.diff == 1 * M and rev.suspect[:2] == ("bút toán Nợ TK 5111 đối ứng TK 131", 1 * M)
+    assert "Nợ TK 5111 đối ứng TK 131" in m.warnings()[0]
 
 
 def test_a_sale_missing_from_ar12_is_a_gap_never_explained_away(tmp_path):

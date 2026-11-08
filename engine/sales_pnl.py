@@ -403,6 +403,7 @@ class SalesBookLine:
     rows: list = field(default_factory=list)         # trial balance rows, or ledger cells ('Sheet!row')
     how: str = ""                                    # how the books' figure is read, in plain words
     causes: list = field(default_factory=list)       # [(what, amount)] known items that make up the gap exactly
+    suspect: Optional[tuple] = None                  # (what, amount, cells): one group of postings that is the gap
 
     @property
     def diff(self) -> Optional[Decimal]:
@@ -426,6 +427,16 @@ class SalesBookLine:
         return (f"Lưu ý: {self.name.lower()} trên sổ {more} sổ bán hàng {fmt(abs(self.diff))} đ, bằng đúng {what}. "
                 "Đây không phải lỗi, sổ bán hàng không ghi các khoản này")
 
+    def warning(self) -> str:
+        """A gap that is exactly one group of postings with no rule behind it: shown for the user to look at, never
+        called an error and never called 'not an error' (a cut-off or a missing invoice looks just like this)."""
+        if self.ok or self.suspect is None:
+            return ""
+        what, _amount, cells = self.suspect
+        more = f" và {len(cells) - 3} dòng khác" if len(cells) > 3 else ""
+        return (f"{self.name} lệch {fmt(self.diff)} đ. Chênh lệch nằm ở {what} ({', '.join(cells[:3])}{more}), "
+                "không có trong sổ bán hàng; chị xem có đúng kỳ không")
+
 
 @dataclass
 class SalesBookMatch:
@@ -445,6 +456,9 @@ class SalesBookMatch:
             out.append("Lưu ý: " + ", ".join(f"TK {a} {fmt(x)} đ" for a, x in self.other) + f" là {OTHER_REVENUE}, "
                        "em không so với sổ bán hàng")
         return out
+
+    def warnings(self) -> list:
+        return [l.warning() for l in self.lines if l.warning()]
 
     def sentence(self) -> str:
         month, src = _month_text(self.period), self.source
@@ -492,16 +506,23 @@ def _ledger_figures(rows: list) -> dict:
             "cogs": sum((s.cogs for s in rows), ZERO) if have else None, "returns": returns}
 
 
-def _explain(line: SalesBookLine, candidates: list) -> None:
-    """Keep the smallest set of known items that makes the gap exactly; nothing when none does."""
+def _explain(line: SalesBookLine, known: list, others: list = ()) -> None:
+    """known: [(what, amount)] items a rule says the books hold and a sales ledger does not (a provision, returns
+    the ledger nets): the smallest set of them that makes the gap exactly is the cause, said as a note. others:
+    [(what, amount, cells)] groups of postings with no rule behind them: only one group alone that is the gap
+    exactly is named, as a warning, so a gap is never 'explained' by a chance sum of unrelated postings."""
     from engine.bod_review import explain_gap
     if line.diff is None or abs(line.diff) <= VND_TOLERANCE:
         return
     # An item that is most of the figure is the figure itself (the ledger missing it is a real gap), never a cause.
-    candidates = [(w, a) for w, a in candidates if abs(a) * 2 <= abs(line.books)]
-    chosen, rest = explain_gap(line.diff, candidates)
+    small = lambda a: abs(a) * 2 <= abs(line.books)                     # noqa: E731
+    chosen, rest = explain_gap(line.diff, [(w, a) for w, a in known if small(a)])
     if abs(rest) <= VND_TOLERANCE:
         line.causes = list(chosen)
+        return
+    hits = [o for o in others if small(o[1]) and abs(o[1] - line.diff) <= VND_TOLERANCE]
+    if len(hits) == 1:
+        line.suspect = hits[0]
 
 
 def match_books(sales: list, tb, period: str, config=None) -> SalesBookMatch:
@@ -595,26 +616,44 @@ def match_gl(sales: list, postings: list, period: str, config=None) -> SalesBook
                  "left": [(r, n, a) for r, (n, a) in sorted(left.items())]}
 
     def groups(ps, sign):
+        """{(account, contra, side): (what the group adds to the books' figure, cells)}."""
         g = {}
         for p in ps:
-            k = (p.contra or "?", "Nợ" if p.dr else "Có")
-            g[k] = g.get(k, ZERO) + sign * (p.dr - p.cr)
+            k = (p.account, p.contra or "?", "Nợ" if p.dr else "Có")
+            amount, cells = g.get(k, (ZERO, []))
+            g[k] = (amount + sign * (p.dr - p.cr), cells + [p.where])
         return g
 
+    def split(g, known_rule):
+        """Known causes by rule, and the other groups; a cause amount is what the ledger misses: minus the group."""
+        known, others = [], []
+        for (acct, contra, side), (adds, cells) in sorted(g.items()):
+            what = known_rule(acct, contra, side)
+            if what:
+                known.append((what, -adds))
+            else:
+                others.append((f"bút toán {side} TK {acct} đối ứng TK {contra}", -adds, cells))
+        return known, others
+
+    unearned = bool(config is not None and hasattr(config, "rule") and (config.rule("3387") or config.rule("chua thuc hien")))
     if used["rev"] or used["ded"]:
         books = sum((p.cr - p.dr for p in used["rev"]), ZERO) - sum((p.dr - p.cr for p in used["ded"]), ZERO)
         how = f"Có trừ Nợ TK {'/'.join(rev_acc)}" + (f", trừ giảm trừ TK {'/'.join(ded_acc)}" if used["ded"] else "")
         line = SalesBookLine("revenue", LINES[0][1], books, led["net"], sorted({p.account for p in used["rev"] + used["ded"]}),
                              [p.where for p in used["rev"] + used["ded"]], how)
-        g = groups(used["rev"], -1)
-        g.update({(c, s): v for (c, s), v in groups(used["ded"], 1).items()})
-        _explain(line, [(f"bút toán {side} TK {'/'.join(rev_acc)} đối ứng TK {c}", -v) for (c, side), v in g.items()])
+        g = groups(used["rev"], -1)                       # Có less Nợ of revenue adds to the figure
+        g.update(groups(used["ded"], -1))                # Nợ of a deduction takes from it: -(Nợ - Có)
+        rule = lambda a, c, s: ("doanh thu chưa thực hiện kết chuyển vào kỳ (Nợ TK 3387)"      # noqa: E731
+                                if unearned and c.startswith("3387") and s == "Có" and a.startswith(rev_acc) else "")
+        _explain(line, *split(g, rule))
         m.lines.append(line)
     if used["cogs"]:
         line = SalesBookLine("cogs", LINES[1][1], sum((p.dr - p.cr for p in used["cogs"]), ZERO), led["cogs"],
                              sorted({p.account for p in used["cogs"]}), [p.where for p in used["cogs"]],
                              f"Nợ trừ Có TK {'/'.join(cogs_acc)}")
-        g = groups(used["cogs"], 1)
-        _explain(line, [(f"bút toán {side} TK {'/'.join(cogs_acc)} đối ứng TK {c}", -v) for (c, side), v in g.items()])
+        rule = lambda a, c, s: ("trích lập dự phòng giảm giá hàng tồn kho (Có TK 2294)" if c.startswith("2294") and s == "Nợ"  # noqa: E731
+                                else "giá vốn hàng bán bị trả lại nhập kho" if c.startswith(("155", "156")) and s == "Có"
+                                else "")
+        _explain(line, *split(groups(used["cogs"], 1), rule))
         m.lines.append(line)
     return m
