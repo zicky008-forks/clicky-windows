@@ -9,6 +9,10 @@ Run on the owner's PC. Nothing is sent anywhere and no AI is used:
 3. A new file "<name>_Clicky.html" is written: the original page, each target tagged with data-clicky="…",
    plus Clicky's layer (bar, frames, nón lá pointer, captions, "Hỏi Clicky"). The original file is never touched.
 4. The voice is the offline Vietnamese voice; clips are embedded, so the page plays offline.
+5. Number lock: a sentence may only say a figure that is written in the report. A figure the owner typed
+   himself must be listed in that sentence's "so_rieng", and is shown as his. Anything else stops the build.
+6. A machine-readable record ("biên bản") is embedded: every spoken figure, where it is in the report, the
+   report's SHA-256 and a seal over the record. present/kiem_bien_ban.py re-checks it from the output file.
 
 On the page, a reader can also ask about any table cell ("chi phí lương khối bán hàng AOPR?"): Clicky finds the
 row and the column by their labels, frames the real cell and reads it out. Questions it cannot place are kept
@@ -41,6 +45,9 @@ CARD_CLASS = re.compile(r"kpi|metric|stat|tile|card|figure-box|so-lieu", re.I)
 NOTE_START = re.compile(r"^\s*(kết luận|nhận xét|đề xuất|thông điệp|lưu ý|insight|điểm chính|tóm tắt|key)", re.I)
 HAS_NUMBER = re.compile(r"\d")
 CHART_CLASS = re.compile(r"chart|plot|graph|bieu-?do|echarts|apex|highcharts|plotly", re.I)
+NUM_TOKEN = re.compile(r"\d[\d.,]*")
+LABEL_ATTRS = ("aria-label", "alt", "title")
+RECORD_VERSION = 1
 
 
 @dataclass
@@ -132,7 +139,11 @@ def _clean(text: str, limit: int = 400) -> str:
         return text
     cut = text[:limit]
     end = max(cut.rfind(". "), cut.rfind("; "))
-    return (cut[:end + 1] if end > 80 else cut.rstrip() + "…").strip()
+    if end > 80:
+        return cut[:end + 1].strip()
+    if " " in cut:                       # never stop in the middle of a word or a number
+        cut = cut[:cut.rfind(" ")]
+    return cut.rstrip(" ,;:") + "…"
 
 
 CONTAINER_CLASS = re.compile(r"grid|row|list|container|wrapper|group|deck|cards\b", re.I)
@@ -301,6 +312,71 @@ def tag_targets(source: str, root: Node) -> tuple:
     return out, items
 
 
+# --- number lock and record ------------------------------------------------------------------------------
+
+def numbers(text: str) -> list:
+    """Figures as written (186,4 · 12,6 · 2.300), without a sentence's closing dot or comma."""
+    return [t for t in (m.rstrip(".,") for m in NUM_TOKEN.findall(text or "")) if t]
+
+
+def _labels(n: Node) -> str:
+    return " ".join(d.attrs[a] for d in n.walk() for a in LABEL_ATTRS if d.attrs.get(a))
+
+
+def target_texts(root: Node) -> dict:
+    """What a reader can read at each tagged place: its text plus chart labels (aria-label, alt, title)."""
+    return {n.attrs["data-clicky"]: n.text() + " " + _labels(n) for n in root.walk() if n.attrs.get("data-clicky")}
+
+
+def page_numbers(root: Node) -> set:
+    return set(numbers(root.text() + " " + _labels(root)))
+
+
+def seal(record: dict) -> str:
+    body = {k: v for k, v in record.items() if k != "ma_bam"}
+    return hashlib.sha256(json.dumps(body, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def make_record(script: dict, root: Node, meta: dict) -> dict:
+    """Check every spoken figure against the report and write down where it is. Raises on a figure that is
+    neither in the report nor declared by the owner in "so_rieng"."""
+    texts, on_page = target_texts(root), page_numbers(root)
+    rows, bad = [], []
+    for s in script.get("canh") or []:
+        for c in s.get("cau") or []:
+            noi = str(c.get("noi") or "").strip()
+            if not noi:
+                continue
+            chi = c.get("chi") or ""
+            own = {str(x).strip() for x in (c.get("so_rieng") or [])}
+            here = set(numbers(texts.get(chi, "")))
+            found = []
+            for tok in numbers(noi):
+                if tok in here:
+                    found.append({"so": tok, "nguon": chi})
+                elif tok in own:                     # declared by the owner: his, even if the page has it too
+                    found.append({"so": tok, "nguon": "nguoi_soan"})
+                elif tok in on_page:
+                    found.append({"so": tok, "nguon": "bao_cao"})
+                else:
+                    bad.append((noi, tok))
+            rows.append({"canh": s.get("muc", ""), "noi": noi, "chi": chi, "so": found})
+    if bad:
+        shown = "; ".join(f"số {tok} trong câu «{noi[:70]}»" for noi, tok in bad[:5])
+        more = f" (và {len(bad) - 5} chỗ nữa)" if len(bad) > 5 else ""
+        raise PackError(f"Lời nói có số không có trong báo cáo: {shown}{more}. Hãy sửa cho đúng số trong báo cáo. "
+                        "Nếu đó là số anh chủ động thêm, hãy ghi nó vào dòng so_rieng của câu đó.")
+    flat = [x["nguon"] for r in rows for x in r["so"]]
+    record = {"phien_ban": RECORD_VERSION, "bao_cao": meta["report"], "sha256": meta["report_sha256"],
+              "lap_luc": meta["built_iso"], "nguoi_chiu_trach_nhiem": meta["owner"], "cau": rows,
+              "tong": {"cau": len(rows), "so": len(flat),
+                       "dung_cho_khoanh": sum(1 for x in flat if x not in ("bao_cao", "nguoi_soan")),
+                       "cho_khac_trong_bao_cao": flat.count("bao_cao"), "nguoi_soan_them": flat.count("nguoi_soan")}}
+    record["ma_bam"] = seal(record)
+    return record
+
+
 # --- building ----------------------------------------------------------------------------------------
 
 def for_voice(text: str) -> str:
@@ -332,10 +408,13 @@ def scenes_from_script(script: dict, known: set) -> list:
     return scenes
 
 
-def inject(source: str, data: dict) -> str:
+def _blob(obj) -> str:
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+
+
+def inject(source: str, data: dict, record: dict) -> str:
     layer = Path(__file__).with_name("clicky_html_layer.html").read_text(encoding="utf-8")
-    blob = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
-    layer = layer.replace("__DATA__", blob)
+    layer = layer.replace("__DATA__", _blob(data)).replace("__BIEN_BAN__", _blob(record))
     m = None
     for m in re.finditer(r"</body\s*>", source, re.I):
         pass
@@ -352,7 +431,8 @@ def build(report: str, out: Optional[str] = None, owner: str = "anh Tuấn", con
     source = raw.decode("utf-8-sig", errors="replace")
     if 'data-clicky-layer="1"' in source:
         raise PackError("File này đã có Clicky. Hãy chạy trên file báo cáo gốc.")
-    tagged, items = tag_targets(source, parse(source))
+    root = parse(source)
+    tagged, items = tag_targets(source, root)
     known = {it.node.attrs["data-clicky"] for it in items}
     draft = draft_script(items, owner)
     draft_path = src_path.with_name(src_path.stem + "_kich_ban_Clicky.yaml")
@@ -363,6 +443,11 @@ def build(report: str, out: Optional[str] = None, owner: str = "anh Tuấn", con
                               encoding="utf-8")
         script = draft
     scenes = scenes_from_script(script, known)
+    now = dt.datetime.now()
+    meta = {"owner": owner, "contact": contact, "label": label, "report": src_path.name,
+            "report_sha256": hashlib.sha256(raw).hexdigest(), "built": now.strftime("%d/%m/%Y %H:%M"),
+            "built_iso": now.isoformat(timespec="seconds")}
+    record = make_record(script, root, meta)          # before the voice: a wrong figure costs no waiting
     say = voice or offline_voice()
     cache: dict = {}
 
@@ -375,20 +460,22 @@ def build(report: str, out: Optional[str] = None, owner: str = "anh Tuấn", con
     for s in scenes:
         s.update(clip(s["line"]))
     fallback = f"Câu này em chưa tìm thấy trong báo cáo. Em ghi lại để {owner} trả lời anh chị."
-    meta = {"owner": owner, "contact": contact, "label": label, "report": src_path.name,
-            "report_sha256": hashlib.sha256(raw).hexdigest(), "built": dt.datetime.now().strftime("%d/%m/%Y %H:%M"),
-            "minutes": round(sum(s["secs"] + 0.8 for s in scenes) / 60, 1)}
+    meta["minutes"] = round(sum(s["secs"] + 0.8 for s in scenes) / 60, 1)
     meta["pack_id"] = meta["report_sha256"][:16]
+    meta["record"] = dict(record["tong"], ma=record["ma_bam"][:12])
     data = {"meta": meta, "scenes": scenes,
             "cards": [{"id": it.node.attrs["data-clicky"], "text": it.text} for it in items if it.kind == "card"],
             "fallback": fallback, "fallback_clip": clip(fallback)}
-    page = inject(tagged, data)
+    page = inject(tagged, data, record)
     out_path = Path(out) if out else src_path.with_name(src_path.stem + "_Clicky.html")
     if out_path.resolve() == src_path.resolve():
         raise PackError("Không ghi đè file báo cáo gốc.")
     out_path.write_text(page, encoding="utf-8")
     return {"out": str(out_path), "draft": None if script_path else str(draft_path), "scenes": len(scenes),
-            "minutes": meta["minutes"], "bytes": len(page.encode("utf-8")),
+            "minutes": meta["minutes"], "bytes": len(page.encode("utf-8")), "record": meta["record"],
+            # figures found in the report but not at the framed place: weaker evidence, the owner should look
+            "xem_lai": [{"cau": r["noi"], "so": [x["so"] for x in r["so"] if x["nguon"] == "bao_cao"]}
+                        for r in record["cau"] if any(x["nguon"] == "bao_cao" for x in r["so"])],
             "found": {k: sum(1 for i in items if i.kind == k) for k in ("section", "note", "card", "table", "chart")}}
 
 

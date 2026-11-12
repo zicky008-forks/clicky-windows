@@ -2,6 +2,7 @@
 <!-- Clicky layer: added by present/clicky_html.py. Runs offline, sends nothing, uses no AI. -->
 <div id="clicky-host" data-clicky-layer="1"></div>
 <script id="clicky-data" type="application/json">__DATA__</script>
+<script id="clicky-bien-ban" type="application/json">__BIEN_BAN__</script>
 <script>
 (function () {
 "use strict";
@@ -11,6 +12,10 @@ const host = document.getElementById("clicky-host");
 const root = host.attachShadow({mode: "open"});
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const HAT = '<svg viewBox="0 0 32 32" width="22" height="22" aria-hidden="true"><path d="M16 3 L30 22 Q16 28 2 22 Z" fill="#2f8a5f" stroke="#fff" stroke-width="1.5"/><path d="M2 22 Q16 28 30 22" stroke="#174d34" stroke-width="2" fill="none"/></svg>';
+const R = M.record || {so: 0};
+const RECORD = !R.so ? "" : (R.nguoi_soan_them
+  ? `Biên bản: ${R.so - R.nguoi_soan_them} con số Clicky nói có trong báo cáo, ${R.nguoi_soan_them} con số do ${esc(M.owner)} bổ sung.`
+  : `Biên bản: ${R.so} con số Clicky nói đều có trong báo cáo.`) + ` Mã ${esc(R.ma)}.`;
 root.innerHTML = `
 <style>
 :host{all:initial}
@@ -37,6 +42,7 @@ button:focus-visible,input:focus-visible{outline:3px solid #e8a33d;outline-offse
   <form class="ask" id="f"><input id="q" placeholder="Ví dụ: lương khối bán hàng AOPR?" autocomplete="off"><button class="p">Hỏi</button></form>
   <div class="hint">Clicky tìm câu trả lời trong chính báo cáo này, khoanh đúng ô và đọc lên. Câu chưa có trong báo cáo được ghi lại cho ${esc(M.owner)}.</div>
   <div id="a" class="hidden"></div>
+  <div class="hint" id="bb">${RECORD}</div>
   <div id="tb" class="hidden"><h3>Câu đang chờ ${esc(M.owner)} trả lời</h3><ol id="tl"></ol><button class="p" id="send">Gửi các câu này qua email</button></div>
 </div>
 <div class="bar" role="region" aria-label="Clicky trình bày">

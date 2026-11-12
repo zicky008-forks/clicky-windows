@@ -17,6 +17,13 @@ if not exist "%LOCALAPPDATA%\Clicky\voice\tts-piper-vi\tokens.txt" if not exist 
 )
 python -m pip install -q --disable-pip-version-check "sherpa-onnx>=2.0.1,<3" PyYAML openpyxl python-pptx numpy
 python -m present.clicky_html "%~1" %2 %3 %4 %5 %6
+if errorlevel 1 (
+  pause
+  exit /b 1
+)
+echo.
+echo Kiểm lại: mọi con số Clicky nói có nằm trong báo cáo không...
+if exist "%~dpn1_Clicky.html" python -m present.kiem_bien_ban "%~dpn1_Clicky.html" --goc "%~1"
 echo.
 echo Xong. Mở file _Clicky.html để xem. Muốn sửa lời: sửa file _kich_ban_Clicky.yaml rồi kéo thả lại kèm --kich-ban.
 pause
