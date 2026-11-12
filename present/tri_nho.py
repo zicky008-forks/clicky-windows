@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import os
+import datetime as _dt
 import re
 import subprocess
 import sys
@@ -66,6 +67,7 @@ TEMPLATES = {
     TU_DOC: """# Cách đọc riêng của công ty anh. Mỗi dòng: CHỮ VIẾT = cách đọc.
 # Dòng bắt đầu bằng dấu # là ghi chú, Clicky bỏ qua. Muốn dùng ví dụ dưới, xóa dấu # ở đầu dòng.
 # VNM = vi-na-mín
+# AOP = kế hoạch năm
 """,
 }
 
@@ -77,8 +79,17 @@ def fold(s: str) -> str:
 
 
 def read_text(path) -> str:
-    """A text file the owner saved in Notepad: UTF-8 with or without BOM, else the Vietnamese ANSI page."""
+    """A text file the owner saved in Notepad: UTF-8 with or without BOM, UTF-16 ("Unicode"), else the Vietnamese
+    ANSI page."""
     raw = Path(path).read_bytes()
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):        # Notepad "Unicode": UTF-16 with its mark
+        text = raw.decode("utf-16")
+        return unicodedata.normalize("NFC", text).replace("\r\n", "\n")
+    if len(raw) >= 4 and raw[1::2].count(0) > len(raw) // 4:   # UTF-16 without the mark
+        try:
+            return unicodedata.normalize("NFC", raw.decode("utf-16-le")).replace("\r\n", "\n")
+        except UnicodeDecodeError:
+            pass
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -192,9 +203,9 @@ def add_questions(questions: list, report: str = "", asked_by: str = "", when: s
     return {"file": str(f), "added": added, "already": same}
 
 
-def report_period(name: str, title: str = "") -> str:
+def report_period(name: str, title: str = "", today=None) -> str:
     """The reporting period a report belongs to ("10/2026", "Q3/2026"), so v1 and final of the same month share
-    it. Without one, the file name without version words ("v2", "final", "nháp")."""
+    it. Without one, the month the talk is built in."""
     texts = [fold(Path(name).stem.replace("_", " ")), fold(title)]
     year = next((m.group(1) for t in texts for m in [re.search(r"\b(20\d\d)\b", t)] if m), "")
     for t in texts:
@@ -208,12 +219,10 @@ def report_period(name: str, title: str = "") -> str:
         m = re.search(r"(?:\bt|\bthang)\s*0?(\d{1,2})\b", t)
         if m and 1 <= int(m.group(1)) <= 12:
             return f"{int(m.group(1)):02d}/{year}" if year else f"T{int(m.group(1)):02d}"
-    stem = texts[0]
-    while True:
-        cut = re.sub(r"[\s.\-]*(v\d+|ver\s?\d+|final|ban cuoi|cuoi|draft|nhap|sua\s?\d*)$", "", stem).strip()
-        if cut == stem or not cut:
-            return stem or Path(name).stem
-        stem = cut
+    # no month in the name or the title ("Bao cao.html", next month saved over the same name): the month it is
+    # built in, so next month's talk does not read this month's answers again
+    when = today or _dt.date.today()
+    return f"{when.month:02d}/{when.year}"
 
 
 def mark_said(period: str, entries: list, path: Optional[str] = None) -> None:

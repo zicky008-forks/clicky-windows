@@ -4,7 +4,9 @@ Reads only the output file (and the original report when given). It trusts nothi
 1. the record's seal is recomputed;
 2. the sentences in the record are the sentences the page will actually speak;
 3. every figure in every sentence is listed, and is found again at the place the record names, with the same
-   direction (tăng/giảm/âm) and unit, read with the report's own number marks (412,580.5 or 412.580,5);
+   direction (tăng/giảm/âm) and unit, read with the report's own number marks (412,580.5 or 412.580,5); on a
+   table row it must sit in the column the sentence names (chênh lệch, %, AOP gốc…), and the sentence must not
+   name another row;
 4. with --goc, the original report's SHA-256 matches the record;
 5. a talk that says no figure at all does not pass: there is nothing it could have checked.
 
@@ -20,7 +22,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from present.clicky_html import _labels, check_figure, figures, numbers, parse, seal, target_texts, value
+from present.clicky_html import (_labels, check_at, check_figure, figures, numbers, other_row, page_places, parse,
+                                 seal, spelled_number, target_texts, value)
 
 SCRIPT = r'<script id="{}" type="application/json">(.*?)</script>'
 
@@ -47,6 +50,7 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
     root = parse(page)
     en, unit = record.get("dau_so") == "en", record.get("don_vi") or None
     texts = target_texts(root)
+    places = page_places(root, en, unit)       # table rows by column, cards part by part: the build's own rules
     on_page = {value(t, en) for t in numbers(root.text() + " " + _labels(root))}
     count = {"cau": 0, "so": 0, "dung_cho_khoanh": 0, "cho_khac_trong_bao_cao": 0, "nguoi_soan_them": 0}
     for row in record.get("cau", []):
@@ -56,6 +60,11 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
         if [f.tok for f in spoken] != listed:
             errors.append(f"Câu «{row['noi'][:70]}» có số chưa được ghi trong biên bản.")
             continue
+        if spelled_number(row["noi"]):
+            errors.append(f"Câu «{row['noi'][:70]}» có số viết bằng chữ, không đối chiếu được.")
+        other = other_row(row["noi"], row.get("chi", ""), places)
+        if other and spoken:
+            errors.append(f"Câu «{row['noi'][:70]}» nói về «{other}» nhưng Clicky khoanh dòng khác.")
         for f, x in zip(spoken, row["so"]):
             count["so"] += 1
             tok, where = x["so"], x["nguon"]
@@ -67,7 +76,12 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
                     errors.append(f"Số {tok} không còn trong báo cáo (câu «{row['noi'][:70]}»).")
             else:
                 count["dung_cho_khoanh"] += 1
-                why = check_figure(f, figures(texts.get(where, "")), en, unit)
+                if f.how == "paren?":
+                    why = "số trong ngoặc, chưa rõ là số âm hay tỷ trọng"
+                elif where in places:
+                    why = check_at(f, places[where], en, unit)
+                else:
+                    why = check_figure(f, figures(texts.get(where, "")), en, unit)
                 if why == "missing":
                     errors.append(f"Số {tok} không có ở chỗ Clicky khoanh ({where}) (câu «{row['noi'][:70]}»).")
                 elif why:

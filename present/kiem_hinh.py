@@ -1,15 +1,20 @@
 """Open a "<name>_Clicky.html" file in a headless browser and check what the boss will see.
 
 For every place Clicky frames (each pointed place of the talk, each number card, one figure per table row), with
-the question panel closed, open, and with the answer bubble open beside the place, at two laptop screen sizes:
+the question panel closed, open, and with the answer bubble open beside the place, at a laptop screen (1366x768)
+and a small one (911x512, a laptop at 150% zoom):
 - the frame encloses the place it should;
 - the figure is on screen and not under Clicky's own bar, question panel or bubble, nor under the report's own
   fixed header (checked with elementFromPoint);
 - the panel and the bubble never cover the figure's row label or column header;
-- the nón lá pointer does not sit on any figure or label.
+- the nón lá pointer does not sit on any figure or label;
+- the answer bubble never covers its own place and stays fully on the screen;
+- a lassoed region (the first three rows of a table) is still framed round its cells after the page scrolls;
+- Clicky's bar is really on screen and on top (elementFromPoint), also after the report's own scripts ran.
 On a phone screen (390x844) the bar, the caption, the question panel and a bubble stay on the screen, and every
 button of the bar is at least 44px.
-If Clicky's layer never starts on the page (a script error), the check says KHÔNG ĐẠT with the error.
+If Clicky's layer never starts on the page, the check says KHÔNG ĐẠT and why: a script error, embedded data that
+broke the page, or a report so large that Clicky did not start in time.
 
 The geometry is measured by the page itself (window.__clickyKiemHinh in clicky_html_layer.html), so the check
 measures the same code the boss runs. Nothing leaves the PC: the browser opens the local file and no screenshot
@@ -28,7 +33,7 @@ from typing import Optional
 
 from present import tri_nho
 
-SIZES = ((1366, 768), (1920, 1080))
+SIZES = ((1366, 768), (911, 512))
 PHONE = (390, 844)
 SKIPPED = 3
 
@@ -47,6 +52,30 @@ def _launch(pw):
         except Exception as exc:  # the next browser on the list may work
             last = exc
     raise RuntimeError(f"không mở được trình duyệt ({last})")
+
+
+BIG = 20000   # table cells: above this a slow start is put down to the report's size
+
+
+def _why_not(page, errors, blocked=()) -> str:
+    """Why Clicky's layer did not start: the page's security policy, a script error, broken embedded data, or a
+    report too big to read in time. Each says what it is; none is guessed."""
+    if blocked:
+        return "trang có chính sách bảo mật (Content-Security-Policy) chặn mã chạy trong trang, nên Clicky không chạy được"
+    if errors:
+        return "; ".join(errors)
+    try:
+        d = page.evaluate("""() => { const e = document.getElementById('clicky-data'); let ok = false;
+            try { JSON.parse(e.textContent); ok = true; } catch (_) {}
+            return {data: !!e, json: ok, cells: document.querySelectorAll('td,th,[role=cell],[role=gridcell]').length}; }""")
+    except Exception:
+        return "báo cáo quá lớn hoặc quá chậm: trang không trả lời"
+    if not d["data"] or not d["json"]:
+        return "lớp Clicky không khởi động; dữ liệu nhúng có thể đã làm hỏng thẻ script"
+    if d["cells"] >= BIG:
+        return (f"báo cáo quá lớn hoặc quá chậm: Clicky chưa sẵn sàng sau 15 giây ({d['cells']:,} ô bảng)"
+                .replace(",", "."))
+    return "lớp Clicky không khởi động mà trang không báo lỗi; mở file bằng trình duyệt để xem"
 
 
 def check(packed: str, sizes=SIZES, timeout_ms: int = 60000, questions: Optional[list] = None,
@@ -74,16 +103,23 @@ def check(packed: str, sizes=SIZES, timeout_ms: int = 60000, questions: Optional
                 ctx = browser.new_context(viewport={"width": w, "height": h},
                                           **({"is_mobile": True, "has_touch": True} if mobile else {}))
                 page = ctx.new_page()
-                errors = []
+                errors, blocked = [], []
                 page.on("pageerror", lambda e, errors=errors: errors.append(str(e).splitlines()[0][:200]))
+                page.on("console", lambda m, blocked=blocked: blocked.append(1)
+                        if m.type == "error" and "Content Security Policy" in m.text else None)
                 page.set_default_timeout(timeout_ms)
                 try:
                     page.goto(url, wait_until="load")
+                except Exception:  # the page itself did not finish loading
+                    problems.append(f"màn {w}x{h}: báo cáo quá lớn hoặc quá chậm: trình duyệt chưa mở xong trang "
+                                    f"sau {timeout_ms // 1000} giây")
+                    ctx.close()
+                    break
+                try:
                     page.wait_for_function("typeof window.__clickyKiemHinh === 'function'",
                                            timeout=min(timeout_ms, 15000))
-                except Exception:  # the layer never started: say so, never a traceback
-                    why = "; ".join(errors) or "lớp Clicky không khởi động; dữ liệu nhúng có thể đã làm hỏng thẻ script"
-                    problems.append(f"màn {w}x{h}: Clicky không chạy trên trang này ({why})")
+                except Exception:  # the layer never started: say why, never a traceback
+                    problems.append(f"màn {w}x{h}: Clicky không chạy trên trang này ({_why_not(page, errors, blocked)})")
                     ctx.close()
                     break
                 if questions and not tried:
@@ -125,7 +161,8 @@ def main(argv=None) -> int:
         return SKIPPED
     if res["ok"]:
         print(f"ĐẠT. {res['checked']} lần khoanh trên màn {', '.join(res['sizes'])}: khung đúng chỗ, "
-              "không có số, tên dòng hay tiêu đề cột nào bị thanh, bảng hỏi, khung hỏi hay nón lá che.")
+              "không có số, tên dòng hay tiêu đề cột nào bị thanh, bảng hỏi, khung hỏi hay nón lá che; "
+              "khung hỏi không che chỗ đang hỏi; vùng khoanh vẫn đúng sau khi cuộn.")
         return 0
     print("KHÔNG ĐẠT:")
     for p in res["problems"][:30]:

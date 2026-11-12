@@ -48,21 +48,20 @@ def test_dropped_paths_are_always_quoted():
 
 def test_report_launcher_flow():
     text = (ROOT / "Gan_Clicky_vao_bao_cao.bat").read_text(encoding="utf-8")
-    # the real Documents folder, also when OneDrive backs it up, and the path is shown to the owner
-    assert "GetFolderPath('MyDocuments')" in text and 'echo Trí nhớ của Clicky' in text
-    # name and e-mail asked once before the first build
-    assert text.index("present.tri_nho --thu-muc") < text.index("present.clicky_html")
-    assert " chu" in text.split("present.tri_nho --thu-muc", 1)[1].splitlines()[0]
-    # a dropped .yaml is the edited script, whichever order the two files come in
-    assert '"%~x1"==".yaml" set "KB=%~f1"' in text and "--kich-ban" in text
-    # MP3 without ffmpeg
-    assert "lameenc" in next(l for l in text.splitlines() if "pip install" in l)
-    # every check stops the launcher when it fails, and the result is opened at the end
+    # the real Documents folder, also when OneDrive backs it up
+    assert "GetFolderPath('MyDocuments')" in text
+    # MP3 without ffmpeg, and a failed pip stops with a Vietnamese message instead of a traceback later
     lines = [l.strip() for l in text.splitlines()]
-    for step in ("present.clicky_html", "present.kiem_bien_ban", "present.kiem_hinh"):
-        i = next(k for k, l in enumerate(lines) if step in l)
-        assert lines[i + 1].startswith("if errorlevel"), step
-    assert 'start "" "%OUT%"' in text
+    pip = next(k for k, l in enumerate(lines) if "pip install" in l)
+    assert "lameenc" in lines[pip] and lines[pip + 1] == "if errorlevel 1 goto :loi_pip"
+    assert "KHÔNG ĐẠT: chưa cài được các thư viện" in text
+    # the whole flow (owner, build, re-check, look, open) runs in Python, with the full command line that
+    # Explorer used, read with delayed expansion so an unquoted "P&L_T10.html" never runs as a command
+    assert 'set "CLICKY_CMDLINE=!cmdcmdline!"' in text and "EnableDelayedExpansion" in text
+    assert text.index("EnableDelayedExpansion") < text.index("!cmdcmdline!") < text.index("DisableDelayedExpansion")
+    run = next(l for l in lines if "present.clicky_html" in l)
+    assert "--tu-bat" in run and '"%~1"' in run
+    assert lines[lines.index(run) + 1].startswith("if errorlevel 1")
 
 
 def test_memory_launcher_uses_the_real_documents_folder():

@@ -9,12 +9,29 @@
 const D = JSON.parse(document.getElementById("clicky-data").textContent);
 const M = D.meta || {}, S = D.scenes || [], CARDS = D.cards || [];
 const host = document.getElementById("clicky-host");
+document.documentElement.appendChild(host);   // on <html>, outside <body>: a report script that rewrites its body cannot remove Clicky
 const root = host.attachShadow({mode: "open"});
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
-function cellText(c) { return c ? (c.innerText || c.textContent || "").replace(/\s+/g, " ").trim() : ""; }
+const BLOCKY = /^(BR|DIV|P|LI|TR|TD|TH|H[1-6]|UL|OL|DL|DD|DT|TABLE|TBODY|THEAD|TFOOT|SECTION|ARTICLE|BLOCKQUOTE|FIGCAPTION|CAPTION|FIGURE|HEADER|FOOTER|MAIN|NAV|ASIDE|PRE|HR|TEXT)$/;
+function textOf(e) {   // textContent with a space where a line or a block breaks: no layout, so huge reports stay fast
+  if (!e.firstElementChild) return e.textContent || "";
+  let s = "";
+  for (let n = e.firstChild; n; n = n.nextSibling) {
+    if (n.nodeType === 3) { s += n.nodeValue; continue; }
+    if (n.nodeType !== 1) continue;
+    const tg = n.tagName.toUpperCase();
+    if (tg === "SCRIPT" || tg === "STYLE" || tg === "TEMPLATE" || tg === "NOSCRIPT" || n.hidden || n.hasAttribute("data-clicky-layer") ||
+        /display\s*:\s*none/i.test(n.getAttribute("style") || "")) continue;
+    s += BLOCKY.test(tg) ? " " + textOf(n) + " " : textOf(n);
+  }
+  return s;
+}
+function cellText(c) { return c ? textOf(c).replace(/\s+/g, " ").trim() : ""; }
 const OWNER = M.owner || "anh chị phụ trách";
 const H1 = document.querySelector("h1");
-const TITLE = M.title || M.report_title || (document.title || "").trim() || cellText(H1) || M.report || "báo cáo";
+const ascii = t => !/[^\x00-\x7f]/.test(t);
+let TITLE = M.title || M.report_title || (document.title || "").trim() || cellText(H1) || M.report || "báo cáo";
+if (ascii(TITLE) && H1 && !ascii(cellText(H1))) TITLE = cellText(H1);   // "Bao cao thang 10" loses to the heading with its accents
 const HAT = '<svg viewBox="0 0 32 32" width="22" height="22" aria-hidden="true"><path d="M16 3 L30 22 Q16 28 2 22 Z" fill="#2f8a5f" stroke="#fff" stroke-width="1.5"/><path d="M2 22 Q16 28 30 22" stroke="#174d34" stroke-width="2" fill="none"/></svg>';
 const R = M.record || {so: 0};
 const DRAFT = /^SƠ BỘ/i.test(String(M.trang_thai || "").trim());   // a draft the owner has not approved yet; CHÍNH THỨC shows nothing
@@ -53,8 +70,9 @@ root.innerHTML = `
 .cap small{display:block;color:var(--muted);font-size:12.5px}
 button{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:8px;padding:6px 11px;cursor:pointer;min-height:40px;min-width:40px}
 button.p{background:var(--acc);border-color:var(--acc);color:var(--accfg)}
-#play{min-width:15.5em;text-align:left}
-button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--warn);outline-offset:2px}
+#play{min-width:11em;text-align:center}
+button:focus-visible,summary:focus-visible{outline:3px solid var(--warn);outline-offset:2px}
+input:focus-visible{outline:3px solid var(--acc);outline-offset:1px}
 .panel{position:fixed;right:12px;bottom:84px;width:360px;max-height:70vh;overflow:auto;z-index:2147483000;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:12px;box-shadow:var(--sh);padding:12px 14px 14px;display:flex;flex-direction:column;gap:10px;font-size:15px}
 .ph{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .panel h3{margin:0;font-size:15px}
@@ -66,12 +84,18 @@ button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid
 .chips button{background:var(--bg);border:1.5px solid var(--acc);color:var(--fg);font-size:13.5px;min-height:32px;padding:4px 10px;border-radius:99px}
 .chips button::after{content:" ›";color:var(--acc);font-weight:700}
 .hint{color:var(--muted);font-size:13px}
+.sentbox a.mail{color:var(--acc);font-size:13.5px;display:inline-block;margin-top:4px}
 details.bb{color:var(--muted);font-size:12.5px}details.bb summary{cursor:pointer;width:max-content}
 .ev{display:flex;flex-wrap:wrap;gap:5px;margin-top:4px}
 .ev span{font-size:12px;border-radius:99px;padding:1px 8px;background:var(--soft);color:var(--fg);white-space:nowrap}
 .ev span.k{background:var(--soft2)}.ev span.o{background:var(--warnsoft)}
-.bubble{position:fixed;z-index:2147483001;width:350px;max-width:calc(100vw - 24px);background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:12px;box-shadow:var(--sh);padding:10px 12px 12px;display:flex;flex-direction:column;gap:8px;font-size:15px}
-.bubble>.x{position:absolute;top:2px;right:2px}
+.bubble{position:fixed;z-index:2147483001;width:350px;max-width:calc(100vw - 24px);background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:12px;box-shadow:var(--sh);padding:10px 4px 12px 12px;font-size:15px}
+.bin{display:flex;flex-direction:column;gap:8px;overflow:auto;padding-right:8px;overscroll-behavior:contain}
+.bubble>.x{position:absolute;top:2px;right:2px;z-index:1}
+table.mini{border-collapse:collapse;font-size:13.5px;margin-top:6px;width:100%}
+table.mini th,table.mini td{padding:2px 5px;border-bottom:1px solid var(--soft2);text-align:right;white-space:nowrap}table.mini th{white-space:normal;vertical-align:bottom}
+table.mini th:first-child,table.mini td:first-child{text-align:left;white-space:normal}
+table.mini caption{caption-side:bottom;text-align:left;color:var(--muted);font-size:12.5px;padding-top:3px}
 .bubble .ans{margin-right:30px}
 .bubble ul{margin:4px 0 0;padding-left:18px}.bubble li{margin:2px 0}
 .tail{position:absolute;width:14px;height:14px;background:var(--bg);border:1px solid var(--line);transform:rotate(45deg)}
@@ -83,15 +107,20 @@ details.bb{color:var(--muted);font-size:12.5px}details.bb summary{cursor:pointer
 .lasso .tip button{min-height:32px;padding:2px 10px}
 button.on{background:var(--warnsoft);border-color:var(--warn)}
 .quiet{color:var(--muted);font-size:12px}
-.badge{font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--warn);border:1.5px solid var(--warn);background:var(--warnsoft);border-radius:6px;padding:2px 7px;white-space:nowrap;cursor:default}
+.badge{font-size:12.5px;font-weight:700;color:#7a4b06;border:1.5px solid #b86e00;background:var(--warnsoft);border-radius:6px;padding:2px 8px;white-space:nowrap;cursor:pointer;min-height:28px;min-width:0}
+:host([data-theme="dark"]) .badge{color:var(--warn);border-color:var(--warn)}
+.sl{display:none}
 .brk{display:none}
 .hidden{display:none!important}
 :host([data-small]) .bar{padding:6px;gap:6px}
 :host([data-small]) .cap{order:-2;flex:1 1 100%;max-width:none;min-height:2.9em;font-size:14.5px}
 :host([data-small]) .badge{order:-3}:host([data-small]) .badge~.cap{flex-basis:60%}
 :host([data-small]) .brk{display:block;order:-1;flex:0 0 100%;height:0}
-:host([data-small]) .who,:host([data-small]) .lbl{display:none}
+:host([data-small]) .who,:host([data-small]) .lbl,:host([data-small]) .ev{display:none}
+:host([data-mid]) .who>span,:host([data-mid]) #lassob .lbl{display:none}:host([data-mid]) #lassob .sl{display:inline}:host([data-mid]) .cap{flex-basis:240px}
+:host([data-small]) .sl{display:inline;font-size:13px}
 :host([data-small]) .bar button{min-height:44px;min-width:44px;padding:4px 8px;flex:1 1 0}
+:host([data-small]) .bar .badge{flex:0 0 auto}
 :host([data-small]) #play{min-width:44px;text-align:center}
 :host([data-small]) .bubble{width:auto}
 </style>
@@ -106,25 +135,28 @@ button.on{background:var(--warnsoft);border-color:var(--warn)}
 <div class="bubble hidden" id="bub" role="dialog" aria-label="Hỏi em tại chỗ này">
   <div class="tail t" id="tail"></div>
   <button class="x" id="bx" type="button" aria-label="Đóng" title="Đóng (Esc)">×</button>
+  <div class="bin" id="bin">
   <div id="ba" class="ans" aria-live="polite"></div>
   <form class="ask" id="bf"><input id="bq" placeholder="Hỏi thêm về chỗ này…" autocomplete="off" aria-label="Hỏi thêm"><button class="p">Hỏi</button></form>
+  </div>
 </div>
 <div class="lasso hidden" id="lasso"><div class="tip"><span id="ltip"></span><button type="button" id="lstop">Thôi</button></div><div class="r hidden" id="lr"></div></div>
 <div class="bar" id="bar" role="region" aria-label="Trợ lý trình bày báo cáo">
   <span class="who" title="Trình bày do trợ lý AI thực hiện">${HAT}<span>Trợ lý AI của ${esc(OWNER)}</span></span>
-  ${DRAFT ? `<span class="badge" id="draft" tabindex="0" role="note" title="${esc(String(M.trang_thai).trim())}" aria-label="${esc(String(M.trang_thai).trim())}">SƠ BỘ</span>` : ""}
   <button class="p" id="play"></button>
   <button id="prev" title="Phần trước (phím ←)" aria-label="Phần trước">⏮</button><button id="next" title="Phần sau (phím →)" aria-label="Phần sau">⏭</button>
   <button id="askb" title="Gõ câu hỏi về báo cáo">Hỏi em</button>
-  <button id="lassob" title="Khoanh một vùng trên báo cáo để hỏi về vùng đó" aria-label="Khoanh vùng"><span aria-hidden="true">⬚</span><span class="lbl"> Khoanh vùng</span></button>
+  <button id="lassob" title="Khoanh một vùng trên báo cáo để hỏi về vùng đó" aria-label="Khoanh vùng"><span aria-hidden="true">⬚</span><span class="lbl"> Khoanh vùng</span><span class="sl" aria-hidden="true"> Khoanh</span></button>
   <button id="hide" title="Thu gọn lời đang nói" aria-label="Thu gọn">—</button>
+  ${DRAFT ? `<button type="button" class="badge" id="draft" title="${esc(String(M.trang_thai).trim())}" aria-label="Kịch bản nháp: ${esc(String(M.trang_thai).trim())}. Bấm để xem giải thích.">Kịch bản nháp</button>` : ""}
   <div class="cap" id="cap" aria-live="polite"></div><span class="brk"></span>
 </div>`;
 const $ = id => root.getElementById(id);
+const INTRO = "<span>Em là Clicky, trợ lý AI của " + esc(OWNER) + ". Bấm ▶ để nghe trình bày. Bấm vào bất kỳ con số hay đoạn nào trên báo cáo, hoặc ⬚ Khoanh vùng, để hỏi ngay tại đó.</span>";
 const audio = new Audio();
 let idx = 0, playing = false, shown = new Set(), aside = false, started = false, ended = false, resumeAt = null, frames = [];
 function hit(a, b) { return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom; }
-function rect(e) { return e.getBoundingClientRect(); }
+function rect(e) { if (e === regionEl) placeRegion(); return e.getBoundingClientRect(); }
 function isOpen(e) { return !e.classList.contains("hidden"); }
 function vp() {   // what the reader sees; on a phone a wide table can make the page wider than the screen
   const v = window.visualViewport;
@@ -132,7 +164,7 @@ function vp() {   // what the reader sees; on a phone a wide table can make the 
 }
 function fitBar() {
   const v = vp(), small = v.w <= 700, b = $("bar"), g = small ? 6 : 12;
-  host.toggleAttribute("data-small", small);
+  host.toggleAttribute("data-small", small); host.toggleAttribute("data-mid", !small && v.w < 1200);
   Object.assign(b.style, {left: (v.x + g) + "px", width: (v.w - 2 * g) + "px", right: "auto"});
   if (v.y || Math.abs(v.h - innerHeight) > 1) { b.style.bottom = "auto"; b.style.top = (v.y + v.h - b.offsetHeight - g) + "px"; }
   else { b.style.top = ""; b.style.bottom = g + "px"; }
@@ -144,29 +176,97 @@ layer.setAttribute("aria-hidden", "true"); layer.setAttribute("data-clicky-layer
 layer.style.cssText = "position:fixed;left:0;top:0;width:0;height:0;overflow:visible;z-index:2147482999;pointer-events:none";
 document.documentElement.appendChild(layer);
 const NS = "http://www.w3.org/2000/svg";
+// the dim is one shape with a mask: holes that overlap stay clear, never a grey "double box"
 const dim = document.createElementNS(NS, "svg");
+dim.setAttribute("data-clicky-dim", "1");
 dim.style.cssText = "position:fixed;left:0;top:0;overflow:visible;display:none";
-const dimPath = document.createElementNS(NS, "path");
-dimPath.setAttribute("fill", DIM); dimPath.setAttribute("fill-rule", "evenodd"); dim.appendChild(dimPath); layer.appendChild(dim);
+dim.innerHTML = '<defs><mask id="clicky-dim-mask" maskUnits="userSpaceOnUse"><rect x="0" y="0" width="100%" height="100%" fill="#fff"/><g></g></mask></defs>' +
+  '<rect x="0" y="0" width="100%" height="100%" mask="url(#clicky-dim-mask)"/>';
+const dimHoles = dim.querySelector("mask g"), dimRect = dim.lastChild; dimRect.setAttribute("fill", DIM);
+layer.appendChild(dim);
+const lead = document.createElementNS(NS, "svg");   // a thin leader line when the bubble cannot sit right next to its place
+lead.setAttribute("data-clicky-lead", "1");
+lead.style.cssText = "position:fixed;left:0;top:0;width:1px;height:1px;overflow:visible;display:none";
+lead.innerHTML = '<line stroke-width="2" stroke-dasharray="5 3"/><circle r="4"/>';
+lead.firstChild.setAttribute("stroke", FRAME); lead.lastChild.setAttribute("fill", FRAME);
+layer.appendChild(lead);
 const tail = document.createElement("div");   // blank space after the report, so its last lines can scroll above the bar
 tail.setAttribute("aria-hidden", "true"); tail.setAttribute("data-clicky-layer", "1"); tail.style.cssText = "height:55vh";
 document.body.appendChild(tail);
 const hat = document.createElement("div");
 hat.innerHTML = HAT.replace('width="22" height="22"', 'width="34" height="34"');
-hat.style.cssText = "position:fixed;opacity:0;transition:opacity .2s";
+hat.style.cssText = "position:fixed;opacity:0;transition:opacity .2s;filter:drop-shadow(0 1px 2px rgba(0,0,0,.6))";
 layer.appendChild(hat);
-function el(id) { return id ? document.querySelector('[data-clicky="' + id + '"]') : null; }
+const regionEl = document.createElement("div");   // the lassoed area, as a place Clicky can frame and answer beside
+regionEl.style.cssText = "position:fixed;pointer-events:none"; regionEl.setAttribute("data-clicky-region", "1"); layer.appendChild(regionEl);
+const skip = document.createElement("a");   // the first Tab stop of the page: straight to "Hỏi em"
+skip.href = "#"; skip.textContent = "Hỏi Clicky về báo cáo này (phím /)"; skip.setAttribute("data-clicky-layer", "1"); skip.id = "clicky-skip";
+skip.style.cssText = "position:fixed;left:12px;top:-80px;z-index:2147483002;background:#1f7a5a;color:#fff;font:600 15px 'Segoe UI',system-ui,sans-serif;padding:10px 14px;border-radius:8px;text-decoration:none;outline:3px solid #f5b544";
+skip.addEventListener("focus", () => { skip.style.top = "12px"; });
+skip.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); openPanel(); $("q").focus({preventScroll: true}); }); skip.addEventListener("blur", () => { skip.style.top = "-80px"; });
+document.documentElement.insertBefore(skip, document.body);
 const mine = n => { const e = n && (n.nodeType === 1 ? n : n.parentElement); return !!(e && e.closest("[data-clicky-layer]")); };
+// what each tagged place said when the page loaded: a report script that redraws its page loses the tags, Clicky finds them again
+const ANCH = {}, tagAt = {}, sig = e => cellText(e.tagName === "TABLE" && e.rows && e.rows[0] ? e.rows[0] : e);   // a table: its first row is enough
+document.querySelectorAll("[data-clicky]").forEach(e => {
+  const tag = e.tagName; if (!tagAt[tag]) { tagAt[tag] = new Map(); [...document.getElementsByTagName(tag)].forEach((x, i) => tagAt[tag].set(x, i)); }
+  ANCH[e.getAttribute("data-clicky")] = {tag, text: sig(e), k: tagAt[tag].get(e)};
+});
+function el(id) {
+  if (!id) return null;
+  const e = document.querySelector('[data-clicky="' + id + '"]'); if (e) return e;
+  const a = ANCH[id]; if (!a || !a.text) return null;
+  let f = null, d = Infinity;   // the same words in the same kind of element, nearest to where it was
+  [...document.getElementsByTagName(a.tag)].forEach((x, i) => { if (Math.abs(i - a.k) < d && !mine(x) && sig(x) === a.text) { f = x; d = Math.abs(i - a.k); } });
+  if (f) f.setAttribute("data-clicky", id);
+  return f;
+}
 
-let NUMS = null, TABLES = null, BLOCKS = null, PCARDS = null, PTEXT = null;
-const forget = () => { NUMS = TABLES = BLOCKS = PCARDS = PTEXT = null; };
-new MutationObserver(ms => { if (ms.some(m => !mine(m.target))) forget(); })
-  .observe(document.body, {childList: true, subtree: true, characterData: true});
-function numNodes() {   // text nodes that hold a figure, found once and kept until the page changes
+let NUMS = null, TABLES = null, BLOCKS = null, PCARDS = null, PTEXT = null, UMAP = null, CHARTS = null;
+const LIVE = new Set([host, layer, tail, skip]);   // Clicky's own nodes; copies left by a body rewrite are dropped
+const ownNode = n => LIVE.has(n) || (n.nodeType === 1 && n.hasAttribute("data-clicky-layer"));
+const TABLEISH = "table,tr,td,th,thead,tbody,tfoot,[role=table],[role=grid],[role=row],[role=cell],[role=gridcell]";
+function watchBody() {   // the report changed: forget what was read; a table change rebuilds the tables, nothing else does
+  new MutationObserver(ms => {
+    let any = false, tab = false;
+    for (const m of ms) {
+      if (mine(m.target)) continue;
+      const nodes = m.type === "childList" ? [...m.addedNodes, ...m.removedNodes] : [];
+      if (m.type === "childList" && nodes.every(ownNode)) continue;
+      any = true;
+      if (!tab) { const e = m.target.nodeType === 1 ? m.target : m.target.parentElement;
+        tab = !!(e && e.closest(TABLEISH)) || nodes.some(n => n.nodeType === 1 && (n.matches(TABLEISH) || !!n.querySelector(TABLEISH))); }
+    }
+    if (!any) return;
+    NUMS = BLOCKS = PCARDS = PTEXT = UMAP = CHARTS = null; if (tab) TABLES = null;
+    remount();
+  }).observe(document.body, {childList: true, subtree: true, characterData: true});
+}
+function remount() {   // put Clicky back if the report removed it
+  const de = document.documentElement;
+  if (!host.isConnected) de.appendChild(host);
+  if (!layer.isConnected) de.appendChild(layer);
+  if (!skip.isConnected && document.body) de.insertBefore(skip, document.body);
+  if (document.body && !tail.isConnected) document.body.appendChild(tail);
+  if (document.body) document.body.querySelectorAll("[data-clicky-layer]").forEach(x => { if (!LIVE.has(x) && !x.parentElement.closest("[data-clicky-layer]")) x.remove(); });
+}
+watchBody();
+let watchedBody = document.body;
+new MutationObserver(() => { if (document.body && document.body !== watchedBody) { watchedBody = document.body; NUMS = BLOCKS = PCARDS = PTEXT = UMAP = TABLES = CHARTS = null; watchBody(); } remount(); })
+  .observe(document.documentElement, {childList: true});
+function numNodes() {   // text nodes that hold a figure, grouped by table and row so far ones are skipped in one look
   if (NUMS) return NUMS;
-  NUMS = []; const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  for (let n = w.nextNode(); n; n = w.nextNode())
-    if (/\d/.test(n.nodeValue) && n.parentElement && !mine(n.parentElement) && !/^(SCRIPT|STYLE)$/.test(n.parentElement.tagName)) NUMS.push(n);
+  NUMS = []; const groups = new Map(), dg = /\d/;
+  const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let n = w.nextNode(); n; n = w.nextNode()) {
+    if (!dg.test(n.nodeValue)) continue;
+    const p = n.parentElement; if (!p || /^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT)$/.test(p.tagName)) continue;
+    const row = p.closest("tr,[role=row]") || p, box = row.closest("table,[role=table],[role=grid]") || row;
+    let g = groups.get(box); if (!g) { g = {box, rows: new Map()}; groups.set(box, g); NUMS.push(g); }
+    let r = g.rows.get(row); if (!r) { r = {box: row, tall: false, nodes: []}; g.rows.set(row, r); }
+    const cell = p.closest("td,th"); if (cell && cell.rowSpan > 1) r.tall = true;
+    r.nodes.push(n);
+  }
   return NUMS;
 }
 function numberRects(near, pad = 120) {   // where figures are written near a box, in screen coordinates
@@ -174,12 +274,23 @@ function numberRects(near, pad = 120) {   // where figures are written near a bo
   const zone = {left: Math.max(v.x, near.left - pad), right: Math.min(v.x + v.w, near.right + pad),
                 top: Math.max(v.y, near.top - pad), bottom: Math.min(v.y + v.h, near.bottom + pad)};
   if (zone.right <= zone.left || zone.bottom <= zone.top) return out;
-  for (const n of numNodes()) {
-    if (!n.isConnected || !hit(rect(n.parentElement), zone)) continue;
-    const rg = document.createRange(); rg.selectNodeContents(n);
-    for (const q of rg.getClientRects()) if (q.width && q.height && hit(q, zone)) out.push(q);
+  for (const g of numNodes()) {
+    if (!g.box.isConnected || !hit(rect(g.box), zone)) continue;
+    for (const r of g.rows.values()) {
+      if (g.rows.size > 1 && !r.tall && !hit(rect(r.box), zone)) continue;
+      for (const n of r.nodes) {
+        if (!n.isConnected || !n.parentElement || !hit(rect(n.parentElement), zone)) continue;
+        const rg = document.createRange(); rg.selectNodeContents(n);
+        for (const q of rg.getClientRects()) if (q.width && q.height && hit(q, zone)) out.push(q);
+      }
+    }
   }
   return out;
+}
+
+function chartRects(zone) {   // charts count as figures too: a bubble or the hat never sits on one
+  if (!CHARTS) CHARTS = [...document.querySelectorAll("svg,canvas,img")].filter(c => !mine(c) && !c.closest("button,a"));
+  return CHARTS.filter(c => c.isConnected).map(rect).filter(q => q.width >= 60 && q.height >= 40 && hit(q, zone));
 }
 function covers(withBubble) {
   const l = [rect($("bar"))]; if (isOpen($("panel"))) l.push(rect($("panel")));
@@ -204,13 +315,21 @@ function seen(t) {   // the part of a place not clipped by the scroll boxes arou
   }
   return q.right > q.left && q.bottom > q.top ? q : null;
 }
+function pinned(e) {   // fixed or sticky, itself or through a parent: only those can sit on a place when the page scrolls
+  for (let x = e; x && x !== document.body && x !== document.documentElement; x = x.parentElement)
+    if (/^(fixed|sticky)$/.test(getComputedStyle(x).position)) return true;
+  return false;
+}
 function hiddenBy(t) {   // a fixed header or sticky row of the page itself sitting on the place
   const r = seen(t); if (!r) return null;
   const v = vp(), pts = [[(r.left + r.right) / 2, (r.top + r.bottom) / 2], [r.left + 3, r.top + 3], [r.right - 3, r.top + 3]];
+  const tb = t.closest && t.closest("table,[role=table],[role=grid]");
   for (const [x, y] of pts) {
     if (x < v.x || y < v.y || x > v.x + v.w || y > v.y + v.h) continue;
     const e = document.elementFromPoint(x, y);
     if (!e || e === host || e === t || t.contains(e) || e.contains(t) || mine(e)) continue;
+    if (tb && tb.contains(e) && !pinned(e)) continue;   // a merged cell of the same table, not a header that stays put
+    if (!pinned(e)) continue;
     return e;
   }
   return null;
@@ -219,34 +338,49 @@ function pad(r) { return r.height < 28 ? 2 : 4; }
 function place(f) {
   const r = seen(f.target);
   if (!r) { f.box.style.display = "none"; return null; }
-  const p = pad(r);
-  Object.assign(f.box.style, {display: "block", left: (r.left - p) + "px", top: (r.top - p) + "px", width: (r.right - r.left + 2 * p) + "px", height: (r.bottom - r.top + 2 * p) + "px"});
+  const thin = r.bottom - r.top < 24, p = thin ? 0 : pad(r);   // a thin row: a 2px frame inside it, no ring over its neighbours
+  Object.assign(f.box.style, {display: "block", left: (r.left - p) + "px", top: (r.top - p) + "px", width: (r.right - r.left + 2 * p) + "px", height: (r.bottom - r.top + 2 * p) + "px",
+    borderWidth: (thin ? 2 : f.w) + "px", boxShadow: thin ? "none" : "0 0 0 2px " + RING, borderRadius: thin ? "3px" : "8px"});
   return {left: r.left - p, top: r.top - p, right: r.right + p, bottom: r.bottom + p};
 }
 function redraw() {   // frames follow their places; the dim leaves holes for them and for their row label and header
+  placeRegion();
   if (!frames.length) { dim.style.display = "none"; return; }
-  const W = innerWidth, H = innerHeight; let d = `M0 0H${W}V${H}H0Z`;
+  const W = innerWidth, H = innerHeight, holes = [];
   for (const f of frames) {
-    const q = place(f); if (q) d += `M${q.left} ${q.top}H${q.right}V${q.bottom}H${q.left}Z`;
-    for (const s of f.soft) { const z = place(s); if (z) d += `M${z.left} ${z.top}H${z.right}V${z.bottom}H${z.left}Z`; }
+    const q = place(f); if (q) holes.push(q);
+    for (const s of f.soft) { const z = place(s); if (z) holes.push(z); }
   }
-  dim.setAttribute("width", W); dim.setAttribute("height", H); dimPath.setAttribute("d", d);
+  dim.setAttribute("width", W); dim.setAttribute("height", H);
+  dimHoles.innerHTML = holes.map(q => `<rect x="${q.left}" y="${q.top}" width="${q.right - q.left}" height="${q.bottom - q.top}" rx="6" fill="#000"/>`).join("");
   dim.style.display = frames[0].dim ? "block" : "none";
   if (hat._t && +hat.style.opacity > 0) { const r = rect(hat._t); hat.style.left = (r.left + hat._dx) + "px"; hat.style.top = (r.top + hat._dy) + "px"; }
 }
 function guards(t) {   // what gives a figure its meaning: its row label and column header (strong), other labels (soft)
   const m = t && modelOf(t); if (!m) return {strong: [], soft: [], els: []};
-  const pos = posOf(m, t), strong = [], els = [], soft = [];
-  m.headCells.forEach(c => soft.push(rect(c)));
-  m.rows.forEach(r => r.labelCells.forEach(c => soft.push(rect(c))));
-  if (pos && pos.row) pos.row.labelCells.forEach(c => { if (c !== t) { strong.push(rect(c)); els.push(c); } });
-  if (pos && pos.c >= 0) (m.headAt[pos.c] || []).forEach(c => { if (c !== t) { strong.push(rect(c)); els.push(c); } });
+  const pos = posOf(m, t), strong = [], els = [], soft = [], v = vp();
+  const near = c => { const q = rect(c); if (q.bottom > v.y - 200 && q.top < v.y + v.h + 200) soft.push(q); };
+  m.headCells.forEach(near);
+  m.rows.forEach(r => r.labelCells.forEach(near));
+  const own = c => c !== t && !t.contains(c) && !c.contains(t);   // a cell inside the place is already in its frame: no second box
+  if (pos && pos.row) pos.row.labelCells.forEach(c => { if (own(c)) { strong.push(rect(c)); els.push(c); } });
+  if (pos && pos.c >= 0) (m.headAt[pos.c] || []).forEach(c => { if (own(c)) { strong.push(rect(c)); els.push(c); } });
   return {strong, soft, els};
 }
+function labelRects(zone) {   // row labels and column headers of every table near a box, not only the place's own table
+  const out = [];
+  for (const m of tables()) {
+    if (!hit(rect(m.el), zone)) continue;
+    m.headCells.forEach(c => { const q = rect(c); if (hit(q, zone)) out.push(q); });
+    m.rows.forEach(r => r.labelCells.forEach(c => { const q = rect(c); if (hit(q, zone)) out.push(q); }));
+  }
+  return out;
+}
 function hideHat() { clearTimeout(hat._fade); hat.style.opacity = 0; hat._t = null; }
-function placeHat(t) {   // first free spot next to the place that covers no figure and no label; none free = no hat
+function placeHat(t) {   // first free spot next to the place that covers no figure, no label and no chart; none free = no hat
   if (isOpen($("bub"))) { hideHat(); return false; }
-  const r = rect(t), s = 34, v = vp(), avoid = numberRects(r).concat(guards(t).soft), cov = covers(true);
+  const r = rect(t), s = 34, v = vp(), zone = {left: r.left - 80, top: r.top - 80, right: r.right + 80, bottom: r.bottom + 80};
+  const avoid = numberRects(r).concat(guards(t).soft, labelRects(zone), chartRects(zone)), cov = covers(true);
   const spots = [[r.left, r.bottom + 6], [r.right + 6, r.top], [r.left - s - 6, r.top], [r.left, r.top - s - 6], [r.right - s, r.bottom + 6]];
   for (const [x, y] of spots) {
     const h = {left: x, top: y, right: x + s, bottom: y + s};
@@ -255,7 +389,7 @@ function placeHat(t) {   // first free spot next to the place that covers no fig
     // no glide across the figures: fade out, jump, fade in
     hat.style.transition = calm() ? "none" : "opacity .2s"; hat._t = t; hat._dx = x - r.left; hat._dy = y - r.top;
     hat.style.left = x + "px"; hat.style.top = y + "px"; hat.style.opacity = 1;
-    clearTimeout(hat._fade); hat._fade = setTimeout(() => { hat.style.opacity = 0.35; }, 1400);
+    clearTimeout(hat._fade); hat._fade = setTimeout(() => { hat.style.opacity = 0.7; }, 1400);
     return true;
   }
   hideHat(); return false;
@@ -273,55 +407,92 @@ function placePanel() {   // above the bar, on the side chosen for the framed pl
   p.style.left = (small ? v.x + 8 : p.classList.contains("left") ? v.x + 12 : v.x + v.w - w - 12) + "px";
   const room = small ? v.h * 0.55 : bar.top - v.y - 20, cap = p._cap || Infinity;
   p.style.maxHeight = Math.max(120, Math.min(room, small ? room : v.h * 0.7, cap)) + "px";
-  p.style.top = (small ? v.y + 8 : bar.top - 12 - p.offsetHeight) + "px";
+  p.style.top = (small || p.classList.contains("top") ? v.y + 8 : bar.top - 12 - p.offsetHeight) + "px";
 }
+let hsave = null;   // where the reader had scrolled sideways before Clicky moved the page; given back when the answer closes
+function sideways(e, dx) {
+  if (!hsave) hsave = [];
+  if (!hsave.some(h => h.e === e)) hsave.push({e, x: e === window ? scrollX : e.scrollLeft});
+  e.scrollBy({left: dx, behavior: "auto"});
+}
+function restoreSideways() { if (!hsave) return; hsave.forEach(h => { if (h.e === window) scrollTo({left: h.x, top: scrollY, behavior: "auto"}); else h.e.scrollLeft = h.x; }); hsave = null; schedule(); }
 function keepVisible(t) {   // the framed place is never under the bar, the panel or the page's own fixed header
   const p = $("panel"), v = vp(), small = v.w <= 700;
-  p._cap = 0; p.classList.remove("left"); placePanel();
-  let r = rect(t), floor = rect($("bar")).top, ceil = v.y;
+  p._cap = 0; p.classList.remove("left", "top"); placePanel();
+  let r = rect(t), floor = rect($("bar")).top, ceil = v.y, under = false;
+  const barTop = floor, gd = guards(t).strong;
   if (isOpen(p) && !small) {   // the side that leaves the place, its row label and its header free and hides fewest figures
-    const g = guards(t).strong.concat([r]), across = (x, y) => x.left < y.right && y.left < x.right;
+    const g = gd.concat([r]), across = (x, y) => x.left < y.right && y.left < x.right;
     const side = left => { p.classList.toggle("left", left); placePanel(); const q = rect(p);
       return {free: !g.some(x => across(x, q)), hides: numberRects(q, 0).filter(n => hit(n, q)).length}; };
     const Rt = side(false), Lf = side(true);
     p.classList.toggle("left", Lf.free && (!Rt.free || Lf.hides < Rt.hides)); placePanel();
     if (!Rt.free && !Lf.free) {   // a wide table: the panel gets shorter and the place sits above it
       p._cap = Math.max(150, Math.min(rect(p).height, floor - 48 - r.height - 40)); placePanel();
-      floor = rect(p).top;
+      floor = rect(p).top; under = true;
     }
   } else if (isOpen(p)) ceil = rect(p).bottom;
   const bub = $("bub");
   if (isOpen(bub) && anchor && (anchor === t || t.contains(anchor) || anchor.contains(t)) && r.width + bub.offsetWidth + 48 > v.w) {
-    const need = bub.offsetHeight + 28;   // a wide place: keep room under it for the answer bubble
+    const need = Math.min(bub.offsetHeight, 260) + 28;   // a wide place: keep room under it for the answer bubble
     if (r.height + need < floor - ceil - 16) floor -= need;
   }
   const sc = scrollerOf(t) || scrollerOf(t, true);
-  if (sc) { const c = rect(sc); ceil = Math.max(ceil, c.top); floor = Math.min(floor, c.bottom);
-    if (!sc.querySelector(":scope > [data-clicky-layer]")) {   // room after the last rows of a scroll box too
-      const sp = document.createElement("div"); sp.setAttribute("aria-hidden", "true"); sp.setAttribute("data-clicky-layer", "1"); sp.style.cssText = "height:55vh"; sc.appendChild(sp); } }
   let moved = false;
-  if (r.right > v.x + v.w || r.left < v.x) { t.scrollIntoView({block: "nearest", inline: "nearest", behavior: "auto"}); r = rect(t); moved = true; }
-  const fits = r.height < (floor - ceil) * 0.8;
-  const dy = fits ? (r.top < ceil + 8 || r.bottom > floor - 8 ? r.top - (ceil + Math.max(8, (floor - ceil - r.height) / 2)) : 0)
-                  : (r.top > floor - 60 || r.bottom < ceil + 60 ? r.top - ceil - 8 : 0);
+  if (sc) { let c = rect(sc);
+    if (Math.min(floor, c.bottom) - Math.max(ceil, c.top) < Math.min(r.height + 60, floor - ceil - 40)) {   // too little of the box shows: the page brings it up first
+      window.scrollBy({top: c.top - ceil - 64, behavior: "auto"}); c = rect(sc); r = rect(t); moved = true; }
+    ceil = Math.max(ceil, c.top); floor = Math.min(floor, c.bottom);
+    if (!sc.querySelector(":scope > [data-clicky-layer]")) {   // room after the last rows of a scroll box too
+      const sp = document.createElement("div"); sp.setAttribute("aria-hidden", "true"); sp.setAttribute("data-clicky-layer", "1"); sp.style.cssText = "height:55vh"; LIVE.add(sp); sc.appendChild(sp); } }
+  if (r.width <= v.w - 16 && (r.right > v.x + v.w || r.left < v.x)) {   // sideways only for a place that fits the screen
+    const hs = scrollerOf(t) && scrollerOf(t).scrollWidth > scrollerOf(t).clientWidth + 1 ? scrollerOf(t) : window;
+    const box = hs === window ? {left: v.x, right: v.x + v.w} : rect(hs);
+    sideways(hs, r.right > box.right ? r.right - box.right + 12 : r.left - box.left - 12); r = rect(t); moved = true;
+  } else if (r.width > v.w - 16 && (r.left < v.x || r.left > v.x + v.w * 0.5)) {   // a wide row: its label, at the left edge
+    sideways(window, r.left - v.x - 8); r = rect(t); moved = true;
+  }
+  // the place and its column header together, when they fit: a figure is read with its header
+  let u = {top: r.top, bottom: r.bottom};
+  gd.forEach(q => { const t2 = Math.min(u.top, q.top), b2 = Math.max(u.bottom, q.bottom); if (b2 - t2 < (floor - ceil) * 0.8) u = {top: t2, bottom: b2}; });
+  const want = () => { const hgt = u.bottom - u.top, fits = hgt < (floor - ceil) * 0.8;
+    return fits ? (u.top < ceil + 8 || u.bottom > floor - 8 ? u.top - (ceil + Math.max(8, (floor - ceil - hgt) / 2)) : 0)
+                : (r.top > floor - 60 || r.bottom < ceil + 60 ? r.top - ceil - 8 : 0); };
+  let dy = want();
+  if (under) {   // the page cannot scroll far enough to lift the place above the panel: the panel goes to the top instead
+    const se = document.scrollingElement || document.documentElement;
+    const lo = sc ? -sc.scrollTop : -scrollY, hi = sc ? sc.scrollHeight - sc.clientHeight - sc.scrollTop : se.scrollHeight - innerHeight - scrollY;
+    const got = Math.max(lo, Math.min(hi, dy));
+    if (u.bottom - got > floor - 4 || u.top - got < ceil) {   // the panel takes the larger free space, above or below the place
+      const pt = u.top - got, pb = u.bottom - got, above = pt - v.y - 20, below = barTop - pb - 24;
+      p._cap = Math.max(120, Math.max(above, below)); if (above > below) p.classList.add("top"); placePanel();
+      dy = got; }
+  }
   if (Math.abs(dy) > 1) { (sc || window).scrollBy({top: dy, behavior: calm() ? "auto" : "smooth"}); moved = true; }
   const unhide = () => { const e = hiddenBy(t); if (!e) return; const c = rect(e), q = rect(t);
     (scrollerOf(t) || window).scrollBy({top: c.top < q.top ? -(c.bottom - q.top + 12) : (q.bottom - c.top + 12), behavior: "auto"}); schedule(); };
-  if (calm() || !moved) unhide(); else setTimeout(unhide, 450);
+  const settle = () => { unhide(); panelClear(t); };
+  if (calm() || !moved) settle(); else setTimeout(settle, 450);
   return moved;
 }
-function frame(target, keep, noDim) {
+function panelClear(t) {   // after every scroll: if the panel still sits on the place, it takes the larger free space beside it
+  const p = $("panel"), v = vp(); if (!isOpen(p) || v.w <= 700) return;
+  const r = rect(t), q = rect(p); if (!hit(r, q) || r.height > (rect($("bar")).top - v.y) * 0.6) return;
+  const barTop = rect($("bar")).top, above = r.top - v.y - 20, below = barTop - r.bottom - 24;
+  p._cap = Math.max(120, Math.max(above, below)); p.classList.toggle("top", above > below); placePanel();
+}
+function frame(target, keep, noDim, still) {   // still: one more frame, the page does not move for it
   if (!target) return;
   if (!keep) clearFrames();
   const mk = (w, color) => { const b = document.createElement("div");
     b.style.cssText = `position:fixed;border:${w}px solid ${color};border-radius:8px;box-shadow:0 0 0 2px ${RING}` + (calm() ? "" : ";transition:opacity .3s,transform .3s;opacity:0;transform:scale(1.03)");
     layer.appendChild(b); return b; };
-  const box = mk(3, FRAME);
-  const soft = guards(target).els.map(c => ({target: c, box: mk(2, FRAME + "88")}));   // its row label and header, not dimmed
-  const f = {target, box, soft, dim: !noDim && !frames.length}; frames.push(f);
-  const moved = keepVisible(target);
-  const show = () => { redraw(); [box, ...soft.map(s => s.box)].forEach(b => { b.style.opacity = 1; b.style.transform = "none"; }); placeBubble(); placeHat(target); };
-  if (calm()) show(); else { redraw(); setTimeout(show, moved ? 450 : 30); }
+  const box = mk(3, FRAME); box.setAttribute("data-clicky-frame", still ? "also" : "main");
+  const soft = still ? [] : guards(target).els.map(c => { const b = mk(2, FRAME + "cc"); b.setAttribute("data-clicky-frame", "soft"); return {target: c, w: 2, box: b}; });   // its row label and header, not dimmed
+  const f = {target, box, w: 3, soft, dim: !noDim && !frames.length}; frames.push(f);
+  const moved = still ? false : keepVisible(target);
+  const show = () => { redraw(); [box, ...soft.map(s => s.box)].forEach(b => { b.style.opacity = 1; b.style.transform = "none"; }); if (!still) { placeBubble(); placeHat(target); } };
+  if (calm() || still) show(); else { redraw(); setTimeout(show, moved ? 450 : 30); }
 }
 function clearFrames() { frames.forEach(f => { f.box.remove(); f.soft.forEach(s => s.box.remove()); }); frames = []; dim.style.display = "none"; hideHat(); }
 
@@ -331,6 +502,15 @@ function caption(t) {   // the sentence being said now, from the voice's own tim
   while (k < s.sentences.length - 1 && s.starts[k + 1] <= t + 0.05) k++;
   $("cap").innerHTML = "<span>" + esc(s.sentences[k] || "") + "</span>" + evidence((s.ev || [])[k]) +
     "<small>Phần " + (idx + 1) + "/" + S.length + (s.title ? " · " + esc(s.title) : "") + "</small>";
+  fitBar();
+}
+function talkLine() {   // while an answer is open the bar says one short line, never the talk's sentence
+  $("cap").classList.remove("hidden");
+  $("cap").innerHTML = "<span>Đang trả lời câu hỏi" + (resumeAt ? " · ↩ nghe tiếp phần " + (resumeAt.i + 1) + "/" + S.length : "") + "</span>"; fitBar();
+}
+function idleLine() {
+  if (isOpen($("bub")) || isOpen($("panel")) || (playing && !aside)) return;
+  $("cap").innerHTML = aside && resumeAt ? "<span>Bấm ↩ để nghe tiếp phần " + (resumeAt.i + 1) + "/" + S.length + ".</span>" : started ? $("cap").innerHTML : INTRO;
   fitBar();
 }
 // where each spoken figure comes from, from the sealed record: k = the framed place, b = elsewhere in the report, o = owner
@@ -390,6 +570,12 @@ $("prev").onclick = () => go(idx - 1, playing || started);
 $("next").onclick = () => go(idx + 1, playing || started);
 $("askb").onclick = () => { if (isOpen($("panel"))) closePanel(); else openPanel(); };
 $("px").onclick = () => closePanel();
+if ($("draft")) $("draft").onclick = () => {   // one plain line on what "nháp" means; the full status is in its title
+  $("cap").classList.remove("hidden");
+  $("cap").innerHTML = "<span>Kịch bản nháp: lời em trình bày chưa được " + esc(OWNER) + " duyệt" +
+    (R.so && !R.nguoi_soan_them ? "; các con số em nói đều có trong báo cáo." : ".") + "</span>";
+  fitBar();
+};
 $("hide").onclick = () => { const c = $("cap"); c.classList.toggle("hidden"); $("hide").textContent = c.classList.contains("hidden") ? "＋" : "—"; fitBar(); };
 
 // --- reading the report: tables (merged cells too), number tiles, sentences, charts ---
@@ -427,7 +613,15 @@ function toNum(s, en) {   // only to order figures; nothing computed here is sho
   const n = parseFloat(t); return isNaN(n) ? null : neg ? -n : n;
 }
 const UNIT_SAID = /(?:đơn vị(?: tính)?|đvt)\s*[:：]?\s*(tỷ đồng|triệu đồng|nghìn đồng|ngàn đồng|tỷ|triệu|nghìn|người|usd|đồng)/i;
-function unitIn(s) { const m = String(s || "").match(UNIT_SAID) || String(s || "").match(/\(\s*(?:[^()]*?,\s*)?(tỷ đồng|triệu đồng|nghìn đồng|tỷ|triệu|người|usd)\s*\)/i); return m ? m[1].toLowerCase() : ""; }
+const UNIT_SHORT = {"tỷ đồng": "tỷ", "triệu đồng": "triệu", "nghìn đồng": "nghìn", "ngàn đồng": "nghìn", "ngàn": "nghìn", "usd": "USD"};
+const unitWord = u => UNIT_SHORT[u] || u;   // one wording for one unit, everywhere: "92,3 tỷ", never "tỷ đồng" in one row and "tỷ" in the next
+function unitIn(s) { const m = String(s || "").match(UNIT_SAID) || String(s || "").match(/\(\s*(?:[^()]*?,\s*)?(tỷ đồng|triệu đồng|nghìn đồng|tỷ|triệu|người|usd)\s*\)/i); return m ? unitWord(m[1].toLowerCase()) : ""; }
+function unitMap() {   // every figure the page writes with a unit after it, read in one pass
+  if (UMAP) return UMAP;
+  UMAP = new Map();
+  for (const m of pageText().matchAll(/(?<![\d.,])(\d[\d.,]*\d|\d)\s*(tỷ|triệu|người|ngày|USD)/giu)) if (!UMAP.has(m[1])) UMAP.set(m[1], unitWord(m[2].toLowerCase()));
+  return UMAP;
+}
 function pageText() { return PTEXT || (PTEXT = cellText(document.body)); }
 function headingFor(x) {   // the section title above a place
   for (let e = x; e && e !== document.body; e = e.parentElement) {
@@ -479,9 +673,15 @@ function model(el, grid) {
   });
   // "Khối Bán hàng" with figures heads the plain rows below it ("Lương", "Thưởng"), never other "Khối ..." rows
   const gen = r => GENERIC.has(words(r.label)[0]) && core(r.label).length;
+  const lab = r => r.labelCells[r.labelCells.length - 1];
+  const bold = c => { if (!c) return false; const b = c.querySelector("b,strong"); return +getComputedStyle(c).fontWeight >= 600 || !!(b && cellText(b) === cellText(c)); };
+  const indent = c => { if (!c) return 0; const st = getComputedStyle(c), f = c.firstElementChild;
+    return parseFloat(st.paddingLeft) + parseFloat(st.textIndent || 0) + ((c.textContent || "").match(/^[\s\u00a0]*/)[0].length * 4) + (f ? parseFloat(getComputedStyle(f).marginLeft) || 0 : 0); };
   let head2 = null;
   rows.forEach((r, i) => { if (r.total) { head2 = null; return; }
-    if (gen(r)) { head2 = rows[i + 1] && !gen(rows[i + 1]) && !rows[i + 1].total ? r.label : null; return; }
+    if (gen(r)) { head2 = null; let k = i + 1; while (rows[k] && !gen(rows[k]) && !rows[k].total && !rows[k].group) k++;
+      if (k - i - 1 >= 2 && (bold(lab(r)) || indent(lab(rows[i + 1])) > indent(lab(r)) + 2)) head2 = r.label;
+      return; }
     if (head2 && !r.group) r.group = head2; });
   if (!rows.length) return null;
   const sample = rows.flatMap(r => r.cells.slice(lc).map(cellText)).filter(isNum);
@@ -493,7 +693,7 @@ function model(el, grid) {
 }
 function units(m) {   // unit of each column: its header, then the table's or page's "Đơn vị", then the same figure written with a unit
   const tableU = unitIn(m.titles.join(" ") + " " + m.cap) || unitIn(m.heading) || unitIn((m.el.previousElementSibling ? cellText(m.el.previousElementSibling) : ""))
-    || unitIn(pageText().slice(0, 700)), txt = pageText(), out = [], dp = [];
+    || unitIn(pageText().slice(0, 700)), um = unitMap(), out = [], dp = [];
   for (let c = 0; c < m.n; c++) {
     const h = m.head[c] || "", vals = m.rows.map(r => r.cells[c] && cellText(r.cells[c])).filter(isNum);
     dp.push(vals.length ? (vals[0].match(/[.,](\d+)\D*$/) || [, ""])[1].length : -1);
@@ -501,8 +701,7 @@ function units(m) {   // unit of each column: its header, then the table's or pa
       || (/\b(headcount|hc|so nguoi|so nhan vien|so lao dong|nhan su binh quan)\b/.test(fold(h)) ? "người" : /^ty dong$/.test(fold(h)) ? "tỷ" : "");
     if (!u && c >= m.lc && vals.length && !vals.some(v => /%$/.test(v))) {
       for (const v of vals) { if (v.replace(/\D/g, "").length < 3) continue;
-        const f = txt.match(new RegExp("(?<![\\d.,])" + v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*(tỷ|triệu|người|ngày|USD)", "i"));
-        if (f) { u = f[1].toLowerCase(); break; } }
+        const k = v.trim(); if (um.has(k)) { u = um.get(k); break; } }
       if (!u && tableU) u = tableU;
     }
     out.push(u);
@@ -522,6 +721,9 @@ function tables() {
     const rows = [...g.querySelectorAll('[role="row"]')].filter(r => r.closest('[role="table"],[role="grid"]') === g);
     const m = model(g, rows.map(r => ({el: r, cells: [...r.children]}))); if (m) TABLES.push(m);
   });
+  TABLES.forEach(m => { if (!m.el.hasAttribute("data-clicky-t")) {   // one Tab stop per table; arrow keys move inside it
+    m.el.setAttribute("data-clicky-t", "1"); if (!m.el.hasAttribute("tabindex")) m.el.setAttribute("tabindex", "0");
+    if (!m.el.getAttribute("aria-label")) m.el.setAttribute("aria-label", (m.cap || m.titles[0] || m.heading || "Bảng số") + ". Dùng phím mũi tên để đi giữa các ô, Enter để hỏi em."); } });
   return TABLES;
 }
 function modelOf(t) { return tables().find(m => m.el.contains(t)) || null; }
@@ -535,11 +737,17 @@ function withUnit(v, u) { return !u || /[%a-zA-ZÀ-ỹ]/.test(v) ? v : u === "%"
 function rowName(row) { return row.label + (row.group ? " (" + row.group + ")" : ""); }
 function colName(m, c) { return m.head[c] || "cột " + (c + 1); }
 function numCols(m, row) { const out = []; for (let c = m.lc; c < m.n; c++) { const x = row.cells[c]; if (x && row.cells.indexOf(x) === c && isNum(cellText(x))) out.push(c); } return out; }
+function outside(fn) {   // every element of the report outside its tables, charts and Clicky itself, in one walk
+  const w = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, {acceptNode: n =>
+    n.hasAttribute("data-clicky-layer") || /^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT|TABLE|SVG|CANVAS)$/i.test(n.tagName) || /^(table|grid)$/.test(n.getAttribute("role") || "")
+      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT});
+  for (let n = w.nextNode(); n; n = w.nextNode()) fn(n);
+}
 function pageCards() {   // number tiles the builder did not tag: a short block with a label and one figure
   if (PCARDS) return PCARDS;
   PCARDS = []; const tagged = CARDS.map(c => el(c.id)).filter(Boolean);
-  document.querySelectorAll("body *").forEach(x => {
-    if (x.children.length || mine(x) || !isNum(cellText(x)) || x.closest("table,svg,[role=table],[role=grid],script,style") || tagged.some(t => t.contains(x))) return;
+  outside(x => {
+    if (x.children.length || !isNum(cellText(x)) || tagged.some(t => t.contains(x))) return;
     let box = x.parentElement; while (box && box !== document.body && cellText(box).length < 12) box = box.parentElement;
     if (!box || box === document.body || cellText(box).length > 160 || PCARDS.some(c => c.el === box)) return;
     const t = cellText(box), v = cellText(x), i = t.indexOf(v), lab = t.slice(0, i).replace(/[:\s·-]+$/, "").trim();
@@ -552,8 +760,8 @@ function allCards() { return CARDS.map(c => ({el: el(c.id), text: c.text})).filt
 function blocks() {   // the report's own sentences: paragraphs, notes, callouts, list items
   if (BLOCKS) return BLOCKS;
   BLOCKS = []; const cards = allCards().map(c => c.el);
-  document.querySelectorAll("body *").forEach(x => {
-    if (mine(x) || /^(SCRIPT|STYLE|TABLE|TD|TH|TR|SVG|CANVAS|H1|H2|H3|H4|BUTTON)$/i.test(x.tagName) || x.closest("table,svg,[role=table],[role=grid]")) return;
+  outside(x => {
+    if (/^(H1|H2|H3|H4|BUTTON)$/i.test(x.tagName)) return;
     const own = [...x.childNodes].filter(n => n.nodeType === 3).map(n => n.nodeValue).join(" ");
     if ((own.match(/[a-zA-ZÀ-ỹ]/g) || []).length < 15) return;
     let b = x; while (b.parentElement && b.parentElement !== document.body && getComputedStyle(b).display.startsWith("inline")) b = b.parentElement;
@@ -589,7 +797,10 @@ function chartData(c) {   // label + value pairs a chart carries itself: SVG tex
 }
 function chartTitle(x, c) {
   const cap = x.querySelector && x.querySelector("figcaption"), t = c && c.querySelector && c.querySelector("title");
-  let prev = ""; for (let e = c || x; e && e !== document.body && !prev; e = e.parentElement) { const p = e.previousElementSibling; if (p && cellText(p).length < 90 && !isNum(cellText(p))) prev = cellText(p); }
+  let prev = "";   // the line just above the chart; a chart above it means that line names the other chart
+  for (let e = c || x; e && e !== document.body && !prev; e = e.parentElement) { const p = e.previousElementSibling;
+    if (p && chartOf(p)) break;
+    if (p && cellText(p).length < 90 && !isNum(cellText(p))) prev = cellText(p); }
   return (c && (c.getAttribute("aria-label") || c.getAttribute("title"))) || x.getAttribute("aria-label") || x.getAttribute("title") || cellText(t) || cellText(cap) || prev || "";
 }
 
@@ -601,22 +812,27 @@ function qinfo(q) {
   let sup = null;
   if (sm) { sup = /^(thap|it|nho|cham|kem)$/.test(sm[1]) ? "min" : "max"; if (/\bgiam\b/.test(f) && sup === "max" && !/\btang\b/.test(f)) sup = "min"; }
   const t = widen(f.replace(/\b(cao|thap|nhieu|it|lon|nho|manh|nhanh|cham|tot|kem)\s+nhat\b/, " "));
-  return {q, f, t, why, sup, w: [...new Set(words(t))], w0: [...new Set(words(f))], ids: ids(q), accented: /[^\x00-\x7f]/.test(q)};
+  const delta = /\b(tang|giam|chenh)\b/.test(f) && /\b(bao nhieu|so voi|the nao|may|nhieu|bao)\b/.test(f) && !sup;
+  const share = /\b(chiem|ty trong)\b/.test(f);
+  const yoy = /\b(nam truoc|nam ngoai|cung ky|so voi nam|yoy|ky truoc)\b/.test(f);
+  const tc = t.replace(/\bso voi\s+[a-z0-9 ]*?(?=\s+(tang|giam|bao|the|thi|la|$)|$)/, " ");   // "so với AOP gốc" is the base, not the column asked
+  return {q, f, t, tc, why, sup, delta, share, yoy, w: [...new Set(words(t))], w0: [...new Set(words(f))], wc: [...new Set(words(tc))],
+          ids: ids(q), accented: /[^\x00-\x7f]/.test(q)};
 }
-function subject(x) {   // words the reader leaves out because the whole report is about them: title, h1, the section heading
-  return new Set([TITLE, cellText(H1), x ? headingFor(x) : ""].join(" ").toLowerCase().replace(/chi phí/g, "chi_phí").split(/[^\p{L}\p{N}_]+/u).filter(Boolean)
-    .concat(words([TITLE, cellText(H1), x ? headingFor(x) : ""].join(" ")).filter(w => w.length > 3)));
+function subject(x, accented) {   // words the reader leaves out because the whole report is about them: title, h1, the section heading
+  const t = [TITLE, document.title, cellText(H1), x ? headingFor(x) : ""].join(" ");
+  return new Set(accented ? t.toLowerCase().replace(/chi phí/g, "chi_phí").split(/[^\p{L}\p{N}_]+/u).filter(Boolean) : words(t));
 }
+const UNITW = new Set("nguoi ty trieu dong nghin ngan usd vnd phan tram nam".split(" "));
 function coverOf(parts) { const s = new Set(); parts.forEach(p => { words(widen(fold(p))).forEach(w => s.add(w)); ids(p).forEach(i => s.add("#" + i));
   if (/%/.test(p || "")) ["phan", "tram", "ty", "le"].forEach(w => s.add(w)); }); return s; }
 function leftover(Q, cover, ctxEl) {   // the reader's words the answer does not cover, in the reader's own spelling
-  const subj = subject(ctxEl);
-  return Q.q.replace(/(chi)\s+(ph[íi])/gi, "$1_$2").replace(/(?<![\p{L}])(tháng|thang|quý|quy|fy)\s+(\d)/giu, "$1$2").split(/\s+/).map(x => x.replace(/[?.,!:;"“”()«»]+/g, "")).filter(x => {
-    const w = words(widen(fold(x))), i = [...ids(x)];
+  const subj = subject(ctxEl, Q.accented);
+  return Q.q.replace(/(?<![\p{L}\d])\d+\s+(năm|nam|người|nguoi|tỷ|triệu|ngày)(?![\p{L}])/giu, "$1").replace(/(chi)\s+(ph[íi])/gi, "$1_$2").replace(/(?<![\p{L}])(tháng|thang|quý|quy|fy)\s+(\d)/giu, "$1$2").split(/\s+/).map(x => x.replace(/[?.,!:;"“”()«»]+/g, "")).filter(x => {
+    const w = words(fold(x)), i = [...ids(x)];
     if (i.length && i.every(k => cover.has("#" + k))) return false;
     if (!w.length) return !!i.length && i.some(k => !cover.has("#" + k) && !subj.has(k));
-    return w.every(y => !cover.has(y) && !GENERIC.has(y) && !(Q.accented ? subj.has(x.toLowerCase()) : subj.has(y)) && !/^(tang|giam)$/.test(y) || false) &&
-      !w.every(y => cover.has(y) || GENERIC.has(y) || /^(tang|giam)$/.test(y) || (Q.accented ? subj.has(x.toLowerCase()) : subj.has(y)));
+    return !w.every(y => cover.has(y) || GENERIC.has(y) || UNITW.has(y) || /^(tang|giam|chenh|chiem)$/.test(y) || (Q.accented ? subj.has(x.toLowerCase()) : subj.has(y)));
   });
 }
 function colMatch(Q, m) {   // the column the question names: words, "%" or a period ("T3", "tháng 3")
@@ -625,7 +841,7 @@ function colMatch(Q, m) {   // the column the question names: words, "%" or a pe
     const h = m.head[c]; if (!h) continue;
     const hw = words(h).filter(w => !/^(tang|giam)$/.test(w)), hi = ids(h);
     if ([...hi].length && [...Q.ids].length && ![...Q.ids].some(i => hi.has(i))) continue;
-    let s = hw.filter(w => Q.w.includes(w) || has(Q.t, w)).length * 6;
+    let s = hw.filter(w => Q.wc.includes(w) || has(Q.tc, w)).length * 6;
     if (s && hw.length) s += 3 * s / 6 / hw.length;
     if ([...Q.ids].some(i => hi.has(i))) s += 15;
     if (/%/.test(h) && /%/.test(Q.t)) s += 6;
@@ -639,10 +855,57 @@ function rowMatch(Q, row) {   // most of the row's own words; "khối", "phòng"
   if (!L.length || (hit < Math.max(1, Math.ceil(L.length * 2 / 3)) && !has(Q.t, row.label))) return 0;
   return 10 * hit + 8 * G.filter(w => Q.w.includes(w)).length + ([...Q.ids].some(i => li.has(i)) ? 15 : 0) - 3 * (L.length - hit);
 }
-function cardMatch(Q, c) {
-  const label = c.text.split(":")[0], L = words(label), hit = L.filter(w => Q.w.includes(w)).length;
-  if (L.length && hit >= Math.max(1, Math.ceil(L.length * 2 / 3))) return 10 * hit - 3 * (L.length - hit);
-  const all = words(c.text); return Q.w.length >= 2 && Q.w.every(w => all.includes(w)) ? 4 * Q.w.length : 0;
+function cardMatch(Q, c) {   // ranked by how many of the question's own words the tile covers, not by the tile's words alone
+  const label = c.text.split(":")[0], L = [...new Set(words(widen(fold(label))))], all = words(widen(fold(c.text)));
+  const hit = L.filter(w => Q.w0.includes(w)).length;   // the reader's own words; "doanh thu" never matches a ratio tile on its alias
+  const qn = Q.w0.filter(w => !/^(tang|giam)$/.test(w) || L.includes(w)), cov = qn.filter(w => all.includes(w)).length;
+  const byLabel = L.length && hit >= Math.max(1, Math.ceil(L.length * 2 / 3));
+  const byQ = qn.length && hit >= 1 && cov >= Math.max(qn.length > 1 ? 2 : 1, Math.ceil(qn.length * 2 / 3));
+  return byLabel || byQ ? 10 * cov - 3 * words(label).filter(w => !Q.w.includes(w)).length : 0;
+}
+const PER = i => /^(m|q|fy)\d/.test(i) ? i.slice(0, i[0] === "f" ? 2 : 1) : null;   // the kind of a period: month, quarter, year
+function periodClash(Q, text) {   // the reader asks "tháng 3", the place is about "tháng 10": that is not an answer
+  const qp = [...Q.ids].filter(PER); if (!qp.length) return false;
+  const tp = [...ids(text)].filter(PER);
+  return qp.some(i => tp.some(k => PER(k) === PER(i))) && !qp.some(i => tp.includes(i));
+}
+const perPhrase = s => (String(s || "").match(/(?<![\p{L}])(tháng|thang|quý|quy|Q|T|FY)\s?\d{1,4}(?:\s?[–-]\s?\d{2,4})?(?!\d)/iu) || [""])[0];
+function placeText(c) {   // everything that says which period a candidate is about
+  if (c.card) return c.card.text + " " + headingFor(c.card.el) + " " + TITLE;
+  if (c.chart) return c.text + " " + TITLE;
+  const cols = c.cols || (c.c >= 0 ? [c.c] : null);
+  return [c.row.label, c.row.group, cols ? cols.map(k => c.m.head[k]).join(" ") : c.m.head.join(" "), c.m.titles.join(" "), c.m.heading, c.m.cap, TITLE].join(" ");
+}
+function deltaCols(m) {   // "tăng bao nhiêu": the difference column and the % column of a table
+  const abs = m.head.findIndex((h, i) => i >= m.lc && /chenh|tang giam|bien dong|delta|var|\+\/-/.test(fold(h)) && !/%/.test(h));
+  const pct = m.head.findIndex((h, i) => i >= m.lc && /%/.test(h) && i !== abs);
+  return [abs, pct].filter(c => c >= 0);
+}
+function charts() {   // charts that carry their own figures (SVG text, Chart.js data)
+  return [...document.querySelectorAll("svg,canvas")].filter(c => !mine(c) && !(c.tagName.toLowerCase() === "svg" && c.closest("button")))
+    .map(c => ({el: c.closest("figure") || c.closest("[data-clicky]") || c, c, pairs: chartData(c)})).filter(x => x.pairs.length);
+}
+function chartLabelMatch(Q, l) {
+  const li = ids(l); if ([...li].length) return [...Q.ids].some(i => li.has(i));   // an exact FY label decides alone
+  const w = core(l); return w.length > 0 && w.every(x => Q.w.includes(x));
+}
+function decimal(s, en) {   // a figure as written, as an integer and its number of decimals: no float rounding in what is shown
+  let t = String(s).replace(/[^\d.,\-−–]/g, ""); const neg = /^[\-−–]/.test(t); t = t.replace(/[\-−–]/g, "");
+  if (en) t = t.replace(/,/g, ""); else t = t.replace(/\./g, "").replace(",", ".");
+  const [i, d = ""] = t.split("."); if (!/^\d+$/.test(i || "0") || (d && !/^\d+$/.test(d))) return null;
+  return {n: (neg ? -1 : 1) * Number((i || "0") + d), d: d.length};
+}
+function vn(n, d) { const neg = n < 0, a = String(Math.abs(n)).padStart(d + 1, "0"); const i = a.slice(0, a.length - d), f = a.slice(a.length - d);
+  return (neg ? "-" : "") + i.replace(/\B(?=(\d{3})+(?!\d))/g, ".") + (d ? "," + f : ""); }
+function share(a, b, en) {   // a ÷ b in %, one decimal, from the two figures as written
+  const x = decimal(a, en), y = decimal(b, en); if (!x || !y || y.n <= 0 || x.n < 0) return null;
+  const d = Math.max(x.d, y.d), xa = x.n * 10 ** (d - x.d), yb = y.n * 10 ** (d - y.d);
+  return vn(Math.round(xa * 1000 / yb), 1);
+}
+function change(a, b, en) {   // b − a and (b − a) ÷ a, from two figures as written
+  const x = decimal(a, en), y = decimal(b, en); if (!x || !y || x.n === 0) return null;
+  const d = Math.max(x.d, y.d), xa = x.n * 10 ** (d - x.d), yb = y.n * 10 ** (d - y.d);
+  return {diff: vn(yb - xa, d), pct: vn(Math.round((yb - xa) * 1000 / Math.abs(xa)), 1)};
 }
 // ready answers: questions the owner already answered in his memory file (CAU_TREO.md), with his voice clip
 const BANK = (D.bank || []).map(b => ({...b, w: words(b.q), why: qinfo(b.q).why}));
@@ -705,6 +968,17 @@ function whyAnswer(Q, scope, entity) {   // "vì sao": the report's own sentence
   }
   return best;
 }
+function figureSentence(Q) {   // a sentence of the report holding every word of the question and a figure
+  if (Q.w0.length < 2) return null;
+  for (const b of blocks()) for (const s of splitSent(b.text)) { const w = words(widen(fold(s)));
+    if (Q.w0.every(x => w.includes(x))) return {b, s, fig: /\d/.test(s)}; }
+  return null;
+}
+function valueCol(Q, m) {   // the column a share is taken from: named, else the one the title is about ("AOPR")
+  const n = colMatch(Q, m); if (n.c >= 0 && n.s >= 6 && !/%/.test(m.head[n.c])) return n.c;
+  const subj = subject(m.el, false);
+  return m.head.findIndex((h, i) => i >= m.lc && h && !/%/.test(h) && !deltaCols(m).includes(i) && words(h).length && words(h).every(w => subj.has(w)));
+}
 function resolve(q, scope) {
   const Q = qinfo(q);
   const known = bankMatch(Q, scope); if (known) return {kind: "bank", b: known, Q};
@@ -712,18 +986,38 @@ function resolve(q, scope) {
   // places the question names itself
   let cands = [];
   for (const m of tables()) {
-    const col = colMatch(Q, m);
-    for (const row of m.rows) { const rs = rowMatch(Q, row); if (rs) cands.push({score: rs + col.s + (scope && scope.rows && scope.rows.some(x => x.row === row) ? 5 : 0), m, row, c: col.c}); }
-    if (col.c >= 0 && col.s >= 6) {   // only the column: the reader's row, else the table's total
+    const col = colMatch(Q, m), dc = Q.delta && col.s < 6 ? deltaCols(m) : [];
+    const cOf = () => dc.length ? {c: dc[0], cols: dc} : {c: col.c};
+    for (const row of m.rows) { const rs = rowMatch(Q, row); if (rs) cands.push(Object.assign({score: rs + col.s + (dc.length ? 10 : 0) + (scope && scope.rows && scope.rows.some(x => x.row === row) ? 5 : 0), m, row}, cOf())); }
+    if ((col.c >= 0 && col.s >= 6) || dc.length) {   // only the column: the reader's row, else the table's total
       const sr = scope && scope.m === m && scope.row, tot = m.rows.find(r => r.total);
-      if (sr) cands.push({score: col.s + 12, m, row: sr, c: col.c, scoped: true});
-      else if (tot) cands.push({score: col.s + 1, m, row: tot, c: col.c});
+      if (sr) cands.push(Object.assign({score: (dc.length ? 16 : col.s) + 12, m, row: sr, scoped: true}, cOf()));
+      else if (tot) cands.push(Object.assign({score: (dc.length ? 16 : col.s) + 1, m, row: tot}, cOf()));
     }
   }
   for (const c of allCards()) { const s = cardMatch(Q, c); if (s > 0) cands.push({score: s, card: c}); }
-  if (scope && scope.pairs) scope.pairs.forEach(([l, v]) => { if (l && (core(l).every(w => Q.w.includes(w)) || [...ids(l)].some(i => Q.ids.has(i)))) cands.push({score: 30, chart: scope.el, text: l + ": " + v + "."}); });
+  const CH = charts();
+  for (const ch of CH) ch.pairs.forEach(([l, v]) => { if (l && chartLabelMatch(Q, l))
+    cands.push({score: 30 + (scope && scope.el === ch.el ? 5 : 0), chart: ch.el, text: l + ": " + v + " (biểu đồ «" + shortText(chartTitle(ch.el, ch.c), 60) + "»).", label: l}); });
+  if (Q.yoy) {   // "so với năm trước": the last two points of a chart over periods, read from the chart itself
+    const ch = (scope && scope.el ? CH.filter(x => x.el === scope.el) : []).concat(CH).find(x => x.pairs.filter(([l]) => [...ids(l)].length).length >= 2);
+    if (ch) { const p = ch.pairs.filter(([l]) => [...ids(l)].length), [a, b] = p.slice(-2); return {kind: "yoy", ch, a, b, Q}; }
+  }
+  const had = cands.length; cands = cands.filter(c => !periodClash(Q, placeText(c)));
+  if (had && !cands.length && !Q.why) return {kind: "none", Q, why: "period"};
   const named = cands.some(c => (c.row && !c.scoped) || c.chart);
+  if (Q.share) {   // "chiếm bao nhiêu % tổng": computed here from two figures of the table, and said so
+    const rc = cands.filter(c => c.row && !c.scoped && !c.row.total).sort((a, b) => b.score - a.score)[0];
+    const m = rc ? rc.m : scope && scope.row ? scope.m : null, row = rc ? rc.row : scope && scope.row;
+    const tot = m && m.rows.find(r => r.total), c = m ? valueCol(Q, m) : -1;
+    if (m && row && tot && c >= 0 && row.cells[c] && tot.cells[c]) {
+      const pct = share(cellText(row.cells[c]), cellText(tot.cells[c]), m.en);
+      if (pct) return {kind: "share", m, row, tot, c, pct, Q};
+    }
+    return {kind: "none", Q, why: "share"};
+  }
   // the place the reader pointed at, when the question names no other place
+  if (scope && scope.card && !named && !Q.why && !cands.some(c => c.card && c.card !== scope.card && c.score >= 20)) cands = [{score: 5, card: scope.card}];
   if (scope && !named && !Q.why) {
     if (scope.row && !cands.some(c => c.scoped)) {
       const cardHit = cands.filter(c => c.card).sort((a, b) => b.score - a.score)[0];
@@ -739,19 +1033,27 @@ function resolve(q, scope) {
     for (const e of ents) { const x = whyAnswer(Q, scope, e); if (x && (!w || x.sc > w.sc)) w = x; }
     return {kind: "why", w, entity, row: ent ? ent.row : scope && scope.row, m: ent ? ent.m : scope && scope.m, Q};
   }
-  // a figure for a row, from a tile that is about the whole company: said plainly, never passed off as the row's
+  if (cands.length && cands.every(c => periodClash(Q, placeText(c)))) return {kind: "none", Q, why: "period"};
+  cands = cands.filter(c => !periodClash(Q, placeText(c)));
   const rowsNamed = cands.filter(c => c.row && !c.scoped && !c.row.total);
-  cands.sort((a, b) => b.score - a.score);
-  if (!cands.length) {
-    const bs = blocks().map(b => ({b, s: splitSent(b.text).find(s => Q.w0.length >= 2 && Q.w0.every(w => words(s).includes(w)))})).find(x => x.s);
-    return bs ? {kind: "mention", b: bs.b, s: bs.s, Q} : {kind: "none", Q};
-  }
+  const fs = figureSentence(Q);
+  if (!cands.length && !fs && [...Q.ids].some(PER) && ![...Q.ids].filter(PER).some(i => ids(pageText()).has(i))) return {kind: "none", Q, why: "period"};
+  if (!cands.length) return fs ? {kind: fs.fig ? "sentence" : "mention", b: fs.b, s: fs.s, Q} : {kind: "none", Q};
   // which candidate explains most of the question
-  cands.forEach(c => { c.cover = coverOf(c.card ? [c.card.text] : c.chart ? [c.text] : [c.row.label, c.row.group, c.c >= 0 ? c.m.head[c.c] : c.m.head.join(" "), c.c >= 0 ? c.m.units[c.c] : ""]);
+  cands.forEach(c => { c.cover = coverOf(c.card ? [c.card.text] : c.chart ? [c.text] : [c.row.label, c.row.group, (c.cols || [c.c]).map(k => k >= 0 ? c.m.head[k] + " " + c.m.units[k] : "").join(" "), c.c >= 0 && !c.cols ? "" : c.m.head.join(" ")]);
     if (scope && scope.words) scope.words.forEach(w => c.cover.add(w));
     c.rest = leftover(Q, c.cover, c.card ? c.card.el : c.m ? c.m.el : null); c.total = c.score - 8 * c.rest.length; });
   cands.sort((a, b) => b.total - a.total);
-  const top = cands.filter(c => c.total === cands[0].total && !(c.row && cands[0].row && c.row === cands[0].row && c.c === cands[0].c) || c === cands[0]);
+  const same = (a, b) => a === b || (a.row && a.row === b.row && a.c === b.c) || (a.card && a.card === b.card) || (a.chart && a.text === b.text);
+  let top = cands.filter(c => c.total === cands[0].total).filter((c, i, l) => l.findIndex(o => same(o, c)) === i);
+  if (top[0].rest.length && fs && fs.fig) return {kind: "sentence", b: fs.b, s: fs.s, Q};   // the report says it in a sentence
+  const exact = top.length === 1 && top[0].row && !top[0].scoped && core(top[0].row.label).every(w => Q.w0.includes(w));
+  if (Q.w0.length === 1 && !scope && !exact) {   // one word: offer the places it names
+    const opts = cands.filter((c, i, l) => l.findIndex(o => same(o, c)) === i).slice(0, 5);
+    if (opts.length > 1) top = opts;
+  }
+  const isPer = x => /^(tháng|thang|quý|quy|fy|q|t)\d/i.test(x);
+  if (top.length === 1 && top[0].rest.some(isPer)) return {kind: "none", Q, why: "period"};   // "tháng 3" is nowhere: never a figure of another period
   if (top.length > 1) return {kind: "many", top, Q};
   const one = top[0];
   if (scope && scope.rows && one.row && one.row.total && /\b(tong|cong)\b/.test(Q.f))
@@ -759,33 +1061,43 @@ function resolve(q, scope) {
   if (one.card && !one.wider && rowsNamed.length) { const r = rowsNamed.sort((a, b) => b.score - a.score)[0]; if (!words(one.card.text).some(w => core(r.row.label).includes(w))) one.wider = rowName(r.row); }
   return {kind: "one", b: one, rest: one.rest, Q};
 }
-function cellAnswer(m, row, c) {   // "Khối Bán hàng, AOPR: 92,3 tỷ."; never "undefined", never an empty figure
+function cellAnswer(m, row, c, cols) {   // "Khối Bán hàng, AOPR: 92,3 tỷ."; never "undefined", never an empty figure
+  if (cols && cols.length > 1) {
+    const parts = cols.filter(k => row.cells[k] && isNum(cellText(row.cells[k]))).map(k => colName(m, k) + " " + withUnit(cellText(row.cells[k]), m.units[k]));
+    if (parts.length) return {text: rowName(row) + ": " + parts.join("; ") + ".", target: row.cells[cols[0]] || row.r};
+  }
   const x = c >= 0 ? row.cells[c] : null, v = x ? cellText(x) : "";
   if (x && v && isNum(v)) return {text: rowName(row) + ", " + colName(m, c) + ": " + withUnit(v, m.units[c]) + ".", target: x};
   const parts = numCols(m, row).slice(0, 5).map(k => colName(m, k) + " " + withUnit(cellText(row.cells[k]), m.units[k]));
   return {text: rowName(row) + ": " + (parts.length ? parts.join("; ") : "dòng này không có số") + ".", target: row.r};
 }
-function rowAnswer(m, row, c, extra, opts) { const a = cellAnswer(m, row, c); answer(a.text, a.target, Object.assign({extra}, opts || {})); }
+function rowAnswer(m, row, c, extra, opts, cols) { const a = cellAnswer(m, row, c, cols); answer(a.text, a.target, Object.assign({extra}, opts || {})); }
 function quiet(t) { const n = document.createElement("div"); n.className = "src"; n.textContent = t; return n; }
-function parkNote(q, msg) {   // a question set aside: said plainly, and it only reaches the owner when the reader presses Send
+function parkNote(q, msg, said) {   // a question set aside: said once, and it reaches the owner only when the reader sends it
   park(q);
-  const box = document.createElement("div");
-  box.appendChild(quiet((msg ? msg + " " : "") + "Em đã ghi câu này lại. Câu hỏi chỉ đến " + OWNER + " khi anh chị bấm «Gửi»."));
-  box.appendChild(chips([["Gửi cho " + OWNER, sendParked]]));
+  const box = document.createElement("div"), btn = "Gửi cho " + OWNER;
+  box.appendChild(quiet((msg ? msg + " " : "") + (said ? "" : "Em ghi câu này lại. ") + "Bấm «" + btn + "» để câu hỏi đến " + OWNER + "."));
+  box.appendChild(chips([[btn, () => sendParked(box)]]));
   return box;
+}
+function whole(t, n) {   // whole sentences, never a fragment; figures in bold
+  const ss = splitSent(String(t || "").replace(/\s+/g, " ").trim()); let out = "";
+  for (const x of ss) { if (out && (out + " " + x).length > (n || 360)) break; out = out ? out + " " + x : x; }
+  return esc(out).replace(/(\d[\d.,]*\d|\d)(\s*(?:%|tỷ|triệu|người|ngày|vị trí|nhân viên|điểm))?/g, "<b>$&</b>");
 }
 let toldNoVoice = false;
 function answer(text, target, o) {
   o = o || {};
-  const a = isOpen($("bub")) ? $("ba") : $("a"); a.className = "ans " + (o.cls || ""); a.innerHTML = "<div>" + esc(text) + "</div>";
+  const a = isOpen($("bub")) ? $("ba") : $("a"); a.className = "ans " + (o.cls || ""); a.innerHTML = "<div>" + (o.html ? text : esc(text)) + "</div>";
   const src = o.src !== undefined ? o.src : target ? "Lấy từ báo cáo «" + TITLE + "», đúng chỗ đang khoanh" : "";
   const ex = [].concat(o.extra || []).filter(Boolean);
-  ex.filter(x => x.tagName === "UL").forEach(x => a.appendChild(x));   // the figures first, then where they come from
+  const figs = x => /^(UL|TABLE)$/.test(x.tagName);
+  ex.filter(figs).forEach(x => a.appendChild(x));   // the figures first, then where they come from
   if (src) a.appendChild(quiet(src));
-  ex.filter(x => x.tagName !== "UL").forEach(x => a.appendChild(x));
+  ex.filter(x => !figs(x)).forEach(x => a.appendChild(x));
   if (!o.clip && !viVoice && !toldNoVoice && text !== D.fallback) { toldNoVoice = true; const n = quiet("Máy anh chị chưa có giọng tiếng Việt, em hiện chữ thôi ạ."); n.classList.add("quiet"); a.appendChild(n); }
   if (!aside && started && !ended) resumeAt = {i: idx, t: audio.currentTime};
-  aside = true; audio.pause(); stopVoice(); setPlaying(false);
+  aside = true; audio.pause(); stopVoice(); setPlaying(false); talkLine();
   if (target) frame(target); else { clearFrames(); placePanel(); }
   if (o.clip) { audio.src = "data:" + (o.clip.mime || "audio/mpeg") + ";base64," + o.clip.audio; audio.play().catch(() => {}); }
   else speak(text);
@@ -804,14 +1116,14 @@ function chips(list) { const box = document.createElement("div"); box.className 
 function answerBank(b) { answer(b.a, null, {src: OWNER + " trả lời ngày " + b.ngay + " · từ câu hỏi đã gửi trước đây", clip: b}); }
 function candLabel(b) {   // repeated labels ("Lương", "Lương") get their group or section
   if (b.card) return b.card.text.split(":")[0];
-  if (b.chart) return b.text;
+  if (b.chart) return b.label || b.text;
   const where = b.row.group || b.m.heading;
   return b.row.label + (b.c >= 0 && b.m.head[b.c] ? " · " + b.m.head[b.c] : "") + (where ? " · " + where : "");
 }
 function showCand(b, extra, opts) {
   if (b.card) answer(b.card.text.replace(/\.?$/, "."), b.card.el, Object.assign({extra}, opts));
   else if (b.chart) answer(b.text, b.chart, Object.assign({extra}, opts));
-  else rowAnswer(b.m, b.row, b.c, extra, opts);
+  else rowAnswer(b.m, b.row, b.c, extra, opts, b.cols);
 }
 function ask(q, scope) {
   const r = resolve(q, scope);
@@ -824,22 +1136,44 @@ function ask(q, scope) {
     return;
   }
   if (r.kind === "why") {
-    if (r.w && r.w.cause) { answer("Báo cáo viết: «" + shortText(r.w.text, 300) + "»", r.w.b.el, {src: "Lấy từ báo cáo «" + TITLE + "», đoạn đang khoanh"}); return; }
+    if (r.w && r.w.cause) { answer("Báo cáo viết: «" + whole(r.w.text) + "»", r.w.b.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "», đoạn đang khoanh"}); return; }
     const what = r.entity ? " vì sao " + r.entity + " thay đổi" : " lý do";
-    if (r.w) { answer("Báo cáo chưa nói rõ" + what + ". Chỗ gần nhất: «" + shortText(r.w.text, 240) + "»", r.w.b.el, {cls: "park", extra: parkNote(q), src: "Trên báo cáo «" + TITLE + "»"}); return; }
+    if (r.w) { answer(esc("Báo cáo chưa nói rõ" + what + ". Chỗ gần nhất: ") + "«" + whole(r.w.text) + "»", r.w.b.el, {html: true, cls: "park", extra: parkNote(q), src: "Trên báo cáo «" + TITLE + "»"}); return; }
     if (r.row && r.m) { const a = cellAnswer(r.m, r.row, -1); answer(a.text, a.target, {cls: "park", extra: parkNote(q, "Báo cáo chưa nói" + what + ".")}); return; }
-    answer(D.fallback, null, {cls: "park", extra: parkNote(q)}); return;
+    answer(D.fallback, null, {cls: "park", extra: parkNote(q, null, true)}); return;
   }
-  if (r.kind === "mention") { answer("Em chưa thấy số này trong bảng hay thẻ số. Báo cáo có nhắc: «" + shortText(r.s, 240) + "»", r.b.el, {cls: "park", extra: parkNote(q), src: "Trên báo cáo «" + TITLE + "»"}); return; }
-  if (r.kind === "none") { answer(D.fallback, null, {cls: "park", extra: parkNote(q)}); return; }
+  if (r.kind === "share") {
+    const v = cellText(r.row.cells[r.c]), t = cellText(r.tot.cells[r.c]), u = r.m.units[r.c];
+    answer(rowName(r.row) + " chiếm " + r.pct + "% " + r.tot.label.toLowerCase() + " " + colName(r.m, r.c) + " (em tính: " + withUnit(v, u) + " ÷ " + withUnit(t, u) + ").",
+      r.row.cells[r.c], {src: "Em tính từ hai số trên báo cáo «" + TITLE + "»; báo cáo không ghi sẵn số này"});
+    return;
+  }
+  if (r.kind === "yoy") {
+    const [la, va] = r.a, [lb, vb] = r.b, ch = change(va, vb, /\d\.\d/.test(va + vb) && !/,/.test(va + vb));
+    answer(lb + ": " + vb + "; " + la + ": " + va + (ch ? " (em tính: " + (ch.diff.startsWith("-") ? "giảm " + ch.diff.slice(1) : "tăng " + ch.diff) + ", " + ch.pct.replace(/^-/, "−") + "%)" : "") + ".",
+      r.ch.el, {src: "Số trên biểu đồ «" + shortText(chartTitle(r.ch.el, r.ch.c), 60) + "»" + (ch ? "; phần chênh lệch em tính" : "")});
+    return;
+  }
+  if (r.kind === "sentence") { answer("Báo cáo viết: «" + whole(r.s) + "»", r.b.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "», đoạn đang khoanh"}); return; }
+  if (r.kind === "mention") { answer(esc("Em chưa thấy số này trong bảng hay thẻ số. Báo cáo có nhắc: ") + "«" + whole(r.s) + "»", r.b.el, {html: true, cls: "park", extra: parkNote(q), src: "Trên báo cáo «" + TITLE + "»"}); return; }
+  if (r.kind === "none" && r.why === "period") {
+    const asked = perPhrase(q), has = perPhrase(TITLE) || perPhrase(cellText(H1));
+    answer("Em chưa thấy số " + (asked ? "«" + asked + "»" : "kỳ này") + " trong báo cáo" + (has && fold(has) !== fold(asked) ? "; báo cáo này là số «" + has + "»" : "") + ".", null, {cls: "park", extra: parkNote(q)}); return; }
+  if (r.kind === "none" && r.why === "share") { answer("Báo cáo chưa có số này, và em chưa tìm được hai số để tính.", null, {cls: "park", extra: parkNote(q)}); return; }
+  if (r.kind === "none") { answer(D.fallback, null, {cls: "park", extra: parkNote(q, null, true)}); return; }
   if (r.kind === "many") {
-    answer("Anh chị muốn hỏi chỗ nào ạ?", null, {extra: chips(r.top.slice(0, 8).map(b => [candLabel(b), () => showCand(b, null)]))});
+    const top = r.top.slice(0, 8), labs = top.map(candLabel);   // two chips never read the same: add the section, then the table's number
+    const where = b => b.m ? (b.m.heading || b.m.cap || b.m.titles[0] || "") : b.card ? headingFor(b.card.el) : "";
+    const twice = () => labs.map(l => labs.filter(x => x === l).length > 1);
+    let dup = twice(); dup.forEach((d, i) => { if (d && where(top[i]) && !labs[i].includes(where(top[i]))) labs[i] += " · " + where(top[i]); });
+    dup = twice(); dup.forEach((d, i) => { if (d && top[i].m) labs[i] += " · bảng " + (tables().indexOf(top[i].m) + 1); });
+    answer("Anh chị muốn hỏi chỗ nào ạ?", null, {extra: chips(top.map((b, i) => [labs[i], () => showCand(b, null)]))});
     return;
   }
   const b = r.b;
   if (b.wider) { showCand(b, parkNote(q, "Đây là số chung của công ty, báo cáo chưa tách theo " + b.wider + ".")); return; }
   if (b.note) { showCand(b, parkNote(q, b.note)); return; }
-  const note = r.rest && r.rest.length ? parkNote(q, "Em chưa thấy «" + r.rest.join(" ") + "» trong báo cáo, đây là chỗ gần nhất.") : null;
+  const note = r.rest && r.rest.length ? parkNote(q, "Em chưa thấy «" + r.rest.map(x => x.replace(/_/g, " ").replace(/^(tháng|thang|quý|quy|fy)(\d)/i, "$1 $2")).join(" ") + "» trong báo cáo, đây là chỗ gần nhất.") : null;
   showCand(b, note);
 }
 $("f").onsubmit = e => { e.preventDefault(); const q = $("q").value.trim(); if (q) ask(q, null); };
@@ -847,7 +1181,7 @@ $("f").onsubmit = e => { e.preventDefault(); const q = $("q").value.trim(); if (
 // --- click or Enter anywhere in the report: the answer opens right there, in a small bubble beside the place ---
 let anchor = null, scope = null, lastFocus = null;
 function openPanel() { closeBubble(); $("panel").classList.remove("hidden"); placePanel(); if (!TOUCH) $("q").focus({preventScroll: true}); }
-function closePanel() { $("panel").classList.add("hidden"); }
+function closePanel() { const was = isOpen($("panel")); $("panel").classList.add("hidden"); if (was) idleLine(); }
 function openBubble(target, sc, hint) {
   closePanel(); anchor = target; scope = sc || null;
   if (!isOpen($("bub"))) lastFocus = document.activeElement;
@@ -855,45 +1189,103 @@ function openBubble(target, sc, hint) {
   if (!TOUCH) $("bq").focus({preventScroll: true});
 }
 function closeBubble() {
-  const was = isOpen($("bub")); $("bub").classList.add("hidden"); anchor = null; scope = null;
+  const was = isOpen($("bub")); $("bub").classList.add("hidden"); anchor = null; scope = null; lead.style.display = "none";
   if (was && lastFocus && lastFocus !== document.body && lastFocus.focus && lastFocus.isConnected) { try { lastFocus.focus({preventScroll: true}); } catch (_) {} }
   lastFocus = null;
+  if (was) { restoreSideways(); idleLine(); }
 }
 let bubAt = null;
+function gapOf(q, r) { return Math.hypot(Math.max(0, q.left - r.right, r.left - q.right), Math.max(0, q.top - r.bottom, r.top - q.bottom)); }
+function bubbleCap(px) { $("bin").style.maxHeight = Math.max(80, Math.floor(px) - 24) + "px"; }   // 24: the bubble's own padding
 function placeBubble(follow) {   // beside the place, never on it or on its row label and header, never under the bar
-  if (!anchor || !isOpen($("bub"))) return;
-  const b = $("bub"), v = vp(), small = v.w <= 700, bar = rect($("bar")), g = 14;
+  if (!anchor || !isOpen($("bub"))) { lead.style.display = "none"; return; }
+  const b = $("bub"), v = vp(), small = v.w <= 700, bar = rect($("bar")), g = 14, top0 = v.y + 8, bot0 = bar.top - 8;
+  const set = (x, y) => { b.style.left = x + "px"; b.style.top = y + "px"; };
   if (follow && bubAt && bubAt.anchor === anchor) {   // on scroll: move with the place; choose again only when it no longer fits
-    const r = rect(anchor), x = r.left + bubAt.dx, y = r.top + bubAt.dy, w = b.offsetWidth, h = b.offsetHeight;
-    if (x >= v.x + 8 && x + w <= v.x + v.w - 8 && y >= v.y + 8 && y + h <= bar.top - 8) { b.style.left = x + "px"; b.style.top = y + "px"; return; }
+    const r = rect(anchor), x = r.left + bubAt.dx, y = r.top + bubAt.dy, w = b.offsetWidth, h = b.offsetHeight, q = {left: x, top: y, right: x + w, bottom: y + h};
+    if (x >= v.x + 8 && q.right <= v.x + v.w - 8 && y >= top0 && q.bottom <= bot0 && (bubAt.over || !hit(q, r))) { set(x, y); pointAt(r, q); return; }
   }
-  if (small) b.style.width = (v.w - 16) + "px"; else b.style.width = "";
-  const r = rect(anchor), w = b.offsetWidth, h = b.offsetHeight;
-  const box = anchor.closest && anchor.closest("table,[role=table],[role=grid],figure,svg,canvas,img"), c = box ? rect(box) : r;
-  const spots = [[c.right + g, r.top - 10], [c.left - w - g, r.top - 10], [r.left, c.top - h - g], [r.left, c.bottom + g],
-                 [r.right + g, r.bottom + g], [r.left - w - g, r.bottom + g], [r.right + g, r.top - h - g], [r.left - w - g, r.top - h - g],
-                 [r.left, r.bottom + g], [r.left, r.top - h - g], [r.right + g, r.top], [r.left - w - g, r.top],
-                 [r.right - w, r.bottom + g], [r.right - w, r.top - h - g],
-                 [v.x + v.w - w - 12, bar.top - h - 12], [v.x + 12, bar.top - h - 12]];   // last: docked just above the bar
-  const figs = numberRects({left: v.x, top: v.y, right: v.x + v.w, bottom: v.y + v.h}, 0), gd = guards(anchor);
-  let best = null;
-  for (let [x, y] of spots) {
-    x = Math.max(v.x + 8, Math.min(x, v.x + v.w - w - 8));
-    const q = {left: x, top: y, right: x + w, bottom: y + h};
-    if (y < v.y + 8 || q.bottom > bar.top - 8 || hit(q, r)) continue;
-    // a hidden figure in the place's own row or column counts ten times; its row label and header a hundred
-    const cost = figs.filter(n => hit(n, q)).reduce((k, n) => k + ((n.bottom > r.top && n.top < r.bottom) || (n.right > r.left && n.left < r.right) ? 10 : 1), 0)
-      + 100 * gd.strong.filter(s => hit(s, q)).length + 10 * gd.soft.filter(s => hit(s, q)).length;
-    const far = Math.hypot(x + w / 2 - (r.left + r.right) / 2, y + h / 2 - (r.top + r.bottom) / 2);
-    if (!best || cost < best.cost || (cost === best.cost && far < best.far)) best = {x, y, cost, far};
+  b.style.width = small ? (v.w - 16) + "px" : "";
+  bubbleCap(bot0 - top0);   // never taller than the screen above the bar: a long answer scrolls inside
+  const view = {left: v.x, top: v.y, right: v.x + v.w, bottom: v.y + v.h};
+  let figs = numberRects(view, 0), charts = chartRects(view).filter(q => !hit(q, rect(anchor)));
+  const gd = guards(anchor);
+  const choose = r => {
+    const w = b.offsetWidth, h = b.offsetHeight;
+    const box = anchor.closest && anchor.closest("table,[role=table],[role=grid],figure,svg,canvas,img"), c = box ? rect(box) : r;
+    const spots = [[c.right + g, r.top - 10], [c.left - w - g, r.top - 10], [r.left, c.top - h - g], [r.left, c.bottom + g],
+                   [r.right + g, r.bottom + g], [r.left - w - g, r.bottom + g], [r.right + g, r.top - h - g], [r.left - w - g, r.top - h - g],
+                   [r.left, r.bottom + g], [r.left, r.top - h - g], [r.right + g, r.top], [r.left - w - g, r.top],
+                   [r.right - w, r.bottom + g], [r.right - w, r.top - h - g],
+                   [v.x + v.w - w - 12, bot0 - h - 4], [v.x + 12, bot0 - h - 4]];   // last: docked just above the bar
+    let best = null;
+    for (let [x, y] of spots) {
+      x = Math.max(v.x + 8, Math.min(x, v.x + v.w - w - 8));
+      if (h > bot0 - top0) continue;
+      y = Math.max(top0, Math.min(y, bot0 - h));   // slid up or down to stay whole on the screen; it must still miss the place
+      const q = {left: x, top: y, right: x + w, bottom: y + h};
+      if (hit(q, r)) continue;
+      // a hidden figure in the place's own row or column counts ten times, its row label and header a hundred, a chart five;
+      // and every 40px between the bubble and its place costs as much as one hidden figure
+      const cost = figs.filter(n => hit(n, q)).reduce((k, n) => k + ((n.bottom > r.top && n.top < r.bottom) || (n.right > r.left && n.left < r.right) ? 10 : 1), 0)
+        + 100 * gd.strong.filter(s => hit(s, q)).length + 10 * gd.soft.filter(s => hit(s, q)).length + 5 * charts.filter(s => hit(s, q)).length
+        + gapOf(q, r) / 40;
+      if (!best || cost < best.cost - 1e-6) best = {x, y, cost};
+    }
+    return best;
+  };
+  let r = rect(anchor), best = choose(r);
+  if (!best && !small) {   // a narrower bubble fits beside the place
+    const room = Math.max(v.x + v.w - 8 - (r.right + g), r.left - g - (v.x + 8));
+    if (room >= 240 && room < b.offsetWidth) { b.style.width = Math.floor(room) + "px"; best = choose(r); if (!best) b.style.width = ""; }
   }
-  if (!best) best = {x: Math.max(v.x + 8, Math.min(r.left, v.x + v.w - w - 8)), y: Math.max(v.y + 8, bar.top - h - 12), far: 1e9};
-  b.style.left = best.x + "px"; b.style.top = best.y + "px"; bubAt = {anchor, dx: best.x - r.left, dy: best.y - r.top};
-  const tl = $("tail"), cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;   // the tail points at the place
-  tl.className = "tail " + (best.y >= r.bottom ? "t" : best.y + h <= r.top ? "b" : best.x >= r.right ? "l" : "r");
-  tl.classList.toggle("hidden", best.far > 420 || cx < v.x || cx > v.x + v.w);
-  if (/[tb]$/.test(tl.className.split(" ")[1])) { tl.style.left = Math.max(14, Math.min(w - 28, cx - best.x - 7)) + "px"; tl.style.top = ""; }
-  else { tl.style.top = Math.max(14, Math.min(h - 28, cy - best.y - 7)) + "px"; tl.style.left = ""; }
+  if (!best && !follow) {   // no room beside the place: move the page so the place sits high with the answer under it
+    const h = Math.min(b.offsetHeight, 200);
+    if (r.height + g + h <= bot0 - top0 - 56) {
+      const dy = r.top - top0 - 48, sc = scrollerOf(anchor);
+      if (sc) sc.scrollBy({top: dy, behavior: "auto"});
+      if (Math.abs(rect(anchor).top - r.top) < 2) window.scrollBy({top: dy, behavior: "auto"});
+      redraw(); r = rect(anchor); figs = numberRects(view, 0); best = choose(r);
+      if (!best && bot0 - g - r.bottom - 6 >= 110) { bubbleCap(bot0 - g - r.bottom - 6); best = choose(r); }
+    }
+  }
+  if (!best) {   // still none: a shorter bubble in the free space below the place, else above it, else beside it
+    const below = bot0 - g - r.bottom - 6, above = r.top - g - top0 - 6, side = bot0 - top0;
+    for (const room of [below, above, side].filter(x => x >= 110).sort((a, b) => b - a)) { bubbleCap(room); best = choose(r); if (best) break; }
+  }
+  let over = false;
+  if (!best) {   // a place taller than the screen: a short bubble docked above the bar, beside the place when there is room
+    bubbleCap(Math.min(bot0 - top0, 220)); const w = b.offsetWidth, h = b.offsetHeight;
+    const x = r.right + g + w <= v.x + v.w - 8 ? r.right + g : r.left - g - w >= v.x + 8 ? r.left - g - w : v.x + v.w - w - 8;
+    best = {x, y: Math.max(top0, bot0 - h)}; over = true;
+  }
+  const w = b.offsetWidth, h = b.offsetHeight, q = {left: best.x, top: best.y, right: best.x + w, bottom: best.y + h};
+  set(best.x, best.y); bubAt = {anchor, dx: best.x - r.left, dy: best.y - r.top, over};
+  pointAt(r, q);
+}
+function pointAt(r, q) {   // the tail touches the place when it can reach it; otherwise a thin leader line goes to it
+  const tl = $("tail"), w = q.right - q.left, h = q.bottom - q.top, gap = gapOf(q, r), v = vp();
+  const side = q.top >= r.bottom - 1 ? "t" : q.bottom <= r.top + 1 ? "b" : q.left >= r.right - 1 ? "l" : q.right <= r.left + 1 ? "r" : "";
+  let at = null;
+  if (side && gap <= 30) {
+    if (side === "t" || side === "b") { const lo = Math.max(r.left + 4, q.left + 21), hi = Math.min(r.right - 4, q.right - 21);
+      if (lo <= hi) at = {x: (Math.max(lo, Math.min(hi, (r.left + r.right) / 2))) - q.left - 7}; }
+    else { const lo = Math.max(r.top + 2, q.top + 21), hi = Math.min(r.bottom - 2, q.bottom - 21);
+      if (lo <= hi) at = {y: (Math.max(lo, Math.min(hi, (r.top + r.bottom) / 2))) - q.top - 7}; }
+  }
+  if (at) {
+    tl.className = "tail " + side; lead.style.display = "none";
+    if (at.x !== undefined) { tl.style.left = at.x + "px"; tl.style.top = ""; } else { tl.style.top = at.y + "px"; tl.style.left = ""; }
+    return;
+  }
+  tl.className = "tail hidden";
+  const rc = {x: Math.max(v.x, Math.min(v.x + v.w, (r.left + r.right) / 2)), y: Math.max(v.y, Math.min(v.y + v.h, (r.top + r.bottom) / 2))};
+  const px = Math.max(q.left, Math.min(q.right, rc.x)), py = Math.max(q.top, Math.min(q.bottom, rc.y));
+  const tx = Math.max(r.left, Math.min(r.right, px)), ty = Math.max(r.top, Math.min(r.bottom, py));
+  if (hit(q, r) || Math.hypot(tx - px, ty - py) < 4 || ty < v.y || ty > v.y + v.h) { lead.style.display = "none"; return; }
+  const [ln, dot] = [lead.firstChild, lead.lastChild];
+  ln.setAttribute("x1", px); ln.setAttribute("y1", py); ln.setAttribute("x2", tx); ln.setAttribute("y2", ty);
+  dot.setAttribute("cx", tx); dot.setAttribute("cy", ty); lead.style.display = "block";
 }
 $("bx").onclick = () => { closeBubble(); clearFrames(); };
 $("bf").onsubmit = e => { e.preventDefault(); const q = $("bq").value.trim(); if (q) ask(q, scope); };
@@ -951,6 +1343,7 @@ function pick(t) {   // what the reader pointed at, by mouse, finger or keyboard
       const hi = vals.reduce((a, b) => b.v > a.v ? b : a), lo = vals.reduce((a, b) => b.v < a.v ? b : a), u = m.units[pos.c];
       answer("Cột «" + colName(m, pos.c) + "»: cao nhất " + rowName(hi.row) + " " + withUnit(cellText(hi.x), u) + "; thấp nhất " + rowName(lo.row) + " " + withUnit(cellText(lo.x), u) + ".", cell,
         {extra: quiet("So " + vals.length + " dòng" + (m.rows.some(r => r.total) ? ", không tính dòng Tổng" : "") + ".")});
+      frame(hi.x, true, true, true); if (lo.x !== hi.x) frame(lo.x, true, true, true);
       return true;
     }
     const row = pos.row, rows = pos.label && cell.rowSpan > 1 ? m.rows.filter(r => r.labelCells.includes(cell)) : null;
@@ -978,36 +1371,40 @@ function pick(t) {   // what the reader pointed at, by mouse, finger or keyboard
   const text = cellText(blk), head = headingFor(blk);
   openBubble(blk, {el: blk, words: words(head), label: head}, "Hỏi về đoạn này…");
   if (/^H[1-4]$/.test(blk.tagName)) { answer("Phần «" + text + "». Anh chị bấm vào một con số hay một đoạn trong phần này để em nói rõ hơn.", blk, {src: "Trên báo cáo «" + TITLE + "»"}); return true; }
-  const figs = figuresOf(text), ul = document.createElement("ul");
-  figs.forEach(f => { const li = document.createElement("li"); li.textContent = f; ul.appendChild(li); });
-  answer("Đoạn này nói: " + shortText(splitSent(text)[0] || text, 170) + (figs.length ? " Các số trong đoạn:" : ""), blk,
-    {extra: [figs.length ? ul : null, nextQs(text, null, "Nghe lại phần em đọc đoạn này")], src: "Trên báo cáo «" + TITLE + "»"});
+  answer("Đoạn này nói: «" + whole(text) + "»", blk,
+    {html: true, extra: nextQs(text, null, "Nghe lại phần em đọc đoạn này"), src: "Trên báo cáo «" + TITLE + "»"});
   return true;
 }
-document.addEventListener("click", e => {
+document.addEventListener("click", e => {   // capture phase: a report that stops clicks on its own cells still gets answers
   const t = e.target;
   if (!(t instanceof Element) || host.contains(t) || mine(t) || t.closest("a,button,input,select,textarea,label,summary")) return;
   if (String(getSelection && getSelection()).trim()) return;   // the reader is selecting text, not asking
   pick(t);
-});
+}, true);
 addEventListener("keydown", e => {
   const t = (e.composedPath ? e.composedPath()[0] : e.target) || document.body;
-  if (e.key === "Escape") {   // Esc: stop talking, close what is open
+  if (e.key === "Escape") {   // Esc: stop talking, close what is open, and the keyboard is back on "Hỏi em"
+    const open = isOpen($("bub")) || isOpen($("panel")) || isOpen($("lasso"));
     if (playing) { audio.pause(); setPlaying(false); }
-    stopVoice(); closeBubble(); closePanel(); stopLasso(); clearFrames(); return;
+    stopVoice(); closeBubble(); closePanel(); stopLasso(); clearFrames();
+    if (open) $("askb").focus({preventScroll: true});
+    return;
   }
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || "") || t.isContentEditable;
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "/") { e.preventDefault(); openPanel(); $("q").focus({preventScroll: true}); return; }
+  const inTable = t.closest && !root.contains(t) && t.closest("[data-clicky-t]");
+  if (inTable && /^(Arrow(Up|Down|Left|Right)|Home|End)$/.test(e.key)) { const x = cellMove(t, e.key); e.preventDefault(); if (x) focusCell(x); return; }
+  if (e.key === "Enter" && inTable && t !== inTable) { e.preventDefault(); pick(t); return; }
+  if (e.key === "Enter" && inTable) { e.preventDefault(); const x = cellMove(t, "ArrowDown"); if (x) { focusCell(x); pick(x); } return; }
   if (e.key === "Enter" && t.hasAttribute && t.hasAttribute("data-clicky-hoi") && !root.contains(t)) { e.preventDefault(); pick(t); return; }
   if (e.key === " " || e.code === "Space") { if (/^(BUTTON|A|SUMMARY)$/.test(t.tagName || "")) return; e.preventDefault(); togglePlay(); }
   else if (e.key === "ArrowRight") { e.preventDefault(); $("next").click(); }
   else if (e.key === "ArrowLeft") { e.preventDefault(); $("prev").click(); }
-});
+}, true);
 
 // --- draw a box around any part of the report and ask about what is inside ---
 let lassoFrom = null;
-const regionEl = document.createElement("div"); regionEl.style.cssText = "position:fixed;pointer-events:none"; layer.appendChild(regionEl);
-let regionAt = null;
 function stopLasso() { $("lasso").classList.add("hidden"); $("lr").classList.add("hidden"); $("lassob").classList.remove("on"); lassoFrom = null; }
 $("ltip").textContent = TOUCH ? "Dùng ngón tay kéo một khung quanh vùng muốn hỏi" : "Kéo chuột khoanh vùng muốn hỏi · Esc để thôi";
 $("lstop").onclick = e => { e.stopPropagation(); stopLasso(); };
@@ -1030,38 +1427,92 @@ $("lasso").addEventListener("pointerup", e => {
 function inside(e, box) { const r = rect(e), cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
   return cx >= box.left && cx <= box.right && cy >= box.top && cy <= box.bottom; }
 function regionSummary(box) {   // what is inside, in the report's own labels and figures
-  const lines = [], labels = [], rows = [];
+  const lines = [], labels = [], rows = [], cells = [];
   for (const m of tables()) for (const row of m.rows) {
-    const got = []; for (const c of numCols(m, row)) { const x = row.cells[c]; if (inside(x, box)) got.push(colName(m, c) + " " + withUnit(cellText(x), m.units[c])); }
-    if (got.length) { lines.push(rowName(row) + ": " + got.join("; ")); labels.push(row.label); rows.push({m, row}); }
+    const got = [], cs = []; for (const c of numCols(m, row)) { const x = row.cells[c]; if (inside(x, box)) { got.push(colName(m, c) + " " + withUnit(cellText(x), m.units[c])); cs.push(c); cells.push(x); } }
+    if (got.length) { lines.push(rowName(row) + ": " + got.join("; ")); labels.push(row.label); rows.push({m, row, cols: cs}); }
   }
-  for (const c of allCards()) if (inside(c.el, box)) { lines.push(c.text); labels.push(c.text.split(":")[0]); }
-  return {lines, labels, rows};
+  for (const c of allCards()) if (inside(c.el, box)) { lines.push(c.text); labels.push(c.text.split(":")[0]); cells.push(c.el); }
+  return {lines, labels, rows, cells};
+}
+function placeRegion() {   // the lasso frame follows the cells it found (or the page, when it found none) on every scroll
+  if (!regionEl._cells && !regionEl._page) return;
+  let u = null;
+  if (regionEl._cells) for (const c of regionEl._cells) { if (!c.isConnected) continue; const q = seen(c); if (!q) continue;
+    u = u ? {left: Math.min(u.left, q.left), top: Math.min(u.top, q.top), right: Math.max(u.right, q.right), bottom: Math.max(u.bottom, q.bottom)} : {...q}; }
+  else { const p = regionEl._page; u = {left: p.left - scrollX, top: p.top - scrollY, right: p.right - scrollX, bottom: p.bottom - scrollY}; }
+  if (!u) { regionEl.style.display = "none"; return; }
+  Object.assign(regionEl.style, {display: "block", left: u.left + "px", top: u.top + "px", width: (u.right - u.left) + "px", height: (u.bottom - u.top) + "px"});
+}
+function miniTable(rows) {   // more than three rows of one table: a small grid, the unit said once
+  const m = rows[0].m, cols = [...new Set(rows.flatMap(x => x.cols))].sort((a, b) => a - b);
+  const us = [...new Set(cols.map(c => m.units[c] || ""))], one = us.length === 1 && us[0] && us[0] !== "%" ? us[0] : "";
+  const t = document.createElement("table"); t.className = "mini";
+  const tr = (cells, tag) => { const r = document.createElement("tr"); cells.forEach(x => { const c = document.createElement(tag); c.textContent = x; r.appendChild(c); }); return r; };
+  t.appendChild(tr(["", ...cols.map(c => colName(m, c) + (one || !m.units[c] || m.units[c] === "%" ? "" : " (" + m.units[c] + ")"))], "th"));
+  rows.slice(0, 12).forEach(x => t.appendChild(tr([rowName(x.row), ...cols.map(c => x.cols.includes(c) && x.row.cells[c] ? cellText(x.row.cells[c]) + (m.units[c] === "%" && !/%/.test(cellText(x.row.cells[c])) ? "%" : "") : "")], "td")));
+  if (one || rows.length > 12) { const cap = document.createElement("caption");
+    cap.textContent = [one ? "Đơn vị: " + one : "", rows.length > 12 ? "… và " + (rows.length - 12) + " dòng nữa" : ""].filter(Boolean).join(" · "); t.appendChild(cap); }
+  return t;
 }
 function askRegion(box) {
-  Object.assign(regionEl.style, {left: box.left + "px", top: box.top + "px", width: (box.right - box.left) + "px", height: (box.bottom - box.top) + "px"});
-  const {lines, labels, rows} = regionSummary(box);
-  openBubble(regionEl, {rows, m: rows.length && rows.every(x => x.m === rows[0].m) ? rows[0].m : null, words: labels.flatMap(core), label: ""}, "Hỏi về vùng này…");
+  const {lines, labels, rows, cells} = regionSummary(box);
   const ch = [...document.querySelectorAll("svg,canvas")].find(c => !mine(c) && inside(c, box));
+  const bl = lines.length ? [] : blocks().filter(b => inside(b.el, box));
+  const found = cells.length ? cells : ch && !lines.length ? [ch] : bl.map(b => b.el);
+  regionEl._cells = found.length ? found : null;
+  regionEl._page = found.length ? null : {left: box.left + scrollX, top: box.top + scrollY, right: box.right + scrollX, bottom: box.bottom + scrollY};
+  placeRegion();
+  openBubble(regionEl, {rows, m: rows.length && rows.every(x => x.m === rows[0].m) ? rows[0].m : null, words: labels.flatMap(core), label: ""}, "Hỏi về vùng này…");
   if (!lines.length && ch) { const a = aboutChart(ch.closest("figure") || ch); answer(a.text, regionEl, {extra: a.extra, src: "Trên báo cáo «" + TITLE + "»"}); return; }
   if (!lines.length) {
-    const ws = blocks().filter(b => inside(b.el, box)).map(b => b.text).join(" ");
-    answer(ws ? shortText(ws, 260) : "Vùng này chưa có con số nào em đọc được. Anh chị hỏi em ở ô dưới nhé.", regionEl, {src: "Trên báo cáo «" + TITLE + "»"});
+    const ws = bl.map(b => b.text).join(" ");
+    if (ws) answer("Vùng này viết: «" + whole(ws, 260) + "»", regionEl, {html: true, src: "Trên báo cáo «" + TITLE + "»"});
+    else answer("Vùng này chưa có con số nào em đọc được. Anh chị hỏi em ở ô dưới nhé.", regionEl, {src: "Trên báo cáo «" + TITLE + "»"});
+    return;
+  }
+  const oneTable = rows.length > 3 && rows.length === lines.length && rows.every(x => x.m === rows[0].m);
+  if (oneTable) {
+    answer("Vùng anh chị khoanh có " + rows.length + " dòng của bảng" + (rows[0].m.heading ? " «" + rows[0].m.heading + "»" : "") + ":", regionEl, {extra: miniTable(rows), src: "Lấy từ báo cáo «" + TITLE + "»"});
     return;
   }
   const list = document.createElement("ul"); lines.slice(0, 8).forEach(l => { const li = document.createElement("li"); li.textContent = l; list.appendChild(li); });
   if (lines.length > 8) { const li = document.createElement("li"); li.textContent = "… và " + (lines.length - 8) + " dòng nữa"; list.appendChild(li); }
   answer("Vùng anh chị khoanh có " + lines.length + (lines.length > 1 ? " mục:" : " mục."), regionEl, {extra: list, src: "Lấy từ báo cáo «" + TITLE + "»"});
 }
-function markAskable() {   // a quiet hint: the cursor changes over figures; Tab reaches them and Enter asks
+function markAskable() {   // a quiet hint: the cursor changes over figures; one Tab stop per table, each number tile, Enter asks
   const st = document.createElement("style");
-  st.textContent = "[data-clicky-hoi]{cursor:help} [data-clicky]:not(table):not(tr){cursor:help} [data-clicky-hoi]:focus-visible{outline:3px solid " + FRAME + ";outline-offset:2px}";
-  document.head.appendChild(st);
-  const mark = x => { if (!x.hasAttribute("data-clicky-hoi")) { x.setAttribute("data-clicky-hoi", "1"); if (!x.hasAttribute("tabindex")) x.setAttribute("tabindex", "0"); } };
-  tables().forEach(m => m.rows.forEach(row => numCols(m, row).forEach(c => mark(row.cells[c]))));
-  allCards().forEach(c => mark(c.el));
+  st.setAttribute("data-clicky-layer", "1");
+  st.textContent = "[data-clicky-t] td,[data-clicky-t] th,[data-clicky-t] [role=cell],[data-clicky-t] [role=gridcell],[data-clicky-hoi]{cursor:help} [data-clicky]:not(table):not(tr){cursor:help} " +
+    "[data-clicky-t]:focus-visible,[data-clicky-t] [data-clicky-at]:focus-visible,[data-clicky-hoi]:focus-visible{outline:3px solid " + FRAME + ";outline-offset:2px}";
+  (document.head || document.documentElement).appendChild(st);
+  tables();
+  allCards().forEach(x => { if (!x.el.hasAttribute("data-clicky-hoi")) { x.el.setAttribute("data-clicky-hoi", "1"); if (!x.el.hasAttribute("tabindex")) x.el.setAttribute("tabindex", "0"); } });
 }
-markAskable();
+function cellMove(t, key) {   // arrow keys inside a table: the cell next to this one, merged cells counted once
+  const tb = t.closest("[data-clicky-t]"), m = tb && tables().find(x => x.el === tb); if (!m) return null;
+  const g = m.grid;
+  if (t === tb) { const row = m.rows[0], c = numCols(m, row)[0]; return row.cells[c >= 0 ? c : 0] || null; }
+  let r = -1, c = -1;
+  for (let i = 0; i < g.length && r < 0; i++) { const k = g[i].cells.indexOf(t); if (k >= 0) { r = i; c = k; } }
+  if (r < 0) return null;
+  const at = (i, k) => g[i] && g[i].cells[k];
+  if (key === "ArrowRight") { let k = c; while (at(r, k) === t) k++; return at(r, k) || null; }
+  if (key === "ArrowLeft") { let k = c; while (k >= 0 && at(r, k) === t) k--; return k >= 0 ? at(r, k) : null; }
+  if (key === "ArrowDown") { let i = r; while (at(i, c) === t) i++; return at(i, c) || null; }
+  if (key === "ArrowUp") { let i = r; while (i >= 0 && at(i, c) === t) i--; return i >= 0 ? at(i, c) : null; }
+  if (key === "Home") return at(r, 0) || null;
+  if (key === "End") { const row = g[r].cells; return row[row.length - 1] || null; }
+  return null;
+}
+function focusCell(x) {
+  if (!x) return;
+  document.querySelectorAll("[data-clicky-at]").forEach(o => { if (o !== x) { o.removeAttribute("data-clicky-at"); if (o.getAttribute("tabindex") === "-1") o.removeAttribute("tabindex"); } });
+  if (!x.hasAttribute("tabindex")) x.setAttribute("tabindex", "-1");
+  x.setAttribute("data-clicky-at", "1"); x.focus({preventScroll: false});
+}
+// a huge report: the reading happens just after the page shows, not before; a click before that reads what it needs itself
+(window.requestIdleCallback || (f => setTimeout(f, 1)))(() => { markAskable(); setTimeout(() => { numNodes(); }, 0); });
 
 // --- parked questions: kept on this device, sent only when the reader presses Send ---
 const key = "clicky-treo-" + M.pack_id; let mem = [];
@@ -1070,18 +1521,28 @@ function save(l) { mem = l; try { localStorage.setItem(key, JSON.stringify(l)); 
 function park(q) { const l = load(); if (!l.some(x => x.q === q && !x.sent)) l.push({q, part: idx + 1, at: new Date().toLocaleString("vi-VN")}); save(l); draw(); }
 function draw() { const l = load().filter(x => !x.sent); $("tb").classList.toggle("hidden", !l.length && !$("sent").textContent); $("send").classList.toggle("hidden", !l.length);
   $("tl").innerHTML = l.map(x => "<li>" + esc(x.q) + "</li>").join(""); }
-function sendParked() {
-  const all = load(), l = all.filter(x => !x.sent); if (!l.length) return;
-  const body = "Chào " + OWNER + ",\n\nKhi xem báo cáo \"" + TITLE + "\", tôi có các câu hỏi sau:\n\n" + l.map((x, i) => (i + 1) + ". " + x.q).join("\n") + "\n\n(Gửi từ Clicky, mã báo cáo " + (M.pack_id || "") + ")";
-  const to = String(M.contact || "").split(/[,;\s]+/).filter(Boolean).map(encodeURIComponent).join(",");
-  save(all.map(x => Object.assign(x, {sent: true})));
-  $("sent").textContent = "Em đã mở thư gửi " + OWNER + " với " + l.length + " câu. Anh chị bấm Gửi trong thư là xong.";
-  draw();
-  location.href = "mailto:" + to + "?subject=" + encodeURIComponent("Câu hỏi về " + TITLE) + "&body=" + encodeURIComponent(body);
+function mailBody(l) { return "Chào " + OWNER + ",\n\nKhi xem báo cáo \"" + TITLE + "\", tôi có các câu hỏi sau:\n\n" + l.map((x, i) => (i + 1) + ". " + x.q).join("\n") + "\n\n(Gửi từ Clicky, mã báo cáo " + (M.pack_id || "") + ")"; }
+function copyText(t) {
+  try { if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(t).then(() => true, () => false); } catch (_) {}
+  const ta = document.createElement("textarea"); ta.value = t; ta.setAttribute("data-clicky-layer", "1"); ta.style.cssText = "position:fixed;left:-9999px";
+  document.body.appendChild(ta); ta.select(); let ok = false; try { ok = document.execCommand("copy"); } catch (_) {} ta.remove(); return Promise.resolve(ok);
 }
-$("send").onclick = sendParked;
+function sendParked(where) {   // opens the reader's mail app; the questions stay on the list until the reader says the mail went
+  const l = load().filter(x => !x.sent); if (!l.length) return;
+  const to = String(M.contact || "").split(/[,;\s]+/).filter(Boolean).map(a => encodeURIComponent(a).replace(/%40/g, "@")).join(",");
+  const href = "mailto:" + to + "?subject=" + encodeURIComponent("Câu hỏi về " + TITLE) + "&body=" + encodeURIComponent(mailBody(l));
+  const box = document.createElement("div"); box.className = "sentbox";
+  box.appendChild(quiet("Em đã mở thư gửi " + OWNER + " với " + l.length + " câu. Thư chưa mở thì anh chị sao chép câu hỏi và gửi cách khác."));
+  const again = document.createElement("a"); again.href = href; again.className = "mail"; again.textContent = "Mở lại thư"; box.appendChild(again);
+  box.appendChild(chips([["Đã gửi xong", () => { save(load().map(x => Object.assign(x, {sent: true}))); box.replaceChildren(quiet("Cảm ơn anh chị, em đã đánh dấu đã gửi.")); draw(); }],
+                         ["Sao chép câu hỏi", () => copyText(mailBody(l)).then(ok => { box.lastChild.before(quiet(ok ? "Em đã chép câu hỏi, anh chị dán vào thư hay tin nhắn." : "Máy không cho chép; anh chị chọn và chép từ danh sách câu chờ.")); })]]));
+  const host2 = where && where.nodeType === 1 ? where : $("sent");
+  [...host2.querySelectorAll(".sentbox")].forEach(x => x.remove()); host2.appendChild(box); draw();
+  try { location.href = href; } catch (_) {}
+}
+$("send").onclick = () => sendParked($("sent"));
 draw(); setPlaying(false);
-$("cap").innerHTML = "<span>Em là Clicky, trợ lý AI của " + esc(OWNER) + ". Bấm ▶ để nghe trình bày. Bấm vào bất kỳ con số hay đoạn nào trên báo cáo, hoặc ⬚ Khoanh vùng, để hỏi ngay tại đó.</span>";
+$("cap").innerHTML = INTRO;
 if (S.length) audio.src = sceneSrc(0); else $("play").disabled = true;
 fitBar();
 
@@ -1118,7 +1579,10 @@ window.__clickyKiemHinh = async function () {
     .concat(cells.slice(0, 40).map(c => ({t: c, name: (c.closest("tr,[role=row]") && c.closest("tr,[role=row]").getAttribute("data-clicky") || "") + " ô " + (c.cellIndex ?? "") + " «" + cellText(c) + "»"})));
   const problems = []; let n = 0;
   const v = vp(), b0 = rect($("bar"));
-  if (b0.left < v.x - 1 || b0.right > v.x + v.w + 1 || b0.bottom > v.y + v.h + 1) problems.push("thanh Clicky ra ngoài màn hình");
+  const barShown = () => { const q = rect($("bar")); if (!host.isConnected || !q.width) return false;   // really on screen and on top
+    const e = document.elementFromPoint(Math.min(v.x + v.w - 2, (q.left + q.right) / 2), Math.min(v.y + v.h - 2, (q.top + q.bottom) / 2)); return e === host; };
+  if (b0.left < v.x - 1 || b0.right > v.x + v.w + 1 || b0.bottom > v.y + v.h + 1 || b0.top < v.y - 1) problems.push("thanh Clicky ra ngoài màn hình");
+  else if (!barShown()) problems.push("thanh Clicky không hiện trên trang (bị gỡ hoặc bị che)");
   for (const open of [false, true, "bubble"]) {
     closeBubble(); $("panel").classList.toggle("hidden", open !== true); placePanel();
     if (open === true) { const a = $("a"); a.className = "ans"; a.innerHTML = "<div>Câu trả lời mẫu dài vừa phải để bảng hỏi có chiều cao thật.</div>"; a.appendChild(chips([["Cả dòng", () => 0], ["Nghe lại", () => 0], ["Hỏi câu khác", () => 0]])); placePanel(); }
@@ -1130,7 +1594,7 @@ window.__clickyKiemHinh = async function () {
       const where = name + (open === true ? ", khi mở bảng hỏi" : open ? ", khi hỏi tại chỗ" : "");
       const r = rect(t), small = r.height < v.h * 0.6, gd = guards(t).strong.filter(g => g.bottom > v.y && g.top < v.y + v.h);
       if (open) { const q = rect(open === true ? $("panel") : $("bub")), what = open === true ? "bảng hỏi" : "khung hỏi tại chỗ";
-        if (open === "bubble" && hit(q, r) && small) problems.push(where + ": khung hỏi tại chỗ che chính chỗ đang hỏi");
+        if (open === "bubble" && hit(q, r) && r.height < (rect($("bar")).top - v.y) * 0.75) problems.push(where + ": khung hỏi tại chỗ che chính chỗ đang hỏi");
         if (q.top < v.y - 1 || q.bottom > v.y + v.h + 1 || q.left < v.x - 1 || q.right > v.x + v.w + 1) problems.push(where + ": " + what + " ra ngoài màn hình");
         if (open === "bubble" && hit(q, rect($("bar")))) problems.push(where + ": khung hỏi tại chỗ đè lên thanh Clicky");
         if (small && gd.some(g => hit(g, q))) problems.push(where + ": " + what + " che tên dòng hoặc tiêu đề cột của số"); }
@@ -1144,8 +1608,27 @@ window.__clickyKiemHinh = async function () {
         if (guards(t).soft.some(q => hit(h, q))) problems.push(where + ": nón lá đè lên tên dòng hoặc tiêu đề cột"); }
     }
   }
+  // a lassoed region: after the page scrolls, its frame still goes round the cells it listed
+  closePanel(); closeBubble(); clearFrames();
+  const m0 = tables().find(m => m.rows.filter(r => numCols(m, r).length).length >= 3);
+  if (m0) {
+    const rows = m0.rows.filter(r => numCols(m0, r).length).slice(0, 3), cs = rows.flatMap(r => numCols(m0, r).map(c => r.cells[c]));
+    cs[0].scrollIntoView({block: "center"}); await wait();
+    const u = cs.map(rect).reduce((a, q) => ({left: Math.min(a.left, q.left), top: Math.min(a.top, q.top), right: Math.max(a.right, q.right), bottom: Math.max(a.bottom, q.bottom)}));
+    askRegion({left: u.left - 2, top: u.top - 2, right: Math.min(u.right + 2, v.x + v.w - 1), bottom: u.bottom + 2}); await wait();
+    const listed = regionEl._cells || [], sc = scrollerOf(cs[0]);
+    (sc || window).scrollBy({top: 150, behavior: "auto"}); await wait(); redraw(); await wait();
+    const f = frames[0] && frames[0].box.style.display !== "none" ? rect(frames[0].box) : null;
+    if (!listed.length) problems.push("khoanh vùng: em không đọc được ô nào trong vùng ba dòng đầu của bảng");
+    else listed.forEach(c => { const q = seen(c); if (q && (!f || f.left > q.left + 1 || f.top > q.top + 1 || f.right < q.right - 1 || f.bottom < q.bottom - 1))
+      problems.push("khoanh vùng: sau khi cuộn trang, khung không còn bao ô «" + cellText(c) + "»"); });
+    const bq = rect($("bub")), fr = f || {left: 0, top: 0, right: 0, bottom: 0};
+    if (isOpen($("bub")) && hit(bq, fr) && fr.bottom - fr.top < (rect($("bar")).top - v.y) * 0.75) problems.push("khoanh vùng: khung hỏi tại chỗ che vùng đang hỏi");
+    n++;
+  }
   closePanel(); closeBubble(); clearFrames(); FAST = false;
-  return {checked: n, problems, size: Math.round(v.w) + "x" + Math.round(v.h)};
+  if (!barShown()) problems.push("thanh Clicky không hiện sau khi kiểm (bị gỡ hoặc bị che)");
+  return {checked: n, problems: [...new Set(problems)], size: Math.round(v.w) + "x" + Math.round(v.h)};
 };
 window.__clickyKiemDienThoai = async function () {   // on a phone: the bar, the panel and a bubble stay on the screen
   const wait = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));

@@ -8,21 +8,23 @@ gets these words.
   Vietnamese heading ("TỔNG CHI PHÍ") is read as words, not spelled.
 - Periods: "Q3/2026" is "quý 3 năm 2026", "20/11/2026" is "ngày 20 tháng 11 năm 2026", "T10" is "tháng 10",
   "9M" is "9 tháng", "H1" is "sáu tháng đầu năm", "FY26" is "năm tài chính 2026".
-- Signs: "+12,6% so với" is "tăng", "−5,4 tỷ so với" is "giảm", but a level after ":" ("Lợi nhuận: −5,4 tỷ")
-  and an accounting "(1.234)" are "âm". "(+6,2%)" is ", tức tăng 6,2%,". "2026-2027" and "3-5" are "đến".
+- Signs: a minus is "âm" ("Lợi nhuận là −2,1 tỷ"); it is "giảm" only for a change ("−5,4 tỷ so với AOP",
+  "tức −18%", "(−1,4pp)"). "+12,6%" is "tăng". An accounting "(1.234)" is "âm" only as a whole cell or after
+  ":"; "(35%)" after a figure stays a share. "(1) tăng…" is "thứ nhất". "3-5" is "đến"; "2026–2027" is
+  "hai nghìn không trăm hai mươi sáu – hai mươi bảy". "≥", "<5%", "±", "x2" are said in words.
 - Units: "149,4 triệu/năm" is "mỗi năm", "nhân sự/DTT" is "trên", "GT/MT" is "GT và MT", "1,2x" is "lần",
   "120 bps" is "điểm cơ bản", "~3%" is "khoảng 3%".
 - Figures are then turned into words by present.vn_format.speakable ("186,4" = "một trăm tám mươi sáu phẩy bốn").
 
 The owner can add his company's own words in a file (CLICKY_TU_DOC, one "VIẾT TẮT = cách đọc" per line).
-"""
+A line there wins over the table here: "AOP = kế hoạch năm" makes the voice say "kế hoạch năm" for AOP."""
 from __future__ import annotations
 
 import os
 import re
 from pathlib import Path
 
-from present.vn_format import speakable
+from present.vn_format import int_words, join_groups, speakable
 
 # said as words: what the abbreviation means in a Vietnamese finance team
 WORDS = {
@@ -35,12 +37,22 @@ WORDS = {
     "YTD": "lũy kế từ đầu năm", "MTD": "lũy kế trong tháng", "QTD": "lũy kế trong quý",
     "EBITDA": "ê-bít-đa", "EBIT": "ê-bít", "OPEX": "chi phí hoạt động", "Opex": "chi phí hoạt động",
     "OpEx": "chi phí hoạt động", "CAPEX": "chi phí đầu tư", "Capex": "chi phí đầu tư", "CapEx": "chi phí đầu tư",
-    "KPI": "cây-pi-ai", "KPIs": "các cây-pi-ai", "LE": "ước thực hiện", "FC": "dự báo", "PY": "năm trước",
+    "KPI": "cây-pi-ai", "KPIs": "các cây-pi-ai", "LE": "số ước thực hiện", "FC": "dự báo", "PY": "năm trước",
     "ROI": "a-ô-ai", "ROE": "a-ô-i", "ROA": "a-ô-ây", "SKU": "ét-cây-giu", "ERP": "i-a-pi",
     "CFO": "xi-ép-ô", "CEO": "xi-i-ô", "FM": "ép-em", "HR": "nhân sự", "tr": "triệu", "tr.": "triệu",
-    "HC": "số nhân sự", "HRC": "hô-re-ca", "HORECA": "hô-re-ca", "VAT": "vát", "USD": "đô la Mỹ",
+    "HRC": "hô-rê-ca", "HORECA": "hô-rê-ca", "VAT": "vát", "USD": "đô la Mỹ",
     "COGS": "giá vốn hàng bán", "CAGR": "tăng trưởng kép bình quân", "D&A": "khấu hao",
-    "B2B": "bi-tu-bi", "B2C": "bi-tu-xi",
+    "B2B": "bi-tu-bi", "B2C": "bi-tu-xi", "GM": "biên lợi nhuận gộp", "QoQ": "so với quý trước",
+    "SG&A": "chi phí bán hàng và quản lý", "R&D": "nghiên cứu và phát triển", "NPAT": "lợi nhuận sau thuế",
+    "PBT": "lợi nhuận trước thuế", "GSV": "doanh thu gộp", "NSV": "doanh thu thuần",
+    # Vietnamese accounting and HR abbreviations ("HC" alone is a department code here: it is spelled)
+    "BHXH": "bảo hiểm xã hội", "BHYT": "bảo hiểm y tế", "BHTN": "bảo hiểm thất nghiệp",
+    "KPCĐ": "kinh phí công đoàn", "TNCN": "thu nhập cá nhân", "TNDN": "thu nhập doanh nghiệp",
+    "GTGT": "giá trị gia tăng", "TSCĐ": "tài sản cố định", "CCDC": "công cụ dụng cụ", "NVL": "nguyên vật liệu",
+    "HTK": "hàng tồn kho", "KQKD": "kết quả kinh doanh", "BCTC": "báo cáo tài chính", "KD": "kinh doanh",
+    "KT": "kế toán", "NS": "nhân sự", "HCNS": "hành chính nhân sự", "HC-NS": "hành chính nhân sự",
+    "MKT": "ma-két-tinh", "TP.HCM": "thành phố Hồ Chí Minh", "TP. HCM": "thành phố Hồ Chí Minh",
+    "TPHCM": "thành phố Hồ Chí Minh", "HCM": "Hồ Chí Minh", "HN": "Hà Nội", "kg": "ki-lô-gam",
 }
 # English finance words a Vietnamese voice cannot read: what the team says instead (any letter case)
 ENGLISH = {"aop revised": "ây-ô-pi điều chỉnh", "revised": "điều chỉnh", "headcount": "số nhân sự",
@@ -176,46 +188,92 @@ def _month_year(m: re.Match) -> str:
 
 
 def _paren_negative(m: re.Match) -> str:
-    """Accounting brackets: '(1.234) triệu', '(5,4)' and 'Chênh lệch: (2,1%)' are negatives. A share
-    '(35%)', a year '(2026)' or a note '(1)' is not."""
+    """Brackets mean a negative only where an accounting cell would: the bracket is the whole line ('(1.234)'),
+    or it follows ':' or '=' ('Chênh lệch: (2,1%)'). A share after a figure ('92,3 tỷ (66,2%)'), after 'chiếm'
+    or a direction word ('giảm (12,6%)') and a bare '(35%)' or '(2026)' keep their brackets.
+    The same rule as the build's figure check (present.clicky_html.figures)."""
     num, pct = m.group(1), m.group(2) or ""
-    after_label = bool(re.search(r"[:=]\s*$", m.string[:m.start()]))
-    if after_label or (not pct and re.search(r"[.,]", num)):
+    before, after = m.string[:m.start()], m.string[m.end():]
+    whole = not before.strip() and not after.strip(" .;,!?")
+    if whole or re.search(r"[:=]\s*$", before):
         return f"âm {num}{pct}"
     return m.group(0)
 
 
+def _ordinal(n: int) -> str:
+    return "thứ " + {1: "nhất", 4: "tư"}.get(n, int_words(n))
+
+
+def _years(y1: str, y2: str) -> str:
+    """'2026–2027' is said 'hai nghìn không trăm hai mươi sáu – hai mươi bảy': the century once."""
+    short = int(y2[2:]) if y1[:2] == y2[:2] else int(y2)
+    return f"{y1} – {int_words(short)}"
+
+
+def _minus(m: re.Match) -> str:
+    """A minus is 'âm' (a level: 'là −2,1 tỷ', 'Dòng tiền thuần −12,5 tỷ'). It is 'giảm' only for a change:
+    'so với' later in the same clause, or just after 'tức' or '('."""
+    before, after = m.string[:m.start()], m.string[m.end():]
+    clause = re.split(r"[,;:.!?](?=\s|$)", after, maxsplit=1)[0]
+    if re.search(r"(?:\btức|\()\s*$", before) or re.search(r"\bso với\b", clause):
+        return "giảm "
+    return "âm "
+
+
+_PERIOD_TAG = {"A": "thực hiện", "B": "kế hoạch", "F": "dự báo", "E": "ước tính"}
+
+
 def _periods(t: str) -> str:
-    """Dates and periods, before any '/' is read as 'trên' or 'mỗi'."""
-    t = re.sub(r"\bFY\s?((?:19|20)\d{2})\s*[-–—/]\s*((?:19|20)\d{2})\b", r"năm tài chính \1 đến \2", t)
-    t = re.sub(r"\bFY\s?(\d{2})\s*[-–—/]\s*(\d{2})\b", r"năm tài chính 20\1 đến 20\2", t)     # FY26-27
+    """Dates and periods, before any '/' is read as 'trên' or 'mỗi' and before '-' is read as 'đến'."""
+    yr = r"((?:19|20)\d{2})"
+    t = re.sub(rf"\bFY\s?{yr}\s*[-–—/]\s*{yr}\b", lambda m: "năm tài chính " + _years(m.group(1), m.group(2)), t)
+    t = re.sub(r"\bFY\s?(\d{2})\s*[-–—/]\s*(\d{2})\b",                                        # FY26-27
+               lambda m: "năm tài chính " + _years("20" + m.group(1), "20" + m.group(2)), t)
     t = re.sub(r"\bFY\s?(\d{2})(\d{2})\b", lambda m: f"năm tài chính {m.group(1)}{m.group(2)}" if m.group(1) in
-               ("19", "20") else f"năm tài chính 20{m.group(1)} đến 20{m.group(2)}", t)          # FY2026, FY2627
+               ("19", "20") else "năm tài chính " + _years("20" + m.group(1), "20" + m.group(2)), t)  # FY2026, FY2627
     t = re.sub(r"\bFY\s?(\d{2})\b", r"năm tài chính 20\1", t)                                    # FY26
     t = re.sub(r"(?i)(\bngày\s+)?(?<![\d.,])\b(\d{1,2})\s*([/.-])\s*(\d{1,2})\s*\3\s*((?:19|20)\d{2})\b", _date, t)
-    t = re.sub(r"\bQ([1-4])\s*/\s*((?:19|20)\d{2})\b", r"quý \1 năm \2", t)
-    t = re.sub(r"\bQ([1-4])\s+((?:19|20)\d{2})\b", r"quý \1 năm \2", t)
+    t = re.sub(rf"(?<![\d.,]){yr}\s*[-–—]\s*{yr}\b", lambda m: _years(m.group(1), m.group(2)), t)  # 2026-2027
+    t = re.sub(rf"\b{yr}([ABFE])\b", lambda m: f"{_PERIOD_TAG[m.group(2)]} năm {m.group(1)}", t)   # 2025A, 2026B
+    t = re.sub(rf"\bQ([1-4])\s*[/-]\s*{yr}\b", r"quý \1 năm \2", t)                              # Q3/2026, Q3-2026
+    t = re.sub(r"\bQ([1-4])\s*/\s*(\d{2})\b(?![\d/])", r"quý \1 năm 20\2", t)                    # Q3/26
+    t = re.sub(rf"\bQ([1-4])\s+{yr}\b", r"quý \1 năm \2", t)
     t = re.sub(r"\bQ([1-4])\b", r"quý \1", t)
     t = re.sub(r"\bH1\b", "sáu tháng đầu năm", t)
     t = re.sub(r"\bH2\b", "sáu tháng cuối năm", t)
     t = re.sub(r"\b(3|6|9|12)M\b(?!\s*(?:USD|VND|\$))", r"\1 tháng", t)        # lũy kế 9M
-    t = re.sub(r"\bT(1[0-2]|[1-9])\s*/\s*((?:19|20)\d{2})\b", r"tháng \1 năm \2", t)
+    t = re.sub(rf"\b(1[0-2]|[1-9])T\s*/\s*{yr}\b", r"\1 tháng năm \2", t)       # 9T/2026
+    t = re.sub(r"\b(1[0-2]|[1-9])T\b", r"\1 tháng", t)                          # 6T đầu năm
+    t = re.sub(rf"\bT(1[0-2]|[1-9])\s*/\s*{yr}\b", r"tháng \1 năm \2", t)
     t = re.sub(r"\bT(1[0-2]|[1-9])\b", r"tháng \1", t)
     t = re.sub(r"(?i)(\btháng\s+)?(?<![\d.,])\b(\d{1,2})\s*/\s*((?:19|20)\d{2})\b(?!\s*/)", _month_year, t)
+    t = re.sub(r"(?<![\d.,])\b(\d{1,2})/(\d{1,2})\b(?![/%]|[.,]\d)",              # 30/70: a split, not a date
+               lambda m: f"{int_words(int(m.group(1)))} – {int_words(int(m.group(2)))}"
+               if int(m.group(1)) + int(m.group(2)) == 100 else m.group(0), t)
     t = re.sub(r"(?i)(\bngày\s+)?(?<![\d.,])\b(\d{1,2})/(\d{1,2})\b(?![/%]|[.,]\d|\s*/)", _day_month, t)  # 11/11
+    t = re.sub(r"\b(?:TK|[Tt]ài khoản)\s*(\d{3,})",                                # TK 6421: digit by digit
+               lambda m: "tài khoản " + " ".join(int_words(int(c)) for c in m.group(1)), t)
     return t
 
 
 def _signs(t: str) -> str:
-    t = re.sub(r"\s*\(\s*\+\s*(\d[\d.,]*\s*%?)\s*\)", r", tức tăng \1,", t)       # (+6,2%)
-    t = re.sub(r"\s*\(\s*[−–-]\s*(\d[\d.,]*\s*%?)\s*\)", r", tức giảm \1,", t)    # (−6,2%)
+    # a list marker: "Kính đề nghị: (1) tăng…, (2) giảm…" is "thứ nhất", never "âm một"
+    t = re.sub(r"\((\d{1,2})\)(?=\s+[^\W\d_])(?!\s+(?:tỷ|triệu|nghìn|đồng|tr|điểm)\b)",
+               lambda m: _ordinal(int(m.group(1))) + ",", t)
+    t = re.sub(r"\s*\(\s*\+\s*(\d[^()]*?)\s*\)", r", tức tăng \1,", t)                 # (+6,2%)
+    t = re.sub(r"\s*\(\s*[−–-]\s*(\d[^()]*?)\s*\)", r", tức giảm \1,", t)              # (−1,4pp)
     t = re.sub(r"\(\s*(\d[\d.,]*)\s*(%)?\s*\)", _paren_negative, t)
-    t = re.sub(r"([:=])\s*[−–-]\s?(?=\d)", r"\1 âm ", t)                          # a level after ':' is negative
-    t = re.sub(r"(\d)\s*[-–—]\s*(\d)", r"\1 đến \2", t)                         # 2026-2027, 3–5 người
+    t = re.sub(r"(\d)\s*[-–—]\s*(\d)", r"\1 đến \2", t)                         # 3–5 người
     t = re.sub(r"(?<![\w,.])\+\s?(?=\d)", "tăng ", t)                             # +12,6% so với AOP
-    t = re.sub(r"(?<![\w,.])[−–]\s?(?=\d)", "giảm ", t)                           # −5,4 tỷ written with a real minus
-    t = re.sub(r"(?<![\w,.])-\s?(?=\d[\d.,]*[^\d,;:!?.][^,;:!?.]*\bso với)", "giảm ", t)  # -5,4 tỷ so với AOP
+    t = re.sub(r"(?<![\w,.])[−–-]\s?(?=\d)", _minus, t)                           # −2,1 tỷ: âm, unless a change
     t = re.sub(r"[~≈]\s*(?=\d)", "khoảng ", t)
+    t = re.sub(r"\s*≥\s*", " lớn hơn hoặc bằng ", t)
+    t = re.sub(r"\s*≤\s*", " nhỏ hơn hoặc bằng ", t)
+    t = re.sub(r"\s*<\s*(?=\d)", " dưới ", t)
+    t = re.sub(r"\s*>\s*(?=\d)", " trên ", t)
+    t = re.sub(r"\s*±\s*", " cộng trừ ", t)
+    t = re.sub(r"(?:\bgấp\s+)?(?<!\w)[x×]\s*(?=\d)", "gấp ", t)                    # x2, gấp x2
+    t = re.sub(r"\s*=\s*", " bằng ", t)
     return t
 
 
@@ -228,11 +286,22 @@ def _units(t: str) -> str:
     t = re.sub(r"(\d)\s*pp\b", r"\1 điểm phần trăm", t)
     t = re.sub(r"(\d)\s*bps?\b", r"\1 điểm cơ bản", t)
     t = re.sub(r"(\d)\s*đ\b", r"\1 đồng", t)                                       # 1.250.000 đ
+    t = re.sub(r"(\d)\s*HC\b", r"\1 người", t)                                     # 1.248 HC
     t = re.sub(r"%\s*/\s*(?=[\d−+-])", "% và ", t)                                 # 65%/35%
     t = re.sub(rf"\b({_MONEY})\s*/\s*(?=[^\W\d_])", r"\1 mỗi ", t)                 # đồng/thùng, tr/người
     t = re.sub(r"(?<=\w)\s*/\s*(?=năm|tháng|quý|người|ngày|tuần)", " mỗi ", t)
     t = re.sub(r"(?<=[A-Za-zÀ-ỹ])\s*\+\s*(?=[A-Za-zÀ-ỹ])", " cộng ", t)             # HRC+KA: one channel
+    t = re.sub(r"\bAOP gốc(?=\s*(?:[.;!?]|,?\s*$))", "AOP ban đầu", t)            # "gốc" at a sentence end is lost
     return t
+
+
+# what the offline voice can say once doc() is done; anything else would be silently skipped
+SAYABLE = re.compile(r"[\w\s,.;:!?()–-]")
+
+
+def unsaid(text: str) -> list:
+    """Characters left in a spoken line that the voice would skip (a sign like '≠' or '€')."""
+    return sorted({c for c in text if not SAYABLE.match(c)})
 
 
 def vn_numbers(text: str) -> str:
@@ -245,7 +314,18 @@ def doc(text: str, en_numbers: bool = False) -> str:
     """The sentence as it should be heard. en_numbers: the report writes 412,580.5 (English marks)."""
     table = {**WORDS, **owner_words()}
     t = vn_numbers(text or "") if en_numbers else str(text or "")
+    t = join_groups(t)                                                 # "1 234 567 triệu" is one figure
     t = re.sub(r"_+", " ", t)                                          # a code like __BIEN_BAN__ has no sound
+    t = re.sub(r"\bQ([1-4])\s?['’]\s?(\d{2})\b", r"quý \1 năm 20\2", t)       # Q3'26
+    t = re.sub(r"(?<=\w)['’‘](?=\s|$)|['’‘`]", "", t)                     # Sales' / quotes have no sound
+    t = re.sub(r"\s*€", " ơ rô", t)
+    t = re.sub(r"\$\s*(\d[\d.,]*)", r"\1 đô la", t)                          # $12 -> 12 đô la
+    t = re.sub(r"(?<=\d)\s*\$", " đô la", t)
+    t = re.sub(r"\s*£", " bảng Anh", t)
+    t = re.sub(r"\s*¥", " yên", t)
+    t = re.sub(r"[«»“”\"‘’`*•]", "", t)                                 # quotes and bullets have no sound
+    t = re.sub(r"\s*[—…]\s*", ", ", t)
+    t = re.sub(r"[<>](?!\s*\d)|[{}\[\]|\\^#@]", " ", t)                   # markup and code marks have no sound
     t = _caps_heading(t, table)
     t = _periods(t)
     t = _signs(t)
@@ -264,6 +344,7 @@ def doc(text: str, en_numbers: bool = False) -> str:
     t = re.sub(r",\s*(?=[,.;:!?]|$)", "", t)                          # "(+6,2%)." leaves no ",."
     # a two-word lead sentence ("Phần 2.") voiced alone comes out garbled: read it into the next one
     t = re.sub(r"(?:^|(?<=[.!?]\s))([^\s.!?]+(?:\s+[^\s.!?]+)?)\.\s+(?=[^\W\d_])", r"\1, ", t)
+    t = re.sub(r"^(\W*)[Ưư]ớc(?= thực hiện)", r"\1Số ước", t.strip())  # Piper swallows a first "Ước thực hiện"
     return re.sub(r"\s+", " ", speakable(t)).strip()
 
 
@@ -271,7 +352,8 @@ def _sentences(text: str) -> list:
     """Split after '.', '!' or '?' followed by a space; '1.248', 'tr. mỗi' and a short lead 'Phần 2.' stay whole."""
     out = []
     for part in re.split(r"(?<=[.!?])\s+", str(text).strip()):
-        joined = out and (len(out[-1].split()) <= 2 or not (part[:1].isupper() or part[:1].isdigit() or part[:1] in "\"“('"))
+        joined = out and (len(out[-1].split()) <= 2 or out[-1].endswith(("TP.", "Tp.")) or
+                          not (part[:1].isupper() or part[:1].isdigit() or part[:1] in "\"“('"))
         if part and joined:                                           # "Phần 2." stays with what follows
             out[-1] += " " + part
         elif part:
@@ -296,11 +378,11 @@ def pieces(text: str) -> list:
     for sentence in _sentences(text):
         for semi in re.split(r"(?<=;)\s+", sentence):
             for part in _colon(semi):
-                if len(part) > 110:                                   # a long line: breathe at commas too
+                if len(doc(part)) > 100:                              # long when said: breathe at commas too
                     sub, cur = [], ""
                     for seg in re.split(r"(?<=,)\s+(?=\D)", part):
                         cur = (cur + " " + seg).strip() if cur else seg
-                        if len(cur) > 45:
+                        if len(doc(cur)) > 50:
                             sub.append(cur)
                             cur = ""
                     if cur:

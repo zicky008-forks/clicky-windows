@@ -45,7 +45,7 @@ def test_nothing_of_clicky_covers_a_figure(built):
     if res["skipped"]:
         pytest.skip(res["reason"])
     assert res["ok"], res["problems"]
-    assert res["checked"] >= 40 and res["sizes"] == ["1366x768", "1920x1080", "390x844 (điện thoại)"]
+    assert res["checked"] >= 40 and res["sizes"] == ["1366x768", "911x512", "390x844 (điện thoại)"]
 
 
 def test_a_bar_that_covers_the_report_is_caught(built, tmp_path):
@@ -112,7 +112,7 @@ def test_click_a_paragraph_or_heading(page):
     para.click()
     pg.wait_for_timeout(600)
     said = _answer(pg)
-    assert said.startswith("Đoạn này nói: ") and said.split()[3] in para.inner_text()
+    assert said.startswith("Đoạn này nói: «") and said.split()[3].strip("«") in para.inner_text()
     assert _apart(_box(pg, "bub"), para.bounding_box())
     pg.locator("h2").first.click()
     pg.wait_for_timeout(600)
@@ -207,16 +207,21 @@ def test_basic_questions_are_answered_with_units_and_no_false_notes(page):
     assert a.startswith("Tổng chi phí nhân sự AOPR: 186,4 tỷ") and "Em chưa thấy" not in a
     assert "Em chưa thấy" not in _ask(pg, "Trần đề xuất là gì?")    # «gì» is a question word
     assert _parked(pg) == ""
-    # a question set aside says plainly that it reaches the owner only after "Gửi"
+    # a question set aside says once, plainly, that it reaches the owner only after "Gửi cho anh Tuấn"
     a = _ask(pg, "Lương bình quân khối bán hàng?")
-    assert "Em chưa thấy «Lương bình quân»" in a and "bấm «Gửi»" in a
+    assert "Em chưa thấy «Lương bình quân»" in a and "Bấm «Gửi cho anh Tuấn» để câu hỏi đến anh Tuấn." in a
+    assert a.count("Em ghi câu này lại") == 1
     assert "Lương bình quân khối bán hàng?" in _parked(pg)
     assert pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('send').textContent") == "Gửi cho anh Tuấn"
-    # after "Gửi" the list is marked sent, so the next e-mail does not repeat it
+    # "Gửi" only opens the mail app: the questions stay until the reader says the mail went, or copies them
     pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('send').click()")
     pg.wait_for_timeout(200)
-    assert _parked(pg) == "" and "Em đã mở thư gửi anh Tuấn với 1 câu" in pg.evaluate(
-        "document.getElementById('clicky-host').shadowRoot.getElementById('sent').textContent")
+    sent = lambda: pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('sent').textContent")
+    assert "Lương bình quân khối bán hàng?" in _parked(pg) and "Em đã mở thư gửi anh Tuấn với 1 câu" in sent()
+    assert "Sao chép câu hỏi" in sent() and "Đã gửi xong" in sent()
+    pg.evaluate("""[...document.getElementById('clicky-host').shadowRoot.querySelectorAll('#sent .chips button')]
+      .find(b => b.textContent === 'Đã gửi xong').click()""")
+    assert _parked(pg) == "" and "em đã đánh dấu đã gửi" in sent()
     assert not errors
 
 
@@ -316,15 +321,27 @@ def test_keyboard_space_arrows_esc_and_resume(built):
 
 def test_figures_take_focus_and_enter_asks(page):
     pg, errors = page
-    cell = pg.locator("table[data-clicky] tr").nth(2).locator("td").nth(2)
-    assert cell.get_attribute("tabindex") == "0"
-    cell.focus()
+    pg.wait_for_timeout(300)                                             # tables are read just after the page shows
+    table = pg.locator("table[data-clicky]")
+    cell = table.locator("tr").nth(2).locator("td").nth(2)
+    assert table.get_attribute("tabindex") == "0" and cell.get_attribute("tabindex") is None   # one Tab stop per table
+    # the first Tab stop is the skip link to "Hỏi em", never the draft badge
+    pg.evaluate("document.activeElement && document.activeElement.blur()")
+    pg.keyboard.press("Tab")
+    assert pg.evaluate("document.activeElement.id") == "clicky-skip"
+    table.focus()
+    pg.keyboard.press("ArrowDown")                                        # into the table: its first figure
+    pg.keyboard.press("ArrowDown")
+    pg.keyboard.press("ArrowRight")
     pg.keyboard.press("Enter")
     pg.wait_for_timeout(200)
     assert _answer(pg).startswith("Khối Marketing, AOPR: 14,0 tỷ.")
     assert pg.evaluate("document.getElementById('clicky-host').shadowRoot.activeElement.id") == "bq"
-    pg.keyboard.press("Escape")
-    assert pg.evaluate("document.activeElement === document.querySelector('table[data-clicky] tr:nth-child(2) td:nth-child(3)')")
+    pg.keyboard.press("Escape")                                           # Esc: the keyboard is back on "Hỏi em"
+    assert pg.evaluate("document.getElementById('clicky-host').shadowRoot.activeElement.id") == "askb"
+    pg.evaluate("document.activeElement.blur()")
+    pg.keyboard.press("/")                                                # "/" opens the question box
+    assert pg.evaluate("document.getElementById('clicky-host').shadowRoot.activeElement.id") == "q"
     assert not errors
 
 
@@ -376,11 +393,11 @@ def test_dark_report_gets_a_dark_dim_and_dark_controls(tmp_path):
         assert pg.evaluate("document.getElementById('clicky-host').getAttribute('data-theme')") == "dark"
         pg.locator("tbody tr").nth(0).locator("td").nth(2).click()
         pg.wait_for_timeout(300)
-        fill = pg.evaluate("document.querySelector('[data-clicky-layer] svg path').getAttribute('fill')")
+        fill = pg.evaluate("document.querySelector('[data-clicky-dim] > rect').getAttribute('fill')")
         assert fill.startswith("rgba(11,18,32,")                          # the page's own dark background, not cream
         bg = pg.evaluate("getComputedStyle(document.getElementById('clicky-host').shadowRoot.getElementById('bar')).backgroundColor")
         assert bg != "rgb(255, 255, 255)"
-        assert _answer(pg).startswith("Miền Bắc, Thực hiện: 455,2 tỷ đồng.")   # unit from "đơn vị tỷ đồng"
+        assert _answer(pg).startswith("Miền Bắc, Thực hiện: 455,2 tỷ.")   # unit from "đơn vị tỷ đồng", said one way
         # an SVG chart is read as label/value pairs, never glued together
         pg.keyboard.press("Escape")
         pg.locator("svg text").first.click()
@@ -431,7 +448,7 @@ def test_excel_tables_merged_cells_periods_and_div_grids(tmp_path):
         pg.locator("td", has_text="63,2").click()
         pg.wait_for_timeout(200)
         a = _answer(pg)
-        assert a.startswith("Lương (Khối Bán hàng), Kế hoạch so Thực hiện AOP: 63,2 tỷ đồng.")
+        assert a.startswith("Lương (Khối Bán hàng), Kế hoạch so Thực hiện AOP: 63,2 tỷ.")
         pg.keyboard.press("Escape")
         pg.locator("td", has_text="285,7").click()
         pg.wait_for_timeout(200)
@@ -471,9 +488,9 @@ def test_frames_land_on_the_place_in_centred_pages_with_a_fixed_header(tmp_path)
         cell = pg.locator("td", has_text="177,5")
         pg.evaluate("window.scrollTo(0, 0)")
         assert _ask(pg, "Khoản 25 thực hiện?").startswith("Khoản 25, Thực hiện: 177,5")   # never «Khoản 2»
-        pg.wait_for_timeout(200)
+        pg.wait_for_timeout(800)            # the page has finished its smooth scroll
         box = cell.bounding_box()
-        fr = pg.evaluate("(() => { const b = [...document.querySelectorAll('[data-clicky-layer] div')].find(d => d.style.border.startsWith('3px'));"
+        fr = pg.evaluate("(() => { const b = document.querySelector('[data-clicky-frame=main]');"
                          " const r = b.getBoundingClientRect(); return {x: r.left, y: r.top, width: r.width, height: r.height}; })()")
         assert fr["x"] <= box["x"] and fr["x"] + fr["width"] >= box["x"] + box["width"]
         assert fr["y"] <= box["y"] and fr["y"] + fr["height"] >= box["y"] + box["height"]
@@ -533,7 +550,12 @@ def test_draft_badge_on_the_bar_only_for_a_draft(built, tmp_path):
               if (!b) return null; const r = b.getBoundingClientRect(), bar = b.parentElement.getBoundingClientRect();
               return {text: b.textContent, title: b.title, inBar: r.top >= bar.top && r.bottom <= bar.bottom && r.left >= bar.left && r.right <= bar.right,
                       w: r.width}; })()""")
-            assert badge == {"text": "SƠ BỘ", "title": "SƠ BỘ: kịch bản nháp chưa duyệt", "inBar": True, "w": badge["w"]} and badge["w"] > 0
+            assert badge == {"text": "Kịch bản nháp", "title": "SƠ BỘ: kịch bản nháp chưa duyệt", "inBar": True, "w": badge["w"]} and badge["w"] > 0
+            # a tap says in one line what "nháp" means; dark brown on cream, readable
+            pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('draft').click()")
+            assert "chưa được anh Tuấn duyệt" in pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('cap').innerText")
+            if not mobile:
+                assert pg.evaluate("getComputedStyle(document.getElementById('clicky-host').shadowRoot.getElementById('draft')).color") == "rgb(122, 75, 6)"
             text = pg.evaluate("document.getElementById('clicky-host').shadowRoot.innerHTML")
             assert "Ghi chú riêng" not in text                          # the owner's warnings never reach viewers
             assert not errors
@@ -541,3 +563,305 @@ def test_draft_badge_on_the_bar_only_for_a_draft(built, tmp_path):
         browser, pg, errors = _open(pw, final)
         assert pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('draft')") is None
         browser.close()
+
+
+# --- round 2 review: BOD, UI and QA findings; each blocker keeps a test here ---
+
+SR = "document.getElementById('clicky-host').shadowRoot"
+
+
+def _variant(built, tmp_path, name, head="", body_end="", script=""):
+    """The built report with extra page code: a style in <head>, markup or a script just before Clicky's layer."""
+    src = built.read_text(encoding="utf-8")
+    at = src.index("\n<!-- Clicky layer")
+    extra = body_end + (f"<script>{script}</script>" if script else "")
+    out = tmp_path / name
+    out.write_text(src[:at].replace("</head>", head + "</head>", 1) + extra + src[at:], encoding="utf-8")
+    return out
+
+
+def test_round2_questions_rank_by_the_readers_words(page):
+    pg, errors = page
+    # the tile that covers the question's own words wins: "bình quân" is the cost tile, never the Headcount tile
+    assert _ask(pg, "Chi phí bình quân tăng bao nhiêu?").startswith("Chi phí bình quân mỗi người: 149,4 triệu/năm")
+    # "tăng bao nhiêu (so với AOP gốc)" reads the difference and % columns, not "AOP gốc"
+    assert _ask(pg, "So với AOP gốc tăng bao nhiêu?").startswith("Tổng: Chênh lệch 20,9 tỷ; % tăng 12,6%.")
+    # a share of the total is computed from two figures of the table, and said so
+    a = _ask(pg, "Khối Bán hàng chiếm bao nhiêu phần trăm tổng AOPR?")
+    assert a.startswith("Khối Bán hàng chiếm 49,5% tổng AOPR (em tính: 92,3 tỷ ÷ 186,4 tỷ).") and "báo cáo không ghi sẵn số này" in a
+    # unit words and figures said in a sentence leave no false "chưa thấy"
+    assert "Em chưa thấy" not in _ask(pg, "Headcount bán hàng bao nhiêu người?")
+    a = _ask(pg, "Tuyển thêm bao nhiêu nhân viên bán hàng?")
+    assert a.startswith("Báo cáo viết: «Khối Bán hàng tăng mạnh nhất, 14,1 tỷ, do kế hoạch tuyển thêm 48 nhân viên")
+    assert pg.evaluate(f"{SR}.querySelector('#a b').textContent") == "14,1 tỷ"   # figures in bold, whole clauses
+    assert not errors
+
+
+def test_round2_periods_years_and_charts(tmp_path):
+    out = _build_html(tmp_path, DARK, "toi")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, out)
+        a = _ask(pg, "T2 bao nhiêu?")                                     # an exact period label decides alone
+        assert a.startswith("T2: 104,5 (biểu đồ «Doanh thu thuần theo tháng, tỷ đồng»)") and "muốn hỏi chỗ nào" not in a
+        a = _ask(pg, "So với kỳ trước tăng bao nhiêu?")                   # read from the chart's own labels and values
+        assert a.startswith("T3: 111,9; T2: 104,5 (em tính: tăng 7,4, 7,1%).")
+        a = _ask(pg, "Doanh thu tháng 5?")                                # a period the report does not have: parked
+        assert a.startswith("Em chưa thấy số «tháng 5» trong báo cáo") and "Gửi cho anh Tuấn" in a
+        assert not errors
+        browser.close()
+
+
+def test_round2_month_asked_is_never_answered_with_another_month(tmp_path):
+    html = DARK.replace("<h1>Doanh thu thuần Q3 theo vùng</h1>", "<h1>Doanh thu tháng 10</h1><div class='kpi'><b>Doanh thu tháng 10</b> <span>1.299,7 tỷ</span></div>")
+    out = _build_html(tmp_path, html, "thang")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, out)
+        assert _ask(pg, "Doanh thu tháng 3?").startswith("T3: 111,9")      # "T3" on the chart is tháng 3
+        a = _ask(pg, "Doanh thu tháng 4?")
+        assert "1.299,7" not in a and a.startswith("Em chưa thấy số «tháng 4» trong báo cáo; báo cáo này là số «tháng 10»")
+        assert _ask(pg, "Doanh thu tháng 10?").startswith("Doanh thu tháng 10: 1.299,7 tỷ")
+        browser.close()
+
+
+def test_round2_frames_dim_and_hat(page):
+    pg, errors = page
+    # a whole row: its label is inside the frame, so no second box around it and one clear hole in the dim
+    pg.locator("table[data-clicky] tbody tr").nth(1).locator("td").nth(0).click()
+    pg.wait_for_timeout(600)
+    res = pg.evaluate("""(() => { const m = document.querySelector('[data-clicky-frame=main]').getBoundingClientRect();
+      const soft = [...document.querySelectorAll('[data-clicky-frame=soft]')].map(b => b.getBoundingClientRect())
+        .filter(q => q.left >= m.left - 1 && q.right <= m.right + 1 && q.top >= m.top - 1 && q.bottom <= m.bottom + 1);
+      const dim = document.querySelector('[data-clicky-dim]');
+      return {inside: soft.length, mask: !!dim.querySelector('mask'), evenodd: !!dim.querySelector('[fill-rule=evenodd]')}; })()""")
+    assert res == {"inside": 0, "mask": True, "evenodd": False}
+    pg.keyboard.press("Escape")
+    # a column header: its highest and lowest rows are framed too
+    pg.locator("table[data-clicky] thead th").nth(2).click()
+    pg.wait_for_timeout(600)
+    assert pg.evaluate("document.querySelectorAll('[data-clicky-frame=also]').length") == 2
+    assert not errors
+
+
+def test_round2_lasso_frame_follows_its_cells_after_scrolling(page):
+    pg, errors = page
+    rows = pg.locator("table[data-clicky] tbody tr")
+    rows.nth(0).scroll_into_view_if_needed()
+    a, b = rows.nth(0).locator("td").nth(1).bounding_box(), rows.nth(4).locator("td").nth(3).bounding_box()
+    pg.evaluate(f"{SR}.getElementById('lassob').click()")
+    pg.mouse.move(a["x"] - 3, a["y"] - 3)
+    pg.mouse.down()
+    pg.mouse.move(b["x"] + b["width"] + 3, b["y"] + b["height"] + 3, steps=5)
+    pg.mouse.up()
+    pg.wait_for_timeout(700)
+    # five rows of one table: a small grid, the unit said once
+    assert pg.evaluate(f"{SR}.querySelectorAll('#ba table.mini tr').length") == 6
+    assert "Đơn vị: tỷ" in _answer(pg)
+    pg.mouse.wheel(0, 150)
+    pg.wait_for_timeout(400)
+    cell = rows.nth(2).locator("td").nth(2).bounding_box()
+    fr = pg.evaluate("(() => { const r = document.querySelector('[data-clicky-frame=main]').getBoundingClientRect(); return {x: r.left, y: r.top, width: r.width, height: r.height}; })()")
+    assert fr["x"] <= cell["x"] and fr["y"] <= cell["y"] and fr["x"] + fr["width"] >= cell["x"] + cell["width"] and fr["y"] + fr["height"] >= cell["y"] + cell["height"]
+    assert not errors
+
+
+def test_round2_bubble_on_a_small_screen_never_covers_its_place(built):
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, built, 911, 512)
+        cells = pg.locator("table[data-clicky] tbody td")
+        for i in range(0, cells.count(), 3):
+            c = cells.nth(i)
+            c.scroll_into_view_if_needed()
+            c.click()
+            pg.wait_for_timeout(150)
+            bub, bar, box = _box(pg, "bub"), _box(pg, "bar"), c.bounding_box()
+            assert _apart(bub, box), i                                    # never on its own place
+            assert bub["y"] >= 0 and bub["y"] + bub["height"] <= bar["y"] + 1, i   # whole, above the bar
+            pg.keyboard.press("Escape")
+        # the answer bubble is capped to the screen: a long answer scrolls inside
+        pg.locator("table[data-clicky] thead th").nth(1).click()
+        pg.wait_for_timeout(150)
+        assert pg.evaluate(f"parseFloat({SR}.getElementById('bin').style.maxHeight)") <= 512
+        assert not errors
+        browser.close()
+
+
+def test_round2_keyboard_tab_order_and_badge_wording(built, tmp_path):
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, built)
+        pg.keyboard.press("Tab")
+        assert pg.evaluate("document.activeElement.id") == "clicky-skip"
+        pg.keyboard.press("Enter")                                          # the skip link opens "Hỏi em"
+        assert pg.evaluate(f"{SR}.activeElement && {SR}.activeElement.id") == "q"
+        browser.close()
+
+
+def test_round2_answering_shows_one_short_line(built):
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 768})
+        pg.add_init_script(STUB_AUDIO)
+        pg.goto(built.as_uri())
+        pg.keyboard.press("Space")
+        pg.keyboard.press("ArrowRight")
+        pg.locator('[data-clicky="c3"]').click()
+        pg.wait_for_timeout(200)
+        cap = pg.evaluate(f"{SR}.getElementById('cap').innerText")
+        assert cap.startswith("Đang trả lời câu hỏi · ↩ nghe tiếp phần 2/") and "\n" not in cap.strip()
+        browser.close()
+
+
+def test_round2_report_scripts_cannot_remove_or_block_clicky(built, tmp_path):
+    # the report rewrites its body after load, strips Clicky's tags, and stops clicks on its tables
+    out = _variant(built, tmp_path, "viet_lai.html", script="""addEventListener('load', () => {
+      document.body.innerHTML += '<p>Ghi chú thêm của trang.</p>';
+      document.querySelectorAll('[data-clicky]').forEach(e => e.removeAttribute('data-clicky'));
+      document.querySelectorAll('table').forEach(t => t.addEventListener('click', e => e.stopPropagation())); });""")
+    res = kiem_hinh.check(str(out), sizes=((1366, 768),), phone=None)
+    if res["skipped"]:
+        pytest.skip(res["reason"])
+    assert res["ok"], res["problems"]                                      # every place found again, bar on screen
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, out)
+        pg.wait_for_timeout(300)
+        assert pg.evaluate("document.getElementById('clicky-host').parentElement === document.documentElement")
+        pg.locator("table tbody tr").nth(1).locator("td").nth(2).click()
+        pg.wait_for_timeout(300)
+        assert _answer(pg).startswith("Khối Marketing, AOPR: 14,0 tỷ.")
+        assert pg.evaluate("document.querySelectorAll('[data-clicky-layer]').length") == pg.evaluate(
+            "new Set([...document.querySelectorAll('[data-clicky-layer]')]).size")
+        browser.close()
+
+
+def test_round2_zoomed_body_keeps_the_bar_on_screen(built, tmp_path):
+    out = _variant(built, tmp_path, "zoom.html", head="<style>body{zoom:1.25}</style>")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, out)
+        bar = _box(pg, "bar")
+        assert bar["y"] >= 0 and bar["y"] + bar["height"] <= 768 and bar["x"] + bar["width"] <= 1366
+        browser.close()
+
+
+def test_round2_send_link_keeps_the_at_sign(page):
+    pg, errors = page
+    _ask(pg, "Lương bình quân khối bán hàng?")
+    pg.evaluate(f"{SR}.getElementById('send').click()")
+    href = pg.evaluate(f"{SR}.querySelector('#sent a.mail').getAttribute('href')")
+    assert href.startswith("mailto:tuan@congty.vn?subject=")
+
+
+EXCEL2 = """<html><head><meta charset="utf-8"><title>Hai bang</title></head><body><h1>Chi phí nhân sự (SỐ GIẢ LẬP)</h1>
+<p>Nhận xét: lương Khối Văn phòng thực hiện 13,5 tỷ, cao hơn kế hoạch 1,5 tỷ.</p>
+<h2>Kế hoạch</h2><table><tr><th>Khối</th><th>Khoản mục</th><th>Giá trị</th></tr>
+<tr><td rowspan=2>Khối Văn phòng</td><td>Lương</td><td>12,0</td></tr><tr><td>Thưởng</td><td>3,0</td></tr></table>
+<h2>Thực hiện</h2><table><tr><th>Khối</th><th>Khoản mục</th><th>Giá trị</th></tr>
+<tr><td rowspan=2>Khối Văn phòng</td><td>Lương</td><td>13,5</td></tr><tr><td>Thưởng</td><td>2,5</td></tr></table>
+<h2>Theo vùng</h2><table><tr><th>Vùng</th><th>Doanh thu</th></tr><tr><td>Miền Bắc</td><td>120,0</td></tr>
+<tr><td>Miền Nam</td><td>150,0</td></tr><tr><td>Xuất khẩu</td><td>30,0</td></tr><tr><td>Nội địa</td><td>270,0</td></tr>
+<tr><td>Tổng</td><td>300,0</td></tr></table>
+<div><div>Doanh thu theo tháng</div><svg width="200" height="80"><text x="20" y="20">12,0</text><text x="20" y="70">T1</text>
+<text x="80" y="20">13,5</text><text x="80" y="70">T2</text></svg><canvas width="200" height="80"></canvas></div></body></html>"""
+
+
+def test_round2_same_label_chips_grouping_and_chart_titles(tmp_path):
+    out = _build_html(tmp_path, EXCEL2, "hai_bang")
+    res = kiem_hinh.check(str(out), sizes=((1366, 768),), phone=None)    # merged group labels are not "fixed parts"
+    if res["skipped"]:
+        pytest.skip(res["reason"])
+    assert res["ok"], res["problems"]
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, out)
+        a = _ask(pg, "Lương khối văn phòng?")
+        chips = pg.evaluate(f"[...{SR}.querySelectorAll('#a .chips button')].map(b => b.textContent)")
+        assert a.startswith("Anh chị muốn hỏi chỗ nào") and len(chips) == 2 and len(set(chips)) == 2
+        assert any("Kế hoạch" in c for c in chips) and any("Thực hiện" in c for c in chips)
+        # "Xuất khẩu" follows "Miền Nam" but is not under it: no bold head, nothing indented
+        assert _ask(pg, "Xuất khẩu?").startswith("Xuất khẩu: Doanh thu 30,0")
+        # a canvas after an SVG chart: never named after the other chart's figures
+        pg.keyboard.press("Escape")
+        pg.locator("canvas").click()
+        pg.wait_for_timeout(200)
+        a = _answer(pg)
+        assert "12,0T1" not in a and "Doanh thu theo tháng" not in a
+        pg.keyboard.press("Escape")
+        pg.locator("svg text").first.click()
+        pg.wait_for_timeout(200)
+        assert "T1: 12,0" in _answer(pg)
+        assert not errors
+        browser.close()
+
+
+def test_round2_phone_row_frame_keeps_the_page_from_sliding_sideways(tmp_path):
+    wide = FIXTURE.read_text(encoding="utf-8").replace("<table>", '<div class="cuon" style="overflow-x:auto"><table style="min-width:900px">', 1).replace(
+        "</table>", "</table></div>", 1)
+    out = _build_html(tmp_path, wide, "rong2")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, out, 390, 844, is_mobile=True, has_touch=True)
+        pg.evaluate("document.querySelectorAll('table tbody tr')[1].cells[0].click()")   # a whole row, wider than the phone
+        pg.wait_for_timeout(500)
+        assert pg.evaluate("scrollX") == 0
+        pg.evaluate("document.querySelectorAll('table tbody tr')[1].cells[5].click()")   # a figure off to the right: shown, then given back
+        pg.wait_for_timeout(500)
+        moved = pg.evaluate("document.querySelector('.cuon').scrollLeft")
+        pg.evaluate(f"{SR}.getElementById('bx').click()")
+        pg.wait_for_timeout(200)
+        assert moved > 0 and pg.evaluate("document.querySelector('.cuon').scrollLeft") == 0 and pg.evaluate("scrollX") == 0
+        lasso = pg.evaluate(f"{SR}.querySelector('#lassob .sl').getBoundingClientRect().width")
+        assert lasso > 0                                                    # the ⬚ button says "Khoanh" on a phone
+        assert not errors
+        browser.close()
+
+
+def test_round2_thin_rows_get_an_inner_frame(tmp_path):
+    html = DARK.replace("td,th{padding:10px;", "td,th{padding:1px;font-size:13px;")
+    out = _build_html(tmp_path, html, "mong")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, out)
+        pg.locator("tbody tr").nth(0).locator("td").nth(2).click()
+        pg.wait_for_timeout(600)
+        st = pg.evaluate("(() => { const b = document.querySelector('[data-clicky-frame=main]'); return [b.style.borderWidth, b.style.boxShadow]; })()")
+        assert st == ["2px", "none"]
+        browser.close()
+
+
+def test_round2_a_huge_report_stays_quick(built, tmp_path):
+    rows = "".join(f"<tr><td>Chi nhánh {i}</td>" + "".join(f"<td>{(i * 7 + k) % 997},{k}</td>" for k in range(9)) + "</tr>"
+                   for i in range(3500))
+    out = _variant(built, tmp_path, "lon.html", body_end=f"<h2>9. Chi nhánh</h2><table><tr><th>Chi nhánh</th>"
+                   + "".join(f"<th>Cột {k}</th>" for k in range(9)) + f"</tr>{rows}</table>")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, out)
+        pg.wait_for_function("typeof window.__clickyKiemHinh === 'function'", timeout=20000)
+        pg.wait_for_timeout(1500)
+        ms = pg.evaluate("""(() => { const td = [...document.querySelectorAll('td')].filter(x => x.textContent === '%s')[0];
+          td.scrollIntoView({block: 'center'}); const a = performance.now(); td.click(); return performance.now() - a; })()""" % "1,1")
+        assert ms < 1000, ms                                               # 35.000 cells: a click answers fast
+        assert not errors
+        browser.close()
+
+
+def test_round2_check_says_why_clicky_did_not_start():
+    class Page:
+        def __init__(self, d):
+            self.d = d
+
+        def evaluate(self, js):
+            return self.d
+    assert "Content-Security-Policy" in kiem_hinh._why_not(Page({}), [], [1])
+    assert "quá lớn" in kiem_hinh._why_not(Page({"data": True, "json": True, "cells": 120000}), [])
+    small = kiem_hinh._why_not(Page({"data": True, "json": True, "cells": 25}), [])
+    assert "quá lớn" not in small and "dữ liệu nhúng" not in small            # a small page is never called "too big"
+    assert "dữ liệu nhúng" in kiem_hinh._why_not(Page({"data": True, "json": False, "cells": 25}), [])

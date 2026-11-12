@@ -113,10 +113,25 @@ def number_words(text: str) -> str:
 _NUM = re.compile(r"(?:(?<![\w.,])-)?(?:\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:,\d+)?)")
 
 
+_GAP = "[\u00a0\u202f\u2009]"          # no-break space, narrow no-break space, thin space
+
+
+def join_groups(text: str) -> str:
+    """'1 234 567' (thousands split by a space, a no-break space or a thin space) is one number: '1.234.567'.
+    A plain space needs two groups ('1 234 567') or a decimal part ('1 234,5'), so '3 120' stays two numbers."""
+    def one(m):
+        return re.sub(r"[ \u00a0\u202f\u2009]", ".", m.group(0))
+    text = re.sub(rf"(?<![\d.,])\d{{1,3}}(?:{_GAP}\d{{3}})+(?![\d])", one, text)
+    return re.sub(r"(?<![\d.,])\d{1,3}(?:(?: \d{3}){2,}| \d{3}(?=,\d))(?!\d)", one, text)
+
+
 def speakable(text: str) -> str:
     """Turn every displayed number in a sentence into Vietnamese words for an offline voice.
     Number words always get a space on each side, so "3%so" or "Q3" never glue into one unknown word."""
+    text = join_groups(text)
     text = re.sub(r"(?<=\d)\s*[-–—]\s*(?=\d)", " đến ", text)            # 3-5 người, 2026–2027
+    # "12.6%": a dot with one or two digits after it cannot group thousands, so it is a decimal point
+    text = re.sub(r"(?<![\d.,])(\d+)\.(\d{1,2})(?![\d.,]|\.\d)", r"\1,\2", text)
     text = re.sub(r"\s*%", " phần trăm ", text)
     text = _NUM.sub(lambda m: " " + number_words(m.group(0)) + " ", text)
     text = re.sub(r"[ \t]+", " ", text)

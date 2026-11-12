@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import base64
 import codecs
+import functools
 import datetime as dt
 import hashlib
 import json
@@ -45,7 +46,7 @@ from typing import Callable, Optional
 
 import yaml
 
-from present import doc_tai_chinh, goi_html, tri_nho
+from present import doc_tai_chinh, goi_html, tri_nho, vn_format
 from present.goi_html import PackError, audio_mime, offline_voice
 
 VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track",
@@ -166,7 +167,13 @@ def decode_report(raw: bytes) -> tuple:
     try:
         return raw.decode("utf-8"), "utf-8"
     except UnicodeDecodeError:
-        return unicodedata.normalize("NFC", raw.decode("cp1258", errors="replace")), "cp1258"
+        pass
+    text = raw.decode("utf-8", errors="replace")       # one stray byte in a UTF-8 page is not a whole other page
+    bad = text.count("\ufffd")
+    good = sum(1 for ch in text if ord(ch) > 127) - bad
+    if bad <= 3 and good >= 10 * bad:
+        return text, "utf-8"
+    return unicodedata.normalize("NFC", raw.decode("cp1258", errors="replace")), "cp1258"
 
 
 def utf8_meta(source: str) -> str:
@@ -234,18 +241,51 @@ def card_label(n: Node) -> str:
     return (m.group(0) if m else n.text()).strip(" :")
 
 
-def card_line(n: Node) -> str:
-    """How a person says a card: 'Tổng chi phí nhân sự AOPR là 186,4 tỷ, tăng 12,6% so với AOP gốc.'"""
+MONEY_LABEL = re.compile(r"chi phí|doanh thu|lợi nhuận|ngân sách|tiền|giá|trần|quỹ|lương|thưởng|aop|kế hoạch|"
+                         r"\bcost|revenue|profit|budget|cần (tăng|giảm)|tiết kiệm", re.I)
+NOT_MONEY_LABEL = re.compile(r"biên|tỷ lệ|tỉ lệ|margin|sản lượng|headcount|số người|nhân viên|khách|đơn hàng|"
+                             r"\bfte\b|ngày|vòng quay", re.I)
+CHANGE_LABEL = re.compile(r"^\s*((?:cần|phải|nên)\s+)?(tăng|giảm|tiết kiệm|cắt giảm|cắt)\s+(?:so với|vs\.?)\s+(.+)$",
+                          re.I)
+
+
+def card_line(n: Node, unit: Optional[str] = None, said: Optional[set] = None, en: bool = False) -> str:
+    """How a person says a card: 'Tổng chi phí nhân sự AOPR là 186,4 tỷ, tăng 12,6% so với AOP gốc.'
+    The value keeps its own sign ("−5,4 tỷ" is "âm 5,4 tỷ"); a change after it says tăng or giảm. A money card
+    without a unit gets the report's "Đơn vị:" unit. A change whose figures were already said is left out."""
     parts = _card_parts(n)
     if len(parts) < 2:
         return _sentence(n.text())
+    label = parts[0].rstrip(": ")
+    money = unit if unit in MONEY and MONEY_LABEL.search(label) and not NOT_MONEY_LABEL.search(label) else None
+
+    def with_unit(p):                  # "+1,2 vs AOP" → "+1,2 tỷ vs AOP"
+        f = figures(p)
+        if not (money and len(f) == 1 and not f[0].unit):
+            return p
+        end = f[0].at + len(f[0].tok)
+        end += len(re.match(r"\)?", p[end:]).group(0))
+        return p[:end] + " " + money + p[end:]
+
+    value_part = parts[1].strip()
+    value_part = re.sub(r"^\+\s*(?=\d)", "", value_part)
+    value_part = re.sub(r"^[-−–]\s*(?=\d)", "âm ", value_part)
+    value_part = re.sub(r"^\((\d[\d.,]*%?)\)", r"âm \1", value_part)       # (9,870): accounting negative
+    value_part = with_unit(value_part)
     rest = []
-    for p in parts[1:]:
-        p = re.sub(r"^\+\s*(?=\d)", "tăng ", p)
-        p = re.sub(r"^[-−]\s*(?=\d)", "giảm ", p)
-        p = re.sub(r"^\((\d[\d.,]*%?)\)", r"âm \1", p)            # (9,870) vs AOP: accounting negative
-        rest.append(re.sub(r"\bvs\.?(?=\s|$)", "so với", p))
-    return _sentence(parts[0].rstrip(": ") + " là " + ", ".join(rest))
+    for p in parts[2:]:
+        if said is not None and figures(p) and {value(f.tok, en) for f in figures(p)} <= said:
+            continue                                                  # "12,6%" was just said in the key message
+        p = re.sub(r"^\+\s*(?=\d)", "tăng ", p.strip())
+        p = re.sub(r"^[-−–]\s*(?=\d)", "giảm ", p)
+        p = re.sub(r"^\((\d[\d.,]*%?)\)", r"giảm \1", p)
+        rest.append(re.sub(r"\bvs\.?(?=\s|$)", "so với", with_unit(p)))
+    m = CHANGE_LABEL.match(label)
+    if m:                                         # "Cần giảm so với AOPR 8,9 tỷ" → "So với AOPR, cần giảm 8,9 tỷ."
+        verb = ((m.group(1) or "") + m.group(2)).strip()
+        value_part = re.sub(r"^âm\s+", "", value_part)
+        return _sentence(f"So với {m.group(3).strip()}, {verb[:1].lower() + verb[1:]} " + ", ".join([value_part] + rest))
+    return _sentence(label + " là " + ", ".join([value_part] + rest))
 
 
 def _is_note(n: Node) -> bool:
@@ -360,8 +400,14 @@ UNITS = {"%": "%", "nghìn tỷ": "nghìn tỷ", "ngàn tỷ": "nghìn tỷ", "t
          "lần": "lần"}
 MONEY = {"nghìn tỷ", "tỷ", "triệu", "nghìn", "đồng"}
 UNIT_AFTER = re.compile(r"\s*(%|nghìn tỷ|ngàn tỷ|tỷ|tỉ|triệu|tr\b\.?|nghìn|ngàn|đồng|người|điểm|lần)", re.I)
-NEG_WORD = re.compile(r"(?<!\w)(giảm|thấp hơn|âm|hụt|lỗ|kém|ít hơn|sụt)(?!\w)", re.I)
-POS_WORD = re.compile(r"(?<!\w)(tăng|cao hơn|vượt|nhiều hơn)(?!\w)", re.I)
+NEG_WORD = re.compile(r"(?<!\w)(giảm|thấp hơn|âm|hụt|lỗ|kém|ít hơn|ít đi|sụt|tiết kiệm|đi xuống|thu hẹp|thấp đi)(?!\w)",
+                      re.I)
+POS_WORD = re.compile(r"(?<!\w)(tăng|cao hơn|vượt|nhiều hơn|nhiều lên|đi lên|mở rộng)(?!\w)", re.I)
+CLAUSE = re.compile(r"[,;:.!?](?=\s)|[()]|(?<!\w)(?:nhưng|trong khi|còn|song|tuy nhiên|mặc dù|riêng)(?!\w)", re.I)
+SUBJECTS = [(re.compile(p, re.I), k) for p, k in (
+    (r"tỷ lệ|tỉ lệ|\bratio\b", "tỷ lệ"), (r"doanh thu|revenue|\bsales\b|\bdtt\b", "doanh thu"),
+    (r"giá vốn|\bcogs\b|gvhb", "giá vốn"), (r"lợi nhuận|\bebitda\b|\bebit\b|lntt|lnst|profit|net income", "lợi nhuận"),
+    (r"headcount|số người|nhân viên|\bfte\b", "số người"), (r"chi phí|\bcost|opex|expense", "chi phí"))]
 DECLARED = re.compile(r"đơn vị(?: tính)?\s*:?\s*(nghìn tỷ|ngàn tỷ|tỷ|tỉ|triệu|tr\b|nghìn|ngàn)", re.I)
 
 
@@ -371,40 +417,113 @@ class Fig:
     sign: Optional[str]    # "+", "-" or None
     sym: bool              # the sign is a symbol (+, −, parentheses), not a word
     unit: Optional[str]
+    ctx: str = ""          # the words before it in its clause ("Khối Bán hàng chênh lệch ")
+    how: str = ""          # "sym" (+ − parentheses), "am" (the word âm: the cell's own sign), "word" (tăng, giảm…)
+    subj: str = ""         # what the clause is about: "doanh thu", "chi phí"… (first one named)
+    at: int = -1           # where the figure starts in the text
+    spaced: bool = False   # written with spaces between thousands ("1 234 567"): says nothing about the marks
+
+
+PAREN_NEG = re.compile(r"(?:^|[:=]|(?<!\w)(?:là|was|is|were|are|đạt|ở mức|at))\s*$", re.I)
+PAREN_SHARE = re.compile(r"(?:\d[\d.,]*\s*(?:%|nghìn tỷ|ngàn tỷ|tỷ|tỉ|triệu|tr\b\.?|nghìn|ngàn|đồng|người|điểm|lần)?|"
+                         r"(?<!\w)(?:chiếm|tỷ trọng|tỉ trọng|bằng|tương đương|khoảng|gồm|trong đó|tức)(?:\s+\S+)?)\s*$",
+                         re.I)
+
+
+def paren_kind(text: str, s: int) -> str:
+    """What "(x)" means, from the words before the bracket. "neg": an accounting negative, when the bracket stands
+    alone (a cell, a card value) or right after ":", "=" or "là". "share": a figure set beside another figure
+    ("186,4 tỷ (12,6%)") or after "chiếm". "?": it could be either; the owner says which in words."""
+    start = max(0, s - 80)
+    pre = text[start:s].rstrip()
+    pre = pre[:-1].rstrip() if pre.endswith("(") else pre
+    if start and len(pre) == 0:
+        pre = "x"
+    if PAREN_NEG.search(pre):
+        return "neg"
+    if PAREN_SHARE.search(pre) or NEG_WORD.search(CLAUSE.split(pre)[-1]) or POS_WORD.search(CLAUSE.split(pre)[-1]):
+        return "share"
+    return "?"
+
+
+def subject(ctx: str) -> str:
+    hits = [(m.start(), k) for rx, k in SUBJECTS for m in [rx.search(ctx or "")] if m]
+    return min(hits)[1] if hits else ""
 
 
 def figures(text: str) -> list:
     """Figures as written, each with its direction and unit. Years (2026), periods glued to a letter (FY2627, T10,
     Q1), dates (11/11) and list markers "(1)" are not figures."""
-    text = text or ""
+    return list(_figures(text or ""))
+
+
+_YEAR = re.compile(r"(19|20)\d\d")
+_SLASH_AFTER = re.compile(r"/\d")
+_SLASH_BEFORE = re.compile(r"\d/$")
+_OPEN = re.compile(r"\(\s*$")
+_CLOSE = re.compile(r"\s*%?\s*\)")
+_MINUS = re.compile(r"(?:^|[^\w%)])[−–-]\s?$")
+_PLUS = re.compile(r"(?:^|[^\w])\+\s?$")
+_TUC = re.compile(r"\s*tức\b", re.I)
+
+
+@functools.lru_cache(maxsize=8192)
+def _figures(raw: str) -> tuple:
+    text = vn_format.join_groups(raw)       # "1 234 567" is one figure, as the voice reads it (same length)
     out, prev = [], 0
     for m in NUM_TOKEN.finditer(text):
         tok = m.group(0).rstrip(".,")
         if not tok:
             continue
         s, e = m.start(), m.start() + len(tok)
-        before, after = text[prev:s], text[e:]
+        before, after = text[max(prev, s - 400):s], text[e:e + 40]
         prev = e
-        if re.fullmatch(r"(19|20)\d\d", tok) or re.match(r"/\d", after) or re.search(r"\d/$", text[max(0, s - 2):s]):
+        if _YEAR.fullmatch(tok) or _SLASH_AFTER.match(after) or _SLASH_BEFORE.search(text[max(0, s - 2):s]):
             continue
-        if re.search(r"\(\s*$", before) and re.match(r"\)", after) and re.fullmatch(r"\d{1,2}", tok):
+        if _OPEN.search(before) and after.startswith(")") and len(tok) <= 2 and tok.isdigit():
             continue                                            # "(1) tăng ngân sách": a list marker
-        sign, sym = None, False
-        if re.search(r"\(\s*$", before) and re.match(r"\s*%?\s*\)", after):
-            sign, sym = "-", True
-        elif re.search(r"(?:^|[^\w%)])[−–-]\s?$", text[max(0, s - 3):s]):
-            sign, sym = "-", True
-        elif re.search(r"(?:^|[^\w])\+\s?$", text[max(0, s - 3):s]):
-            sign, sym = "+", True
+        sign, sym, how = None, False, ""
+        clause = CLAUSE.split(before)[-1]
+        paren = paren_kind(text, s) if _OPEN.search(before) and _CLOSE.match(after) else ""
+        if paren == "neg":
+            sign, sym, how = "-", True, "sym"
+        elif paren == "?":
+            how = "paren?"
+        elif _MINUS.search(text[max(0, s - 3):s]):
+            sign, sym, how = "-", True, "sym"
+        elif _PLUS.search(text[max(0, s - 3):s]):
+            sign, sym, how = "+", True, "sym"
         else:
-            clause = re.split(r"[,;:.!?](?=\s)|[()]", before)[-1]
-            words = [(w.start(), "-") for w in NEG_WORD.finditer(clause)] + \
-                    [(w.start(), "+") for w in POS_WORD.finditer(clause)]
-            if words:
-                sign = max(words)[1]
+            words = [(w.start(), "-", w.group(1).lower()) for w in NEG_WORD.finditer(clause)] + \
+                    [(w.start(), "+", w.group(1).lower()) for w in POS_WORD.finditer(clause)]
+            if paren:
+                pass                                            # "186,4 tỷ (12,6%)": no direction of its own
+            elif words:
+                _, sign, word = max(words)
+                how = "am" if word == "âm" else "word"
+            elif out and _TUC.match(clause):     # "giảm 14,1 tỷ, tức 18,0%": same direction
+                sign, how = out[-1].sign, out[-1].how
         u = UNIT_AFTER.match(after)
-        out.append(Fig(tok, sign, sym, UNITS.get(u.group(1).lower().rstrip(".")) if u else None))
-    return out
+        if paren:
+            u = UNIT_AFTER.match(re.sub(r"^\s*%?\s*\)", lambda m: m.group(0).replace(")", ""), after, count=1))
+        out.append(Fig(tok, sign, sym, UNITS.get(u.group(1).lower().rstrip(".")) if u else None, clause, how,
+                       subject(clause), s, raw[s:e] != tok))
+    return tuple(out)
+
+
+NUM_WORDS = ("không một hai ba bốn năm sáu bảy tám chín mười mươi mốt lăm tư trăm nghìn ngàn triệu tỷ tỉ phẩy linh "
+             "lẻ").split()
+NUM_WORD_RUN = re.compile(r"(?<!\w)((?:(?:%s)\s+){1,}(?:%s))(?!\w)" % ("|".join(NUM_WORDS), "|".join(NUM_WORDS)),
+                          re.I)
+
+
+def spelled_number(text: str) -> Optional[str]:
+    """A figure written in words ("một trăm sáu mươi tám phẩy bốn"): the lock cannot check it."""
+    for m in NUM_WORD_RUN.finditer(text or ""):
+        words = m.group(1).lower().split()
+        if len(words) >= 3 or set(words) & {"trăm", "mươi", "mười", "phẩy", "linh", "lẻ"}:
+            return m.group(1)
+    return None
 
 
 def numbers(text: str) -> list:
@@ -413,6 +532,8 @@ def numbers(text: str) -> list:
 
 
 def value(tok: str, en: bool = False) -> Optional[Decimal]:
+    if tok.count(".") >= 2 and "," not in tok:          # 1.234.567: thousands in any report
+        tok = tok.replace(".", "")
     t = tok.replace(",", "") if en else tok.replace(".", "").replace(",", ".")
     try:
         return Decimal(t)
@@ -441,6 +562,8 @@ def number_marks(texts: list) -> bool:
     seen = {("en", True): [], ("vn", True): [], ("en", False): [], ("vn", False): []}
     for t in texts:
         for f in figures(t):
+            if f.spaced:
+                continue
             kind, strong = _mark_kind(f.tok)
             if kind:
                 seen[(kind, strong)].append(f.tok)
@@ -448,8 +571,8 @@ def number_marks(texts: list) -> bool:
     if not en and not vn:
         en, vn = seen[("en", False)], seen[("vn", False)]
     if en and vn:
-        raise PackError(f"Báo cáo viết số theo hai kiểu lẫn nhau, ví dụ «{en[0]}» (dấu phẩy ngăn nghìn, kiểu Anh) và "
-                        f"«{vn[0]}» (dấu chấm ngăn nghìn, kiểu Việt). Em không chắc số nào là phần nghìn, số nào là "
+        raise PackError(f"Báo cáo viết số theo hai kiểu lẫn nhau, ví dụ «{en[0]}» (kiểu Anh: dấu phẩy ngăn nghìn, dấu chấm thập phân) và "
+                        f"«{vn[0]}» (kiểu Việt: dấu chấm ngăn nghìn, dấu phẩy thập phân). Em không chắc số nào là phần nghìn, số nào là "
                         "phần thập phân, nên chưa đọc. Anh sửa báo cáo về một kiểu rồi chạy lại.")
     return bool(en)
 
@@ -469,9 +592,13 @@ def check_figure(f: Fig, place: list, en: bool, declared: Optional[str]) -> Opti
     same = [p for p in place if v is not None and value(p.tok, en) == v]
     if not same:
         return "missing"
+    if f.subj and all(p.subj and p.subj != f.subj for p in same) and any(p.subj == f.subj for p in place):
+        return f"trong báo cáo, số {f.tok} là của «{same[0].subj}», không phải «{f.subj}»"
     signs = {p.sign for p in same}
     if f.sign and None not in signs and f.sign not in signs:
         return f"báo cáo ghi {SIGN_WORD[next(iter(signs))]}, câu nói lại là {SIGN_WORD[f.sign]}"
+    if f.sign == "-" and f.how in ("sym", "am") and signs == {None} and all(p.how != "paren?" for p in same):
+        return "báo cáo ghi số dương, câu nói lại là số âm"
     if f.sign is None and all(p.sign == "-" and p.sym for p in same):
         return "báo cáo ghi số âm, câu nói thiếu chữ «giảm» hoặc «âm»"
     if f.unit:
@@ -484,6 +611,16 @@ def check_figure(f: Fig, place: list, en: bool, declared: Optional[str]) -> Opti
 # --- the places Clicky can frame ---------------------------------------------------------------------------
 
 @dataclass
+class Col:
+    header: str            # every header row's text for this column ("Chênh lệch Tỷ đồng")
+    text: str              # the cell
+    figs: list
+    unit: Optional[str]    # from the cell, the header, the table's money unit, or "Đơn vị:" on the page
+    kind: str              # label | value | var | pct | pctvar
+    name: str = ""         # the lowest header cell ("AOP" under "Kế hoạch so Thực hiện"): how a person names it
+
+
+@dataclass
 class Place:
     id: str
     kind: str              # title | section | note | card | table | chart | row
@@ -491,6 +628,197 @@ class Place:
     anchor: str            # the text that finds it again in a changed report
     section: Optional[str]
     label: str = ""
+    cols: Optional[list] = None    # a table row: its cells by column
+    figs: Optional[list] = None    # a card: the figures of each part on its own, so "(5,4) tỷ" alone is negative
+    neg_book: bool = False         # the row writes its amounts negative, e.g. costs in brackets in a P&L
+    cost: bool = False             # a cost line: more is worse
+
+
+HEAD_UNIT = re.compile(r"(nghìn tỷ|ngàn tỷ|tỷ|tỉ|triệu|\btr\b|nghìn|ngàn)", re.I)
+HEAD_PEOPLE = re.compile(r"headcount|\bhc\b|người|nhân viên|số lượng|\bsl\b|lao động|\bfte\b", re.I)
+COST_WORDS = re.compile(r"chi phí|giá vốn|\bcost|cogs|opex|expense|lương|thưởng|phụ cấp|khấu hao|capex|\bcp\b|"
+                        r"\bgvhb\b|cpbh|cpql", re.I)
+INCOME_WORDS = re.compile(r"doanh thu|revenue|sales|lợi nhuận|ebitda|\bebit\b|biên|margin|thu nhập|income|sản lượng|"
+                          r"\bdtt\b|lntt|lnst|tiền", re.I)
+
+
+def _cell_sign(g: Fig) -> str:
+    """A table cell without a sign is a positive figure."""
+    return g.sign if g.sym and g.sign else "+"
+
+
+def column_kinds(trs: list) -> tuple:
+    """(header text, kind) per column of a table."""
+    hc = header_texts(trs)
+    data = [r for r in trs if not r.header]
+    kinds = []
+    for i, h in enumerate(hc):
+        cells = [r.cells[i] for r in data if i < len(r.cells) and r.cells[i].strip()]
+        if not cells or not any(FIGURE_CELL.match(x) for x in cells):
+            kinds.append("label")
+        elif "%" in h or (cells and all("%" in x for x in cells if FIGURE_CELL.match(x))):
+            kinds.append("pctvar" if VAR_HEAD.search(h) or re.search(r"tăng|giảm|var", h, re.I) else "pct")
+        elif VAR_HEAD.search(h):
+            kinds.append("var")
+        else:
+            kinds.append("value")
+    return hc, kinds
+
+
+def row_places(trs: list, section: Optional[str], page_figs: list, en: bool, declared: Optional[str],
+               cost_page: bool) -> dict:
+    """Places for the rows of one table, each with its cells by column, the column's unit and kind."""
+    if not trs:
+        return {}
+    hc, kinds = column_kinds(trs)
+    money = {}                                  # the table's money unit, from the same figure written elsewhere
+    page = {}
+    for g in page_figs:
+        if g.unit in MONEY:
+            page.setdefault(value(g.tok, en), set()).add(g.unit)
+    for r in trs:
+        for i, x in enumerate(r.cells):
+            if i < len(kinds) and kinds[i] in ("value", "var") and not HEAD_PEOPLE.search(hc[i]):
+                for g in figures(x):
+                    for u in page.get(value(g.tok, en), ()):
+                        money[u] = money.get(u, 0) + 1
+    # the unit the same figures carry elsewhere on the page: twice, or once with no other unit seen
+    table_unit = max(money, key=money.get) if money and (max(money.values()) >= 2 or len(money) == 1) else declared
+    units = []
+    for i, h in enumerate(hc):
+        m = HEAD_UNIT.search(h)
+        if kinds[i].startswith("pct"):
+            units.append("%")
+        elif HEAD_PEOPLE.search(h):
+            units.append("người")
+        elif m:
+            units.append(UNITS.get(m.group(1).lower(), m.group(1).lower()))
+        else:
+            units.append(table_unit if kinds[i] != "label" else None)
+    heads = [r for r in trs if r.header and len({x for x in r.cells if x}) > 1]
+    names = [next((h.cells[i] for h in reversed(heads) if i < len(h.cells) and h.cells[i].strip()), "").strip()
+             for i in range(len(hc))]
+    out = {}
+    for r in trs:
+        cols = [Col(hc[i] if i < len(hc) else "", x, figures(x), units[i] if i < len(units) else None,
+                    kinds[i] if i < len(kinds) else "value", names[i] if i < len(names) else "")
+                for i, x in enumerate(r.cells)]
+        vals = [g for c in cols if c.kind == "value" for g in c.figs]
+        neg_book = bool(vals) and sum(1 for g in vals if _cell_sign(g) == "-") > len(vals) / 2
+        cost = bool(COST_WORDS.search(r.label)) or (cost_page and not INCOME_WORDS.search(r.label))
+        out[r.id] = Place(r.id, "row", r.node.text(), r.label.strip()[:80], section, r.label.strip(), cols=cols,
+                          neg_book=neg_book, cost=cost)
+    return out
+
+
+def _wanted(f: Fig, cols: list) -> tuple:
+    """The columns a spoken figure must come from, by the words before it, and how to name them."""
+    ctx = tri_nho.fold(f.ctx)
+    named, best, diff = [], 0, False
+    for c in cols:
+        h = tri_nho.fold(c.header)
+        m = re.search(rf"(?<![\w%]){re.escape(h)}(?![\w%])", ctx) if c.kind != "label" and len(h) >= 2 else None
+        if m is None and c.kind != "label" and len(tri_nho.fold(c.name)) >= 2:
+            h = tri_nho.fold(c.name)
+            m = re.search(rf"(?<![\w%]){re.escape(h)}(?![\w%])", ctx)
+        if m and len(h) >= best:
+            named = [x for x in named if len(tri_nho.fold(x.header)) >= len(h)] + [c]
+            best = len(h)
+            # "vượt AOP gốc 14,1 tỷ": the figure is the difference from that column, not the column
+            diff = any(w.start() < m.start() and w.group(1) != "am"
+                       for w in re.finditer(r"(?<!\w)(giam|thap hon|cao hon|vuot|hut|kem|it hon|tang|tiet kiem|"
+                                            r"nhieu hon|am)(?!\w)", ctx))
+    if named and not diff:
+        return named, named[0].header
+    if f.unit == "%" or re.match(r"\s*tuc\b", ctx):
+        pct = [c for c in cols if c.kind.startswith("pct")]
+        if pct:
+            return pct, " / ".join(dict.fromkeys(c.header for c in pct))
+    if f.how in ("word", "am") or re.search(r"chenh lech|\blech\b", ctx):
+        var = [c for c in cols if c.kind == "var"] or [c for c in cols if c.kind == "pctvar"]
+        if var:
+            return var, " / ".join(dict.fromkeys(c.header for c in var))
+    return None, ""
+
+
+def check_row(f: Fig, place: Place, en: bool) -> Optional[str]:
+    """A spoken figure against a table row: the right column, the right direction, the right unit."""
+    v = value(f.tok, en)
+    hits = [(c, g) for c in place.cols if c.kind != "label" for g in c.figs if v is not None and value(g.tok, en) == v]
+    if not hits:
+        named = any(value(g.tok, en) == v for c in place.cols if c.kind == "label" for g in c.figs)
+        return None if named and f.sign is None and not f.unit else "missing"     # "Dòng 1", "Chi nhánh 6"
+    want, name = _wanted(f, place.cols)
+    if want is not None:
+        inside = [(c, g) for c, g in hits if any(c is w for w in want)]
+        if not inside:
+            return f"số {f.tok} là cột «{hits[0][0].header}», không phải cột «{name}»"
+        hits = inside
+    why = None
+    for c, g in hits:
+        raw = _cell_sign(g)
+        change = c.kind in ("var", "pctvar")
+        size = ("-" if raw == "+" else "+") if place.neg_book else raw     # is the amount bigger or smaller
+        if f.sign is None:
+            if raw == "-" and not (place.neg_book and not change):
+                why = why or f"cột «{c.header}» ghi số âm ({c.text.strip()}), câu nói thiếu chữ «giảm» hoặc «âm»"
+                continue
+        elif f.how == "word" and change and f.sign != size:
+            why = why or (f"cột «{c.header}» ghi {'tăng' if size == '+' else 'giảm'} ({c.text.strip()}), câu nói lại là "
+                          f"{'tăng' if f.sign == '+' else 'giảm'}")
+            continue
+        elif f.how in ("am", "sym") and f.sign != raw:
+            why = why or f"cột «{c.header}» ghi {c.text.strip()}, câu nói lại là {SIGN_WORD[f.sign]}"
+            continue
+        unit = g.unit or c.unit
+        if f.unit and unit and f.unit != unit:
+            why = why or f"cột «{c.header}» tính bằng «{unit}», câu nói lại là «{f.unit}»"
+            continue
+        return None
+    return why
+
+
+def other_row(noi: str, chi: str, places: dict) -> Optional[str]:
+    """The label of another row of the same table, named in a sentence that frames this row (and does not name
+    this row): Clicky would circle «Khối Bán hàng» while saying «Khối Marketing»."""
+    p = places.get(chi)
+    if p is None or p.kind != "row" or not p.label:
+        return None
+    text, own = tri_nho.fold(noi), tri_nho.fold(p.label)
+    if re.search(rf"(?<!\w){re.escape(own)}(?!\w)", text):
+        return None
+    table = chi.rsplit("r", 1)[0] + "r"
+    for q in places.values():
+        lab = tri_nho.fold(q.label)
+        if q.kind == "row" and q.id != chi and q.id.startswith(table) and re.fullmatch(r"\d+", q.id[len(table):]) \
+                and len(lab) >= 4 and lab not in own and re.search(rf"(?<!\w){re.escape(lab)}(?!\w)", text):
+            return q.label
+    return None
+
+
+def check_at(f: Fig, place: Optional[Place], en: bool, declared: Optional[str]) -> Optional[str]:
+    if place is None:
+        return "missing"
+    if place.cols is not None:
+        return check_row(f, place, en)
+    return check_figure(f, place.figs if place.figs is not None else figures(place.text), en, declared)
+
+
+def card_figs(n: Node) -> list:
+    """A card's figures read part by part (label, value, change): its value stands alone in its part."""
+    parts = _card_parts(n)
+    if len(parts) < 2:
+        return figures(n.text() + " " + _labels(n))
+    out = [g for p in parts for g in figures(p)]
+    words = [(w.start(), "-", w.group(1).lower()) for w in NEG_WORD.finditer(parts[0])] + \
+            [(w.start(), "+", w.group(1).lower()) for w in POS_WORD.finditer(parts[0])]
+    if words:                        # "Cần giảm so với AOPR" / "8,9 tỷ": the label gives the value its direction
+        _, sign, word = max(words)
+        for g in figures(parts[1]):
+            if g.sign is None and g.how == "":
+                out[out.index(g)] = Fig(g.tok, sign, False, g.unit, parts[0], "am" if word == "âm" else "word",
+                                        subject(parts[0]), g.at)
+    return out + figures(_labels(n))
 
 
 def _labels(n: Node) -> str:
@@ -507,34 +835,64 @@ def tag_targets(source: str, root: Node) -> tuple:
     for it in items:
         if it.kind != "table":
             continue
-        trs = [n for n in it.node.walk() if n.tag == "tr"]
-        grid = table_grid(trs)
-        first_data = next((k for k, g in enumerate(grid) if sum(1 for x in g if FIGURE_CELL.match(x)) >= 2), len(grid))
-        for r, row in enumerate(trs):
-            rid = f"{it.node.attrs['data-clicky']}r{r}"
-            row.attrs["data-clicky"] = rid
-            inserts.append((row.start, "tr", rid))
-            cells = grid[r]
-            lead = []
-            for x in cells:                     # the label columns, before the first figure
-                if FIGURE_CELL.match(x):
-                    break
-                if x and x not in lead:
-                    lead.append(x)
-            label = " ".join(reversed(lead)) if len(lead) > 1 else (lead[0] if lead else "")
-            header = r < first_data or all(c.tag == "th" for c in row.children if c.tag in ("td", "th")) or \
-                row.has_ancestor(lambda p: p.tag == "thead")
-            rows.append(Row(rid, row, it, cells, label, header))
-    out = source
-    for start, tag, cid in sorted(inserts, key=lambda x: -x[0]):
+        for row in table_rows(it.node, it.node.attrs["data-clicky"], it):
+            row.node.attrs["data-clicky"] = row.id
+            inserts.append((row.node.start, "tr", row.id))
+            rows.append(row)
+    pieces, pos = [], 0
+    for start, tag, cid in sorted(inserts, key=lambda x: x[0]):
         at = start + 1 + len(tag)
-        if out[start:at].lower() != "<" + tag:
+        if source[start:at].lower() != "<" + tag:
             raise PackError(f"Không gắn được dấu vào thẻ <{tag}> ở vị trí {start}.")
-        out = out[:at] + f' data-clicky="{cid}"' + out[at:]
-    return out, items, rows
+        pieces += [source[pos:at], f' data-clicky="{cid}"']
+        pos = at
+    return "".join(pieces) + source[pos:], items, rows
 
 
 FIGURE_CELL = re.compile(r"^[\s(+\-−–]*\d[\d.,]*\s*%?\)?\s*$")
+
+
+def table_rows(table: Node, tid: str, item=None) -> list:
+    """The rows of a table with their cells laid out by column; ids are "<table id>r<n>"."""
+    trs = [n for n in table.walk() if n.tag == "tr"]
+    grid = table_grid(trs)
+    first_data = next((k for k, g in enumerate(grid) if sum(1 for x in g if FIGURE_CELL.match(x)) >= 2), len(grid))
+    rows = []
+    for r, row in enumerate(trs):
+        cells = grid[r]
+        lead = []
+        for x in cells:                     # the label columns, before the first figure
+            if FIGURE_CELL.match(x):
+                break
+            if x and x not in lead:
+                lead.append(x)
+        label = " ".join(reversed(lead)) if len(lead) > 1 else (lead[0] if lead else "")
+        header = r < first_data or all(c.tag == "th" for c in row.children if c.tag in ("td", "th")) or \
+            row.has_ancestor(lambda p: p.tag == "thead")
+        rows.append(Row(f"{tid}r{r}", row, item, cells, label, header))
+    return rows
+
+
+def cost_context(root: Node) -> bool:
+    """The report is about costs (its title says so): a line without a revenue word is a cost line."""
+    head = " ".join(n.text() for n in root.walk() if n.tag in ("title", "h1"))[:300]
+    return bool(re.search(r"chi phí|\bcost|expense|opex", head, re.I))
+
+
+def page_places(root: Node, en: bool, declared: Optional[str]) -> dict:
+    """Row and card places read back from a built page (kiem_bien_ban): the same columns, units, kinds and card
+    parts as the build."""
+    page_figs = figures(root.text())
+    cost_page = cost_context(root)
+    out = {}
+    for t in root.walk():
+        cid = t.attrs.get("data-clicky")
+        if t.tag == "table" and cid:
+            out.update(row_places(table_rows(t, cid), None, page_figs, en, declared, cost_page))
+        elif cid and _is_card(t):
+            out[cid] = Place(cid, "card", t.text() + " " + _labels(t), card_label(t), None, card_label(t),
+                             figs=card_figs(t))
+    return out
 
 
 def table_grid(trs: list) -> list:
@@ -572,7 +930,8 @@ def _int(v) -> int:
         return 1
 
 
-def make_places(items: list, rows: list) -> dict:
+def make_places(items: list, rows: list, root: Optional[Node] = None, en: bool = False,
+                declared: Optional[str] = None) -> dict:
     out = {}
     for it in items:
         cid = it.node.attrs["data-clicky"]
@@ -589,10 +948,13 @@ def make_places(items: list, rows: list) -> dict:
             anchor = it.text or "biểu đồ " + (it.node.attrs.get("id") or "")
         else:
             anchor = it.text[:80]
-        out[cid] = Place(cid, it.kind, it.node.text() + " " + _labels(it.node), anchor.strip(), sec, label)
-    for r in rows:
-        tp = out[r.table.node.attrs["data-clicky"]]
-        out[r.id] = Place(r.id, "row", r.node.text(), r.label.strip()[:80], tp.section, r.label.strip())
+        out[cid] = Place(cid, it.kind, it.node.text() + " " + _labels(it.node), anchor.strip(), sec, label,
+                         figs=card_figs(it.node) if it.kind == "card" else None)
+    page_figs = figures(root.text()) if root is not None else []
+    cost_page = cost_context(root) if root is not None else False
+    for trs in tables_of(rows):
+        tp = out[trs[0].table.node.attrs["data-clicky"]]
+        out.update(row_places(trs, tp.section, page_figs, en, declared, cost_page))
     return out
 
 
@@ -603,6 +965,10 @@ def target_texts(root: Node) -> dict:
 
 def page_numbers(root: Node) -> set:
     return set(numbers(root.text() + " " + _labels(root)))
+
+
+def _masked(text: str) -> str:
+    return re.sub(r"\d[\d.,]*", "#", text)[:60]
 
 
 def reanchor(script: dict, places: dict) -> list:
@@ -620,8 +986,10 @@ def reanchor(script: dict, places: dict) -> list:
             key = tri_nho.fold(neo)
             if chi in places and tri_nho.fold(places[chi].anchor) == key:
                 continue
-            found = by_anchor.get(key) or [p for k, ps in by_anchor.items() for p in ps
-                                           if k and len(key) >= 8 and (k.startswith(key) or key.startswith(k))]
+            found = by_anchor.get(key) \
+                or [p for k, ps in by_anchor.items() for p in ps if _masked(k) == _masked(key)] \
+                or [p for k, ps in by_anchor.items() for p in ps if k and len(key) >= 8 and
+                    min(len(k), len(key)) >= 0.8 * max(len(k), len(key)) and (k.startswith(key) or key.startswith(k))]
             if not found:
                 raise PackError(f"Kịch bản trỏ tới chỗ «{neo}» ('{chi}') nhưng báo cáo không còn chỗ đó. Anh sửa câu "
                                 f"«{str(c.get('noi'))[:60]}» hoặc xóa file kịch bản để Clicky soạn lại.")
@@ -652,15 +1020,24 @@ EN_HEADINGS = {"key messages": "Thông điệp chính", "key message": "Thông �
                "recommendation": "Đề xuất", "next steps": "Bước tiếp theo", "appendix": "Phụ lục",
                "overview": "Tổng quan", "risks": "Rủi ro", "outlook": "Triển vọng", "actions": "Hành động",
                "commentary": "Nhận xét", "key takeaways": "Điểm chính"}
-ORDINAL = ["Thứ nhất", "Thứ hai", "Thứ ba"]
+ORDINAL = ["Thứ nhất", "Thứ hai", "Thứ ba", "Thứ tư", "Thứ năm"]
+REASON = re.compile(r"(?<!\w)(do|vì|bởi|nhờ|chủ yếu do|chủ yếu vì|nguyên nhân là|nguyên nhân do)\s+(.+?)(?:[.;!]\s|[.;!]?$)",
+                    re.I)
 COUNT_WORD = {1: "một", 2: "hai", 3: "ba"}
 NET_CHART = re.compile(r"""<script[^>]+src\s*=\s*["']https?://[^"']*(chart|echarts|highcharts|apexcharts|plotly|"""
                        r"""d3|amcharts|google)""", re.I)
 
 
+SECTION_NUMBER = re.compile(r"^\s*(?:(?:phần|mục|part|section)\s+)?(?:\d+(?:\.\d+)*|[ivxlc]+|[a-h])\s*[.):\-–]\s*",
+                            re.I)
+
+
 def heading_title(text: str) -> str:
-    """A section title as Clicky says it and shows it in the bar: English headings in Vietnamese."""
+    """A section title as Clicky says it and shows it in the bar: English headings in Vietnamese, and without the
+    report's numbering ("2. Chi tiết theo khối"): Clicky presents only some parts, so "phần hai" would follow no
+    "phần một"."""
     t = re.sub(r"\s+", " ", text).strip().rstrip(".:")
+    t = SECTION_NUMBER.sub("", t, count=1) or t
     return EN_HEADINGS.get(t.lower(), t)
 
 
@@ -741,12 +1118,39 @@ def _signed(f: Fig) -> str:
     return ("âm " if f.sign == "-" else "") + f.tok
 
 
-def driver_line(i: int, r: Row, f: Fig, pf: Optional[Fig], unit: Optional[str]) -> str:
-    line = f"{ORDINAL[i]}, {r.label.strip()} chênh lệch {_signed(f)}"
-    if unit and not f.unit:
-        line += " " + unit
+PLAN_HEAD = re.compile(r"\baop\b|kế hoạch|\bkh\b|plan|budget|ngân sách|cùng kỳ|\bly\b|\bpy\b|năm trước|tháng trước",
+                       re.I)
+
+
+def driver_line(i: int, r: Row, f: Fig, pf: Optional[Fig], unit: Optional[str], place: Optional[Place] = None,
+                said_before: bool = False) -> str:
+    """'Thứ nhất, khối Bán hàng vượt AOP gốc 14,1 tỷ, tức 18,0%.' The direction comes from the variance cell
+    (a P&L that writes costs in brackets is read the same way as the lock reads it), the unit from its column,
+    the words from the line: a cost above plan is "vượt", below plan "tiết kiệm so với"; revenue is "cao hơn" or
+    "thấp hơn". The percent is said without a second minus ("tức 5,2%", never "thấp hơn … âm 5,2%")."""
+    raw = _cell_sign(f)
+    size = ("-" if raw == "+" else "+") if place is not None and place.neg_book else raw
+    col = next((c for c in (place.cols if place and place.cols else []) if c.kind == "var" and f in c.figs), None)
+    u = f.unit or (col.unit if col and col.unit != "%" else None) or unit
+    ref = None
+    if place is not None and place.cols:
+        values = [c for c in place.cols if c.kind == "value" and c.unit != "người"]
+        ref = next(((c.name or c.header) for c in values if PLAN_HEAD.search(c.name or c.header)), None)
+    label = r.label.strip()
+    label = label[:1].lower() + label[1:] if re.match(r"(khối|phòng|ban|bộ phận|kênh|vùng|miền|chi nhánh)\b", label, re.I) \
+        else label
+    amount = f.tok + (" " + u if u else "")
+    if ref and place.cost:
+        verb = f"vượt {ref}" if size == "+" else f"tiết kiệm so với {ref}"
+    elif ref:
+        verb = f"cao hơn {ref}" if size == "+" else f"thấp hơn {ref}"
+    else:
+        verb = "tăng" if size == "+" else "giảm"
+    if said_before and pf:                 # the amount was in the key message: say the rate only, not 22,630 twice
+        return f"{ORDINAL[i]}, {label} {verb} {pf.tok}%."
+    line = f"{ORDINAL[i]}, {label} {verb} {amount}"
     if pf:
-        line += f", tức {_signed(pf)}%"
+        line += f", tức {pf.tok}%"
     return line + "."
 
 
@@ -771,9 +1175,19 @@ def draft_script(items: list, rows: list, places: dict, owner: str, en: bool = F
             out["neo"] = places[chi].anchor
         return out
 
+    unclear: list = []
+
+    def speakable(text):                   # nothing the lock or the voice would stop on in a first draft
+        if any(f.how == "paren?" for f in figures(text)) or spelled_number(text) or \
+                doc_tai_chinh.unsaid(doc_tai_chinh.doc(for_voice(text), en)):
+            if text not in unclear:
+                unclear.append(text)
+            return False
+        return True
+
     def fresh(text):                       # has a figure, and not every figure was just said
         v = _vals(text, en)
-        return bool(v) and not v <= said
+        return bool(v) and not v <= said and speakable(text)
 
     title = next((i for i in items if i.kind == "title"), None)
     notes = [i for i in items if i.kind == "note" and i.text and not GREETING.search(i.text)]
@@ -782,7 +1196,7 @@ def draft_script(items: list, rows: list, places: dict, owner: str, en: bool = F
     reco = next((n for n in notes if n.section is not None and RECO_HEAD.search(items[n.section].text)), None) \
         or next((n for n in notes if RECO_START.search(n.text)), None)
     reco_sec = reco.section if reco else -1
-    fig_notes = [n for n in notes if n is not reco and _vals(n.text, en)]
+    fig_notes = [n for n in notes if n is not reco and _vals(n.text, en) and speakable(n.text)]
     headline = next((n for n in fig_notes if KEY_START.search(n.text) or KEY_CLASS.search(n.node.cls)), None) \
         or next((n for n in fig_notes if n.section is not None and KEY_HEAD.search(items[n.section].text)), None) \
         or (fig_notes[0] if fig_notes else None)
@@ -822,8 +1236,9 @@ def draft_script(items: list, rows: list, places: dict, owner: str, en: bool = F
                 used.add(id(ch))
                 key.append(line(text, cid(ch)))
                 break
+    unit = declared if declared in MONEY else None
     for c in [c for c in cards if c.section != reco_sec or reco is None][:4]:
-        text = card_line(c.node)
+        text = card_line(c.node, unit, said, en)
         if fresh(text):
             used.add(id(c))
             if not key:
@@ -836,12 +1251,22 @@ def draft_script(items: list, rows: list, places: dict, owner: str, en: bool = F
 
     # the largest variances, each framed on its own row
     found = drivers(rows, en)
-    unit = declared if declared in MONEY else None
     if found:
         _trs, top = found
         cau = [line(f"Nguyên nhân chính nằm ở {COUNT_WORD[len(top)]} dòng có chênh lệch lớn nhất trong bảng.",
                     top[0][0].id)]
-        cau += [line(driver_line(k, r, f, pf, unit), r.id) for k, (r, f, pf) in enumerate(top)]
+        for k, (r, f, pf) in enumerate(top):
+            cau.append(line(driver_line(k, r, f, pf, unit, places.get(r.id), value(f.tok, en) in said), r.id))
+            # the report's own comment on this row: say its reason here, never its figure a second time
+            lab = tri_nho.fold(r.label)
+            for n in fig_notes:
+                if id(n) in used or n is headline or len(lab) < 4 or value(f.tok, en) not in _vals(n.text, en) \
+                        or not re.search(rf"(?<!\w){re.escape(lab)}(?!\w)", tri_nho.fold(n.text)):
+                    continue
+                used.add(id(n))
+                why = REASON.search(n.text)
+                if why:
+                    cau.append(line(_sentence("Nguyên nhân là " + why.group(2).strip(" ,;")), cid(n)))
         scenes.append({"muc": "Nguyên nhân chính", "cau": cau})
 
     # what else it means: the other sections, in the report's order (a few: the full report is on the page)
@@ -858,9 +1283,9 @@ def draft_script(items: list, rows: list, places: dict, owner: str, en: bool = F
                 used.add(id(n))
                 cau.append(line(_sentence(n.text), cid(n)))
         for c in cards:
-            if c.section == idx and id(c) not in used and fresh(card_line(c.node)):
+            if c.section == idx and id(c) not in used and fresh(card_line(c.node, unit, said, en)):
                 used.add(id(c))
-                cau.append(line(card_line(c.node), cid(c)))
+                cau.append(line(card_line(c.node, unit, said, en), cid(c)))
         for ch in (i for i in items if i.kind == "chart" and i.section == idx):
             text = chart_line(ch)
             if text and cau:
@@ -879,26 +1304,44 @@ def draft_script(items: list, rows: list, places: dict, owner: str, en: bool = F
         if cau and parts < max_parts:
             parts += 1
             t = heading_title(sec.text)
-            scenes.append({"muc": t, "cau": [line(f"Phần {t}.", cid(sec))] + cau})
+            said_t = t if re.match(r".[A-ZĐ0-9]", t) else t[:1].lower() + t[1:]
+            scenes.append({"muc": t, "cau": [line(f"Tiếp theo là phần {said_t}.", cid(sec))] + cau})
 
-    # one request to the Board
+    # the requests to the Board: every point of the recommendation section, in order
+    skipped = []
     if reco:
-        body = RECO_START.sub("", reco.text).strip()
-        joint = ": " if re.match(r"[(\d]", body) else " "
-        if body[1:2].islower():
-            body = body[:1].lower() + body[1:]
-        cau = [line(_sentence("Kính đề nghị Ban Giám đốc" + joint + body), cid(reco))]
+        recos = [n for n in notes if n.section == reco_sec and n.section is not None] or [reco]
+        if reco not in recos:
+            recos.insert(0, reco)
+        skipped = [n.text for n in recos[5:]]
+        recos = recos[:5]
+        cau = []
+        for k, n in enumerate(recos):
+            used.add(id(n))
+            body = RECO_START.sub("", n.text).strip()
+            body = re.sub(r"^\s*(?:\(?\d{1,2}[.)]|[-•*–])\s*", "", body) if len(recos) > 1 else body
+            word = body.split(" ", 1)[0]
+            if len(word) == 1 or word[1:].islower():           # "Giao Mua hàng…" → "giao Mua hàng…", not "GT…"
+                body = body[:1].lower() + body[1:]
+            if len(recos) == 1:
+                joint = ": " if re.match(r"[(\d]", body) else " "
+                text = "Kính đề nghị Ban Giám đốc" + joint + body
+            elif k == 0:
+                text = "Kính đề nghị Ban Giám đốc: thứ nhất, " + body
+            else:
+                text = (ORDINAL[k] if k < len(ORDINAL) else "Tiếp theo") + ", " + body
+            cau.append(line(_sentence(text), cid(n)))
         for c in cards:
-            if c.section == reco_sec and id(c) not in used and fresh(card_line(c.node)):
+            if c.section == reco_sec and id(c) not in used and fresh(card_line(c.node, unit, said, en)):
                 used.add(id(c))
-                cau.append(line(card_line(c.node), cid(c)))
+                cau.append(line(card_line(c.node, unit, said, en), cid(c)))
         scenes.append({"muc": "Đề nghị Ban Giám đốc", "cau": cau})
 
     scenes[-1]["cau"] += [
         line(f"Anh chị có thể hỏi em bất kỳ con số nào trong báo cáo; câu nào em chưa trả lời được, em ghi lại để "
              f"{owner} trả lời anh chị sau."),
         line("Em xin cảm ơn anh chị đã lắng nghe.")]
-    return {"canh": scenes}
+    return {"canh": scenes, "bo_qua": skipped, "chua_ro": unclear}
 
 
 def memory_scene(entries: list, owner: str, places: dict, en: bool, declared: Optional[str]) -> Optional[dict]:
@@ -932,8 +1375,7 @@ def label_place(context: str, noi: str, places: dict, en: bool, declared: Option
             if best is None or len(lab) > len(tri_nho.fold(best.label)):
                 best = p
     figs = figures(noi)
-    here = figures(best.text) if best else []
-    at = [f for f in figs if best and check_figure(f, here, en, declared) is None]
+    at = [f for f in figs if best and check_at(f, best, en, declared) is None]
     own = list(dict.fromkeys(f.tok for f in figs if f not in at))
     return (best.id if at else ""), own
 
@@ -965,7 +1407,9 @@ def script_hash(canh) -> str:
     return hashlib.sha256(json.dumps(canh, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
 
 
-def dump_script(script: dict, report: str) -> str:
+def dump_script(script: dict, report: str, snap: Optional[dict] = None, draft: bool = True) -> str:
+    """The script as the owner edits it. "ma_nhap" marks a draft nobody has touched; "so_cho" keeps the figures
+    each framed place showed, so a report of the next month is recognised and its new figures put in place."""
     canh = script["canh"]
     out = []
     for s in canh:
@@ -982,10 +1426,107 @@ def dump_script(script: dict, report: str) -> str:
                     row[k] = [_Q(str(x)) for x in c[k]]
             sc["cau"].append(row)
         out.append(sc)
-    body = {"bao_cao": _Q(report), "da_duyet": _Q("chưa"), "ma_nhap": script_hash(json.loads(json.dumps(out))),
-            "canh": out}
+    body = {"bao_cao": _Q(report), "da_duyet": _Q("chưa"),
+            "ma_nhap": script_hash(json.loads(json.dumps(out))) if draft else "", "canh": out}
     return SCRIPT_HEAD.format(report=report) + yaml.dump(body, Dumper=_Dumper, allow_unicode=True, sort_keys=False,
-                                                         width=4096)
+                                                         width=4096) + dump_snap(snap)
+
+
+SNAP_HEAD = "# Số ở từng chỗ khoanh lúc soạn hoặc duyệt (Clicky tự ghi, anh không cần sửa):\n"
+
+
+def dump_snap(snap: Optional[dict]) -> str:
+    if not snap:
+        return ""
+    return "\n" + SNAP_HEAD + yaml.dump({"so_cho": {_Q(k): _Q(v) for k, v in snap.items()}}, Dumper=_Dumper,
+                                         allow_unicode=True, sort_keys=False, width=4096)
+
+
+def write_snap(path: Path, snap: dict, reset: bool = False) -> None:
+    """Rewrite only the "so_cho" block at the end of the owner's script (and, when asked, set da_duyet back to
+    'chưa'); every sentence the owner wrote stays as it is."""
+    text = tri_nho.read_text(path)
+    cut = re.search(r"^(?:%s)?so_cho:" % re.escape(SNAP_HEAD), text, re.M)
+    text = text[:cut.start()].rstrip("\n") + "\n" if cut else text.rstrip("\n") + "\n"
+    if reset:
+        text = re.sub(r"^da_duyet:.*$", "da_duyet: 'chưa'", text, count=1, flags=re.M)
+    path.write_text(text + dump_snap(snap), encoding="utf-8")
+
+
+def _tok(g: Fig) -> str:
+    return ("-" if g.sign == "-" else "") + g.tok + ("%" if g.unit == "%" else "")
+
+
+def place_figs(p: Place) -> list:
+    if p.cols is not None:
+        return [g for c in p.cols if c.kind != "label" for g in c.figs]
+    return p.figs if p.figs is not None else figures(p.text)
+
+
+def snapshot(script: dict, places: dict) -> dict:
+    """{neo: "78,2 92,3 14,1 18,0% 712"}: the figures at each place a line frames, in reading order."""
+    out = {}
+    for s in script.get("canh") or []:
+        for c in s.get("cau") or []:
+            chi, neo = str(c.get("chi") or ""), str(c.get("neo") or "").strip()
+            if chi in places and neo and places[chi].kind not in ("title", "section"):
+                out[neo] = " ".join(_tok(g) for g in place_figs(places[chi]))
+    return out
+
+
+def _tok_value(t: str, en: bool) -> Optional[Decimal]:
+    return value(t.lstrip("-").rstrip("%"), en)
+
+
+def next_period(script: dict, old: dict, places: dict, en: bool) -> tuple:
+    """The owner's sentences with this period's figures put where last period's stood (same place, same position
+    in it). Returns (script, lines whose direction flipped: their wording no longer holds)."""
+    now = snapshot(script, places)
+    flipped = []
+    for s in script.get("canh") or []:
+        for c in s.get("cau") or []:
+            neo = str(c.get("neo") or "").strip()
+            a, b = (old.get(neo) or "").split(), (now.get(neo) or "").split()
+            if not a or len(a) != len(b):
+                continue
+            noi = str(c.get("noi") or "")
+            for f in reversed(figures(noi)):
+                k = next((i for i, t in enumerate(a) if _tok_value(t, en) == value(f.tok, en)), None)
+                if k is None or a[k] == b[k]:
+                    continue
+                if a[k].startswith("-") != b[k].startswith("-"):
+                    flipped.append(c)
+                noi = noi[:f.at] + b[k].lstrip("-").rstrip("%") + noi[f.at + len(f.tok):]
+            c["noi"] = noi
+    return script, flipped
+
+
+RANK = {"thu nhat": 0, "thu hai": 1, "thu ba": 2, "lon nhat": 0, "manh nhat": 0,
+        "nhieu nhat": 0, "cao nhat": 0, "nho nhat": -1, "it nhat": -1, "thap nhat": -1}
+
+
+def ranking_issues(script: dict, rows: list, en: bool) -> list:
+    """Lines that rank a row ("Thứ nhất, …", "… lớn nhất") whose rank in this report's variance column is not
+    that one any more. [(line, the row that holds that rank now)]"""
+    found = drivers(rows, en, limit=999)
+    if not found:
+        return []
+    _trs, order = found
+    ids = {r.id for r in _trs}
+    out = []
+    for s in script.get("canh") or []:
+        for c in s.get("cau") or []:
+            chi = str(c.get("chi") or "")
+            if chi not in ids:
+                continue
+            text = tri_nho.fold(str(c.get("noi") or ""))
+            k = next((v for w, v in RANK.items() if re.search(rf"(?<!\w){w}(?!\w)", text)), None)
+            if k is None or not order:
+                continue
+            want = order[k][0] if -len(order) <= k < len(order) else None
+            if want is not None and want.id != chi:
+                out.append((c, want))
+    return out
 
 
 def _quote_lists(text: str) -> str:
@@ -1002,17 +1543,49 @@ def _quote_lists(text: str) -> str:
                   flags=re.M)
 
 
+def _inner_quotes(text: str) -> str:
+    """noi: 'theo ý 'sếp' Hùng.' — an apostrophe inside the owner's sentence is doubled for him, so a quoted word
+    does not break the whole script."""
+    def fix(m):
+        inner = m.group(3).replace("''", "'").replace("'", "''")
+        return f"{m.group(1)}'{inner}'{m.group(4)}"
+    return re.sub(r"^([ \t]*(?:-[ \t]+)?(noi|neo|muc)[ \t]*:[ \t]*)'(.*)'([ \t]*)$", fix, text, flags=re.M)
+
+
+class _Loader(yaml.SafeLoader):
+    """A key written twice ("noi:" twice in one line of the script) is an error, not the last one silently."""
+
+
+def _no_twice(loader, node, deep=False):
+    seen = {}
+    for k, _v in node.value:
+        key = loader.construct_object(k, deep=deep)
+        if key in seen:
+            raise yaml.constructor.ConstructorError(
+                None, None, f"twice:{key}:{seen[key] + 1}", k.start_mark)
+        seen[key] = k.start_mark.line
+    return yaml.SafeLoader.construct_mapping(loader, node, deep)
+
+
+_Loader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+                        lambda loader, node: _no_twice(loader, node, True))
+
+
 def load_script(path) -> dict:
     """The owner's script, with errors in plain Vietnamese and the line they are on."""
     text = tri_nho.read_text(path)
     try:
-        script = yaml.safe_load(_quote_lists(text))
+        script = yaml.load(_inner_quotes(_quote_lists(text)), Loader=_Loader)
     except yaml.YAMLError as exc:
         mark = getattr(exc, "problem_mark", None) or getattr(exc, "context_mark", None)
         where = f"ở dòng {mark.line + 1}" if mark else ""
         prob = str(getattr(exc, "problem", "") or exc)
         line = text.splitlines()[mark.line] if mark and mark.line < len(text.splitlines()) else ""
-        if "\\t" in prob or "\t" in line:
+        if prob.startswith("twice:"):
+            _, key, first = prob.split(":", 2)
+            why = (f"một câu có hai dòng «{key}:» (dòng {first} và dòng này). Mỗi câu chỉ một dòng «{key}:»; muốn thêm "
+                   "câu mới, bắt đầu bằng «- noi:».")
+        elif "\\t" in prob or "\t" in line:
             why = "dòng này có phím Tab. Hãy xóa Tab, chỉ dùng dấu cách để thụt đầu dòng."
         elif "mapping values" in prob:
             why = ("câu có dấu hai chấm (:) nhưng chưa nằm trong dấu nháy. Hãy đặt cả câu sau noi: trong dấu nháy "
@@ -1061,8 +1634,21 @@ def seal(record: dict) -> str:
                                      separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+def stale_places(script: dict, places: dict, en: bool) -> int:
+    """How many framed places no longer show a figure the line says there (a script without "so_cho")."""
+    gone = set()
+    for s in script.get("canh") or []:
+        for c in s.get("cau") or []:
+            chi = str(c.get("chi") or "")
+            own = {value(t, en) for t in _toks(c.get("so_rieng"))}
+            if chi in places and any(value(f.tok, en) not in own and check_at(f, places[chi], en, None) == "missing"
+                                     for f in figures(str(c.get("noi") or ""))):
+                gone.add(chi)
+    return len(gone)
+
+
 def make_record(script: dict, places: dict, page_text: str, meta: dict, en: bool = False,
-                declared: Optional[str] = None) -> dict:
+                declared: Optional[str] = None, earlier: Optional[dict] = None) -> dict:
     """Check every spoken figure against the place it frames and write down where it is. Stops on a figure that
     is not there with the same direction and unit, unless the owner declared it (so_rieng) or confirmed it is the
     report's figure from another place (xac_nhan)."""
@@ -1078,11 +1664,23 @@ def make_record(script: dict, places: dict, page_text: str, meta: dict, en: bool
             conf = c.get("xac_nhan")
             conf_all = conf is True or tri_nho.fold(str(conf or "")) in YES
             confirmed = {value(t, en) for t in _toks(conf)}
-            here = figures(places[chi].text) if chi in places else []
             found = []
+            words = spelled_number(noi)
+            if words:
+                bad.append((noi, words, "là số viết bằng chữ, em không đối chiếu được với báo cáo. Anh viết lại "
+                                        "bằng chữ số, ví dụ «12,6%»"))
+            other = other_row(noi, chi, places)
+            if other and figures(noi):
+                bad.append((noi, figures(noi)[0].tok, f"câu nói về «{other}» nhưng Clicky khoanh dòng "
+                                                       f"«{places[chi].label}». Sửa chi cho đúng dòng"))
+                rows.append({"canh": s.get("muc", ""), "noi": noi, "chi": chi, "so": []})
+                continue
             for f in figures(noi):
                 v = value(f.tok, en)
-                why = check_figure(f, here, en, declared)
+                why = check_at(f, places.get(chi), en, declared)
+                if f.how == "paren?":
+                    why = (f"số trong ngoặc, em chưa rõ là số âm hay tỷ trọng. Anh viết «âm {f.tok}» nếu là số âm, "
+                           f"hoặc «chiếm {f.tok}» nếu là tỷ trọng")
                 entry = {"so": f.tok, "gia_tri": str(v), "dau": f.sign or ""}   # gia_tri: the value as read aloud
                 if v in own:                         # declared by the owner: his, even if the page has it too
                     found.append(dict(entry, nguon="nguoi_soan"))
@@ -1090,6 +1688,11 @@ def make_record(script: dict, places: dict, page_text: str, meta: dict, en: bool
                     found.append(dict(entry, nguon=chi))
                 elif why != "missing":
                     bad.append((noi, f.tok, why))
+                elif v in (earlier or {}).get(chi, ()):       # last time's figure at this very place
+                    now = " ".join(g.tok for g in place_figs(places[chi])) if chi in places else ""
+                    bad.append((noi, f.tok, f"là số cũ ở chỗ «{places[chi].anchor[:40] if chi in places else chi}» "
+                                            f"lúc soạn kịch bản; báo cáo bây giờ ghi {now[:60]} ở đó. Anh sửa câu theo "
+                                            "số mới"))
                 elif v in on_page and (conf_all or v in confirmed):
                     found.append(dict(entry, nguon="bao_cao"))
                 elif v in on_page:
@@ -1160,7 +1763,12 @@ def voice_lines(sentences: list, say: Callable[[str], bytes], en_numbers: bool =
         starts.append(round(t, 3))
         parts = doc_tai_chinh.pieces(sentence) or [sentence]
         for j, piece in enumerate(parts):
-            data = voiced(doc_tai_chinh.doc(piece, en_numbers))
+            said = doc_tai_chinh.doc(piece, en_numbers)
+            odd = doc_tai_chinh.unsaid(said)       # a sign the voice would skip ("≠", "€") can change the meaning
+            if odd:
+                raise PackError(f"Câu «{sentence}» có ký hiệu giọng đọc không đọc được: {' '.join(odd)}. "
+                                "Anh viết ký hiệu đó bằng chữ trong kịch bản (ví dụ «khác», «euro») rồi chạy lại.")
+            data = voiced(said)
             if not data.startswith(b"RIFF"):
                 return b"".join(say(doc_tai_chinh.doc(x, en_numbers)) for x in sentences), None
             pr, fr = _wav(data)
@@ -1207,10 +1815,36 @@ def wav_to_mp3(wav: bytes) -> tuple:
     return wav, secs
 
 
-def for_voice(sentence: str) -> str:
-    """What the voice gets besides the caption: "(9,870)" is a negative figure, "vs" is "so với"."""
-    t = re.sub(r"\((\d[\d.,]*%?)\)", lambda m: m.group(0) if re.fullmatch(r"\d{1,2}", m.group(1)) else
-               "âm " + m.group(1), sentence)
+def _millions(m, en: bool) -> str:
+    """"2.000 tr" is said "2 tỷ", "1.234,5 triệu" is "1 tỷ 234,5 triệu": nobody reads two thousand million."""
+    v = value(m.group(1), en)
+    if v is None or v < 1000:
+        return m.group(1) + " triệu"
+    whole, rest = int(v // 1000), v - (v // 1000) * 1000
+    text = f"{whole} tỷ"
+    if rest:
+        r = format(rest.normalize(), "f")
+        text += " " + (r if en else r.replace(".", ",")) + " triệu"
+    return text
+
+
+def for_voice(sentence: str, en: bool = False) -> str:
+    """What the voice gets besides the caption, read with the same bracket rule as the number lock: "(9,870)" that
+    stands for a negative is "âm 9,870"; "186,4 tỷ (12,6%)" is said "186,4 tỷ, 12,6%"; "vs" is "so với"."""
+    t = sentence
+    for f in reversed(figures(sentence)):
+        m = re.search(r"\s*\(\s*$", t[:f.at])
+        close = re.match(r"\s*%?\s*\)", t[f.at + len(f.tok):])
+        if not m or not close:
+            continue
+        inner = f.tok + ("%" if "%" in close.group(0) else "")
+        tail = t[f.at + len(f.tok) + close.end():]
+        if f.sign == "-" and f.sym:
+            mid = (" " if m.start() else "") + "âm " + inner
+        else:
+            mid = (", " if m.start() else "") + inner + ("," if re.match(r"\s*\w", tail) else "")
+        t = t[:m.start()] + mid + tail
+    t = re.sub(r"(?<![\d.,])(\d[\d.,]*\d|\d)\s*(?:tr\b|triệu)", lambda m: _millions(m, en), t)
     return re.sub(r"(?<!\w)vs\.?(?=\s|$)", "so với", t)
 
 
@@ -1261,13 +1895,20 @@ def _blob(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
 
 
+CSP_META = re.compile(r"<meta[^>]+http-equiv\s*=\s*[\"']?content-security-policy[^>]*>", re.I)
+
+
 def inject(source: str, data: dict, record: dict) -> str:
     layer = Path(__file__).with_name("clicky_html_layer.html").read_text(encoding="utf-8")
     blobs = {"__DATA__": _blob(data), "__BIEN_BAN__": _blob(record)}
     layer = re.sub(r"__DATA__|__BIEN_BAN__", lambda m: blobs[m.group(0)], layer)   # one pass: report text is data
+    source = CSP_META.sub("<!-- Clicky: thẻ Content-Security-Policy được bỏ để Clicky chạy; file gốc giữ nguyên -->",
+                          source)                     # a CSP meta blocks the layer's inline script outright
+    scripts = [(x.start(), x.end()) for x in re.finditer(r"<script\b[\s\S]*?</script\s*>", source, re.I)]
     m = None
-    for m in re.finditer(r"</body\s*>", source, re.I):
-        pass
+    for x in re.finditer(r"</body\s*>", source, re.I):
+        if not any(a < x.start() < b for a, b in scripts):    # "</body>" written inside a script is not the end
+            m = x
     if m is None:
         return source + layer
     return source[:m.start()] + layer + source[m.start():]
@@ -1329,13 +1970,13 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     source = utf8_meta(source)
     root = parse(source)
     tagged, items, rows = tag_targets(source, root)
-    places = make_places(items, rows)
     page_text = root.text() + " " + _labels(root)
+    places = make_places(items, rows)
     if not any(figures(p.text) for p in places.values() if p.kind not in ("title", "section")):
         raise _nothing_to_say(source, items, "nhưng không thấy con số nào ngoài tiêu đề")
-    tables = [r.node.text() for r in rows] + [i.text for i in items if i.kind == "card"]
-    en = number_marks(tables or [page_text])
+    en = number_marks([p.text for p in places.values()] + [r.node.text() for r in rows])   # every place: a note too
     declared = declared_unit(page_text)
+    places = make_places(items, rows, root, en, declared)
     net_chart = bool(NET_CHART.search(source)) and any(i.kind == "chart" for i in items)
     known = set(places)
 
@@ -1353,7 +1994,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     if not any(figures(c["noi"]) for s in draft["canh"] for c in s["cau"]
                if c.get("chi") not in places or places[c["chi"]].kind not in ("title", "section")):
         raise _nothing_to_say(source, items, "nhưng chưa có câu nào có số để trình bày")
-    fresh = dump_script(draft, src_path.name)
+    fresh = dump_script(draft, src_path.name, snapshot(draft, places))
     main_yaml = src_path.with_name(src_path.stem + "_kich_ban_Clicky.yaml")
     nhap = src_path.with_name(src_path.stem + "_kich_ban_nhap.yaml")
     notes = []
@@ -1372,28 +2013,97 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     else:
         main_yaml.write_text(fresh, encoding="utf-8")
         used, script, kind, draft_out = main_yaml, load_script(main_yaml), "nhap", main_yaml
+    if draft.get("chua_ro") and kind == "nhap":
+        notes.append(f"{len(draft['chua_ro'])} đoạn em chưa đưa vào bản nháp vì có số trong ngoặc chưa rõ âm hay tỷ "
+                     "trọng, số viết bằng chữ, hoặc ký hiệu giọng không đọc được, ví dụ "
+                     f"«{draft['chua_ro'][0][:60]}». Anh viết lại câu đó trong kịch bản nếu cần nói.")
+    if draft.get("bo_qua"):
+        notes.append(f"Phần đề xuất có {len(draft['bo_qua']) + 5} ý, bản nháp chỉ đọc 5 ý đầu; chưa đọc: "
+                     + "; ".join(f"«{t[:50]}»" for t in draft["bo_qua"][:3]) + ". Anh thêm vào kịch bản nếu cần.")
     if memo and not any(s.get("tri_nho") for s in script["canh"]):
         script["canh"].insert(1 if script["canh"] else 0, memo)
         notes.append("Đã thêm phần «Câu hỏi lần trước» sau lời chào (anh có thể sửa trong file nháp).")
     moved = reanchor(script, places)
     if moved:
         notes.append(f"{len(moved)} chỗ khoanh đã dời theo chữ vì báo cáo thêm hoặc bớt phần.")
+    old = {str(k).strip(): str(v) for k, v in (script.get("so_cho") or {}).items()} \
+        if isinstance(script.get("so_cho"), dict) else {}
+    now_snap = snapshot(script, places)
+    changed = [k for k in old if k in now_snap and now_snap[k] != old[k]]
+    by_chi = {str(c.get("chi")): c for s in draft["canh"] for c in s["cau"] if c.get("chi")}
+    period_note = ""
+    if kind == "chu" and ((old and len(changed) >= 2) or (not old and stale_places(script, places, en) >= 2)):
+        # a report of the next period saved under the same name: keep what the owner approved, put in the new
+        # figures, and say so first
+        before = used.with_name(used.stem + " (kỳ trước)" + used.suffix)
+        if before.exists():
+            before = used.with_name(used.stem + f" (kỳ trước {dt.datetime.now():%d-%m-%Y %Hh%M})" + used.suffix)
+        if not script_path:
+            used.rename(before)
+        if old:
+            script, flipped = next_period(script, old, places, en)
+        else:
+            script, flipped = json.loads(json.dumps(draft)), []
+        redo = []
+        for c, want in ranking_issues(script, rows, en):     # "Thứ ba" is another row now: this period's line
+            d = by_chi.get(want.id)
+            redo.append((str(c.get("noi")), d["noi"] if d else ""))
+            c.update(noi=d["noi"] if d else "", chi=want.id, neo=d.get("neo", "") if d else "")
+        for c in flipped:                           # its tăng/giảm no longer holds: this period's draft line
+            if any(c["noi"] == new for _, new in redo):
+                continue
+            d = by_chi.get(str(c.get("chi")))
+            redo.append((str(c.get("noi")), d["noi"] if d else ""))
+            c["noi"] = d["noi"] if d else ""
+        script["canh"] = [dict(s, cau=[c for c in s["cau"] if str(c.get("noi") or "").strip()])
+                          for s in script["canh"]]
+        for s in script["canh"]:
+            for c in s["cau"]:
+                if c.get("chi") in places:
+                    c["neo"] = places[c["chi"]].anchor
+        main_yaml.write_text(dump_script(script, src_path.name, snapshot(script, places), draft=False),
+                             encoding="utf-8")
+        script, used, kind = load_script(main_yaml), main_yaml, "ky_moi"
+        period_note = (f"Đây là báo cáo kỳ mới ({len(changed) or 'nhiều'} chỗ đổi số). Em giữ lời anh đã duyệt và thay "
+                       f"số mới vào đúng chỗ; kịch bản cũ giữ ở «{before.name}».")
+        if redo:
+            period_note += (f" {len(redo)} câu đổi nghĩa (tăng thành giảm, hoặc đổi thứ hạng), anh đọc lại: "
+                            + "; ".join(f"«{a[:50]}» → " + (f"«{b[:60]}»" if b else "bỏ") for a, b in redo[:3]) + ".")
+        notes.insert(0, period_note)
+    ranked = ranking_issues(script, rows, en)
+    for c, want in ranked[:3]:
+        d = by_chi.get(want.id)
+        notes.append(f"Thứ hạng đã đổi: câu «{str(c.get('noi'))[:60]}» nhưng bây giờ dòng đứng ở thứ hạng đó là "
+                     f"«{want.label}»." + (f" Câu nháp mới: «{d['noi']}»." if d else ""))
     scenes = scenes_from_script(script, known)
     ok = approved(script)
-    status = ("CHÍNH THỨC: kịch bản đã được duyệt" if ok else "SƠ BỘ: kịch bản nháp chưa duyệt" if kind == "nhap"
+    reset = ok and bool(changed) and kind == "chu"
+    status = ("SƠ BỘ: báo cáo kỳ mới, số mới đã thay vào lời đã duyệt" if kind == "ky_moi"
+              else "SƠ BỘ: báo cáo đổi số sau khi duyệt" if reset
+              else "SƠ BỘ: thứ tự chênh lệch đã đổi" if ok and ranked
+              else "CHÍNH THỨC: kịch bản đã được duyệt" if ok else "SƠ BỘ: kịch bản nháp chưa duyệt" if kind == "nhap"
               else "SƠ BỘ: kịch bản đã sửa nhưng chưa ghi duyệt")
+    if reset:
+        notes.insert(0, f"Báo cáo đã đổi số ở {len(changed)} chỗ sau khi anh duyệt kịch bản ("
+                     + ", ".join(f"«{k[:30]}»" for k in changed[:3]) + "). Em chuyển về SƠ BỘ; anh đọc lại rồi đổi "
+                     "da_duyet thành 'có' lần nữa.")
     now = dt.datetime.now()
     meta = {"owner": owner, "contact": contact, "label": label, "report": src_path.name,
             "report_sha256": hashlib.sha256(raw).hexdigest(), "built": now.strftime("%d/%m/%Y %H:%M"),
             "built_iso": now.isoformat(timespec="seconds"), "trang_thai": status, "dau_so": "en" if en else "vn",
             "title": title or (head_title.group(1).strip() if head_title else "") or _first_caption(root)}
+    earlier = {}                               # the figures each place showed when the script was written
+    for sc in script.get("canh") or []:
+        for c in sc.get("cau") or []:
+            t = old.get(str(c.get("neo") or "").strip())
+            if t and kind == "chu":
+                earlier[str(c.get("chi"))] = {_tok_value(x, en) for x in t.split()} - {None}
     try:                                       # before the voice: a wrong figure costs no waiting
-        record = make_record(script, places, page_text, meta, en, declared)
+        record = make_record(script, places, page_text, meta, en, declared, earlier)
     except PackError as exc:
-        if kind != "chu":
-            raise
-        raise PackError(f"{exc}\nKịch bản đang dùng: {used}. Nếu đây là báo cáo kỳ mới, anh đổi tên file kịch bản cũ "
-                        "để Clicky soạn bản nháp mới.") from None
+        raise PackError(f"{exc}\nKịch bản đang dùng: {used}." + (f"\n{period_note}" if period_note else "")) from None
+    if kind == "chu" and used.suffix.lower() in (".yaml", ".yml") and (reset or now_snap != old):
+        write_snap(used, now_snap, reset=reset)  # the owner reads this report now: these are the figures he sees
     if not any(r["so"] for r in record["cau"] if r["chi"] not in places
                or places[r["chi"]].kind not in ("title", "section")):
         raise PackError("Bài trình bày chưa nói con số nào trong báo cáo. Anh thêm ít nhất một câu có số vào kịch bản "
@@ -1406,7 +2116,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
 
     # warnings the owner should read: a part that says no figure, a chart that needs the internet
     spoken = {r["chi"] for r in record["cau"] if r["so"]}
-    silent = [heading_title(p.anchor[:60]) for sid, p in places.items() if p.kind == "section"
+    silent = [re.sub(r"\s+", " ", p.anchor[:60]).strip().rstrip(".:") for sid, p in places.items() if p.kind == "section"
               and not any(places[c].section == sid and places[c].kind != "section" for c in spoken if c in places)]
     if silent:
         notes.append(f"{len(silent)} phần chưa có câu nào nói số: " + ", ".join(f"«{t}»" for t in silent[:4])
@@ -1415,6 +2125,12 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     if english:
         notes.append(f"{len(english)} câu viết bằng tiếng Anh, giọng tiếng Việt đọc sẽ khó nghe, ví dụ «{english[0][:60]}». "
                      "Anh nên viết lại bằng tiếng Việt trong kịch bản.")
+    if "\ufffd" in source and encoding == "utf-8":
+        notes.append(f"Báo cáo có {source.count(chr(0xFFFD))} ký tự hỏng (lỗi mã hóa khi lưu); em vẫn đọc bằng UTF-8. "
+                     "Anh xem lại chữ quanh dấu � trên bản trình bày.")
+    if re.search(r"<meta[^>]+http-equiv\s*=\s*[\"']?content-security-policy", source, re.I):
+        notes.append("Báo cáo có thẻ Content-Security-Policy chặn mã trong trang: em bỏ thẻ đó trong bản trình bày "
+                     "để Clicky chạy được (file gốc giữ nguyên).")
     if net_chart:
         notes.append("Biểu đồ trong báo cáo tải thư viện vẽ từ Internet: người xem không có mạng sẽ thấy ô trống, nên "
                      "Clicky không nói về biểu đồ.")
@@ -1427,7 +2143,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     def clip(text, sentences=None):
         key = "\n".join(sentences) if sentences else text
         if key not in cache:
-            wav, starts = voice_lines([for_voice(x) for x in (sentences or [text])], say, en)
+            wav, starts = voice_lines([for_voice(x, en) for x in (sentences or [text])], say, en)
             mp3, secs = wav_to_mp3(wav)
             if starts is None:                     # no timings from the voice: spread by length
                 total, starts, pos = sum(len(x) + 1 for x in (sentences or [text])), [], 0
@@ -1485,20 +2201,148 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
                 "bai_hoc": mem.lessons}}
 
 
+def todo_list(rep: dict) -> list:
+    """What the owner should do, most important first: a new period or a changed report, then reading the draft."""
+    todo = rep["canh_bao"][:]
+    if rep["trang_thai"].startswith("SƠ BỘ"):
+        first = 1 if todo and todo[0].startswith(("Đây là báo cáo kỳ mới", "Báo cáo đã đổi số")) else 0
+        todo.insert(first, f"Đọc và sửa lời trong «{Path(rep['kich_ban']).name}», đổi da_duyet thành 'có', rồi kéo "
+                           "thả báo cáo vào Clicky lần nữa.")
+    return todo
+
+
 def summary(rep: dict) -> str:
     """Three plain lines for the console: pass or not, what to look at, where the file is."""
     r = rep["record"]
     first = (f"ĐẠT ({rep['trang_thai']}). {rep['scenes']} phần, khoảng {str(rep['minutes']).replace('.', ',')} phút, "
              f"{r['so']} con số đều khớp với báo cáo.")
-    todo = rep["canh_bao"][:]
-    if rep["trang_thai"].startswith("SƠ BỘ"):
-        todo.append(f"Đọc và sửa lời trong {Path(rep['kich_ban']).name}, đổi da_duyet thành 'có', rồi kéo thả báo cáo "
-                    "vào Clicky lần nữa.")
+    todo = todo_list(rep)
     second = "Cần xem: " + " ".join(todo) if todo else "Không có gì cần sửa."
     return "\n".join([first, second, f"File: {rep['out']}"])
 
 
+def set_aside(out_path: Path, why: str = "bản cũ") -> Optional[Path]:
+    """A failed build must not leave last time's "<tên>_Clicky.html" looking like today's result: it becomes
+    "<tên>_Clicky (bản cũ).html"."""
+    if not out_path.is_file():
+        return None
+    to = out_path.with_name(f"{out_path.stem} ({why}){out_path.suffix}")
+    if to.exists():
+        to = out_path.with_name(f"{out_path.stem} ({why} {dt.datetime.fromtimestamp(out_path.stat().st_mtime):%d-%m-%Y %Hh%M})"
+                                f"{out_path.suffix}")
+    out_path.replace(to)
+    return to
+
+
+def dropped(argv: list, cmdline: Optional[str]) -> list:
+    """The files dropped on the launcher. Explorer leaves a path without spaces unquoted, so "P&L_T10.html" splits
+    at "&" before the .bat sees it; the whole command line (%cmdcmdline%) still has it."""
+    paths = [a for a in argv if a]
+    if cmdline:
+        m = re.search(r"\.bat\"?\s*(.*)$", cmdline, re.I | re.S)
+        if m:
+            rest = m.group(1).strip()
+            rest = rest[:-1] if rest.endswith('"') and rest.count('"') % 2 else rest
+            whole = [a.strip('"') for a in re.findall(r'"[^"]*"|[^\s"]+', rest)]
+            if whole and (not paths or sum(Path(a).exists() for a in whole) > sum(Path(a).exists() for a in paths)):
+                paths = whole
+    return paths
+
+
+def run_drop(argv=None, cmdline: Optional[str] = None, ask=input, opener=None, look: bool = True) -> int:
+    """What the launcher does after the files are dropped: owner, build, re-check, look at the page, open it.
+    The console gets exactly three lines (pass or not, what to look at, which file); everything else goes to
+    "<tên>_nhat_ky.txt" beside the report."""
+    import contextlib
+    import io
+    argv = list(sys.argv[1:] if argv is None else argv)
+    mem = os.environ.get("CLICKY_TRI_NHO") or None
+    paths = dropped(argv, cmdline if cmdline is not None else os.environ.get("CLICKY_CMDLINE"))
+    kb = next((a for a in paths if a.lower().endswith((".yaml", ".yml"))), None)
+    report = next((a for a in paths if not a.lower().endswith((".yaml", ".yml"))), None)
+    if not report:
+        print("KHÔNG ĐẠT: chưa có file báo cáo.\nCần làm: kéo thả file báo cáo .html vào biểu tượng Clicky (có thể "
+              "kéo kèm file kịch bản .yaml đã sửa).\nFile: chưa có.")
+        return 1
+    if not Path(report).is_file():
+        print(f"KHÔNG ĐẠT: không tìm thấy file «{report}».\nCần làm: nếu tên file có dấu & hay ký tự lạ, anh đổi tên "
+              "(chỉ giữ chữ, số, dấu cách, gạch ngang) rồi kéo thả lại.\nFile: chưa có.")
+        return 1
+    src = Path(report)
+    out = src.with_name(src.stem + "_Clicky.html")
+    log_path = src.with_name(src.stem + "_nhat_ky.txt")
+    try:
+        name, mail = tri_nho.ask_owner(mem, ask=ask)
+    except (EOFError, KeyboardInterrupt):
+        print("\nKHÔNG ĐẠT: chưa có tên và email người chịu trách nhiệm báo cáo.\nCần làm: chạy lại và gõ tên, email "
+              f"khi em hỏi (hoặc điền file {tri_nho.folder(mem) / tri_nho.CHU}).\nFile: chưa có.")
+        return 1
+    log, console = io.StringIO(), sys.stdout
+    log.write(f"Clicky {dt.datetime.now():%d/%m/%Y %H:%M}\nBáo cáo: {src}\nTrí nhớ: {tri_nho.folder(mem)}\n"
+              f"Người chịu trách nhiệm: {name} <{mail}>\n\n")
+
+    def finish(lines, code):
+        log.write("\n".join(lines) + "\n")
+        try:
+            log_path.write_text(log.getvalue(), encoding="utf-8")
+        except OSError:
+            pass
+        print("\n".join(lines), file=console)
+        return code
+
+    def fail(why, aside=None):
+        moved = set_aside(out, aside) if aside else None
+        log.write(f"KHÔNG ĐẠT:\n{why}\n" + (f"Bản trình bày lần trước đã đổi tên thành «{moved.name}» để không gửi "
+                                            "nhầm.\n" if moved else ""))
+        parts = why.strip().splitlines()
+        first = parts[0] + (" " + parts[1].strip(" -") if parts[0].endswith(":") and len(parts) > 1 else "")
+        return finish(["KHÔNG ĐẠT: chưa có bản trình bày mới để gửi.",
+                       "Cần sửa: " + first[:300] + (" (chi tiết trong nhật ký)" if len(parts) > 2 or len(first) > 300
+                                                     else ""),
+                       f"Nhật ký: {log_path}"], 1)
+
+    with contextlib.redirect_stdout(log):
+        try:
+            rep = build(str(src), None, name, mail, kb, memory=mem)
+        except PackError as exc:
+            return fail(str(exc), "bản cũ")
+        print(summary(rep))
+        extra = remind(rep)
+        if extra:
+            print(extra)
+        from present import kiem_bien_ban
+        res = kiem_bien_ban.verify(str(out), str(src))
+        if not res["ok"]:
+            return fail("Kiểm lại biên bản: " + "; ".join(res["errors"]), "chưa đạt")
+        print(f"Kiểm lại biên bản: ĐẠT, {res['tong']['so']} con số.")
+        seen = "chưa kiểm hình"
+        if look:
+            from present import kiem_hinh
+            code = kiem_hinh.main([str(out)] + (["--tri-nho", mem] if mem else []))
+            if code == 1:
+                return fail("Kiểm hình: Clicky che số hoặc khoanh sai chỗ trên một số màn hình (xem nhật ký).",
+                            "chưa đạt")
+            seen = "đã kiểm hình" if code == 0 else "chưa kiểm hình được, anh mở file xem vài chỗ khoanh"
+    todo = todo_list(rep)
+    r = rep["record"]
+    lines = [f"ĐẠT ({rep['trang_thai']}): {r['so']} con số khớp báo cáo, {seen}.",
+             "Cần xem: " + (todo[0][:300] + (f" (và {len(todo) - 1} việc nữa trong nhật ký)" if len(todo) > 1 else "")
+                            if todo else "không có gì cần sửa."),
+             f"File: {out}"]
+    code = finish(lines, 0)
+    opener = opener if opener is not None else getattr(os, "startfile", None)
+    if opener:
+        try:
+            opener(str(out))
+        except OSError:
+            pass
+    return code
+
+
 def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["--tu-bat"]:
+        return run_drop(argv[1:])
     ap = argparse.ArgumentParser(description="Gắn Clicky vào báo cáo HTML: trình bày bằng giọng, khoanh đúng chỗ, hỏi–đáp.")
     ap.add_argument("bao_cao", help="file báo cáo .html (không bị sửa)")
     ap.add_argument("--ra", help="file kết quả, mặc định <tên>_Clicky.html")
@@ -1513,8 +2357,11 @@ def main(argv=None) -> int:
     try:
         rep = build(a.bao_cao, a.ra, a.chu or name, a.email or mail, a.kich_ban, a.nhan, memory=a.tri_nho)
     except PackError as exc:
+        src = Path(a.bao_cao)
+        moved = set_aside(Path(a.ra) if a.ra else src.with_name(src.stem + "_Clicky.html"))
         print(f"KHÔNG ĐẠT. {exc}", file=sys.stderr)
-        print("Chưa ghi file trình bày nào. Sửa chỗ trên rồi kéo thả báo cáo vào Clicky lần nữa.", file=sys.stderr)
+        print("Chưa ghi file trình bày mới. Sửa chỗ trên rồi kéo thả báo cáo vào Clicky lần nữa."
+              + (f" Bản lần trước đã đổi tên thành «{moved.name}» để không gửi nhầm." if moved else ""), file=sys.stderr)
         return 2
     print(summary(rep))
     extra = remind(rep)

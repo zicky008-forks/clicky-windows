@@ -1,5 +1,6 @@
 """Company memory: a parked question goes from the reader's e-mail into CAU_TREO.md; the owner's answer is read
 once at the start of the next talk, kept as a ready answer, and recorded with its figures."""
+import datetime
 import json
 import re
 import shutil
@@ -89,7 +90,7 @@ def _data(page):
     return json.loads(re.search(r'<script id="clicky-data" type="application/json">(.*?)</script>', page, re.S).group(1))
 
 
-def test_an_answer_is_read_once_kept_ready_and_recorded(report, tmp_path):
+def test_an_answer_is_read_once_kept_ready_and_recorded(report, tmp_path, monkeypatch):
     d = str(tmp_path / "nho")
     tri_nho.add_questions(["Vì sao khối CNTT tăng 12%?", "Lương bình quân khối bán hàng là bao nhiêu?"],
                           "thang_truoc.html", path=d)
@@ -121,9 +122,15 @@ def test_an_answer_is_read_once_kept_ready_and_recorded(report, tmp_path):
     assert res["ok"], res["errors"]
     assert res["tong"]["tra_loi_san"] == 1 and data["bank"][0]["q"] == "Vì sao khối CNTT tăng 12%?"
     # read once per report: the same report again still reads it, another report does not
-    assert "Đã nói trong: bao cao" in (Path(d) / tri_nho.TREO).read_text(encoding="utf-8")
+    # no month in the file name or title: the month it is built in
+    month = tri_nho.report_period("bao_cao.html")
+    assert re.fullmatch(r"\d\d/20\d\d", month)
+    assert f"Đã nói trong: {month}" in (Path(d) / tri_nho.TREO).read_text(encoding="utf-8")
     Path(rep["out"]).unlink()
     assert clicky_html.build(str(report), voice=voice, memory=d)["tri_nho"]["doc_dau"] == 1
+    # next month, the same file saved under a new name (or the same one): the answer is not read again
+    real = tri_nho.report_period
+    monkeypatch.setattr(tri_nho, "report_period", lambda n, t="", today=None: real(n, t, datetime.date(2099, 1, 1)))
     other = report.with_name("thang_sau.html")
     shutil.copyfile(FIXTURE, other)
     rep2 = clicky_html.build(str(other), voice=voice, memory=d)
@@ -203,3 +210,19 @@ def test_v1_and_final_both_read_last_months_answer_and_a_coincidence_is_not_the_
     nov = tmp_path / "BC nhan su T11.html"
     nov.write_text(html.replace("Tháng 10/2026", "Tháng 11/2026"), encoding="utf-8")
     assert clicky_html.build(str(nov), voice=voice, memory=d)["tri_nho"]["doc_dau"] == 0
+
+
+def test_a_report_without_a_month_is_keyed_on_the_month_it_is_built(tmp_path):
+    when = datetime.date(2026, 12, 3)
+    assert tri_nho.report_period("Bao cao nhan su gia lap.html", "AOP Revised FY2026–2027", when) == "12/2026"
+    assert tri_nho.report_period("Bao cao.html", "", datetime.date(2027, 1, 5)) == "01/2027"
+    assert tri_nho.report_period("BC nhan su T10 v1.html", "", when) == "T10"         # a month named wins
+
+
+def test_notepad_unicode_files_are_read(tmp_path):
+    f = tmp_path / "CAU_TREO.md"
+    f.write_bytes("- Câu: Vì sao khối CNTT tăng?\r\n".encode("utf-16"))
+    assert tri_nho.read_text(f) == "- Câu: Vì sao khối CNTT tăng?\n"
+    f.write_bytes("- Câu: Lương?\n".encode("utf-16-le"))
+    assert tri_nho.read_text(f) == "- Câu: Lương?\n"
+    assert "# AOP = kế hoạch năm" in tri_nho.TEMPLATES[tri_nho.TU_DOC]
