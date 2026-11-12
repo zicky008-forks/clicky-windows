@@ -226,3 +226,63 @@ def test_notepad_unicode_files_are_read(tmp_path):
     f.write_bytes("- Câu: Lương?\n".encode("utf-16-le"))
     assert tri_nho.read_text(f) == "- Câu: Lương?\n"
     assert "# AOP = kế hoạch năm" in tri_nho.TEMPLATES[tri_nho.TU_DOC]
+
+
+def _next_month(html: str) -> str:
+    """The fixture a month later: the CNTT row and the totals moved (FP&A round 3, nm/B)."""
+    html = html.replace("<td>15,8</td><td>17,7</td><td>1,9</td><td>12,0%</td>",
+                        "<td>15,8</td><td>13,9</td><td>-1,9</td><td>-12,0%</td>")
+    html = html.replace("186,4 tỷ", "182,6 tỷ").replace("<td>165,5</td><td>186,4</td><td>20,9</td><td>12,6%</td>",
+                                                       "<td>165,5</td><td>182,6</td><td>17,1</td><td>10,3%</td>")
+    return html
+
+
+def test_next_month_never_rewrites_the_owners_quoted_answer(report, tmp_path, monkeypatch):
+    d = str(tmp_path / "nho")
+    tri_nho.add_questions(["Vì sao khối CNTT tăng?"], "thang_truoc.html", path=d)
+    _answer(d, "Vì sao khối CNTT tăng?", "Khối CNTT từ 15,8 lên 17,7 tỷ, chủ yếu do dự án ERP thêm 1,5 tỷ thuê ngoài.")
+    rep = clicky_html.build(str(report), voice=voice, memory=d)
+    kb = Path(rep["kich_ban"])
+    kb.write_text(kb.read_text(encoding="utf-8").replace("da_duyet: 'chưa'", "da_duyet: 'có'"), encoding="utf-8")
+    assert "lên 17,7 tỷ" in kb.read_text(encoding="utf-8")
+    # next month: same file name, new figures. The quoted answer belongs to last month and is not substituted
+    real = tri_nho.report_period
+    monkeypatch.setattr(tri_nho, "report_period", lambda n, t="", today=None: real(n, t, datetime.date(2099, 1, 1)))
+    report.write_text(_next_month(report.read_text(encoding="utf-8")), encoding="utf-8")
+    rep2 = clicky_html.build(str(report), voice=voice, memory=d)
+    assert rep2["trang_thai"] == "SƠ BỘ: báo cáo kỳ mới, số mới đã thay vào lời đã duyệt"
+    text = Path(rep2["kich_ban"]).read_text(encoding="utf-8")
+    assert "từ 15,8 lên 13,9" not in text
+    # it was read last month, so this month's talk has no "Câu hỏi lần trước" part
+    assert not any(s.get("tri_nho") for s in clicky_html.load_script(rep2["kich_ban"])["canh"])
+    # the ready answer stays on the page, stamped with the month it answered and marked as old
+    bank = json.loads(re.search(r'<script id="clicky-data" type="application/json">(.*?)</script>',
+                                Path(rep2["out"]).read_text(encoding="utf-8"), re.S).group(1))["bank"]
+    month = real("bao_cao.html")
+    assert bank[0]["ky"] == month and bank[0]["cu"] is True
+    assert kiem_bien_ban.verify(rep2["out"], str(report))["ok"]
+
+
+def test_next_period_leaves_quoted_answers_and_own_figures_alone():
+    script = {"canh": [
+        {"muc": "Câu hỏi lần trước", "tri_nho": True,
+         "cau": [{"noi": "Anh Tuấn xin trả lời: Khối CNTT từ 15,8 lên 17,7 tỷ.", "chi": "c9r6", "neo": "Khối CNTT"}]},
+        {"muc": "A", "cau": [{"noi": "Khối CNTT là 17,7 tỷ, thêm 1,5 tỷ thuê ngoài.", "chi": "c9r6", "neo": "Khối CNTT",
+                              "so_rieng": ["1,5"]},
+                             {"noi": "Khối CNTT là 17,7 tỷ.", "chi": "c9r6", "neo": "Khối CNTT"}]}]}
+    place = clicky_html.Place("c9r6", "row", "Khối CNTT 15,8 13,9", "Khối CNTT", None, "Khối CNTT",
+                              cols=[clicky_html.Col("AOP", "15,8", clicky_html.figures("15,8"), "tỷ", "value"),
+                                    clicky_html.Col("AOPR", "13,9", clicky_html.figures("13,9"), "tỷ", "value")])
+    out, _ = clicky_html.next_period(script, {"Khối CNTT": "15,8 17,7"}, {"c9r6": place}, False)
+    said = [c["noi"] for s in out["canh"] for c in s["cau"]]
+    assert said == ["Anh Tuấn xin trả lời: Khối CNTT từ 15,8 lên 17,7 tỷ.",
+                    "Khối CNTT là 17,7 tỷ, thêm 1,5 tỷ thuê ngoài.", "Khối CNTT là 13,9 tỷ."]
+
+
+def test_a_ready_answer_of_this_period_is_not_old(report, tmp_path):
+    d = str(tmp_path / "nho")
+    tri_nho.add_questions(["Vì sao khối CNTT tăng?"], "thang_truoc.html", path=d)
+    _answer(d, "Vì sao khối CNTT tăng?", "Khối CNTT từ 15,8 lên 17,7 tỷ.")
+    rep = clicky_html.build(str(report), voice=voice, memory=d)
+    bank = _data(Path(rep["out"]).read_text(encoding="utf-8"))["bank"]
+    assert bank[0]["cu"] is False and bank[0]["ky"] == tri_nho.report_period("bao_cao.html")

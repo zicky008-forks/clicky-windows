@@ -86,7 +86,8 @@ def test_click_a_figure_to_ask_about_it(page):
     # the answer opens right beside the cell, never on it, and the side panel stays closed
     bub, box = _box(pg, "bub"), cell.bounding_box()
     assert bub["width"] > 0 and _apart(bub, box)
-    assert abs(bub["y"] - (box["y"] + box["height"])) < 60 or abs(bub["y"] + bub["height"] - box["y"]) < 60
+    # close by: right under the cell, or above the table when under it would cover the Tổng row
+    assert abs(bub["y"] - (box["y"] + box["height"])) < 100 or abs(bub["y"] + bub["height"] - box["y"]) < 100
     assert _box(pg, "panel")["width"] == 0
     # nor on the figures the reader compares it with: its own row and its own column
     rows = pg.locator("table[data-clicky] tr")
@@ -207,12 +208,12 @@ def test_basic_questions_are_answered_with_units_and_no_false_notes(page):
     assert a.startswith("Tổng chi phí nhân sự AOPR: 186,4 tỷ") and "Em chưa thấy" not in a
     assert "Em chưa thấy" not in _ask(pg, "Trần đề xuất là gì?")    # «gì» is a question word
     assert _parked(pg) == ""
-    # a question set aside says once, plainly, that it reaches the owner only after "Gửi cho anh Tuấn"
+    # a question set aside: one short line, and it reaches the owner only after "Gửi anh Tuấn"
     a = _ask(pg, "Lương bình quân khối bán hàng?")
-    assert "Em chưa thấy «Lương bình quân»" in a and "Bấm «Gửi cho anh Tuấn» để câu hỏi đến anh Tuấn." in a
-    assert a.count("Em ghi câu này lại") == 1
+    assert "Em chưa thấy «Lương bình quân»" in a and "Bấm «Gửi anh Tuấn» để hỏi anh ấy." in a
+    assert "Em ghi câu này lại" not in a and a.count("Bấm «") == 1
     assert "Lương bình quân khối bán hàng?" in _parked(pg)
-    assert pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('send').textContent") == "Gửi cho anh Tuấn"
+    assert pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('send').textContent") == "Gửi anh Tuấn"
     # "Gửi" only opens the mail app: the questions stay until the reader says the mail went, or copies them
     pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('send').click()")
     pg.wait_for_timeout(200)
@@ -603,11 +604,11 @@ def test_round2_periods_years_and_charts(tmp_path):
     with sync_playwright() as pw:
         browser, pg, errors = _open(pw, out)
         a = _ask(pg, "T2 bao nhiêu?")                                     # an exact period label decides alone
-        assert a.startswith("T2: 104,5 (biểu đồ «Doanh thu thuần theo tháng, tỷ đồng»)") and "muốn hỏi chỗ nào" not in a
+        assert a.startswith("T2: 104,5 tỷ (biểu đồ «Doanh thu thuần theo tháng, tỷ đồng»)") and "muốn hỏi chỗ nào" not in a
         a = _ask(pg, "So với kỳ trước tăng bao nhiêu?")                   # read from the chart's own labels and values
-        assert a.startswith("T3: 111,9; T2: 104,5 (em tính: tăng 7,4, 7,1%).")
+        assert a.startswith("T3: 111,9 tỷ; T2: 104,5 tỷ (em tính: tăng 7,4 tỷ, 7,1%).")
         a = _ask(pg, "Doanh thu tháng 5?")                                # a period the report does not have: parked
-        assert a.startswith("Em chưa thấy số «tháng 5» trong báo cáo") and "Gửi cho anh Tuấn" in a
+        assert a.startswith("Em chưa thấy số «tháng 5» trong báo cáo") and "Gửi anh Tuấn" in a
         assert not errors
         browser.close()
 
@@ -865,3 +866,281 @@ def test_round2_check_says_why_clicky_did_not_start():
     small = kiem_hinh._why_not(Page({"data": True, "json": True, "cells": 25}), [])
     assert "quá lớn" not in small and "dữ liệu nhúng" not in small            # a small page is never called "too big"
     assert "dữ liệu nhúng" in kiem_hinh._why_not(Page({"data": True, "json": False, "cells": 25}), [])
+
+
+# --- round 3: the clicked place decides, units are kept, row names match exactly ---
+
+def _r3(pg, q, sel=None):
+    return " ".join(_ask(pg, q, sel).split())
+
+
+def test_round3_clicked_tile_answers_change_from_its_own_text(page):
+    pg, errors = page
+    kpi = "[data-clicky=%s] .kpi-value"
+    assert _r3(pg, "Tăng bao nhiêu?", kpi % "c2").startswith("Tổng chi phí nhân sự AOPR: 186,4 tỷ, tăng 12,6% so với AOP gốc.")
+    assert _r3(pg, "Tăng bao nhiêu?", kpi % "c3").startswith("Headcount bình quân: 1.248 người, tăng 64 người so với AOP gốc.")
+    assert _r3(pg, "Tăng bao nhiêu?", kpi % "c4").startswith("Chi phí bình quân mỗi người: 149,4 triệu/năm, tăng 6,7%")
+    # a tile with a figure and its base: the change is computed from the two, and said so
+    a = _r3(pg, "Tăng bao nhiêu?", kpi % "c5")
+    assert a.startswith("Tỷ lệ chi phí nhân sự/DTT: 2,52%, AOP gốc 2,40% (em tính: tăng 0,12 điểm phần trăm).") and "em tính từ hai số trên thẻ" in a
+    assert _r3(pg, "Tăng bao nhiêu?", kpi % "c15").startswith("Cần giảm so với AOPR: 8,9 tỷ.")
+    for c in ("c2", "c3", "c4", "c5", "c15"):
+        assert "20,9" not in _r3(pg, "Tăng bao nhiêu?", kpi % c)      # never the table's Tổng row
+    assert _r3(pg, "So với AOP gốc?", kpi % "c3").startswith("Headcount bình quân: 1.248 người, tăng 64 người")
+    assert not errors
+
+
+def test_round3_clicked_row_so_voi_reads_the_same_row(page):
+    pg, errors = page
+    row = "tbody tr:nth-child(%d) td:nth-child(%d)"
+    cases = [((1, 6), "Khối Bán hàng: AOP gốc 78,2 tỷ; AOPR 92,3 tỷ; Chênh lệch 14,1 tỷ; % tăng 18,0%."),
+             ((2, 3), "Khối Marketing: AOP gốc 12,5 tỷ; AOPR 14,0 tỷ; Chênh lệch 1,5 tỷ; % tăng 12,0%."),
+             ((6, 4), "Khối CNTT: AOP gốc 15,8 tỷ; AOPR 17,7 tỷ; Chênh lệch 1,9 tỷ; % tăng 12,0%.")]
+    for (r, c), want in cases:
+        a = _r3(pg, "So với AOP gốc?", row % (r, c))
+        assert a.startswith(want) and "chưa tách" not in a and "186,4" not in a
+    # "người" asked on a row with no change in people: said, parked, never the change in tỷ
+    a = _r3(pg, "Tăng bao nhiêu người?", row % (1, 6))
+    assert a.startswith("Báo cáo chưa có số tăng giảm tính bằng «người» của Khối Bán hàng. Bảng chỉ ghi Headcount AOPR: 712 người.")
+    assert "14,1" not in a and "Gửi anh Tuấn" in a
+    assert not errors
+
+
+def test_round3_doanh_thu_is_never_the_ratio_tile(page):
+    pg, errors = page
+    for q in ("Doanh thu bao nhiêu?", "Doanh thu?", "Doanh thu tăng bao nhiêu?", "Doanh thu 3 năm?"):
+        a = _r3(pg, q)
+        assert "2,52%" not in a and "Tỷ lệ chi phí nhân sự/DTT:" not in a, (q, a)
+        assert "7,2%" in a or "Gửi anh Tuấn" in a, (q, a)
+    assert _r3(pg, "Tỷ lệ chi phí nhân sự trên doanh thu?").startswith("Tỷ lệ chi phí nhân sự/DTT: 2,52%")
+    assert not errors
+
+
+def test_round3_headcount_change_why_aliases_and_abbreviations(page):
+    pg, errors = page
+    assert _r3(pg, "Headcount tăng bao nhiêu?").startswith("Headcount bình quân: 1.248 người, tăng 64 người")
+    a = _r3(pg, "Vì sao headcount tăng?")
+    assert a.startswith("Báo cáo viết: «Khối Bán hàng tăng mạnh nhất, 14,1 tỷ, do kế hoạch tuyển thêm 48 nhân viên")
+    a = _r3(pg, "AOPR là gì?")
+    assert a.startswith("AOPR là viết tắt của «AOP revised», nghĩa là «AOP điều chỉnh».") and "muốn hỏi chỗ nào" not in a
+    assert _r3(pg, "Chi phí Sales?").startswith("Khối Bán hàng: AOP gốc 78,2 tỷ")
+    a = _r3(pg, "Headcount IT?")
+    assert a.startswith("Khối CNTT, Headcount AOPR: 60 người.") and "«IT»" not in a
+    assert _r3(pg, "Chi phí bình quân mỗi người?").startswith("Chi phí bình quân mỗi người: 149,4 triệu/năm")
+    assert not errors
+
+
+def test_round3_chart_answers_carry_a_unit(built, tmp_path):
+    stub = """window.Chart = {getChart: c => c.id !== 'trendChart' ? null : {data: {labels: ['FY2025', 'FY2026', 'FY2027'],
+      datasets: [{label: 'Chi phí', data: [150.2, 165.5, 186.4]}]}, options: {scales: {y: {title: {display: true, text: 'Tỷ đồng'}}}}}};"""
+    nounit = stub.replace("'Tỷ đồng'", "'Chỉ số'").replace("label: 'Chi phí'", "label: 'Điểm'")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        out = _variant(built, tmp_path, "bieu_do.html", script=stub)
+        browser, pg, errors = _open(pw, out)
+        assert _r3(pg, "FY2026 bao nhiêu?").startswith("FY2026: 165,5 tỷ (biểu đồ")
+        assert _r3(pg, "So với năm trước?").startswith("FY2027: 186,4 tỷ; FY2026: 165,5 tỷ (em tính: tăng 20,9 tỷ, 12,6%).")
+        browser.close()
+        out = _variant(built, tmp_path, "bieu_do2.html", script=nounit)
+        browser, pg, errors = _open(pw, out)
+        assert _r3(pg, "FY2026 bao nhiêu?").startswith("FY2026: 165,5, đơn vị theo biểu đồ (biểu đồ")
+        browser.close()
+
+
+N3 = """<html><head><meta charset="utf-8"><title>Kết quả tháng 10 (SỐ GIẢ LẬP)</title></head><body>
+<h1>Kết quả kinh doanh tháng 10 (SỐ GIẢ LẬP)</h1><p>Đơn vị: tỷ đồng.</p><p>Doanh thu đạt 520,4 tỷ, vượt kế hoạch 4,1%.</p>
+<table><tr><th>Chỉ tiêu</th><th>Kế hoạch</th><th>Thực hiện</th></tr><tr><td>Doanh thu</td><td>500,0</td><td>520,4</td></tr>
+<tr><td>Chi phí lãi vay</td><td>12,0</td><td>13,5</td></tr><tr><td>Lãi vay</td><td>11,0</td><td>12,5</td></tr>
+<tr><td>Lãi</td><td>40,0</td><td>44,1</td></tr><tr><td>Lãi gộp</td><td>200,0</td><td>210,2</td></tr></table>
+<h2>Nhà máy</h2><table><tr><th>Nhà máy</th><th>Kế hoạch</th><th>Thực hiện</th></tr>""" + "".join(
+    f"<tr><td>Nhà máy {i}</td><td>{10 + i},{i % 10}</td><td>{12 + i},{(i * 3) % 10}</td></tr>" for i in range(1, 16)) + """</table>
+<h2>Chi nhánh</h2><table><tr><th>Chỉ tiêu</th><th>T1</th><th>T3</th></tr>""" + "".join(
+    f"<tr><td>Chỉ tiêu {a} CN{b}</td><td>{a}{b},1</td><td>{a}{b},3</td></tr>" for a in (5, 12) for b in (1, 5, 12)) + """</table>
+<p>Tổng sản lượng đạt 412,5 tỷ, vượt kế hoạch 3,2%.</p></body></html>"""
+
+DUPES = """<html><head><meta charset="utf-8"><title>Trùng nhãn</title></head><body><h1>Chi phí nhân sự 2 công ty (SỐ GIẢ LẬP)</h1>""" + "".join(
+    f"""<h2>{n}. Công ty {c}</h2><table><tr><th>Khoản mục</th><th>AOP</th><th>Thực hiện</th></tr>
+<tr><td><b>Khối Bán hàng</b></td><td>1{n},1</td><td>1{n},4</td></tr><tr><td>Lương</td><td>{n}5,2</td><td>{n}6,0</td></tr><tr><td>Thưởng</td><td>{n},0</td><td>{n},5</td></tr>
+<tr><td><b>Khối Văn phòng</b></td><td>{n}8,3</td><td>{n}8,9</td></tr><tr><td>Lương</td><td>{n}4,7</td><td>{n}4,9</td></tr><tr><td>Thưởng</td><td>{n}1,1</td><td>{n}1,3</td></tr>
+<tr><td>Tổng</td><td>{n}18,4</td><td>{n}21,3</td></tr></table>""" for n, c in ((1, "A"), (2, "B"))) + "</body></html>"
+
+
+def test_round3_row_names_with_short_words_and_numbers(tmp_path):
+    out = _build_html(tmp_path, N3, "nha_may")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, out)
+        assert _r3(pg, "Lãi vay thực hiện").startswith("Lãi vay, Thực hiện: 12,5")
+        assert _r3(pg, "Lãi thực hiện").startswith("Lãi, Thực hiện: 44,1")
+        assert _r3(pg, "lai thuc hien").startswith("Lãi, Thực hiện: 44,1")
+        assert _r3(pg, "Chi phí lãi vay thực hiện").startswith("Chi phí lãi vay, Thực hiện: 13,5")
+        assert not _r3(pg, "Vì sao lại tăng?").startswith("Lãi")            # "lại" is not "Lãi"
+        assert _r3(pg, "Nhà máy 12 thực hiện").startswith("Nhà máy 12, Thực hiện: 24,6")
+        assert _r3(pg, "Nhà máy 2 kế hoạch").startswith("Nhà máy 2, Kế hoạch: 12,2")
+        assert _r3(pg, "Chỉ tiêu 5 CN12 T3").startswith("Chỉ tiêu 5 CN12, T3: 512,3")
+        assert _r3(pg, "Chỉ tiêu 12 CN5 T3").startswith("Chỉ tiêu 12 CN5, T3: 125,3")
+        assert not errors
+        browser.close()
+
+
+def test_round3_same_label_chips_name_their_parent_row_and_company_letters_match(tmp_path):
+    out = _build_html(tmp_path, DUPES, "trung")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, out)
+        chips = lambda: pg.evaluate(f"[...{SR}.querySelectorAll('#a .chips button')].map(b => b.textContent)")
+        _ask(pg, "Lương thực hiện")
+        c = chips()
+        assert len(c) == 4 and len(set(c)) == 4, c
+        assert any("Khối Bán hàng" in x and "Công ty A" in x for x in c) and any("Khối Văn phòng" in x and "Công ty B" in x for x in c)
+        pick = lambda i: (pg.evaluate(f"{SR}.querySelectorAll('#a .chips button')[{i}].click()"), " ".join(_answer(pg, "a").split()))[1]
+        _ask(pg, "Lương thực hiện công ty B")                              # "công ty B": only the second table's rows
+        assert len(chips()) == 2 and "26,0" in pick(0)
+        _ask(pg, "Lương thực hiện công ty B")
+        assert "24,9" in pick(1)
+        _ask(pg, "Thưởng AOP công ty A")
+        assert len(chips()) == 2 and "1,0" in pick(0)
+        assert not errors
+        browser.close()
+
+
+def test_round3_plain_same_labels_get_the_row_above_them(tmp_path):
+    out = _build_html(tmp_path, DUPES.replace("<b>", "").replace("</b>", ""), "trung2")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, out)
+        _ask(pg, "Lương thực hiện")
+        c = pg.evaluate(f"[...{SR}.querySelectorAll('#a .chips button')].map(b => b.textContent)")
+        assert len(c) == 4 and len(set(c)) == 4, c
+        assert "Lương · Khối Văn phòng · Thực hiện · 2. Công ty B" in c, c
+        assert not errors
+        browser.close()
+
+
+DENSE = """<html><head><meta charset="utf-8"><title>P&amp;L 12 tháng (SỐ GIẢ LẬP)</title><style>td,th{padding:3px 6px;font-size:13px;text-align:right}</style></head><body>
+<h1>Báo cáo kết quả kinh doanh 12 tháng (SỐ GIẢ LẬP, triệu đồng)</h1><h2>Bảng P&amp;L theo tháng</h2><table><tr><th>Chỉ tiêu</th>""" + "".join(
+    f"<th>T{m}</th>" for m in range(1, 13)) + "<th>Cả năm</th></tr>" + "".join(
+    f"<tr><td>{n}</td>" + "".join(f"<td>{(i * 37 + m * 11) % 900 + 100},{m % 10}</td>" for m in range(1, 13)) + f"<td>{5000 + i},0</td></tr>"
+    for i, n in enumerate(["Doanh thu bán hàng và cung cấp dịch vụ", "Giảm trừ doanh thu", "Doanh thu thuần", "Giá vốn hàng bán",
+                           "Lợi nhuận gộp", "Chi phí bán hàng", "Chi phí quản lý doanh nghiệp", "Lợi nhuận thuần"])) + "</table></body></html>"
+
+
+def test_round3_dense_lasso_table_never_cuts_a_figure(tmp_path):
+    out = _build_html(tmp_path, DENSE, "day")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, out)
+        rows = pg.locator("table tr")
+        a, c = rows.nth(1).locator("td").nth(1).bounding_box(), rows.nth(6).locator("td").last.bounding_box()
+        pg.evaluate(f"{SR}.getElementById('lassob').click()")
+        pg.mouse.move(a["x"] - 4, a["y"] - 4)
+        pg.mouse.down()
+        pg.mouse.move(c["x"] + c["width"] + 4, c["y"] + c["height"] + 4, steps=6)
+        pg.mouse.up()
+        pg.wait_for_timeout(700)
+        cut = f"[...{SR}.querySelectorAll('table.mini td:not(:first-child), table.mini th')].filter(x => x.scrollWidth > x.clientWidth + 1).length"
+        res = pg.evaluate(f"""(() => {{ const R = {SR}, t = R.querySelector('table.mini'), b = R.getElementById('bub').getBoundingClientRect();
+          const lab = getComputedStyle(t.rows[1].cells[0]);
+          return {{w: b.width, cols: t.rows[0].cells.length, chip: [...R.querySelectorAll('#ba .chips button')].map(x => x.textContent),
+                  ell: lab.textOverflow, nowrap: lab.whiteSpace, title: t.rows[1].cells[0].title}}; }})()""")
+        assert 500 <= res["w"] <= 560 and pg.evaluate(cut) == 0, res
+        assert res["ell"] == "ellipsis" and res["nowrap"] == "nowrap" and res["title"].startswith("Doanh thu bán hàng và cung cấp")
+        more = [x for x in res["chip"] if x.endswith("cột")]
+        assert len(more) == 1 and int(more[0][1:].split()[0]) == 14 - res["cols"]   # "+N cột": the columns that did not fit
+        pg.evaluate(f"[...{SR}.querySelectorAll('#ba .chips button')].find(b => /cột/.test(b.textContent)).click()")
+        pg.wait_for_timeout(200)
+        assert pg.evaluate(f"{SR}.querySelector('table.mini').rows[0].cells.length") == 14 and pg.evaluate(cut) == 0
+        assert pg.evaluate(f"getComputedStyle({SR}.querySelector('.mtw')).overflowX") == "auto"   # side by side, in a scroller
+        assert not errors
+        browser.close()
+
+
+def test_round3_short_screen_bubble_is_a_sheet_and_the_bar_is_one_row(built):
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, built, 911, 512)
+        bar = pg.evaluate(f"{SR}.getElementById('bar').getBoundingClientRect().height")
+        assert bar < 70, bar                                                  # one row at 911px
+        td = pg.locator("table[data-clicky] tbody tr").nth(2).locator("td").nth(3)
+        td.click()
+        pg.wait_for_timeout(900)
+        res = pg.evaluate(f"""(() => {{ const R = {SR}, b = R.getElementById('bub').getBoundingClientRect(), bar = R.getElementById('bar').getBoundingClientRect(),
+          f = R.getElementById('bf').getBoundingClientRect(), bin = R.getElementById('bin').getBoundingClientRect();
+          return {{cls: R.getElementById('bub').className, b: [b.left, b.top, b.right, b.bottom], bar: bar.top, f: [f.top, f.bottom], bin: [bin.top, bin.bottom],
+                  pad: getComputedStyle(R.getElementById('bin')).paddingTop, off: getComputedStyle(R.getElementById('bq')).outlineOffset}}; }})()""")
+        box = td.bounding_box()
+        assert "sheet" in res["cls"] and res["b"][3] <= res["bar"] and box["y"] + box["height"] <= res["b"][1], res   # the place stays above the sheet
+        assert res["bin"][0] <= res["f"][0] and res["f"][1] <= res["bin"][1] + 4      # the question box is always in view
+        assert res["pad"] == "3px" and res["off"] == "-2px"                             # the focus ring is never cut
+        assert not errors
+        browser.close()
+
+
+def test_round3_play_button_keeps_one_width(built):
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, built)
+        pg.add_script_tag(content=STUB_AUDIO)
+        x0 = pg.evaluate(f"{SR}.getElementById('prev').getBoundingClientRect().left")
+        pg.evaluate(f"{SR}.getElementById('play').click()")
+        pg.wait_for_timeout(300)
+        x1 = pg.evaluate(f"{SR}.getElementById('prev').getBoundingClientRect().left")
+        pg.evaluate(f"{SR}.getElementById('play').click()")
+        pg.wait_for_timeout(300)
+        x2 = pg.evaluate(f"{SR}.getElementById('prev').getBoundingClientRect().left")
+        assert x0 == x1 == x2, (x0, x1, x2)                                  # ⏮ ⏭ never move under the finger
+        browser.close()
+
+
+def test_round3_phone_answer_brings_the_far_right_figure_on_screen(built):
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, built, 390, 844, is_mobile=True, has_touch=True)
+        pg.evaluate(f"{SR}.getElementById('askb').click()")
+        pg.evaluate(f"(() => {{ {SR}.getElementById('q').value = 'Headcount khối CNTT?'; {SR}.getElementById('f').requestSubmit(); }})()")
+        pg.wait_for_timeout(1200)
+        res = pg.evaluate("""(() => { const v = visualViewport, td = [...document.querySelectorAll('tbody tr')].find(r => /CNTT/.test(r.textContent)).lastElementChild;
+          const r = td.getBoundingClientRect(); return [r.left, r.right, v.offsetLeft, v.offsetLeft + v.width]; })()""")
+        assert res[0] >= res[2] - 1 and res[1] <= res[3] + 1, res
+        lasso = pg.evaluate(f"(() => {{ const b = {SR}.getElementById('lassob'); return [b.scrollWidth, b.clientWidth, b.getBoundingClientRect().width]; }})()")
+        assert lasso[0] <= lasso[1] + 1 and lasso[2] >= 64, lasso              # "⬚ Khoanh" is never cut
+        assert not errors
+        browser.close()
+
+
+def test_round3_leader_line_halo_and_panel_fade(page):
+    pg, errors = page
+    assert pg.evaluate("document.querySelector('[data-clicky-lead]').children.length") == 3
+    assert pg.evaluate("document.querySelector('[data-clicky-lead]').firstElementChild.getAttribute('stroke-width')") == "7"
+    pg.evaluate(f"{SR}.getElementById('askb').click()")
+    for q in ("Lương bình quân?", "Thưởng Tết?", "Chi phí đào tạo?", "Phụ cấp xăng xe?", "Bảo hiểm sức khỏe?"):
+        _ask(pg, q)
+    pg.evaluate(f"(() => {{ const p = {SR}.getElementById('panel'); p.style.maxHeight = '220px'; p.scrollTop = 0; p.dispatchEvent(new Event('scroll')); }})()")
+    assert pg.evaluate(f"{SR}.getElementById('panel').classList.contains('more')")       # more below: a soft fade
+    pg.evaluate(f"(() => {{ const p = {SR}.getElementById('panel'); p.scrollTop = p.scrollHeight; p.dispatchEvent(new Event('scroll')); }})()")
+    assert not pg.evaluate(f"{SR}.getElementById('panel').classList.contains('more')")
+    assert not errors
+
+
+def test_round3_ready_answer_from_an_older_period_says_its_figures_moved(built, tmp_path):
+    import json
+    import re
+    src = built.read_text(encoding="utf-8")
+    m = re.search(r'(<script id="clicky-data" type="application/json">)(.*?)(</script>)', src, re.S)
+    data = json.loads(m.group(2))
+    entry = {"q": "Vì sao khối CNTT tăng?", "a": "Do dự án ERP.", "ngay": "05/11/2026", "mime": "audio/mpeg", "audio": ""}
+    data["bank"] = [dict(entry, ky="10/2026", cu=True), dict(entry, q="Vì sao khối Marketing tăng?", a="Do chiến dịch Tết.", cu=False, ky="11/2026")]
+    out = tmp_path / "cu.html"
+    out.write_text(src[:m.start(2)] + json.dumps(data, ensure_ascii=False).replace("</", "<\\/") + src[m.end(2):], encoding="utf-8")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, out)
+        a = " ".join(_ask(pg, "Vì sao khối CNTT tăng?").split())
+        assert "Do dự án ERP." in a and "anh Tuấn trả lời kỳ 10/2026; số hiện tại đã khác." in a
+        a = " ".join(_ask(pg, "Vì sao khối Marketing tăng?").split())
+        assert "Do chiến dịch Tết." in a and "số hiện tại đã khác" not in a
+        cau = pg.evaluate("window.__clickyThuCau(['Vì sao khối CNTT tăng?', 'Vì sao khối Marketing tăng?'])")
+        assert not cau[0]["ok"] and cau[0]["partial"] and "10/2026" in cau[0]["label"]     # the boss check shows "~"
+        assert cau[1]["ok"] and not cau[1]["partial"]
+        assert not errors
+        browser.close()

@@ -11,8 +11,9 @@ and a small one (911x512, a laptop at 150% zoom):
 - the answer bubble never covers its own place and stays fully on the screen;
 - a lassoed region (the first three rows of a table) is still framed round its cells after the page scrolls;
 - Clicky's bar is really on screen and on top (elementFromPoint), also after the report's own scripts ran.
-On a phone screen (390x844) the bar, the caption, the question panel and a bubble stay on the screen, and every
-button of the bar is at least 44px.
+On a phone screen (390x844) the bar, the caption, the question panel and a bubble stay on the screen, every
+button of the bar is at least 44px with its words not cut, and a figure at the far right of each table, once answered
+from the panel, is brought inside the screen the reader sees (visualViewport).
 If Clicky's layer never starts on the page, the check says KHÔNG ĐẠT and why: a script error, embedded data that
 broke the page, or a report so large that Clicky did not start in time.
 

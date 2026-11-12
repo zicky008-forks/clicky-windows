@@ -28,6 +28,11 @@ function textOf(e) {   // textContent with a space where a line or a block break
 }
 function cellText(c) { return c ? textOf(c).replace(/\s+/g, " ").trim() : ""; }
 const OWNER = M.owner || "anh chị phụ trách";
+const OWNER_HE = (/^(anh|chị)\s+(?!chị\b)\S/i.exec(OWNER) || [])[1] ? OWNER.split(/\s+/)[0].toLowerCase() + " ấy" : OWNER;   // "anh Tuấn" → "anh ấy"
+const SEND = "Gửi " + OWNER;
+const playHtml = (ic, t) => '<span aria-hidden="true">' + ic + '</span><span class="lbl"> ' + esc(t) + "</span>";
+let playKey = "";
+const PLAY_T = ["Tạm dừng", "Nghe lại từ đầu", "Tiếp tục trình bày", "Nghe tiếp", "Nghe trình bày · " + String(M.minutes || 0).replace(".", ",") + " phút"];
 const H1 = document.querySelector("h1");
 const ascii = t => !/[^\x00-\x7f]/.test(t);
 let TITLE = M.title || M.report_title || (document.title || "").trim() || cellText(H1) || M.report || "báo cáo";
@@ -90,11 +95,19 @@ details.bb{color:var(--muted);font-size:12.5px}details.bb summary{cursor:pointer
 .ev span{font-size:12px;border-radius:99px;padding:1px 8px;background:var(--soft);color:var(--fg);white-space:nowrap}
 .ev span.k{background:var(--soft2)}.ev span.o{background:var(--warnsoft)}
 .bubble{position:fixed;z-index:2147483001;width:350px;max-width:calc(100vw - 24px);background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:12px;box-shadow:var(--sh);padding:10px 4px 12px 12px;font-size:15px}
-.bin{display:flex;flex-direction:column;gap:8px;overflow:auto;padding-right:8px;overscroll-behavior:contain}
+.bin{display:flex;flex-direction:column;gap:8px;overflow:auto;padding:3px 8px 3px 3px;overscroll-behavior:contain}
+.bin input:focus-visible,.bin button:focus-visible{outline-offset:-2px}
+.bin>form.ask{position:sticky;bottom:-3px;background:var(--bg);padding:6px 0 3px;margin-top:auto;box-shadow:0 -8px 8px -8px rgba(0,0,0,.25)}
+.fade{position:sticky;bottom:-14px;flex:0 0 28px;margin:-28px -14px -14px;background:linear-gradient(rgba(127,127,127,0),var(--bg) 85%);pointer-events:none;display:none}
+.panel.more .fade{display:block}
+.bubble.sheet{border-radius:12px 12px 0 0}
 .bubble>.x{position:absolute;top:2px;right:2px;z-index:1}
+.mtw{overflow-x:auto;max-width:100%}
+.bubble.wide{width:min(560px,calc(100vw - 24px))}
+table.mini td:first-child{min-width:9em;max-width:14em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 table.mini{border-collapse:collapse;font-size:13.5px;margin-top:6px;width:100%}
 table.mini th,table.mini td{padding:2px 5px;border-bottom:1px solid var(--soft2);text-align:right;white-space:nowrap}table.mini th{white-space:normal;vertical-align:bottom}
-table.mini th:first-child,table.mini td:first-child{text-align:left;white-space:normal}
+table.mini th:first-child,table.mini td:first-child{text-align:left}
 table.mini caption{caption-side:bottom;text-align:left;color:var(--muted);font-size:12.5px;padding-top:3px}
 .bubble .ans{margin-right:30px}
 .bubble ul{margin:4px 0 0;padding-left:18px}.bubble li{margin:2px 0}
@@ -117,11 +130,14 @@ button.on{background:var(--warnsoft);border-color:var(--warn)}
 :host([data-small]) .badge{order:-3}:host([data-small]) .badge~.cap{flex-basis:60%}
 :host([data-small]) .brk{display:block;order:-1;flex:0 0 100%;height:0}
 :host([data-small]) .who,:host([data-small]) .lbl,:host([data-small]) .ev{display:none}
-:host([data-mid]) .who>span,:host([data-mid]) #lassob .lbl{display:none}:host([data-mid]) #lassob .sl{display:inline}:host([data-mid]) .cap{flex-basis:240px}
+:host([data-mid]) .who,:host([data-mid]) .cap small,:host([data-mid]) .ev,:host([data-mid]) #lassob .lbl{display:none}:host([data-mid]) #lassob .sl{display:inline}:host([data-mid]) .cap{flex-basis:150px}
+.cap .sh{display:none}:host([data-mid]) .cap .sh{display:inline}:host([data-mid]) .cap .lg{display:none}
+:host([data-mid]) .cap>span:not(.lg):not(.ev){display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 :host([data-small]) .sl{display:inline;font-size:13px}
 :host([data-small]) .bar button{min-height:44px;min-width:44px;padding:4px 8px;flex:1 1 0}
 :host([data-small]) .bar .badge{flex:0 0 auto}
 :host([data-small]) #play{min-width:44px;text-align:center}
+:host([data-small]) .bar #lassob{min-width:80px;padding:4px 6px;flex-grow:1.4;white-space:nowrap}
 :host([data-small]) .bubble{width:auto}
 </style>
 <div class="panel hidden" id="panel" role="dialog" aria-label="Hỏi em về báo cáo">
@@ -129,8 +145,9 @@ button.on{background:var(--warnsoft);border-color:var(--warn)}
   <form class="ask" id="f"><input id="q" placeholder="Ví dụ: headcount khối bán hàng?" autocomplete="off" aria-label="Câu hỏi"><button class="p">Hỏi</button></form>
   <div class="hint">Em tìm câu trả lời trong chính báo cáo này và khoanh đúng chỗ. Câu chưa có trong báo cáo, em ghi lại để ${esc(OWNER)} trả lời.</div>
   <div id="a" class="hidden" aria-live="polite"></div>
-  <div id="tb" class="hidden"><h3>Câu chờ ${esc(OWNER)} trả lời</h3><ol id="tl"></ol><button class="p" id="send">Gửi cho ${esc(OWNER)}</button><div class="hint" id="sent"></div></div>
+  <div id="tb" class="hidden"><h3>Câu chờ ${esc(OWNER)} trả lời</h3><ol id="tl"></ol><button class="p" id="send">${esc(SEND)}</button><div class="hint" id="sent"></div></div>
   ${RECORD}
+  <div class="fade" aria-hidden="true"></div>
 </div>
 <div class="bubble hidden" id="bub" role="dialog" aria-label="Hỏi em tại chỗ này">
   <div class="tail t" id="tail"></div>
@@ -152,7 +169,8 @@ button.on{background:var(--warnsoft);border-color:var(--warn)}
   <div class="cap" id="cap" aria-live="polite"></div><span class="brk"></span>
 </div>`;
 const $ = id => root.getElementById(id);
-const INTRO = "<span>Em là Clicky, trợ lý AI của " + esc(OWNER) + ". Bấm ▶ để nghe trình bày. Bấm vào bất kỳ con số hay đoạn nào trên báo cáo, hoặc ⬚ Khoanh vùng, để hỏi ngay tại đó.</span>";
+const INTRO = "<span class=\"lg\">Em là Clicky, trợ lý AI của " + esc(OWNER) + ". Bấm ▶ để nghe trình bày. Bấm vào bất kỳ con số hay đoạn nào trên báo cáo, hoặc ⬚ Khoanh vùng, để hỏi ngay tại đó.</span>" +
+  "<span class=\"sh\">Bấm ▶ để nghe, bấm vào số để hỏi em.</span>";   // the short one on a narrow bar
 const audio = new Audio();
 let idx = 0, playing = false, shown = new Set(), aside = false, started = false, ended = false, resumeAt = null, frames = [];
 function hit(a, b) { return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom; }
@@ -168,6 +186,7 @@ function fitBar() {
   Object.assign(b.style, {left: (v.x + g) + "px", width: (v.w - 2 * g) + "px", right: "auto"});
   if (v.y || Math.abs(v.h - innerHeight) > 1) { b.style.bottom = "auto"; b.style.top = (v.y + v.h - b.offsetHeight - g) + "px"; }
   else { b.style.top = ""; b.style.bottom = g + "px"; }
+  playFit();
 }
 
 // --- frames, the soft dim and the nón lá pointer: fixed to the screen, moved on every scroll (any scroll box) ---
@@ -187,8 +206,8 @@ layer.appendChild(dim);
 const lead = document.createElementNS(NS, "svg");   // a thin leader line when the bubble cannot sit right next to its place
 lead.setAttribute("data-clicky-lead", "1");
 lead.style.cssText = "position:fixed;left:0;top:0;width:1px;height:1px;overflow:visible;display:none";
-lead.innerHTML = '<line stroke-width="2" stroke-dasharray="5 3"/><circle r="4"/>';
-lead.firstChild.setAttribute("stroke", FRAME); lead.lastChild.setAttribute("fill", FRAME);
+lead.innerHTML = '<line stroke-width="7" stroke-linecap="round" opacity=".9"/><line stroke-width="2" stroke-dasharray="5 3"/><circle r="4"/>';   // a halo in the page's colour under the dashes
+lead.firstChild.setAttribute("stroke", `rgb(${BG.join(",")})`); lead.children[1].setAttribute("stroke", FRAME); lead.lastChild.setAttribute("fill", FRAME);
 layer.appendChild(lead);
 const tail = document.createElement("div");   // blank space after the report, so its last lines can scroll above the bar
 tail.setAttribute("aria-hidden", "true"); tail.setAttribute("data-clicky-layer", "1"); tail.style.cssText = "height:55vh";
@@ -357,6 +376,12 @@ function redraw() {   // frames follow their places; the dim leaves holes for th
   if (hat._t && +hat.style.opacity > 0) { const r = rect(hat._t); hat.style.left = (r.left + hat._dx) + "px"; hat.style.top = (r.top + hat._dy) + "px"; }
 }
 function guards(t) {   // what gives a figure its meaning: its row label and column header (strong), other labels (soft)
+  if (t && t === regionEl) {   // a lassoed area: the labels of every row it took
+    const strong = [], done = new Set();
+    for (const c of regionEl._cells || []) { const m = c.isConnected && modelOf(c), pos = m && posOf(m, c);
+      if (pos && pos.row && !done.has(pos.row)) { done.add(pos.row); pos.row.labelCells.forEach(l => { if (!l.contains(c)) strong.push(rect(l)); }); } }
+    return {strong, soft: [], els: []};
+  }
   const m = t && modelOf(t); if (!m) return {strong: [], soft: [], els: []};
   const pos = posOf(m, t), strong = [], els = [], soft = [], v = vp();
   const near = c => { const q = rect(c); if (q.bottom > v.y - 200 && q.top < v.y + v.h + 200) soft.push(q); };
@@ -366,6 +391,14 @@ function guards(t) {   // what gives a figure its meaning: its row label and col
   if (pos && pos.row) pos.row.labelCells.forEach(c => { if (own(c)) { strong.push(rect(c)); els.push(c); } });
   if (pos && pos.c >= 0) (m.headAt[pos.c] || []).forEach(c => { if (own(c)) { strong.push(rect(c)); els.push(c); } });
   return {strong, soft, els};
+}
+function totalRects(zone) {   // "Tổng", bold and table-foot rows: a bubble never sits on them
+  const out = [];
+  for (const m of tables()) { if (!hit(rect(m.el), zone)) continue; const big = m.rows.length > 300;
+    for (const r of m.rows) { const q = r.r && r.r.getBoundingClientRect ? r.r.getBoundingClientRect() : null; if (!q || !hit(q, zone)) continue;
+      const lc = r.labelCells[0], bold = !big && lc && +getComputedStyle(lc).fontWeight >= 600;
+      if (r.total || bold || (r.r.closest && r.r.closest("tfoot"))) out.push(q); } }
+  return out;
 }
 function labelRects(zone) {   // row labels and column headers of every table near a box, not only the place's own table
   const out = [];
@@ -408,14 +441,30 @@ function placePanel() {   // above the bar, on the side chosen for the framed pl
   const room = small ? v.h * 0.55 : bar.top - v.y - 20, cap = p._cap || Infinity;
   p.style.maxHeight = Math.max(120, Math.min(room, small ? room : v.h * 0.7, cap)) + "px";
   p.style.top = (small || p.classList.contains("top") ? v.y + 8 : bar.top - 12 - p.offsetHeight) + "px";
+  panelMore();
 }
+function panelMore() { const p = $("panel"); p.classList.toggle("more", p.scrollHeight - p.clientHeight - p.scrollTop > 6); }   // more below: a soft fade says so
+$("panel").addEventListener("scroll", panelMore, {passive: true});
 let hsave = null;   // where the reader had scrolled sideways before Clicky moved the page; given back when the answer closes
-function sideways(e, dx) {
+function sideways(e, dx, t) {
   if (!hsave) hsave = [];
-  if (!hsave.some(h => h.e === e)) hsave.push({e, x: e === window ? scrollX : e.scrollLeft});
-  e.scrollBy({left: dx, behavior: "auto"});
+  if (!hsave.some(h => h.e === e)) hsave.push({e, x: e === window ? scrollX : e.scrollLeft, vx: vp().x});
+  if (e !== window || !t) { e.scrollBy({left: dx, behavior: "auto"}); return; }
+  // the page: on a phone the screen can be narrower than the page's own width, and only the browser moves that view
+  const sy = scrollY; t.scrollIntoView({block: "nearest", inline: "nearest", behavior: "auto"});
+  if (Math.abs(scrollY - sy) > 1) scrollTo({left: scrollX, top: sy, behavior: "auto"});   // up and down is keepVisible's job
+  const v = vp(), r = rect(t);
+  if (r.right > v.x + v.w || r.left < v.x) scrollBy({left: r.right > v.x + v.w ? r.right - (v.x + v.w) + 12 : r.left - v.x - 12, behavior: "auto"});
+  fitBar(); placePanel();
 }
-function restoreSideways() { if (!hsave) return; hsave.forEach(h => { if (h.e === window) scrollTo({left: h.x, top: scrollY, behavior: "auto"}); else h.e.scrollLeft = h.x; }); hsave = null; schedule(); }
+function restoreSideways() { if (!hsave) return;
+  hsave.forEach(h => { if (h.e !== window) { h.e.scrollLeft = h.x; return; }
+    scrollTo({left: h.x, top: scrollY, behavior: "auto"});
+    if (Math.abs(vp().x - h.vx) > 1) {   // the phone's own view was moved: a marker where it was, brought back into view
+      const v = vp(), mk = document.createElement("div"); mk.setAttribute("data-clicky-layer", "1"); LIVE.add(mk);
+      mk.style.cssText = `position:absolute;left:${h.vx + scrollX}px;top:${v.y + scrollY + 4}px;width:1px;height:1px;pointer-events:none`;
+      document.body.appendChild(mk); mk.scrollIntoView({block: "nearest", inline: "start", behavior: "auto"}); mk.remove(); LIVE.delete(mk); fitBar(); } });
+  hsave = null; schedule(); }
 function keepVisible(t) {   // the framed place is never under the bar, the panel or the page's own fixed header
   const p = $("panel"), v = vp(), small = v.w <= 700;
   p._cap = 0; p.classList.remove("left", "top"); placePanel();
@@ -436,6 +485,9 @@ function keepVisible(t) {   // the framed place is never under the bar, the pane
   if (isOpen(bub) && anchor && (anchor === t || t.contains(anchor) || anchor.contains(t)) && r.width + bub.offsetWidth + 48 > v.w) {
     const need = Math.min(bub.offsetHeight, 260) + 28;   // a wide place: keep room under it for the answer bubble
     if (r.height + need < floor - ceil - 16) floor -= need;
+  } else if (isOpen(bub) && anchor && !small && v.h < 600 && (anchor === t || t.contains(anchor) || anchor.contains(t))) {
+    const need = Math.min(bub.offsetHeight, Math.max(120, (floor - v.y - 16) * 0.45)) + 16;   // the bubble is a sheet above the bar
+    if (r.height + need < floor - ceil - 16) floor -= need;
   }
   const sc = scrollerOf(t) || scrollerOf(t, true);
   let moved = false;
@@ -448,7 +500,7 @@ function keepVisible(t) {   // the framed place is never under the bar, the pane
   if (r.width <= v.w - 16 && (r.right > v.x + v.w || r.left < v.x)) {   // sideways only for a place that fits the screen
     const hs = scrollerOf(t) && scrollerOf(t).scrollWidth > scrollerOf(t).clientWidth + 1 ? scrollerOf(t) : window;
     const box = hs === window ? {left: v.x, right: v.x + v.w} : rect(hs);
-    sideways(hs, r.right > box.right ? r.right - box.right + 12 : r.left - box.left - 12); r = rect(t); moved = true;
+    sideways(hs, r.right > box.right ? r.right - box.right + 12 : r.left - box.left - 12, t); r = rect(t); moved = true;
   } else if (r.width > v.w - 16 && (r.left < v.x || r.left > v.x + v.w * 0.5)) {   // a wide row: its label, at the left edge
     sideways(window, r.left - v.x - 8); r = rect(t); moved = true;
   }
@@ -530,11 +582,18 @@ function go(i, autoplay) {
   if (autoplay) { started = true; start(); } else setPlaying(false);
 }
 function start() { audio.play().then(() => setPlaying(true)).catch(() => setPlaying(false)); }
+function playFit() {   // the play button keeps one width for all its labels: ⏮ ⏭ never move under the reader's finger
+  const b = $("play"), key = host.hasAttribute("data-small") + "|" + host.hasAttribute("data-mid"); if (key === playKey) return;
+  if (host.hasAttribute("data-small")) { b.style.minWidth = ""; playKey = key; return; }
+  const keep = b.innerHTML; b.style.minWidth = "0"; let w = 0;
+  for (const t of PLAY_T) { b.innerHTML = playHtml("↻", t); w = Math.max(w, b.getBoundingClientRect().width); }
+  b.innerHTML = keep; if (w > 0) { b.style.minWidth = Math.ceil(w + 1) + "px"; playKey = key; } else b.style.minWidth = "";
+}
 function setPlaying(v) {
   playing = v;
-  const [ic, t] = v ? ["⏸", "Tạm dừng"] : ended ? ["↻", "Nghe lại từ đầu"] : aside && resumeAt ? ["↩", "Tiếp tục trình bày"]
-    : started ? ["▶", "Nghe tiếp"] : ["▶", "Nghe trình bày · " + String(M.minutes || 0).replace(".", ",") + " phút"];
-  $("play").innerHTML = '<span aria-hidden="true">' + ic + '</span><span class="lbl"> ' + esc(t) + "</span>";
+  const [ic, t] = v ? ["⏸", PLAY_T[0]] : ended ? ["↻", PLAY_T[1]] : aside && resumeAt ? ["↩", PLAY_T[2]]
+    : started ? ["▶", PLAY_T[3]] : ["▶", PLAY_T[4]];
+  $("play").innerHTML = playHtml(ic, t);
   $("play").setAttribute("aria-label", t); $("play").title = t + " (phím cách)";
 }
 function onTime() {
@@ -585,15 +644,21 @@ function has(t, p) { p = fold(p); if (p.length < 2) return false; return new Reg
 const STOP = new Set(("la bao nhieu cua the nao va o trong tren cho em anh chi hoi xem bang so muc dong cot gi vay a ah nhe nha ha " +
   "khong voi vi sao tai do dau nao nhat ly nguyen nhan lai thi con duoc may hay cac nhung mot nay kia").split(" "));
 const GENERIC = new Set("khoi phong bo phan kenh vung mien nhom".split(" "));   // "Khối Bán hàng" is also just "bán hàng"
+// "nhà máy", "lãi vay" are one word, like "chi phí"; "công ty B", "khối A": the letter is kept
+function joined(f) { return f.replace(/(^| )(chi phi|nha may|lai vay)(?= |$)/g, (m, a, b) => a + b.replace(" ", "_")).replace(/(^| )(cong ty|khoi|mien|chi nhanh) ([a-z])(?= |$)/g, "$1$2 _$3"); }
 function words(s) {
-  return fold(s).replace(/(^| )chi phi(?= |$)/g, "$1chi_phi").replace(/[0-9%,.\-+]+/g, " ").split(" ").filter(w => w.length >= 2 && !STOP.has(w));
+  return joined(fold(s)).replace(/[0-9%,.\-+]+/g, " ").split(" ").filter(w => w.length >= 2 && !STOP.has(w));
 }
+function allWords(s) { return joined(fold(s)).replace(/[0-9%,.\-+]+/g, " ").split(" ").filter(w => w.length >= 2); }   // a label made only of short words ("Lãi")
 function core(label) { const w = words(label); while (w.length > 1 && GENERIC.has(w[0])) w.shift(); if (w[0] === "bo" && w[1] === "phan" && w.length > 2) w.splice(0, 2); return w; }
 function ids(s) {   // numbers that name a thing ("tháng 3", "T3", "Q3", "FY2526", "Nhà máy 20"), never figures like 14,1
   const f = fold(s).replace(/\b(?:thang|th|t)\s?0?(\d{1,2})\b/g, " m$1 ").replace(/\b(?:quy|q)\s?([1-4])\b/g, " q$1 ").replace(/\bfy\s?(\d{2,4})\b/g, " fy$1 ");
-  return new Set((f.match(/(?<![\d.,])(?:m\d{1,2}|q[1-4]|fy\d{2,4}|\d{1,4})(?![\d.,]*\d)/g) || []).filter(x => !/^\d+$/.test(x) || !/\d[.,]\d/.test(x)));
+  return new Set((f.match(/(?<![\d.,a-z])(?:m\d{1,2}|q[1-4]|fy\d{2,4}|[a-z]{1,3}\d{1,4}|\d{1,4})(?![\d.,]*\d)(?![a-z])/g) || []).filter(x => !/^\d+$/.test(x) || !/\d[.,]\d/.test(x)));
 }
 const ALIAS = {}; Object.entries(D.aliases || {}).forEach(([k, v]) => { ALIAS[fold(k)] = v.map(fold); });
+// the English names teams use for their own departments ("IT" only in capitals: "ít" is a Vietnamese word)
+[["sales", "ban hang"], ["hr", "nhan su"], ["admin", "hanh chinh"], ["supply chain", "chuoi cung ung"], ["marketing", "tiep thi"]]
+  .forEach(([k, v]) => { ALIAS[k] = [...new Set((ALIAS[k] || []).concat(v))]; });
 function widen(t) {   // the question with every abbreviation in it also said in words, and back
   let more = "";
   for (const [k, v] of Object.entries(ALIAS)) {
@@ -784,7 +849,7 @@ function chartData(c) {   // label + value pairs a chart carries itself: SVG tex
   try {
     const ch = window.Chart && window.Chart.getChart && window.Chart.getChart(c);
     if (ch && ch.data) { const ds = ch.data.datasets || [];
-      (ch.data.labels || []).forEach((l, i) => ds.forEach(d => { const v = d.data && d.data[i]; if (v != null && typeof v !== "object") pairs.push([String(l) + (ds.length > 1 ? " · " + (d.label || "") : ""), String(v).replace(".", ",")]); })); }
+      (ch.data.labels || []).forEach((l, i) => ds.forEach(d => { const v = d.data && d.data[i]; if (v != null && typeof v !== "object") pairs.push([String(l) + (ds.length > 1 ? " · " + (d.label || "") : ""), String(v).replace(".", ","), d.label || ""]); })); }
   } catch (_) {}
   if (!pairs.length && /^svg$/i.test(c.tagName)) {
     const t = [...c.querySelectorAll("text")].map(e => ({s: cellText(e), r: rect(e)})).filter(o => o.s);
@@ -794,6 +859,16 @@ function chartData(c) {   // label + value pairs a chart carries itself: SVG tex
       pairs.push([best && best.d < 30 ? best.l.s : "", n.s]); }
   }
   return pairs;
+}
+function chartUnit(c, title, v, series) {   // a chart figure is said with its unit: the axis title, the chart title, the same figure elsewhere, a tile on the series
+  try { const ch = window.Chart && window.Chart.getChart && window.Chart.getChart(c), sc = (ch && ch.options && ch.options.scales) || {};
+    for (const k in sc) { const t = sc[k] && sc[k].title; if (t && t.text) { const u = unitIn("(" + t.text + ")") || unitIn(String(t.text)); if (u) return u; } } } catch (_) {}
+  const svgT = /^svg$/i.test(c.tagName) ? [...c.querySelectorAll("text")].map(cellText).filter(x => !isNum(x)).join(" ") : "";
+  const u = unitIn(title) || unitIn("(" + String(title || "").split(",").pop() + ")") || unitIn("(" + (series || "") + ")") || unitIn(svgT) || (/\d\s*%$/.test(v) ? "%" : "") || unitMap().get(String(v).trim()) || ""; if (u) return u;
+  const sw = core(series || ""); if (!sw.length) return "";
+  const card = allCards().find(k => { const L = words(widen(fold(k.text.split(":")[0]))); return sw.every(w => L.includes(w)); });
+  const m = card && card.text.split(":").slice(1).join(":").match(/\d[\d.,]*\s*(tỷ|triệu|người|%)/);
+  return m ? unitWord(m[1]) : "";
 }
 function chartTitle(x, c) {
   const cap = x.querySelector && x.querySelector("figcaption"), t = c && c.querySelector && c.querySelector("title");
@@ -811,12 +886,14 @@ function qinfo(q) {
   const sm = f.match(/\b(cao|thap|nhieu|it|lon|nho|manh|nhanh|cham|tot|kem)\s+nhat\b/);
   let sup = null;
   if (sm) { sup = /^(thap|it|nho|cham|kem)$/.test(sm[1]) ? "min" : "max"; if (/\bgiam\b/.test(f) && sup === "max" && !/\btang\b/.test(f)) sup = "min"; }
-  const t = widen(f.replace(/\b(cao|thap|nhieu|it|lon|nho|manh|nhanh|cham|tot|kem)\s+nhat\b/, " "));
+  const t = widen(f.replace(/\b(cao|thap|nhieu|it|lon|nho|manh|nhanh|cham|tot|kem)\s+nhat\b/, " ")) + (/\bIT\b/.test(q) ? " cntt cong nghe thong tin" : "");
   const delta = /\b(tang|giam|chenh)\b/.test(f) && /\b(bao nhieu|so voi|the nao|may|nhieu|bao)\b/.test(f) && !sup;
   const share = /\b(chiem|ty trong)\b/.test(f);
   const yoy = /\b(nam truoc|nam ngoai|cung ky|so voi nam|yoy|ky truoc)\b/.test(f);
   const tc = t.replace(/\bso voi\s+[a-z0-9 ]*?(?=\s+(tang|giam|bao|the|thi|la|$)|$)/, " ");   // "so với AOP gốc" is the base, not the column asked
-  return {q, f, t, tc, why, sup, delta, share, yoy, w: [...new Set(words(t))], w0: [...new Set(words(f))], wc: [...new Set(words(tc))],
+  const unit = /\b(bao nhieu|may|them|bot) nguoi\b/.test(f) || (/\b(tang|giam)\b.*\bnguoi\s*$/.test(f) && !/\bmoi nguoi\b/.test(f)) ? "người" : /\b(phan tram|%)/.test(f) || /%/.test(q) ? "%" : "";
+  const define = /\b(la gi|nghia la gi|viet tat cua gi|la viet tat)\b/.test(f);
+  return {q, f, t, tc, why, sup, delta, share, yoy, unit, define, w: [...new Set(words(t))], wa: [...new Set(allWords(f))], w0: [...new Set(words(f))], wc: [...new Set(words(tc))],
           ids: ids(q), accented: /[^\x00-\x7f]/.test(q)};
 }
 function subject(x, accented) {   // words the reader leaves out because the whole report is about them: title, h1, the section heading
@@ -828,11 +905,13 @@ function coverOf(parts) { const s = new Set(); parts.forEach(p => { words(widen(
   if (/%/.test(p || "")) ["phan", "tram", "ty", "le"].forEach(w => s.add(w)); }); return s; }
 function leftover(Q, cover, ctxEl) {   // the reader's words the answer does not cover, in the reader's own spelling
   const subj = subject(ctxEl, Q.accented);
-  return Q.q.replace(/(?<![\p{L}\d])\d+\s+(năm|nam|người|nguoi|tỷ|triệu|ngày)(?![\p{L}])/giu, "$1").replace(/(chi)\s+(ph[íi])/gi, "$1_$2").replace(/(?<![\p{L}])(tháng|thang|quý|quy|fy)\s+(\d)/giu, "$1$2").split(/\s+/).map(x => x.replace(/[?.,!:;"“”()«»]+/g, "")).filter(x => {
-    const w = words(fold(x)), i = [...ids(x)];
+  return Q.q.replace(/(?<![\p{L}\d])\d+\s+(năm|nam|người|nguoi|tỷ|triệu|ngày)(?![\p{L}])/giu, "$1").replace(/(chi)\s+(ph[íi])/gi, "$1_$2")
+    .replace(/(nhà|nha)\s+(máy|may)/giu, "$1_$2").replace(/(lãi|lai)\s+(vay)/giu, "$1_$2").replace(/(công ty|cong ty|khối|khoi|miền|mien|chi nhánh)\s+([A-Za-z])(?![\p{L}\d])/giu, (m, a, b) => a.replace(/ /g, "_") + "_" + b).replace(/(?<![\p{L}])(tháng|thang|quý|quy|fy)\s+(\d)/giu, "$1$2").split(/\s+/).map(x => x.replace(/[?.,!:;"“”()«»]+/g, "")).filter(x => {
+    const w = words(fold(x)), i = [...ids(x)], al = x === "IT" ? ["cntt"] : ALIAS[fold(x)];   // "Sales", "IT": covered by "Bán hàng", "CNTT"
+    if (al && al.some(a => words(a).length && words(a).every(y => cover.has(y)))) return false;
     if (i.length && i.every(k => cover.has("#" + k))) return false;
     if (!w.length) return !!i.length && i.some(k => !cover.has("#" + k) && !subj.has(k));
-    return !w.every(y => cover.has(y) || GENERIC.has(y) || UNITW.has(y) || /^(tang|giam|chenh|chiem)$/.test(y) || (Q.accented ? subj.has(x.toLowerCase()) : subj.has(y)));
+    return !w.every(y => cover.has(y) || GENERIC.has(y) || UNITW.has(y) || /^(tang|giam|chenh|chiem)$/.test(y) || (Q.accented ? subj.has(x.toLowerCase()) || x.toLowerCase().split("_").every(p => subj.has(p)) : subj.has(y)));
   });
 }
 function colMatch(Q, m) {   // the column the question names: words, "%" or a period ("T3", "tháng 3")
@@ -850,10 +929,15 @@ function colMatch(Q, m) {   // the column the question names: words, "%" or a pe
   return {c: best, s: bs};
 }
 function rowMatch(Q, row) {   // most of the row's own words; "khối", "phòng"... may be left out
-  const L = core(row.label), G = words(row.group), hit = L.filter(w => Q.w.includes(w)).length, li = ids(row.label);
-  if ([...li].length && [...Q.ids].length && ![...Q.ids].some(i => li.has(i))) return 0;
-  if (!L.length || (hit < Math.max(1, Math.ceil(L.length * 2 / 3)) && !has(Q.t, row.label))) return 0;
-  return 10 * hit + 8 * G.filter(w => Q.w.includes(w)).length + ([...Q.ids].some(i => li.has(i)) ? 15 : 0) - 3 * (L.length - hit);
+  let L = core(row.label), qw = Q.w; const short = !L.length;
+  if (short) {   // "Lãi": a label is never left with no word at all; with accents typed, "lại" is not "Lãi"
+    const tok = t => t.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(x => x.length >= 2 && !/^\d+$/.test(x));
+    if (Q.accented) { L = tok(row.label); qw = tok(Q.q); } else { L = allWords(row.label); qw = Q.wa; } }
+  const G = words(row.group), hit = L.filter(w => qw.includes(w)).length, li = [...ids(row.label)];
+  if (li.length && [...Q.ids].length && !li.some(i => Q.ids.has(i))) return 0;
+  if (!L.length || (hit < Math.max(1, Math.ceil(L.length * 2 / 3)) && (short || !has(Q.t, row.label)))) return 0;
+  const idHit = li.filter(i => Q.ids.has(i)).length, idMiss = [...Q.ids].length ? li.length - idHit : 0;   // "Nhà máy 2" is not "Nhà máy 12"
+  return 10 * hit + 8 * G.filter(w => Q.w.includes(w)).length + 15 * idHit - 12 * idMiss - 3 * (L.length - hit);
 }
 function cardMatch(Q, c) {   // ranked by how many of the question's own words the tile covers, not by the tile's words alone
   const label = c.text.split(":")[0], L = [...new Set(words(widen(fold(label))))], all = words(widen(fold(c.text)));
@@ -861,6 +945,8 @@ function cardMatch(Q, c) {   // ranked by how many of the question's own words t
   const qn = Q.w0.filter(w => !/^(tang|giam)$/.test(w) || L.includes(w)), cov = qn.filter(w => all.includes(w)).length;
   const byLabel = L.length && hit >= Math.max(1, Math.ceil(L.length * 2 / 3));
   const byQ = qn.length && hit >= 1 && cov >= Math.max(qn.length > 1 ? 2 : 1, Math.ceil(qn.length * 2 / 3));
+  // a ratio tile ("Tỷ lệ chi phí nhân sự/DTT") answers only a question about a ratio, never "doanh thu bao nhiêu"
+  if ((/\//.test(label) || /\bty le\b/.test(fold(label))) && !/\b(ty le|tren)\b/.test(Q.f) && !/[\/%]/.test(Q.q)) return 0;
   return byLabel || byQ ? 10 * cov - 3 * words(label).filter(w => !Q.w.includes(w)).length : 0;
 }
 const PER = i => /^(m|q|fy)\d/.test(i) ? i.slice(0, i[0] === "f" ? 2 : 1) : null;   // the kind of a period: month, quarter, year
@@ -948,20 +1034,21 @@ function superlative(Q, scope) {   // "khối nào tăng nhiều nhất": ordere
   return {kind: "sup", m: pick.m, c: pick.c, win, n: pick.vals.length, region: !!(scope && scope.rows), dir: Q.sup,
           total: pick.m.rows.some(r => r.total)};
 }
-function whyAnswer(Q, scope, entity) {   // "vì sao": the report's own sentence that names the thing and gives a reason
-  const need = entity ? core(entity) : [], other = Q.w.filter(w => !need.includes(w));
+function whyAnswer(Q, scope, entity, strict) {   // strict: a tile's label, every word of it ("mỗi người" is not "tuyển mới")   // "vì sao": the report's own sentence that names the thing and gives a reason
+  const need = entity ? core(entity).filter((w, i, l) => !(/^(binh|trung)$/.test(w) && /^(quan|binh)$/.test(l[i + 1] || "")) && !(/^(quan|binh)$/.test(w) && /^(binh|trung)$/.test(l[i - 1] || "")) && w !== "tong") : [], other = Q.w.filter(w => !need.includes(w));
   let best = null;
   for (const b of blocks()) {
     const ss = splitSent(b.text);
     ss.forEach((s, i) => {
       for (const span of [[s], ss[i + 1] ? [s, ss[i + 1]] : null]) {
-        if (!span) continue; const text = span.join(" "), w = words(text);
+        if (!span) continue; const text = span.join(" "), w = words(widen(fold(text)) + (/\b(nhan vien|tuyen|lao dong|so nguoi)\b/.test(fold(text)) ? " headcount" : ""));
         const nh = need.filter(x => w.includes(x)).length;
-        if (need.length && nh < Math.ceil(need.length * 2 / 3)) continue;
+        if (need.length && nh < (strict ? need.length : Math.ceil(need.length * 2 / 3))) continue;
         const cause = CAUSE.test(text), hits = other.filter(x => w.includes(x)).length;
         if (!cause && !hits && !need.length) continue;
         const early = need.length && need.every(x => words(span[0].split(/\s+/).slice(0, 5).join(" ")).includes(x)) ? 2 : 0;
-        const sc = 3 * nh + 2 * hits + (cause ? 3 : 0) + early - (span.length - 1) * 0.5;
+        const figs = Math.min(2, (text.match(/\d[\d.,]*/g) || []).length);   // a reason with its figures beats a general one
+        const sc = 3 * nh + 2 * hits + (cause ? 3 : 0) + early - (span.length - 1) * 0.5 + 0.5 * figs;
         if (sc > 0 && (!best || sc > best.sc)) best = {sc, text, b, cause};
       }
     });
@@ -969,10 +1056,25 @@ function whyAnswer(Q, scope, entity) {   // "vì sao": the report's own sentence
   return best;
 }
 function figureSentence(Q) {   // a sentence of the report holding every word of the question and a figure
-  if (Q.w0.length < 2) return null;
+  const need = Q.w0.filter(x => !UNITW.has(x)); if (need.length < 2) return null;   // "3 năm", "bao nhiêu người": unit words are not the subject
   for (const b of blocks()) for (const s of splitSent(b.text)) { const w = words(widen(fold(s)));
-    if (Q.w0.every(x => w.includes(x))) return {b, s, fig: /\d/.test(s)}; }
+    if (need.every(x => w.includes(x))) return {b, s, fig: /\d/.test(s)}; }
   return null;
+}
+function colUnit(m, c) {   // "tỷ", "người", "%" or "" for one column
+  if (c < m.lc) return ""; if (m.units[c]) return m.units[c];
+  const v = m.rows.map(r => r.cells[c] && cellText(r.cells[c])).filter(isNum);
+  return /%/.test(m.head[c] || "") || (v.length && v.every(x => /%$/.test(x))) ? "%" : "";
+}
+function cardFigs(c) {   // the figures a tile writes after its label, with their units
+  return [...c.text.split(":").slice(1).join(":").matchAll(/([+\-−]?)(\d[\d.,]*)\s*(%|tỷ|triệu|người)?/g)].map(m => ({sign: m[1], v: m[2], u: m[3] || ""}));
+}
+function cardMoves(c) { return /(tăng|giảm|chênh)/i.test(c.text.split(":").slice(1).join(":")) || cardFigs(c).some(f => f.sign); }
+function cardChange(c) {   // a tile with a figure and its base ("2,52%, AOP gốc 2,40%"): the change, computed from the two
+  const f = cardFigs(c); if (f.length !== 2 || f[0].sign || f[1].sign || f[0].u !== f[1].u) return null;
+  const ch = change(f[1].v, f[0].v); if (!ch) return null;
+  const up = !ch.diff.startsWith("-"), d = ch.diff.replace(/^-/, "");
+  return (up ? "tăng " : "giảm ") + (f[0].u === "%" ? d + " điểm phần trăm" : withUnit(d, f[0].u) + ", " + ch.pct.replace(/^-/, "") + "%");
 }
 function valueCol(Q, m) {   // the column a share is taken from: named, else the one the title is about ("AOPR")
   const n = colMatch(Q, m); if (n.c >= 0 && n.s >= 6 && !/%/.test(m.head[n.c])) return n.c;
@@ -982,6 +1084,11 @@ function valueCol(Q, m) {   // the column a share is taken from: named, else the
 function resolve(q, scope) {
   const Q = qinfo(q);
   const known = bankMatch(Q, scope); if (known) return {kind: "bank", b: known, Q};
+  if (Q.define) {   // "AOPR là gì?": the word, from the table of abbreviations; no figure to choose
+    const term = q.replace(/\s*(là gì|la gi|nghĩa là gì|nghia la gi|là viết tắt của gì|la viet tat cua gi|viết tắt của gì|là viết tắt|la viet tat)\s*[?.!]*\s*$/i, "").replace(/^\s*(chữ|chu|từ|tu)\s+/i, "").trim();
+    const key = Object.keys(D.aliases || {}).find(k => fold(k) === fold(term));
+    if (key) return {kind: "define", term: key, says: D.aliases[key], Q};
+  }
   if (Q.sup) { const s = superlative(Q, scope); if (s) return Object.assign(s, {Q}); }
   // places the question names itself
   let cands = [];
@@ -992,22 +1099,22 @@ function resolve(q, scope) {
     if ((col.c >= 0 && col.s >= 6) || dc.length) {   // only the column: the reader's row, else the table's total
       const sr = scope && scope.m === m && scope.row, tot = m.rows.find(r => r.total);
       if (sr) cands.push(Object.assign({score: (dc.length ? 16 : col.s) + 12, m, row: sr, scoped: true}, cOf()));
-      else if (tot) cands.push(Object.assign({score: (dc.length ? 16 : col.s) + 1, m, row: tot}, cOf()));
+      else if (tot) cands.push(Object.assign({score: (dc.length ? 16 : col.s) + 1, m, row: tot, colOnly: true}, cOf()));
     }
   }
   for (const c of allCards()) { const s = cardMatch(Q, c); if (s > 0) cands.push({score: s, card: c}); }
   const CH = charts();
-  for (const ch of CH) ch.pairs.forEach(([l, v]) => { if (l && chartLabelMatch(Q, l))
-    cands.push({score: 30 + (scope && scope.el === ch.el ? 5 : 0), chart: ch.el, text: l + ": " + v + " (biểu đồ «" + shortText(chartTitle(ch.el, ch.c), 60) + "»).", label: l}); });
+  for (const ch of CH) ch.pairs.forEach(([l, v, ser]) => { if (l && chartLabelMatch(Q, l)) { const ti = chartTitle(ch.el, ch.c), u = chartUnit(ch.c, ti, v, ser);
+    cands.push({score: 30 + (scope && scope.el === ch.el ? 5 : 0), chart: ch.el, text: l + ": " + (u ? withUnit(v, u) : v + ", đơn vị theo biểu đồ") + " (biểu đồ «" + shortText(ti, 60) + "»).", label: l}); } });
   if (Q.yoy) {   // "so với năm trước": the last two points of a chart over periods, read from the chart itself
     const ch = (scope && scope.el ? CH.filter(x => x.el === scope.el) : []).concat(CH).find(x => x.pairs.filter(([l]) => [...ids(l)].length).length >= 2);
     if (ch) { const p = ch.pairs.filter(([l]) => [...ids(l)].length), [a, b] = p.slice(-2); return {kind: "yoy", ch, a, b, Q}; }
   }
   const had = cands.length; cands = cands.filter(c => !periodClash(Q, placeText(c)));
   if (had && !cands.length && !Q.why) return {kind: "none", Q, why: "period"};
-  const named = cands.some(c => (c.row && !c.scoped) || c.chart);
+  const named = cands.some(c => (c.row && !c.scoped && !c.colOnly) || c.chart);
   if (Q.share) {   // "chiếm bao nhiêu % tổng": computed here from two figures of the table, and said so
-    const rc = cands.filter(c => c.row && !c.scoped && !c.row.total).sort((a, b) => b.score - a.score)[0];
+    const rc = cands.filter(c => c.row && !c.scoped && !c.colOnly && !c.row.total).sort((a, b) => b.score - a.score)[0];
     const m = rc ? rc.m : scope && scope.row ? scope.m : null, row = rc ? rc.row : scope && scope.row;
     const tot = m && m.rows.find(r => r.total), c = m ? valueCol(Q, m) : -1;
     if (m && row && tot && c >= 0 && row.cells[c] && tot.cells[c]) {
@@ -1018,6 +1125,17 @@ function resolve(q, scope) {
   }
   // the place the reader pointed at, when the question names no other place
   if (scope && scope.card && !named && !Q.why && !cands.some(c => c.card && c.card !== scope.card && c.score >= 20)) cands = [{score: 5, card: scope.card}];
+  const sv = Q.f.match(/\bso voi\s+(.+?)(?=\s+(tang|giam|bao|the|thi|la|nhu|nhieu|chenh)\b|\s*[?.!]*$)/);
+  if (scope && scope.row && scope.m && sv && !named && !Q.why) {   // "so với AOP gốc" on a row: that column of the same row
+    const m = scope.m, pw = words(widen(sv[1])), dcs = deltaCols(m); let X = -1, xs = 0;
+    m.head.forEach((h, i) => { const hw = words(h || ""); if (i >= m.lc && hw.length && !dcs.includes(i) && hw.every(w => pw.includes(w)) && hw.length > xs) { X = i; xs = hw.length; } });
+    if (X >= 0) {
+      const u = colUnit(m, X), ok = i => i >= m.lc && i !== X && !dcs.includes(i) && colUnit(m, i) === u && scope.row.cells[i] && isNum(cellText(scope.row.cells[i]));
+      const partner = ok(scope.c) ? scope.c : m.head.findIndex((h, i) => ok(i));
+      const cols = [X, partner, ...dcs.filter(k => colUnit(m, k) === u || colUnit(m, k) === "%")].filter(k => k >= 0);
+      cands = [{score: 30, m, row: scope.row, c: X, cols, scoped: true}];
+    }
+  }
   if (scope && !named && !Q.why) {
     if (scope.row && !cands.some(c => c.scoped)) {
       const cardHit = cands.filter(c => c.card).sort((a, b) => b.score - a.score)[0];
@@ -1025,28 +1143,45 @@ function resolve(q, scope) {
       else cands.push({score: 5, m: scope.m, row: scope.row, c: scope.c >= scope.m.lc ? scope.c : -1, scoped: true});
     } else if (scope.card && !cands.length) cands.push({score: 5, card: scope.card});
   }
+  if (Q.unit && !Q.why && cands.length) {   // "bao nhiêu người": only a column or a tile in people
+    const fit = c => {
+      if (c.chart) return true;
+      if (c.card) return Q.unit === "%" || cardFigs(c.card).some(f => f.u === Q.unit);
+      const cols = (c.cols || [c.c]).filter(k => k >= 0 && colUnit(c.m, k) === Q.unit);
+      if (cols.length) { if (c.cols) { c.cols = cols; c.c = cols[0]; } return true; }
+      if (Q.unit === "%") return true;
+      if (c.c < 0 && !c.cols && !Q.delta) { const k = numCols(c.m, c.row).find(k => colUnit(c.m, k) === Q.unit); if (k !== undefined) { c.c = k; return true; } }
+      return false;
+    };
+    const kept = cands.filter(fit);
+    if (!kept.length) { const r0 = cands.find(c => c.row && c.scoped) || cands.find(c => c.row && !c.colOnly) || null;
+      return {kind: "none", Q, why: "unit", m: r0 && r0.m, row: r0 && r0.row}; }
+    cands = kept;
+  }
   if (Q.why) {
-    const ent = cands.filter(c => c.row && !c.scoped).sort((a, b) => b.score - a.score)[0];
-    const entity = ent ? ent.row.label : scope && scope.row ? scope.row.label : scope && scope.card ? scope.card.text.split(":")[0] : scope && scope.label || "";
+    const ent = cands.filter(c => c.row && !c.scoped && !c.colOnly).sort((a, b) => b.score - a.score)[0];
+    const entity = ent ? ent.row.label : scope && scope.row && !scope.row.total ? scope.row.label : scope && scope.card ? scope.card.text.split(":")[0] : scope && scope.label || "";
     let w = null, ents = entity ? [entity] : scope && scope.rows ? scope.rows.map(x => x.row.label) : [];
     if (!ents.length && Q.w0.length) w = whyAnswer(Q, scope, "");
-    for (const e of ents) { const x = whyAnswer(Q, scope, e); if (x && (!w || x.sc > w.sc)) w = x; }
+    const strict = !ent && !(scope && scope.row && !scope.row.total) && !!(scope && scope.card);
+    for (const e of ents) { const x = whyAnswer(Q, scope, e, strict); if (x && (!w || x.sc > w.sc)) w = x; }
     return {kind: "why", w, entity, row: ent ? ent.row : scope && scope.row, m: ent ? ent.m : scope && scope.m, Q};
   }
   if (cands.length && cands.every(c => periodClash(Q, placeText(c)))) return {kind: "none", Q, why: "period"};
   cands = cands.filter(c => !periodClash(Q, placeText(c)));
-  const rowsNamed = cands.filter(c => c.row && !c.scoped && !c.row.total);
+  const rowsNamed = cands.filter(c => c.row && !c.scoped && !c.colOnly && !c.row.total);
   const fs = figureSentence(Q);
   if (!cands.length && !fs && [...Q.ids].some(PER) && ![...Q.ids].filter(PER).some(i => ids(pageText()).has(i))) return {kind: "none", Q, why: "period"};
   if (!cands.length) return fs ? {kind: fs.fig ? "sentence" : "mention", b: fs.b, s: fs.s, Q} : {kind: "none", Q};
   // which candidate explains most of the question
   cands.forEach(c => { c.cover = coverOf(c.card ? [c.card.text] : c.chart ? [c.text] : [c.row.label, c.row.group, (c.cols || [c.c]).map(k => k >= 0 ? c.m.head[k] + " " + c.m.units[k] : "").join(" "), c.c >= 0 && !c.cols ? "" : c.m.head.join(" ")]);
     if (scope && scope.words) scope.words.forEach(w => c.cover.add(w));
-    c.rest = leftover(Q, c.cover, c.card ? c.card.el : c.m ? c.m.el : null); c.total = c.score - 8 * c.rest.length; });
+    c.rest = leftover(Q, c.cover, c.card ? c.card.el : c.m ? c.m.el : null); c.total = c.score - 8 * c.rest.length;
+    if (Q.delta && c.row && !c.cols && c.c >= 0 && !deltaCols(c.m).includes(c.c)) c.total -= 15; });
   cands.sort((a, b) => b.total - a.total);
   const same = (a, b) => a === b || (a.row && a.row === b.row && a.c === b.c) || (a.card && a.card === b.card) || (a.chart && a.text === b.text);
   let top = cands.filter(c => c.total === cands[0].total).filter((c, i, l) => l.findIndex(o => same(o, c)) === i);
-  if (top[0].rest.length && fs && fs.fig) return {kind: "sentence", b: fs.b, s: fs.s, Q};   // the report says it in a sentence
+  if (top[0].rest.length && fs && fs.fig && !(Q.delta && scope && scope.card && top[0].card === scope.card && cardMoves(scope.card))) return {kind: "sentence", b: fs.b, s: fs.s, Q};   // the report says it in a sentence
   const exact = top.length === 1 && top[0].row && !top[0].scoped && core(top[0].row.label).every(w => Q.w0.includes(w));
   if (Q.w0.length === 1 && !scope && !exact) {   // one word: offer the places it names
     const opts = cands.filter((c, i, l) => l.findIndex(o => same(o, c)) === i).slice(0, 5);
@@ -1055,7 +1190,7 @@ function resolve(q, scope) {
   const isPer = x => /^(tháng|thang|quý|quy|fy|q|t)\d/i.test(x);
   if (top.length === 1 && top[0].rest.some(isPer)) return {kind: "none", Q, why: "period"};   // "tháng 3" is nowhere: never a figure of another period
   if (top.length > 1) return {kind: "many", top, Q};
-  const one = top[0];
+  const one = top[0]; if (Q.delta) one.delta = true;
   if (scope && scope.rows && one.row && one.row.total && /\b(tong|cong)\b/.test(Q.f))
     one.note = "Đây là dòng Tổng của cả bảng; báo cáo không cộng riêng các dòng anh chị khoanh.";
   if (one.card && !one.wider && rowsNamed.length) { const r = rowsNamed.sort((a, b) => b.score - a.score)[0]; if (!words(one.card.text).some(w => core(r.row.label).includes(w))) one.wider = rowName(r.row); }
@@ -1075,9 +1210,9 @@ function rowAnswer(m, row, c, extra, opts, cols) { const a = cellAnswer(m, row, 
 function quiet(t) { const n = document.createElement("div"); n.className = "src"; n.textContent = t; return n; }
 function parkNote(q, msg, said) {   // a question set aside: said once, and it reaches the owner only when the reader sends it
   park(q);
-  const box = document.createElement("div"), btn = "Gửi cho " + OWNER;
-  box.appendChild(quiet((msg ? msg + " " : "") + (said ? "" : "Em ghi câu này lại. ") + "Bấm «" + btn + "» để câu hỏi đến " + OWNER + "."));
-  box.appendChild(chips([[btn, () => sendParked(box)]]));
+  const box = document.createElement("div");   // one line: what is missing (if not said already), then the button
+  box.appendChild(quiet((msg ? msg + " " : "") + "Bấm «" + SEND + "» để hỏi " + OWNER_HE + "."));
+  box.appendChild(chips([[SEND, () => sendParked(box)]]));
   return box;
 }
 function whole(t, n) {   // whole sentences, never a fragment; figures in bold
@@ -1091,7 +1226,8 @@ function answer(text, target, o) {
   const a = isOpen($("bub")) ? $("ba") : $("a"); a.className = "ans " + (o.cls || ""); a.innerHTML = "<div>" + (o.html ? text : esc(text)) + "</div>";
   const src = o.src !== undefined ? o.src : target ? "Lấy từ báo cáo «" + TITLE + "», đúng chỗ đang khoanh" : "";
   const ex = [].concat(o.extra || []).filter(Boolean);
-  const figs = x => /^(UL|TABLE)$/.test(x.tagName);
+  const figs = x => /^(UL|TABLE)$/.test(x.tagName) || (x.classList && x.classList.contains("mtw"));
+  $("bub").classList.toggle("wide", ex.some(x => x.classList && x.classList.contains("mtw")));
   ex.filter(figs).forEach(x => a.appendChild(x));   // the figures first, then where they come from
   if (src) a.appendChild(quiet(src));
   ex.filter(x => !figs(x)).forEach(x => a.appendChild(x));
@@ -1113,7 +1249,10 @@ function speak(text) {   // only a Vietnamese voice that runs on this device; ot
 }
 function chips(list) { const box = document.createElement("div"); box.className = "chips";
   list.forEach(([label, fn]) => { const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.onclick = fn; box.appendChild(b); }); return box; }
-function answerBank(b) { answer(b.a, null, {src: OWNER + " trả lời ngày " + b.ngay + " · từ câu hỏi đã gửi trước đây", clip: b}); }
+function answerBank(b) {   // an answer read in an earlier period whose figures have since moved: said so, plainly
+  const old = b.cu ? quiet(OWNER + " trả lời kỳ " + (b.ky || "trước") + "; số hiện tại đã khác.") : null;
+  answer(b.a, null, {src: OWNER + " trả lời ngày " + b.ngay + " · từ câu hỏi đã gửi trước đây", clip: b, extra: old, cls: b.cu ? "park" : ""});
+}
 function candLabel(b) {   // repeated labels ("Lương", "Lương") get their group or section
   if (b.card) return b.card.text.split(":")[0];
   if (b.chart) return b.label || b.text;
@@ -1121,13 +1260,28 @@ function candLabel(b) {   // repeated labels ("Lương", "Lương") get their gr
   return b.row.label + (b.c >= 0 && b.m.head[b.c] ? " · " + b.m.head[b.c] : "") + (where ? " · " + where : "");
 }
 function showCand(b, extra, opts) {
-  if (b.card) answer(b.card.text.replace(/\.?$/, "."), b.card.el, Object.assign({extra}, opts));
+  const moved = b.card && b.delta && !cardMoves(b.card) ? cardChange(b.card) : null;
+  if (moved) answer(b.card.text.replace(/\.?$/, "") + " (em tính: " + moved + ").", b.card.el, Object.assign({extra, src: "Lấy từ báo cáo «" + TITLE + "», đúng chỗ đang khoanh; phần thay đổi em tính từ hai số trên thẻ"}, opts));
+  else if (b.card) answer(b.card.text.replace(/\.?$/, "."), b.card.el, Object.assign({extra}, opts));
   else if (b.chart) answer(b.text, b.chart, Object.assign({extra}, opts));
   else rowAnswer(b.m, b.row, b.c, extra, opts, b.cols);
 }
 function ask(q, scope) {
   const r = resolve(q, scope);
   if (r.kind === "bank") { answerBank(r.b); return; }
+  if (r.kind === "define") {
+    const [a, ...more] = r.says, en = !/[^\x00-\x7f]/.test(a) && more.length;
+    answer(r.term + " là viết tắt của «" + a + "»" + (more.length ? (en ? ", nghĩa là " : ", còn gọi là ") + more.map(x => "«" + x + "»").join(", ") : "") + ".", null,
+      {src: "Theo bảng chữ viết tắt em dùng cho báo cáo này"});
+    return;
+  }
+  if (r.kind === "none" && r.why === "unit") {
+    const k = r.m && r.row ? numCols(r.m, r.row).find(k => colUnit(r.m, k) === r.Q.unit) : undefined, who = r.row ? " của " + rowName(r.row) : "";
+    const what = r.Q.delta ? "số tăng giảm tính bằng «" + r.Q.unit + "»" : "số tính bằng «" + r.Q.unit + "»";
+    answer("Báo cáo chưa có " + what + who + "." + (k !== undefined && r.Q.delta ? " Bảng chỉ ghi " + colName(r.m, k) + ": " + withUnit(cellText(r.row.cells[k]), r.m.units[k]) + "." : ""),
+      k !== undefined ? r.row.cells[k] : null, {cls: "park", extra: parkNote(q)});
+    return;
+  }
   if (r.kind === "sup") {
     const w = r.win[0], head = colName(r.m, r.c), word = r.dir === "max" ? "cao nhất" : "thấp nhất";
     const who = r.win.map(o => rowName(o.row)).join(" và ");
@@ -1140,6 +1294,7 @@ function ask(q, scope) {
     const what = r.entity ? " vì sao " + r.entity + " thay đổi" : " lý do";
     if (r.w) { answer(esc("Báo cáo chưa nói rõ" + what + ". Chỗ gần nhất: ") + "«" + whole(r.w.text) + "»", r.w.b.el, {html: true, cls: "park", extra: parkNote(q), src: "Trên báo cáo «" + TITLE + "»"}); return; }
     if (r.row && r.m) { const a = cellAnswer(r.m, r.row, -1); answer(a.text, a.target, {cls: "park", extra: parkNote(q, "Báo cáo chưa nói" + what + ".")}); return; }
+    if (r.entity) { answer("Báo cáo chưa nói lý do cho số «" + r.entity + "».", null, {cls: "park", extra: parkNote(q)}); return; }
     answer(D.fallback, null, {cls: "park", extra: parkNote(q, null, true)}); return;
   }
   if (r.kind === "share") {
@@ -1149,8 +1304,9 @@ function ask(q, scope) {
     return;
   }
   if (r.kind === "yoy") {
-    const [la, va] = r.a, [lb, vb] = r.b, ch = change(va, vb, /\d\.\d/.test(va + vb) && !/,/.test(va + vb));
-    answer(lb + ": " + vb + "; " + la + ": " + va + (ch ? " (em tính: " + (ch.diff.startsWith("-") ? "giảm " + ch.diff.slice(1) : "tăng " + ch.diff) + ", " + ch.pct.replace(/^-/, "−") + "%)" : "") + ".",
+    const [la, va, sa] = r.a, [lb, vb] = r.b, ch = change(va, vb, /\d\.\d/.test(va + vb) && !/,/.test(va + vb));
+    const u = chartUnit(r.ch.c, chartTitle(r.ch.el, r.ch.c), vb, sa), U = x => u ? withUnit(x, u) : x;
+    answer(lb + ": " + U(vb) + "; " + la + ": " + U(va) + (ch ? " (em tính: " + (ch.diff.startsWith("-") ? "giảm " + U(ch.diff.slice(1)) : "tăng " + U(ch.diff)) + ", " + ch.pct.replace(/^-/, "−") + "%)" : "") + (u ? "" : " (đơn vị theo biểu đồ)") + ".",
       r.ch.el, {src: "Số trên biểu đồ «" + shortText(chartTitle(r.ch.el, r.ch.c), 60) + "»" + (ch ? "; phần chênh lệch em tính" : "")});
     return;
   }
@@ -1166,6 +1322,11 @@ function ask(q, scope) {
     const where = b => b.m ? (b.m.heading || b.m.cap || b.m.titles[0] || "") : b.card ? headingFor(b.card.el) : "";
     const twice = () => labs.map(l => labs.filter(x => x === l).length > 1);
     let dup = twice(); dup.forEach((d, i) => { if (d && where(top[i]) && !labs[i].includes(where(top[i]))) labs[i] += " · " + where(top[i]); });
+    const parent = b => {   // the row it sits under: the nearest row above whose label the table writes only once
+      if (!b.m || !b.row) return ""; const rs = b.m.rows, k = rs.indexOf(b.row), n = l => rs.filter(r => r.label === l).length;
+      for (let j = k - 1; j >= 0; j--) if (!rs[j].total && rs[j].label !== b.row.label && n(rs[j].label) === 1) return rs[j].label;
+      return ""; };
+    dup = twice(); dup.forEach((d, i) => { const pa = d && parent(top[i]); if (pa) { const ps = labs[i].split(" · "); ps.splice(1, 0, pa); labs[i] = ps.join(" · "); } });
     dup = twice(); dup.forEach((d, i) => { if (d && top[i].m) labs[i] += " · bảng " + (tables().indexOf(top[i].m) + 1); });
     answer("Anh chị muốn hỏi chỗ nào ạ?", null, {extra: chips(top.map((b, i) => [labs[i], () => showCand(b, null)]))});
     return;
@@ -1201,6 +1362,12 @@ function placeBubble(follow) {   // beside the place, never on it or on its row 
   if (!anchor || !isOpen($("bub"))) { lead.style.display = "none"; return; }
   const b = $("bub"), v = vp(), small = v.w <= 700, bar = rect($("bar")), g = 14, top0 = v.y + 8, bot0 = bar.top - 8;
   const set = (x, y) => { b.style.left = x + "px"; b.style.top = y + "px"; };
+  const sheet = !small && v.h < 600; b.classList.toggle("sheet", sheet);
+  if (sheet) {   // a short screen (a laptop at 150%): the answer docks above the bar; keepVisible keeps the place above it
+    b.style.width = (v.w - 24) + "px"; bubbleCap(Math.max(120, (bot0 - top0) * 0.45));
+    const r = rect(anchor), h = b.offsetHeight, x = v.x + 12, y = bot0 - h, q = {left: x, top: y, right: x + v.w - 24, bottom: y + h};
+    set(x, y); bubAt = {anchor, dx: x - r.left, dy: y - r.top, over: true}; pointAt(r, q); return;
+  }
   if (follow && bubAt && bubAt.anchor === anchor) {   // on scroll: move with the place; choose again only when it no longer fits
     const r = rect(anchor), x = r.left + bubAt.dx, y = r.top + bubAt.dy, w = b.offsetWidth, h = b.offsetHeight, q = {left: x, top: y, right: x + w, bottom: y + h};
     if (x >= v.x + 8 && q.right <= v.x + v.w - 8 && y >= top0 && q.bottom <= bot0 && (bubAt.over || !hit(q, r))) { set(x, y); pointAt(r, q); return; }
@@ -1209,7 +1376,7 @@ function placeBubble(follow) {   // beside the place, never on it or on its row 
   bubbleCap(bot0 - top0);   // never taller than the screen above the bar: a long answer scrolls inside
   const view = {left: v.x, top: v.y, right: v.x + v.w, bottom: v.y + v.h};
   let figs = numberRects(view, 0), charts = chartRects(view).filter(q => !hit(q, rect(anchor)));
-  const gd = guards(anchor);
+  const gd = guards(anchor), tots = totalRects(view);
   const choose = r => {
     const w = b.offsetWidth, h = b.offsetHeight;
     const box = anchor.closest && anchor.closest("table,[role=table],[role=grid],figure,svg,canvas,img"), c = box ? rect(box) : r;
@@ -1229,6 +1396,7 @@ function placeBubble(follow) {   // beside the place, never on it or on its row 
       // and every 40px between the bubble and its place costs as much as one hidden figure
       const cost = figs.filter(n => hit(n, q)).reduce((k, n) => k + ((n.bottom > r.top && n.top < r.bottom) || (n.right > r.left && n.left < r.right) ? 10 : 1), 0)
         + 100 * gd.strong.filter(s => hit(s, q)).length + 10 * gd.soft.filter(s => hit(s, q)).length + 5 * charts.filter(s => hit(s, q)).length
+        + 60 * tots.filter(s => hit(s, q)).length
         + gapOf(q, r) / 40;
       if (!best || cost < best.cost - 1e-6) best = {x, y, cost};
     }
@@ -1283,8 +1451,8 @@ function pointAt(r, q) {   // the tail touches the place when it can reach it; o
   const px = Math.max(q.left, Math.min(q.right, rc.x)), py = Math.max(q.top, Math.min(q.bottom, rc.y));
   const tx = Math.max(r.left, Math.min(r.right, px)), ty = Math.max(r.top, Math.min(r.bottom, py));
   if (hit(q, r) || Math.hypot(tx - px, ty - py) < 4 || ty < v.y || ty > v.y + v.h) { lead.style.display = "none"; return; }
-  const [ln, dot] = [lead.firstChild, lead.lastChild];
-  ln.setAttribute("x1", px); ln.setAttribute("y1", py); ln.setAttribute("x2", tx); ln.setAttribute("y2", ty);
+  const dot = lead.lastChild;
+  [lead.children[0], lead.children[1]].forEach(ln => { ln.setAttribute("x1", px); ln.setAttribute("y1", py); ln.setAttribute("x2", tx); ln.setAttribute("y2", ty); });
   dot.setAttribute("cx", tx); dot.setAttribute("cy", ty); lead.style.display = "block";
 }
 $("bx").onclick = () => { closeBubble(); clearFrames(); };
@@ -1444,8 +1612,11 @@ function placeRegion() {   // the lasso frame follows the cells it found (or the
   if (!u) { regionEl.style.display = "none"; return; }
   Object.assign(regionEl.style, {display: "block", left: u.left + "px", top: u.top + "px", width: (u.right - u.left) + "px", height: (u.bottom - u.top) + "px"});
 }
-function miniTable(rows) {   // more than three rows of one table: a small grid, the unit said once
-  const m = rows[0].m, cols = [...new Set(rows.flatMap(x => x.cols))].sort((a, b) => a - b);
+function miniTable(rows, all) {   // more than three rows of one table: a small grid, the unit said once; figures never cut
+  const m = rows[0].m, every = [...new Set(rows.flatMap(x => x.cols))].sort((a, b) => a - b);
+  const room = Math.min(560, vp().w - 24) - 40 - 130, cw = c => 14 + 7.5 * Math.max(...[colName(m, c)].concat(rows.slice(0, 12).map(x => x.row.cells[c] ? cellText(x.row.cells[c]) : "")).map(x => Math.min(String(x).length, 12)));
+  let cols = every, used = 0;
+  if (!all) { cols = []; for (const c of every) { used += cw(c); if (cols.length && used > room) break; cols.push(c); } }
   const us = [...new Set(cols.map(c => m.units[c] || ""))], one = us.length === 1 && us[0] && us[0] !== "%" ? us[0] : "";
   const t = document.createElement("table"); t.className = "mini";
   const tr = (cells, tag) => { const r = document.createElement("tr"); cells.forEach(x => { const c = document.createElement(tag); c.textContent = x; r.appendChild(c); }); return r; };
@@ -1453,7 +1624,13 @@ function miniTable(rows) {   // more than three rows of one table: a small grid,
   rows.slice(0, 12).forEach(x => t.appendChild(tr([rowName(x.row), ...cols.map(c => x.cols.includes(c) && x.row.cells[c] ? cellText(x.row.cells[c]) + (m.units[c] === "%" && !/%/.test(cellText(x.row.cells[c])) ? "%" : "") : "")], "td")));
   if (one || rows.length > 12) { const cap = document.createElement("caption");
     cap.textContent = [one ? "Đơn vị: " + one : "", rows.length > 12 ? "… và " + (rows.length - 12) + " dòng nữa" : ""].filter(Boolean).join(" · "); t.appendChild(cap); }
-  return t;
+  [...t.querySelectorAll("td:first-child")].forEach(c => { c.title = c.textContent; });
+  const w = document.createElement("div"); w.className = "mtw"; w.appendChild(t);
+  if (cols.length < every.length) {   // the columns that did not fit: one tap shows them all, side by side in a scroller
+    const more = every.length - cols.length;
+    w.appendChild(chips([["+" + more + " cột", () => { const n = miniTable(rows, true); w.replaceWith(n); placeBubble(); }]]));
+  }
+  return w;
 }
 function askRegion(box) {
   const {lines, labels, rows, cells} = regionSummary(box);
@@ -1549,7 +1726,7 @@ fitBar();
 // --- checks, run by present/kiem_hinh.py in a headless browser after each build ---
 window.__clickyThuCau = function (list) {   // which usual questions this report can answer, and with what: the live engine
   return list.map(q => { const r = resolve(q, null); let ok = false, partial = false, label = "";
-    if (r.kind === "bank") { ok = true; label = "câu đã trả lời: " + r.b.q; }
+    if (r.kind === "bank") { ok = !r.b.cu; partial = !!r.b.cu; label = (r.b.cu ? "câu đã trả lời kỳ " + (r.b.ky || "trước") + ", số hiện tại đã khác: " : "câu đã trả lời: ") + r.b.q; }
     else if (r.kind === "sup") { ok = true; label = r.win.map(o => o.row.label).join(", ") + " (" + colName(r.m, r.c) + ")"; }
     else if (r.kind === "why") { ok = !!(r.w && r.w.cause); partial = !ok && !!(r.w || r.row); label = r.w ? "báo cáo viết: " + shortText(r.w.text, 120) : r.entity || ""; }
     else if (r.kind === "mention") { partial = true; label = "chỉ có câu nhắc: " + shortText(r.s, 120); }
@@ -1639,6 +1816,15 @@ window.__clickyKiemDienThoai = async function () {   // on a phone: the bar, the
   openPanel(); await wait(); inV(rect($("panel")), "bảng hỏi"); closePanel();
   const c = tables().flatMap(m => m.rows.map(row => row.cells[numCols(m, row)[0]])).filter(Boolean)[0];
   if (c) { pick(c); await wait(); placeBubble(); await wait(); inV(rect($("bub")), "khung hỏi tại chỗ"); closeBubble(); }
+  [...$("bar").querySelectorAll("button")].forEach(b => { if (b.scrollWidth > b.clientWidth + 1) out.push("chữ trên nút " + (b.getAttribute("aria-label") || b.textContent) + " bị cắt"); });
+  for (const m of tables()) {   // a figure at the far right of a wide table, answered from the panel: it is brought on screen
+    const row = m.rows[0], k = row && numCols(m, row).pop(), x = k !== undefined && row.cells[k]; if (!x) continue;
+    openPanel(); frame(x); await wait(); await wait();
+    const w = vp(), q = rect(x), cx = (q.left + q.right) / 2;
+    if (q.left < w.x - 1 || q.right > w.x + w.w + 1 || q.bottom < w.y || q.top > w.y + w.h) out.push("ô «" + cellText(x) + "» đang khoanh nằm ngoài màn hình");
+    else if (cx < w.x || cx > w.x + w.w) out.push("ô «" + cellText(x) + "» đang khoanh bị lệch khỏi màn hình");
+    closePanel(); clearFrames(); restoreSideways();
+  }
   clearFrames(); FAST = false;
   return {problems: out, size: Math.round(v.w) + "x" + Math.round(v.h)};
 };

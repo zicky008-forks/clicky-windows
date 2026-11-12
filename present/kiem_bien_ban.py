@@ -22,8 +22,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from present.clicky_html import (_labels, check_at, check_figure, figures, numbers, other_row, page_places, parse,
-                                 seal, spelled_number, target_texts, value)
+from present.clicky_html import (_labels, check_at, check_figure, clip, figures, numbers, other_row, page_places, parse,
+                                 seal, sentence_issues, spelled_number, target_texts, value)
 
 SCRIPT = r'<script id="{}" type="application/json">(.*?)</script>'
 
@@ -58,13 +58,15 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
         listed = [x["so"] for x in row.get("so", [])]
         spoken = figures(row["noi"])
         if [f.tok for f in spoken] != listed:
-            errors.append(f"Câu «{row['noi'][:70]}» có số chưa được ghi trong biên bản.")
+            errors.append(f"Câu «{clip(row['noi'])}» có số chưa được ghi trong biên bản.")
             continue
         if spelled_number(row["noi"]):
-            errors.append(f"Câu «{row['noi'][:70]}» có số viết bằng chữ, không đối chiếu được.")
+            errors.append(f"Câu «{clip(row['noi'])}» có số viết bằng chữ, không đối chiếu được.")
         other = other_row(row["noi"], row.get("chi", ""), places)
         if other and spoken:
-            errors.append(f"Câu «{row['noi'][:70]}» nói về «{other}» nhưng Clicky khoanh dòng khác.")
+            errors.append(f"Câu «{clip(row['noi'])}» nói về «{other}» nhưng Clicky khoanh dòng khác.")
+        for tok, why in sentence_issues(row["noi"], row.get("chi", ""), places, en):
+            errors.append(f"Số {tok}: {why} (câu «{clip(row['noi'])}»).")
         for f, x in zip(spoken, row["so"]):
             count["so"] += 1
             tok, where = x["so"], x["nguon"]
@@ -73,7 +75,7 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
             elif where == "bao_cao":
                 count["cho_khac_trong_bao_cao"] += 1
                 if value(tok, en) not in on_page:
-                    errors.append(f"Số {tok} không còn trong báo cáo (câu «{row['noi'][:70]}»).")
+                    errors.append(f"Số {tok} không còn trong báo cáo (câu «{clip(row['noi'])}»).")
             else:
                 count["dung_cho_khoanh"] += 1
                 if f.how == "paren?":
@@ -83,19 +85,19 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
                 else:
                     why = check_figure(f, figures(texts.get(where, "")), en, unit)
                 if why == "missing":
-                    errors.append(f"Số {tok} không có ở chỗ Clicky khoanh ({where}) (câu «{row['noi'][:70]}»).")
+                    errors.append(f"Số {tok} không có ở chỗ Clicky khoanh ({where}) (câu «{clip(row['noi'])}»).")
                 elif why:
-                    errors.append(f"Số {tok} ở chỗ Clicky khoanh ({where}): {why} (câu «{row['noi'][:70]}»).")
+                    errors.append(f"Số {tok} ở chỗ Clicky khoanh ({where}): {why} (câu «{clip(row['noi'])}»).")
     # ready answers from the owner's memory: the page must hold exactly the recorded answers
     bank = record.get("tra_loi_san", [])
     if [(b.get("q"), b.get("a")) for b in data.get("bank", [])] != [(b["cau"], b["tra_loi"]) for b in bank]:
         errors.append("Câu trả lời sẵn trên trang khác với câu trả lời ghi trong biên bản.")
     for b in bank:
         if numbers(b["tra_loi"]) != [x["so"] for x in b.get("so", [])]:
-            errors.append(f"Câu trả lời «{b['tra_loi'][:70]}» có số chưa được ghi trong biên bản.")
+            errors.append(f"Câu trả lời «{clip(b['tra_loi'])}» có số chưa được ghi trong biên bản.")
         for x in b.get("so", []):
             if x["nguon"] == "bao_cao" and value(x["so"], en) not in on_page:
-                errors.append(f"Số {x['so']} không còn trong báo cáo (câu trả lời «{b['tra_loi'][:70]}»).")
+                errors.append(f"Số {x['so']} không còn trong báo cáo (câu trả lời «{clip(b['tra_loi'])}»).")
     count["tra_loi_san"] = len(bank)
     if not errors and count["so"] == 0:
         errors.append("Bài trình bày không nói con số nào, nên không có gì để đối chiếu với báo cáo.")

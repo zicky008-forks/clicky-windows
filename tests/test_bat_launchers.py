@@ -67,3 +67,25 @@ def test_report_launcher_flow():
 def test_memory_launcher_uses_the_real_documents_folder():
     text = (ROOT / "Ghi_cau_treo.bat").read_text(encoding="utf-8")
     assert "GetFolderPath('MyDocuments')" in text and "%USERPROFILE%\\Documents\\Clicky" not in text
+
+
+def test_report_launcher_closes_cmd_when_explorer_started_it():
+    # Explorer runs: cmd.exe /c ""...\Gan_Clicky_vao_bao_cao.bat" C:\x\P&L_T10.html". cmd splits at "&": if the
+    # .bat only leaves with "exit /b", cmd then runs "L_T10.html" as a command. From Explorer it must end with
+    # "exit"; typed in an open cmd window it keeps the window ("exit /b").
+    text = (ROOT / "Gan_Clicky_vao_bao_cao.bat").read_text(encoding="utf-8")
+    lines = [l.strip() for l in text.splitlines()]
+    assert 'if /i not "!cmdcmdline:/c =!"=="!cmdcmdline!" set "CLICKY_TU_EXPLORER=1"' in lines
+    assert text.index("EnableDelayedExpansion") < text.index("CLICKY_TU_EXPLORER=1") < text.index("DisableDelayedExpansion")
+    ra = lines.index(":ra")
+    assert lines[ra + 1:ra + 4] == ["pause", "if defined CLICKY_TU_EXPLORER exit %CODE%", "exit /b %CODE%"]
+    # every way out of the main flow goes through :ra (the memory-folder subroutine returns with exit /b 0)
+    main = lines[:lines.index(":tim_tri_nho")]
+    assert [l for l in main if not l.lower().startswith("rem") and re.search(r"(^|[\s(&])exit\b", l)] == \
+        ["if defined CLICKY_TU_EXPLORER exit %CODE%", "exit /b %CODE%"]
+    assert [k for k, l in enumerate(main) if l == "pause"] == [ra + 1]
+    # the Explorer command line as cmd hands it over: the file comes after the launcher's own name, even when
+    # the kit's folder has ".bat" in its name
+    from present.clicky_html import dropped
+    cmd = 'C:\\WINDOWS\\system32\\cmd.exe /c ""C:\\Kit.bat\\Gan_Clicky_vao_bao_cao.bat" C:\\BaoCao\\P&L_T10.html"'
+    assert dropped([], cmd) == ["C:\\BaoCao\\P&L_T10.html"]
