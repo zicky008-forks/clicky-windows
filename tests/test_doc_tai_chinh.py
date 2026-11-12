@@ -193,6 +193,83 @@ STRESS3 = [
     'Chi phí < ngân sách.',
     'Doanh thu 11.2026 tăng.',
 ]
+# round 4: dates with no cue word, signs between figures of different units, arrows, times
+STRESS4 = [
+    'Số liệu cập nhật 5/11.',
+    'Báo cáo tuần 45 (3/11–9/11).',
+    'Họp giao ban 12/11 lúc 9h.',
+    '4/4 khối đạt kế hoạch.',
+    '8/8 chỉ tiêu hoàn thành.',
+    'Doanh thu 245,3 tỷ +3,2% YoY.',
+    'Doanh thu 245,3 tỷ, +3,2% so với AOP.',
+    'Chi phí 186,4 tỷ −12,6% vs AOP.',
+    'Lợi nhuận 12 tỷ − 3 tỷ thuế = 9 tỷ.',
+    'Biên lợi nhuận 15% −> 13%.',
+    'Doanh thu tăng từ 200 → 245 tỷ.',
+    'Tỷ lệ 2:1 giữa nhân viên mới và cũ.',
+    'Chi phí 1,5 tỷ/tháng × 12 tháng.',
+    'Tuyển 48 NV (MT: 30, HRC+KA: 18).',
+    'Lương bình quân 18,5tr.',
+    'Doanh thu 2,1 nghìn tỷ đồng (≈ 87 triệu USD).',
+    'Kế hoạch tuyển 3-5 NV/tháng.',
+    'Chi phí tăng 5-7 tỷ.',
+    'Lợi nhuận −5,4 tỷ (−12%).',
+    'Doanh thu 1,2tỷ.',
+    'Số nhân sự 1.248 (+64).',
+    'Số nhân sự 1.248 (−64).',
+    'Chi phí: 186,4 tỷ (+12,6%), doanh thu: 7.400 tỷ (+7,2%).',
+    'Tăng 12,6% (từ 165,5 lên 186,4 tỷ).',
+    'Thứ hạng #1 toàn ngành.',
+    'Tỷ lệ chi phí/doanh thu 2,52% (AOP: 2,40%).',
+    'Doanh thu Q1–Q3/2026 đạt 1.820 tỷ.',
+    'Doanh thu H1/2026 đạt 1.200 tỷ.',
+    'Doanh thu 6 tháng cuối năm (H2) dự kiến 1.300 tỷ.',
+    'FY2026 vs FY2025 tăng 8%.',
+    'Năm 2026, doanh thu đạt 2.980 tỷ.',
+    'Tỷ lệ 0,5% so với 1,0% năm trước.',
+    'Lợi nhuận đạt -0,3 tỷ.',
+    'Chênh lệch -14,1 tỷ (-18%).',
+    'Giảm 1,2 tỷ (tương đương −5%).',
+    'Khối Bán hàng chiếm 49,5% (92,3/186,4 tỷ).',
+    'Ngày 31/12/2026 kết thúc năm tài chính.',
+    'Hạn chót 15/12.',
+    'Doanh thu 1.000.000.000 đồng.',
+    'Tỷ lệ 100% hoàn thành.',
+    'Nhân sự tăng 5,0% lên 1.248 người.',
+    'Thu nhập bình quân 0,9 tỷ/người/năm.',
+    'Doanh thu MT tăng 11,2%, GT −3,4%.',
+    'Doanh thu kênh e-commerce tăng 45%.',
+    'Chi phí thuê ngoài (outsourcing) 1,5 tỷ.',
+    'Giá vốn/Doanh thu là 62%.',
+    'Tăng 2 bậc, từ bậc 3/7 lên 5/7.',
+    'Lương tháng 13 = 1 tháng lương.',
+]
+# round 4: English HR and FP&A words a Vietnamese team writes
+ENGLISH_LINES = [
+    'Doanh số sell-in tăng 8%, sell-out tăng 5%.',
+    'Chi phí trade spend chiếm 12% doanh thu.',
+    'Chi phí promotion tăng 3 tỷ.',
+    'Kênh online tăng 30%, offline giảm 2%.',
+    'Chi phí overhead tăng 4%.',
+    'Mức payroll tháng 10 là 15,6 tỷ.',
+    'Chi phí bonus quý 3 là 2,1 tỷ.',
+    'Tỷ lệ turnover 12%.',
+    'Chi phí recruitment 0,8 tỷ.',
+    'Chi phí training 1,2 tỷ.',
+    'Mô hình driver-based forecast.',
+    'Chi phí one-off 3 tỷ.',
+    'Số liệu actual tháng 10.',
+    'Kế hoạch rolling forecast quý 4.',
+    'Chi phí freelancer 0,5 tỷ.',
+    'Chi phí benefit tăng 6%.',
+    'Tỷ lệ attrition 8%.',
+    'Phân tích deep dive khối bán hàng.',
+    'Số liệu break-even đạt tháng 9.',
+    'Chi phí opex và capex.',
+    'Doanh thu net sales tăng 5%.',
+    'Chi phí accrual tháng 10.',
+    'Phương án upside và downside.',
+]
 # the demo talk (synthetic HR cost report)
 DEMO = [
     "Kính chào anh chị. Em là Clicky, trợ lý AI của anh Tuấn. Em xin trình bày AOP Revised FY2026–2027: "
@@ -340,7 +417,7 @@ def test_every_word_the_finance_reader_adds_is_known_to_the_offline_voice():
     assert not missing
 
 
-@pytest.mark.parametrize("line", STRESS + STRESS2 + STRESS3 + DEMO)
+@pytest.mark.parametrize("line", STRESS + STRESS2 + STRESS3 + STRESS4 + ENGLISH_LINES + DEMO)
 def test_no_word_of_the_fpa_corpus_is_missing_from_the_phoneme_table(line):
     missing = []
     for piece in pieces(line):
@@ -521,7 +598,7 @@ def test_apostrophes_quotes_and_currency_signs_are_spoken_not_blocking():
     ("Doanh thu −5% YoY.", "Doanh thu giảm năm phần trăm so với cùng kỳ năm trước."),
     ("Chi phí −3% vs AOP.", "Chi phí giảm ba phần trăm so với ây-ô-pi."),
     ("Lợi nhuận −2,1 tỷ MoM.", "Lợi nhuận giảm hai phẩy một tỷ so với tháng trước."),
-    ("Chi phí tăng 5%; doanh thu −2%.", "Chi phí tăng năm phần trăm; doanh thu âm hai phần trăm."),  # no "+": a level
+    ("Chi phí tăng 5%; doanh thu −2%.", "Chi phí tăng năm phần trăm; doanh thu giảm hai phần trăm."),  # round 4
     ("Chi phí = 12 tỷ + 3 tỷ.", "Chi phí bằng mười hai tỷ cộng ba tỷ."),
     ("Khoảng 3 x 4 = 12.", "Khoảng ba nhân bốn bằng mười hai."),
     ("Chi phí tăng 2x.", "Chi phí tăng hai lần."),
@@ -545,7 +622,7 @@ def test_round_three_readings(text, heard):
 
 
 def test_round_three_breaths():
-    from present.doc_tai_chinh import LIMIT
+    from present.doc_tai_chinh import LIMIT, LONG
     opening = ("Em kính chào anh chị ạ. Em là trợ lý AI của anh Tuấn, xin trình bày AOP Revised FY2026–2027: "
                "Chi phí nhân sự quản trị.")
     parts = pieces(opening)
@@ -555,13 +632,136 @@ def test_round_three_breaths():
     assert LIMIT == 90
     ask = ("Kính đề nghị Ban Giám đốc giữ tỷ lệ chi phí nhân sự/DTT ở 2,40% như AOP gốc, tức trần 177,5 tỷ; "
            "giãn tuyển 30 vị trí bán hàng sang quý 3 và gắn với doanh thu trên mỗi người.")
-    first = pieces(ask)[0]
-    assert first.startswith("Kính đề nghị Ban Giám đốc") and "tức trần 177,5 tỷ;" in first   # never cut before "tức"
+    first, second = pieces(ask)[:2]                 # round 4: 162 spoken characters was one 8.6 s breath
+    assert first.startswith("Kính đề nghị Ban Giám đốc") and second == "tức trần 177,5 tỷ;"
     assert pieces("Kính đề nghị Ban Giám đốc phê duyệt: giữ trần chi phí như cũ.") == [
         "Kính đề nghị Ban Giám đốc phê duyệt: giữ trần chi phí như cũ."]
     long_minus = ("Doanh thu kênh hiện đại của toàn bộ hệ thống siêu thị trên cả nước trong quý ba, "
                   "−12,5 tỷ so với kế hoạch ban đầu của năm nay.")
     assert not any(doc(p).lower().startswith("âm") or doc(p).lower().startswith("giảm") for p in pieces(long_minus)[1:])
-    for line in STRESS + STRESS2 + STRESS3 + DEMO:
-        for p in pieces(line):
-            assert not re.match(r"(?i)\W*(tức|âm)\b", doc(p)), p
+    for line in STRESS + STRESS2 + STRESS3 + STRESS4 + ENGLISH_LINES + DEMO:
+        parts = pieces(line)
+        for k, p in enumerate(parts):
+            assert not re.match(r"(?i)\W*âm\b", doc(p)), p
+            if k and re.match(r"(?i)\W*tức\b", doc(p)):      # only to keep a breath under LONG
+                assert len(doc(parts[k - 1] + " " + p)) > LONG, p
+
+
+@pytest.mark.parametrize("text, heard", [
+    # dates need no cue word; a count needs its noun ("4/4 khối" was "ngày bốn tháng bốn")
+    ("Số liệu cập nhật 5/11.", "Số liệu cập nhật ngày năm tháng mười một."),
+    ("Báo cáo tuần 45 (3/11–9/11).", "Báo cáo tuần bốn mươi lăm (từ ngày ba đến ngày chín tháng mười một)."),
+    ("Từ 28/10–3/11.", "Từ ngày hai mươi tám tháng mười đến ngày ba tháng mười một."),
+    ("Họp giao ban 12/11 lúc 9h.", "Họp giao ban ngày mười hai tháng mười một lúc chín giờ."),
+    ("4/4 khối đạt kế hoạch.", "bốn trên bốn khối đạt kế hoạch."),
+    ("8/8 chỉ tiêu hoàn thành.", "tám trên tám chỉ tiêu hoàn thành."),
+    ("3/10 khối đạt kế hoạch.", "ba phần mười khối đạt kế hoạch."),
+    ("Chỉ 2/5 vị trí đã tuyển.", "Chỉ hai phần năm vị trí đã tuyển."),
+    ("Tăng 2 bậc, từ bậc 3/7 lên 5/7.", "Tăng hai bậc, từ bậc ba trên bảy lên năm trên bảy."),
+    ("Hạn chót 15/12.", "Hạn chót ngày mười lăm tháng mười hai."),
+    # "+" is "cộng" only between figures of one unit; a change is "tăng"; "−" between them is "trừ"
+    ("Doanh thu 245,3 tỷ +3,2% YoY.",
+     "Doanh thu hai trăm bốn mươi lăm phẩy ba tỷ, tăng ba phẩy hai phần trăm so với cùng kỳ năm trước."),
+    ("12 tỷ + 3 tỷ = 15 tỷ", "mười hai tỷ cộng ba tỷ bằng mười lăm tỷ"),
+    ("Lợi nhuận 12 tỷ − 3 tỷ thuế = 9 tỷ.", "Lợi nhuận mười hai tỷ trừ ba tỷ thuế bằng chín tỷ."),
+    ("Chi phí 5 tỷ – 7 tỷ.", "Chi phí năm tỷ đến bảy tỷ."),
+    ("Chi phí 186,4 tỷ −12,6% vs AOP.",
+     "Chi phí một trăm tám mươi sáu phẩy bốn tỷ giảm mười hai phẩy sáu phần trăm so với ây-ô-pi."),
+    # arrows, ratios, times, glued units
+    ("Biên lợi nhuận 15% −> 13%.", "Biên lợi nhuận mười lăm phần trăm xuống mười ba phần trăm."),
+    ("Doanh thu tăng từ 200 → 245 tỷ.", "Doanh thu tăng từ hai trăm lên hai trăm bốn mươi lăm tỷ."),
+    ("Kế hoạch → thực hiện", "Kế hoạch sang thực hiện"),
+    ("Tỷ lệ 2:1 giữa nhân viên mới và cũ.", "Tỷ lệ hai trên một giữa nhân viên mới và cũ."),
+    ("Họp lúc 9:30 và 14h15.", "Họp lúc chín giờ ba mươi và mười bốn giờ mười lăm."),
+    ("Chi phí 1,5 tỷ/tháng × 12 tháng.", "Chi phí một phẩy năm tỷ mỗi tháng nhân mười hai tháng."),
+    ("Lương bình quân 18,5tr.", "Lương bình quân mười tám phẩy năm triệu."),
+    ("Thứ hạng #1 toàn ngành.", "Thứ hạng số một toàn ngành."),
+    # periods
+    ("Doanh thu Q1–Q3/2026 đạt 1.820 tỷ.", "Doanh thu quý một đến quý ba năm hai nghìn không trăm hai mươi sáu đạt "
+     "một nghìn tám trăm hai mươi tỷ."),
+    ("Lũy kế T1–T10/2026.", "Lũy kế tháng một đến tháng mười năm hai nghìn không trăm hai mươi sáu."),
+    ("Doanh thu H1/2026 đạt 1.200 tỷ.", "Doanh thu sáu tháng đầu năm hai nghìn không trăm hai mươi sáu đạt "
+     "một nghìn hai trăm tỷ."),
+    ("Doanh thu 6 tháng cuối năm (H2) dự kiến 1.300 tỷ.", "Doanh thu sáu tháng cuối năm dự kiến một nghìn ba trăm tỷ."),
+    # a minus after "tăng" in the same sentence is the other direction
+    ("Doanh thu MT tăng 11,2%, GT −3,4%.", "Doanh thu em-ti tăng mười một phẩy hai phần trăm, di-ti giảm ba phẩy bốn phần trăm."),
+    ("Lợi nhuận là −2,1 tỷ.", "Lợi nhuận là âm hai phẩy một tỷ."),
+    ("Giảm 1,2 tỷ (tương đương −5%).", "Giảm một phẩy hai tỷ (tương đương giảm năm phần trăm)."),
+    ("Lợi nhuận −5,4 tỷ trong khi doanh thu tăng 3%.",
+     "Lợi nhuận âm năm phẩy bốn tỷ trong khi doanh thu tăng ba phần trăm."),
+    # report column abbreviations
+    ("Tỷ lệ % TH/KH là 96%.", "Tỷ lệ phần trăm thực hiện trên kế hoạch là chín mươi sáu phần trăm."),
+    ("LK 10T/2026 so với CK NT.", "lũy kế mười tháng năm hai nghìn không trăm hai mươi sáu so với cùng kỳ năm trước."),
+    ("Mã KH 1023 có CK thương mại 2%.", "Mã khách hàng một nghìn không trăm hai mươi ba có chiết khấu thương mại "
+     "hai phần trăm."),
+    # English HR and FP&A words
+    ("Doanh số sell-in tăng 8%, sell-out tăng 5%.", "Doanh số bán vào tăng tám phần trăm, bán ra tăng năm phần trăm."),
+    ("Chi phí trade spend chiếm 12% doanh thu.", "Chi phí thương mại chiếm mười hai phần trăm doanh thu."),
+    ("Chi phí overhead tăng 4%.", "Chi phí chung tăng bốn phần trăm."),
+    ("Kế hoạch rolling forecast quý 4.", "Kế hoạch dự báo cuốn chiếu quý bốn."),
+    ("Chi phí opex và capex.", "Chi phí hoạt động và chi phí đầu tư."),
+    ("Doanh thu net sales tăng 5%.", "Doanh thu thuần tăng năm phần trăm."),
+    ("Chi phí thuê ngoài (outsourcing) 1,5 tỷ.", "Chi phí thuê ngoài một phẩy năm tỷ."),
+    ("Doanh thu kênh E-Commerce tăng 45%.", "Doanh thu kênh thương mại điện tử tăng bốn mươi lăm phần trăm."),
+    ("Chi phí one-off 3 tỷ, BONUS 2 tỷ.", "Chi phí một lần ba tỷ, thưởng hai tỷ."),
+])
+def test_round_four_readings(text, heard):
+    assert doc(text) == heard
+
+
+@pytest.mark.parametrize("a, b, before, after, kind", [
+    (5, 11, "Số liệu cập nhật ", ".", "date"),
+    (4, 4, "", " khối đạt", "ratio"),
+    (3, 10, "", " khối đạt", "fraction"),
+    (2, 5, "Tỷ lệ ", ".", "fraction"),
+    (25, 13, "Tỷ lệ ", ".", "ratio"),
+    (3, 7, "từ bậc ", " lên", "ratio"),
+    (15, 11, "ngày ", "", "date"),
+    (1, 5, "", " số cửa hàng", "fraction"),
+    (5, 20, "", ".", "fraction"),
+    (40, 13, "", ".", "ratio"),
+])
+def test_slash_kind_is_one_rule_for_the_voice_and_the_figure_check(a, b, before, after, kind):
+    from present.vn_format import slash_kind
+    assert slash_kind(a, b, before, after) == kind
+
+
+def test_report_column_abbreviations_are_aliases_both_ways():
+    from present.doc_tai_chinh import aliases
+    got = aliases()
+    assert got["TH"] == ["thực hiện"] and got["KH"] == ["kế hoạch"] and got["LK"] == ["lũy kế"]
+    assert got["CK"] == ["cùng kỳ"] and got["NT"] == ["năm trước"]
+
+
+def test_voice_lines_lists_each_word_spelled_letter_by_letter():
+    import io
+    import wave
+
+    from present import clicky_html
+
+    class Voice:
+        missing = []
+
+        def synthesize(self, text):
+            self.missing = ["Xyzco"] if "Xyzco" in text else []
+            out = io.BytesIO()
+            with wave.open(out, "wb") as w:
+                w.setnchannels(1), w.setsampwidth(2), w.setframerate(8000)
+                w.writeframes(b"\0\0" * 80)
+            return out.getvalue()
+
+    info = {}
+    wav, starts = clicky_html.voice_lines(["Kênh MT và KA của Xyzco tăng.", "Doanh thu TH/KH 96%."],
+                                          Voice().synthesize, info=info)
+    assert wav.startswith(b"RIFF") and len(starts) == 2
+    assert info["danh_van"] == ["KA", "MT", "Xyzco"]                     # TH and KH have a reading: not listed
+    spelled = []
+    assert doc("Kênh GT tăng, BU1 giảm", spelled=spelled) == "Kênh di-ti tăng, bi-giu một giảm"
+    assert spelled == ["GT", "BU"]
+
+
+def test_the_proposal_breathes_before_tuc_only_when_too_long():
+    from present.doc_tai_chinh import LONG
+    assert LONG == 120
+    assert pieces("Thứ nhất, khối Bán hàng vượt AOP gốc 14,1 tỷ, tức 18,0%.") == [
+        "Thứ nhất, khối Bán hàng vượt AOP gốc 14,1 tỷ, tức 18,0%."]

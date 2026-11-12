@@ -22,9 +22,10 @@ from __future__ import annotations
 
 import os
 import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from present.vn_format import int_words, join_groups, speakable
+from present.vn_format import int_words, join_groups, slash_kind, speakable
 
 # said as words: what the abbreviation means in a Vietnamese finance team
 WORDS = {
@@ -54,6 +55,10 @@ WORDS = {
     "MKT": "ma-két-tinh", "TP.HCM": "thành phố Hồ Chí Minh", "TP. HCM": "thành phố Hồ Chí Minh",
     "TPHCM": "thành phố Hồ Chí Minh", "HCM": "Hồ Chí Minh", "HN": "Hà Nội", "kg": "ki-lô-gam",
     "GP": "lợi nhuận gộp",
+    # report columns: "% TH/KH" is "phần trăm thực hiện trên kế hoạch". "KH" in "Mã KH" is a customer.
+    "TH": "thực hiện", "KH": "kế hoạch", "LK": "lũy kế", "CK": "cùng kỳ", "NT": "năm trước",
+    "Mã KH": "Mã khách hàng", "mã KH": "mã khách hàng", "CKTM": "chiết khấu thương mại",
+    "CK thương mại": "chiết khấu thương mại",
 }
 # English finance words a Vietnamese voice cannot read: what the team says instead (any letter case)
 ENGLISH = {"aop revised": "ây-ô-pi điều chỉnh", "revised": "điều chỉnh", "headcount": "số nhân sự",
@@ -62,7 +67,21 @@ ENGLISH = {"aop revised": "ây-ô-pi điều chỉnh", "revised": "điều chỉ
            "run rate": "tốc độ hiện tại", "target": "mục tiêu", "baseline": "mức gốc", "outlook": "triển vọng",
            "margin": "biên lợi nhuận", "vs": "so với", "clicky": "Cờ-lích-ki", "logistics": "lô-gít-tích",
            "working capital": "vốn lưu động", "cash conversion cycle": "chu kỳ chuyển đổi tiền mặt",
-           "cash flow": "dòng tiền", "sales": "bán hàng"}
+           "cash flow": "dòng tiền", "sales": "bán hàng",
+           # HR and FP&A words the team writes in English
+           "bonus": "thưởng", "training": "đào tạo", "recruitment": "tuyển dụng", "turnover": "nghỉ việc",
+           "attrition": "nghỉ việc", "overhead": "chi phí chung", "promotion": "khuyến mãi",
+           "online": "trực tuyến", "offline": "ngoại tuyến", "payroll": "quỹ lương", "benefit": "phúc lợi",
+           "benefits": "phúc lợi", "freelancer": "cộng tác viên", "freelancers": "cộng tác viên",
+           "one-off": "một lần", "one off": "một lần", "upside": "kịch bản tốt", "downside": "kịch bản xấu",
+           "sell-in": "bán vào", "sell in": "bán vào", "sell-out": "bán ra", "sell out": "bán ra",
+           "trade spend": "chi phí thương mại", "accrual": "trích trước", "accruals": "trích trước",
+           "break-even": "hòa vốn", "breakeven": "hòa vốn", "break even": "hòa vốn",
+           "rolling forecast": "dự báo cuốn chiếu", "deep dive": "phân tích sâu", "deep-dive": "phân tích sâu",
+           "net sales": "doanh thu thuần", "sales target": "mục tiêu bán hàng", "e-commerce": "thương mại điện tử",
+           "ecommerce": "thương mại điện tử", "outsourcing": "thuê ngoài", "opex": "chi phí hoạt động",
+           "capex": "chi phí đầu tư", "driver-based forecast": "dự báo theo động lực",
+           "driver based forecast": "dự báo theo động lực", "driver-based": "theo động lực", "driver based": "theo động lực"}
 # English letter names written so a Vietnamese voice says them right
 LETTERS = {"A": "ây", "B": "bi", "C": "xi", "D": "đi", "E": "i", "F": "ép", "G": "di", "H": "hát", "I": "ai",
            "J": "giây", "K": "cây", "L": "e-lờ", "M": "em", "N": "en", "O": "ô", "P": "pi", "Q": "kiêu", "R": "a",
@@ -78,12 +97,15 @@ _MONEY = r"đồng|đ|triệu|tr|tỷ|nghìn|USD|VND|VNĐ|ơ-rô|đô la"
 SHORTER = {"DTT": ["doanh thu"], "LNST": ["lợi nhuận"], "AOPR": ["AOP điều chỉnh"], "GVHB": ["giá vốn"]}
 
 
+_SHORT_ALIAS = ("DT", "CP", "NV", "SL", "HR", "TH", "KH", "LK", "CK", "NT")
+
+
 def aliases() -> dict:
     """{abbreviation: [what people say instead]}, for matching a reader's question to the report's labels.
     Only meanings in words: a reading spelled letter by letter is not something a reader types."""
     out = {}
     for k, v in {**WORDS, **owner_words()}.items():
-        if "-" not in v and not k.islower() and (len(k) >= 3 or k in ("DT", "CP", "NV", "SL", "HR")):  # "LE" is a word
+        if "-" not in v and not k.islower() and (len(k) >= 3 or k in _SHORT_ALIAS):  # "LE" is a word
             out[k] = [v] + SHORTER.get(k, [])
     out["AOPR"] = ["AOP revised"] + SHORTER["AOPR"]
     return out
@@ -118,15 +140,19 @@ def _without_repeat(before: str, said: str) -> str:
     return said
 
 
-def _abbr(m: re.Match, table: dict) -> str:
+def _abbr(m: re.Match, table: dict, spelled: list | None = None) -> str:
     w = m.group(0)
     if w in table:
         return _without_repeat(m.string[:m.start()], table[w])
     code = re.fullmatch(r"([A-Z]{1,4})(\d{1,3})", w)                  # BU1: letters, then the number
     if code:
         letters = code.group(1)
+        if letters not in table and spelled is not None:
+            spelled.append(letters)
         return f"{table.get(letters) or _spell(letters)} {code.group(2)}"
     if 2 <= len(w) <= 5 and w.isupper() and w.isalpha() and not VN_WORD.search(w):
+        if spelled is not None:
+            spelled.append(w)
         return _spell(w)
     return w
 
@@ -177,17 +203,31 @@ def _date(m: re.Match) -> str:
 _DATE_CUE = r"(?:ngày|hạn|từ|đến|trước|sau|dịp|khuyến mãi|chương trình)"
 
 
-def _day_month(m: re.Match) -> str:
-    """'15/11' is a date after a date cue ('ngày 15/11', 'khuyến mãi 11/11') or when a >= b (20/11, 11/11).
-    Otherwise '3/10' and '1/5' are fractions: 'ba phần mười'. The same rule as the build's figure check
-    (present.clicky_html.figures), which also treats 'tháng 11/2026' and 'T11-2026' as periods."""
-    cue, a, b = m.group(1), int(m.group(2)), int(m.group(3))
-    if (cue or a >= b) and 1 <= a <= 31 and 1 <= b <= 12:
-        lead = cue if cue and re.match(r"(?i)ngày", cue) else (cue or "") + "ngày "
+def _slash_say(a: int, b: int, kind: str, cue: str = "") -> str:
+    if kind == "date":
+        lead = cue if re.match(r"(?i)ngày", cue) else cue + "ngày "
         return f"{lead}{a} tháng {b}"
-    if a < b:
-        return f"{cue or ''}{a} phần {b}"
-    return m.group(0)
+    return f"{cue}{a} {'phần' if kind == 'fraction' else 'trên'} {b}"
+
+
+def _day_month(m: re.Match) -> str:
+    """'5/11' is a date, '3/10 khối' a fraction, '4/4 khối' and 'bậc 3/7' a ratio: vn_format.slash_kind,
+    the same rule as the build's figure check (present.clicky_html.figures)."""
+    cue, a, b = m.group(1) or "", int(m.group(2)), int(m.group(3))
+    kind = slash_kind(a, b, m.string[:m.start(2)], m.string[m.end():])
+    return _slash_say(a, b, kind, cue)
+
+
+def _day_range(m: re.Match) -> str:
+    """'(3/11–9/11)' is 'từ ngày 3 đến ngày 9 tháng 11'; across months each date keeps its month."""
+    a, b, c, d = (int(x) for x in m.groups())
+    before, after = m.string[:m.start()], m.string[m.end():]
+    if slash_kind(a, b, before, "") != "date" or slash_kind(c, d, "đến ", after) != "date":
+        return m.group(0)
+    lead = "" if re.search(r"(?i)\btừ\s*$", before) else "từ "
+    if b == d:
+        return f"{lead}ngày {a} đến ngày {c} tháng {d}"
+    return f"{lead}ngày {a} tháng {b} đến ngày {c} tháng {d}"
 
 
 def _month_year(m: re.Match) -> str:
@@ -222,15 +262,17 @@ def _years(y1: str, y2: str) -> str:
 
 def _minus(m: re.Match, bridge: bool = False) -> str:
     """A minus is 'âm' (a level: 'là −2,1 tỷ', 'Dòng tiền thuần −12,5 tỷ', 'Tăng trưởng −2,3%'). It is 'giảm'
-    for a change: 'so với' later in the same clause, just after 'tức' or '(', or in a bridge line that also
-    has a '+'. Right after 'giảm' the sign is dropped: 'giảm −5%' is 'giảm 5%'."""
+    for a change: 'so với' later in the same clause, just after 'tức', 'tương đương' or '(', in a bridge line
+    that also has a '+', or when the sentence already said 'tăng' ('MT tăng 11,2%, GT −3,4%'). Right after 'giảm' the sign is dropped: 'giảm −5%' is 'giảm 5%'."""
     before, after = m.string[:m.start()], m.string[m.end():]
     clause = re.split(r"[,;:.!?](?=\s|$)", after, maxsplit=1)[0]
     if re.search(r"(?i)\btăng trưởng\s*$", before):
         return "âm "
     if re.search(r"(?i)\b(?:giảm|sụt|thấp hơn|lỗ)\s*$", before):
         return ""
-    if bridge or re.search(r"(?:\btức|\()\s*$", before) or re.search(r"\bso với\b", clause):
+    sentence = re.split(r"[.!?](?=\s)", before)[-1]
+    if (bridge or re.search(r"(?i)(?:\btức|\btương đương|\()\s*$", before) or re.search(r"\bso với\b", clause)
+            or re.search(r"(?i)\btăng\b(?!\s+trưởng)", sentence)):
         return "giảm "
     return "âm "
 
@@ -252,12 +294,18 @@ def _periods(t: str) -> str:
     t = re.sub(rf"(?<![\d.,])\b(1[0-2]|0?[1-9])\s*[-.]\s*{yr}\b(?![.,]\d)", r"tháng \1 năm \2", t)   # 11.2026
     t = re.sub(rf"(?<![\d.,]){yr}\s*[-–—]\s*{yr}\b", lambda m: _years(m.group(1), m.group(2)), t)  # 2026-2027
     t = re.sub(rf"\b{yr}([ABFE])\b", lambda m: f"{_PERIOD_TAG[m.group(2)]} năm {m.group(1)}", t)   # 2025A, 2026B
+    t = re.sub(rf"\bQ([1-4])\s*[-–—]\s*Q([1-4])(?:\s*[/-]\s*{yr}\b)?",                          # Q1–Q3/2026
+               lambda m: f"quý {m.group(1)} đến quý {m.group(2)}" + (f" năm {m.group(3)}" if m.group(3) else ""), t)
+    t = re.sub(rf"\bT(1[0-2]|[1-9])\s*[-–—]\s*T(1[0-2]|[1-9])(?:\s*[/-]\s*{yr}\b)?",            # T1–T10/2026
+               lambda m: f"tháng {m.group(1)} đến tháng {m.group(2)}" + (f" năm {m.group(3)}" if m.group(3) else ""), t)
+    t = re.sub(rf"\bH([12])\s*[/-]\s*{yr}\b",                                                   # H1/2026
+               lambda m: f"6 tháng {'đầu' if m.group(1) == '1' else 'cuối'} năm {m.group(2)}", t)
     t = re.sub(rf"\bQ([1-4])\s*[/-]\s*{yr}\b", r"quý \1 năm \2", t)                              # Q3/2026, Q3-2026
     t = re.sub(r"\bQ([1-4])\s*/\s*(\d{2})\b(?![\d/])", r"quý \1 năm 20\2", t)                    # Q3/26
     t = re.sub(rf"\bQ([1-4])\s+{yr}\b", r"quý \1 năm \2", t)
     t = re.sub(r"\bQ([1-4])\b", r"quý \1", t)
-    t = re.sub(r"\bH1\b", "sáu tháng đầu năm", t)
-    t = re.sub(r"\bH2\b", "sáu tháng cuối năm", t)
+    t = re.sub(r"\bH1\b", "6 tháng đầu năm", t)
+    t = re.sub(r"\bH2\b", "6 tháng cuối năm", t)
     t = re.sub(r"\b(3|6|9|12)M\b(?!\s*(?:USD|VND|\$))", r"\1 tháng", t)        # lũy kế 9M
     t = re.sub(rf"\b(1[0-2]|[1-9])T\s*/\s*{yr}\b", r"\1 tháng năm \2", t)       # 9T/2026
     t = re.sub(r"\b(1[0-2]|[1-9])T\b", r"\1 tháng", t)                          # 6T đầu năm
@@ -267,19 +315,55 @@ def _periods(t: str) -> str:
     t = re.sub(r"(?<![\d.,])\b(\d{1,2})/(\d{1,2})\b(?![/%]|[.,]\d)",              # 30/70: a split, not a date
                lambda m: f"{int_words(int(m.group(1)))} – {int_words(int(m.group(2)))}"
                if int(m.group(1)) + int(m.group(2)) == 100 else m.group(0), t)
+    t = re.sub(r"(?<![\d.,/])\b(\d{1,2})/(\d{1,2})\s*[-–—]\s*(\d{1,2})/(\d{1,2})\b(?![/%]|[.,]\d)",
+               _day_range, t)                                                          # 3/11–9/11
     t = re.sub(rf"(?i)(\b{_DATE_CUE}\s+)?(?<![\d.,])\b(\d{{1,2}})/(\d{{1,2}})\b(?![/%]|[.,]\d|\s*/)",
                _day_month, t)                                                          # 15/11, 3/10
     t = re.sub(rf"(?i)(\b{_DATE_CUE}\s+)(?<![\d.,])\b(\d{{1,2}})\.(\d{{1,2}})\b(?=\s*(?:năm\b|[,;:!?]|\.(?!\d)|$))",
                _day_month, t)                                                          # đến 31.10 năm nay
+    # "6 tháng cuối năm (H2)": the bracket only repeats the words just said
+    t = re.sub(r"(?i)\b((?:\w+\s+){0,5}\w+)\s*\(\s*\1\s*\)", r"\1", t)
     t = re.sub(r"\b(?:TK|[Tt]ài khoản)\s*(\d{3,})",                                # TK 6421: digit by digit
                lambda m: "tài khoản " + " ".join(int_words(int(c)) for c in m.group(1)), t)
     return t
 
 
+_UNIT = r"(?:%|pp|điểm phần trăm|nghìn tỷ|tỷ|triệu|nghìn|đồng|người|tr\b)"
+# a figure, a sign, a figure: "12 tỷ + 3 tỷ", "245,3 tỷ +3,2%", "12 tỷ − 3 tỷ thuế"
+_ARITH = re.compile(rf"(\d[\d.,]*)(\s*{_UNIT})?(\s*)([+−]|(?<=\s)[-–](?=\s))(\s*)(\d[\d.,]*)(\s*{_UNIT})?")
+
+
+def _value(text: str):
+    try:
+        return Decimal(text.replace(".", "").replace(",", "."))
+    except InvalidOperation:
+        return None
+
+
+def _arith(m: re.Match) -> str:
+    """'+' between two figures is 'cộng' only when both have the same unit and no comparison follows
+    ('12 tỷ + 3 tỷ'); '245,3 tỷ +3,2% YoY' is a change: 'tăng'. A minus with spaces between two figures of
+    the same unit is 'trừ' ('12 tỷ − 3 tỷ thuế'); a spaced '-' or '–' only when the second is smaller, else
+    it is a range: '5 tỷ – 7 tỷ' is 'đến'."""
+    a, ua, gap1, sign, gap2, b, ub = m.groups()
+    same = (ua or "").strip() == (ub or "").strip()
+    compare = re.match(r"\s*(?:so với|vs\b|cùng kỳ)", m.string[m.end():])
+    left = a + (ua or "") + gap1
+    if sign == "+":
+        if same and not compare:
+            return f"{a}{ua or ''} cộng {b}{ub or ''}"
+        return f"{a}{ua or ''}{',' if gap1 or ua else ''} +{b}{ub or ''}"
+    spaced = gap1 and gap2
+    smaller = sign == "−" or (_value(a) or 0) > (_value(b) or 0)
+    if same and spaced and not compare:
+        return f"{a}{ua or ''} {'trừ' if smaller else 'đến'} {b}{ub or ''}"
+    return m.group(0)
+
+
 def _signs(t: str) -> str:
     bridge = bool(re.search(r"(?<![\w,.])\+\s?\d", t)) and bool(re.search(r"(?<![\w,.])[−–-]\s?\d", t))
-    fig = r"(\d[\d.,]*\s*(?:%|tỷ|triệu|nghìn|đồng|người)?)"
-    t = re.sub(fig + r"\s*\+\s*(?=\d)", r"\1 cộng ", t)                              # 12 tỷ + 3 tỷ
+    t = re.sub(_ARITH, _arith, t)                                                   # 12 tỷ + 3 tỷ, 12 tỷ − 3 tỷ
+    t = re.sub(r"(\b(?:tháng|năm|quý|tuần|ngày|tỷ|triệu|nghìn|đồng|người)|%)\s*[x×]\s*(?=\d)", r"\1 nhân ", t)
     t = re.sub(r"(\d)\s*[x×]\s*(?=\d)", r"\1 nhân ", t)                                # 3 x 4
     # a list marker: "Kính đề nghị: (1) tăng…, (2) giảm…" is "thứ nhất", never "âm một"
     t = re.sub(r"\((\d{1,2})\)(?=\s+[^\W\d_])(?!\s+(?:tỷ|triệu|nghìn|đồng|tr|điểm)\b)",
@@ -310,7 +394,8 @@ def _units(t: str) -> str:
     t = re.sub(r"(\d)\s*x\b", r"\1 lần", t)                                        # 1,2x
     t = re.sub(r"(\d)\s*pp\b", r"\1 điểm phần trăm", t)
     t = re.sub(r"(\d)\s*bps?\b", r"\1 điểm cơ bản", t)
-    t = re.sub(r"(\d)\s*đ\b", r"\1 đồng", t)                                       # 1.250.000 đ
+    t = re.sub(r"(\d)\s*đ\b", r"\1 đồng", t)
+    t = re.sub(r"(\d)\s*tr\b(?:\.(?=\s+[a-zđà-ỹ]))?", r"\1 triệu", t)                                  # 18,5tr                                       # 1.250.000 đ
     t = re.sub(r"(\d)\s*HC\b", r"\1 người", t)                                     # 1.248 HC
     t = re.sub(r"%\s*/\s*(?=[\d−+-])", "% và ", t)                                 # 65%/35%
     t = re.sub(rf"\b({_MONEY})\s*/\s*(?=[^\W\d_])", r"\1 mỗi ", t)                 # đồng/thùng, tr/người
@@ -336,8 +421,32 @@ def vn_numbers(text: str) -> str:
     return re.sub(r"\d[\d,]*(?:\.\d+)?", lambda m: "".join(swap.get(c, c) for c in m.group(0)), str(text))
 
 
-def doc(text: str, en_numbers: bool = False) -> str:
-    """The sentence as it should be heard. en_numbers: the report writes 412,580.5 (English marks)."""
+def _arrow(m: re.Match) -> str:
+    """'15% → 13%' is 'xuống', '200 → 245 tỷ' and '165,5 tỷ → 186,4 tỷ' are 'lên'; between words
+    ('AOP → LE') it is 'sang'."""
+    a = re.search(r"(\d[\d.,]*)\s*(?:%|\w+)?\s*$", m.string[:m.start()])
+    b = re.match(r"\s*(\d[\d.,]*)", m.string[m.end():])
+    if not (a and b):
+        return " sang "
+    return " xuống " if (_value(b.group(1)) or 0) < (_value(a.group(1)) or 0) else " lên "
+
+
+def _colon_figure(m: re.Match) -> str:
+    """'9:30' is a time ('9 giờ 30'); '2:1' is a ratio ('2 trên 1')."""
+    a, b = m.group(1), m.group(2)
+    if len(b) == 2 and int(a) <= 23 and int(b) <= 59:
+        return f"{int(a)} giờ {int(b)}" if int(b) else f"{int(a)} giờ"
+    return f"{a} trên {b}"
+
+
+def _hour(m: re.Match) -> str:
+    return f"{int(m.group(1))} giờ" + (f" {int(m.group(2))}" if m.group(2) and int(m.group(2)) else "")
+
+
+def doc(text: str, en_numbers: bool = False, spelled: list | None = None) -> str:
+    """The sentence as it should be heard. en_numbers: the report writes 412,580.5 (English marks).
+    spelled: if given, each code read letter by letter (not in the table: "MT", "KA") is appended to it,
+    so the owner can see what to add to TU_DOC.txt."""
     table = {**WORDS, **owner_words()}
     t = vn_numbers(text or "") if en_numbers else str(text or "")
     t = join_groups(t)                                                 # "1 234 567 triệu" is one figure
@@ -351,9 +460,13 @@ def doc(text: str, en_numbers: bool = False) -> str:
     t = re.sub(r"(?<=\d)\s*\$", " đô la", t)
     t = re.sub(r"\s*£", " bảng Anh", t)
     t = re.sub(r"\s*¥", " yên", t)
+    t = re.sub(r"(?<![\w#])#\s?(?=\d)", "số ", t)                                  # hạng #1: số một
     t = re.sub(r"[«»“”\"‘’`*•]", "", t)                                 # quotes and bullets have no sound
     t = re.sub(r"\s*…\s*", ", ", t)
     t = re.sub(r"<!--|-->|</?[A-Za-z][^<>]*>|[{}\[\]|\\^#@]", " ", t)        # markup and code marks have no sound
+    t = re.sub(r"\s*(?:→|⟶|➝|[−-]+>|=>)\s*", _arrow, t)                              # 15% → 13%
+    t = re.sub(r"(?<![\d:.,])(\d{1,2}):(\d{1,2})(?![\d:])", _colon_figure, t)              # 2:1, 9:30
+    t = re.sub(r"(?<![\w.,])([01]?\d|2[0-3])h(?:([0-5]\d)(?:p|ph)?)?\b", _hour, t)           # 9h, 9h30
     t = re.sub(r"\s>\s", " lớn hơn ", t)                                       # Doanh thu > chi phí
     t = re.sub(r"\s<\s", " nhỏ hơn ", t)
     t = re.sub(r"\s+[–—]\s+(?=[^\W\d_])", ", ", t)                            # "T10/2026 – Khối Bán hàng": a breath
@@ -372,7 +485,7 @@ def doc(text: str, en_numbers: bool = False) -> str:
     keys = sorted(table, key=len, reverse=True)
     pat = "|".join(re.escape(k) for k in keys)
     t = re.sub(rf"(?<![\w&])(?:{pat})(?![\w&])|\b[A-Z]{{1,4}}\d{{1,3}}\b|\b[A-Z]{{2,5}}\b",
-               lambda m: _abbr(m, table), t)
+               lambda m: _abbr(m, table, spelled), t)
     t = re.sub(r"(?<=\w)\s*/\s*(?=\w)", " trên ", t)                   # chi phí nhân sự/DTT
     t = t.replace("&", " và ")
     t = re.sub(r"\(\s*\)", "", t)                                       # "(GP)" said just before: nothing left
@@ -412,13 +525,23 @@ def _colon(part: str) -> list:
 
 _GLUE = re.compile(r"(?i)\W*(?:tức|âm\b|[−–+-]\s?\d)")      # a piece never starts on these: they finish the last one
 LIMIT = 90                                                     # spoken characters in one breath
+LONG = 120                                  # past this, a breath before "tức" beats running on (8 s in one go)
+_SOFT_GLUE = re.compile(r"(?i)\W*tức\b")
+
+
+def _glued(cur: str, seg: str) -> bool:
+    """seg must stay with cur: it starts on a glue word, unless it is 'tức' and the two together would run
+    past LONG spoken characters."""
+    if not _GLUE.match(seg):
+        return False
+    return not (_SOFT_GLUE.match(seg) and len(doc(cur + " " + seg)) > LONG)
 
 
 def _commas(part: str) -> list:
     """Breathe at commas: close the piece before a segment would take it past LIMIT spoken characters."""
     out, cur = [], ""
     for seg in re.split(r"(?<=,)\s+(?=\D)", part):
-        if cur and len(doc(cur + " " + seg)) > LIMIT and not _GLUE.match(seg):
+        if cur and len(doc(cur + " " + seg)) > LIMIT and not _glued(cur, seg):
             out.append(cur)
             cur = seg
         else:
@@ -430,13 +553,13 @@ def pieces(text: str) -> list:
     """A sentence cut where a speaker breathes: at each sentence end, after ';', after a long lead-in
     before ':', and at a comma before the piece gets too long to say in one breath. Each piece is voiced on
     its own with a short pause between, so a figure-heavy line never runs on. A piece never starts with
-    'tức' or a minus ('âm'): those stay with what they qualify."""
+    a minus ('âm'), and starts with 'tức' only when keeping it would run past LONG spoken characters."""
     out = []
     for sentence in _sentences(text):
         for semi in re.split(r"(?<=;)\s+", sentence):
             for part in _colon(semi):
                 for piece in _commas(part):
-                    if out and _GLUE.match(piece) and not re.search(r"[.!?]$", out[-1]):
+                    if out and _glued(out[-1], piece) and not re.search(r"[.!?]$", out[-1]):
                         out[-1] += " " + piece
                     elif piece:
                         out.append(piece)

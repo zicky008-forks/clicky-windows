@@ -82,7 +82,7 @@ input:focus-visible{outline:3px solid var(--acc);outline-offset:1px}
 .ph{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .panel h3{margin:0;font-size:15px}
 .x{border:0;background:none;font-size:20px;line-height:1;padding:0;width:36px;height:36px;min-height:36px;min-width:36px;color:var(--muted);border-radius:8px}
-.ask{display:flex;gap:6px}.ask input{flex:1;min-width:0;font:inherit;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
+.ask{display:flex;gap:6px;margin:0}.ask input{flex:1;min-width:0;font:inherit;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
 .ans{border-left:4px solid var(--acc);background:var(--soft);border-radius:6px;padding:8px 10px}
 .ans.park{border-color:var(--warn)}.src{color:var(--muted);font-size:12.5px;margin-top:4px}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
@@ -137,6 +137,7 @@ button.on{background:var(--warnsoft);border-color:var(--warn)}
 :host([data-small]) .bar button{min-height:44px;min-width:44px;padding:4px 8px;flex:1 1 0}
 :host([data-small]) .bar .badge{flex:0 0 auto}
 :host([data-small]) #play{min-width:44px;text-align:center}
+#askb{white-space:nowrap}:host([data-small]) .bar #askb{padding:4px 5px}#askb.short .em{display:none}
 :host([data-small]) .bar #lassob{min-width:80px;padding:4px 6px;flex-grow:1.4;white-space:nowrap}
 :host([data-small]) .bubble{width:auto}
 </style>
@@ -162,7 +163,7 @@ button.on{background:var(--warnsoft);border-color:var(--warn)}
   <span class="who" title="Trình bày do trợ lý AI thực hiện">${HAT}<span>Trợ lý AI của ${esc(OWNER)}</span></span>
   <button class="p" id="play"></button>
   <button id="prev" title="Phần trước (phím ←)" aria-label="Phần trước">⏮</button><button id="next" title="Phần sau (phím →)" aria-label="Phần sau">⏭</button>
-  <button id="askb" title="Gõ câu hỏi về báo cáo">Hỏi em</button>
+  <button id="askb" title="Gõ câu hỏi về báo cáo" aria-label="Hỏi em">Hỏi<span class="em"> em</span></button>
   <button id="lassob" title="Khoanh một vùng trên báo cáo để hỏi về vùng đó" aria-label="Khoanh vùng"><span aria-hidden="true">⬚</span><span class="lbl"> Khoanh vùng</span><span class="sl" aria-hidden="true"> Khoanh</span></button>
   <button id="hide" title="Thu gọn lời đang nói" aria-label="Thu gọn">—</button>
   ${DRAFT ? `<button type="button" class="badge" id="draft" title="${esc(String(M.trang_thai).trim())}" aria-label="Kịch bản nháp: ${esc(String(M.trang_thai).trim())}. Bấm để xem giải thích.">Kịch bản nháp</button>` : ""}
@@ -187,6 +188,7 @@ function fitBar() {
   if (v.y || Math.abs(v.h - innerHeight) > 1) { b.style.bottom = "auto"; b.style.top = (v.y + v.h - b.offsetHeight - g) + "px"; }
   else { b.style.top = ""; b.style.bottom = g + "px"; }
   playFit();
+  const ab = $("askb"); ab.classList.remove("short"); if (ab.scrollWidth > ab.clientWidth + 1) ab.classList.add("short");   // "Hỏi" alone rather than a word cut or wrapped
 }
 
 // --- frames, the soft dim and the nón lá pointer: fixed to the screen, moved on every scroll (any scroll box) ---
@@ -206,8 +208,8 @@ layer.appendChild(dim);
 const lead = document.createElementNS(NS, "svg");   // a thin leader line when the bubble cannot sit right next to its place
 lead.setAttribute("data-clicky-lead", "1");
 lead.style.cssText = "position:fixed;left:0;top:0;width:1px;height:1px;overflow:visible;display:none";
-lead.innerHTML = '<line stroke-width="7" stroke-linecap="round" opacity=".9"/><line stroke-width="2" stroke-dasharray="5 3"/><circle r="4"/>';   // a halo in the page's colour under the dashes
-lead.firstChild.setAttribute("stroke", `rgb(${BG.join(",")})`); lead.children[1].setAttribute("stroke", FRAME); lead.lastChild.setAttribute("fill", FRAME);
+lead.innerHTML = '<polyline fill="none" stroke-width="2" stroke-dasharray="5 3" stroke-linejoin="round"/><circle r="4"/>';   // no halo: it rubbed out the digits it crossed
+lead.firstChild.setAttribute("stroke", FRAME); lead.lastChild.setAttribute("fill", FRAME);
 layer.appendChild(lead);
 const tail = document.createElement("div");   // blank space after the report, so its last lines can scroll above the bar
 tail.setAttribute("aria-hidden", "true"); tail.setAttribute("data-clicky-layer", "1"); tail.style.cssText = "height:55vh";
@@ -357,10 +359,12 @@ function pad(r) { return r.height < 28 ? 2 : 4; }
 function place(f) {
   const r = seen(f.target);
   if (!r) { f.box.style.display = "none"; return null; }
-  const thin = r.bottom - r.top < 24, p = thin ? 0 : pad(r);   // a thin row: a 2px frame inside it, no ring over its neighbours
-  Object.assign(f.box.style, {display: "block", left: (r.left - p) + "px", top: (r.top - p) + "px", width: (r.right - r.left + 2 * p) + "px", height: (r.bottom - r.top + 2 * p) + "px",
+  const thin = r.bottom - r.top < 24, p = thin ? 0 : pad(r), v = vp();   // a thin row: a 2px frame inside it, no ring over its neighbours
+  // at the very edge of the screen (a table as wide as the page), the frame steps inside the cell's own blank edge so its ring still shows
+  const L = r.left >= v.x ? Math.min(r.left + 3, Math.max(r.left - p, v.x + 2)) : r.left - p, R = r.right <= v.x + v.w ? Math.max(r.right - 3, Math.min(r.right + p, v.x + v.w - 2)) : r.right + p;
+  Object.assign(f.box.style, {display: "block", left: L + "px", top: (r.top - p) + "px", width: (R - L) + "px", height: (r.bottom - r.top + 2 * p) + "px",
     borderWidth: (thin ? 2 : f.w) + "px", boxShadow: thin ? "none" : "0 0 0 2px " + RING, borderRadius: thin ? "3px" : "8px"});
-  return {left: r.left - p, top: r.top - p, right: r.right + p, bottom: r.bottom + p};
+  return {left: L, top: r.top - p, right: R, bottom: r.bottom + p};
 }
 function redraw() {   // frames follow their places; the dim leaves holes for them and for their row label and header
   placeRegion();
@@ -380,9 +384,9 @@ function guards(t) {   // what gives a figure its meaning: its row label and col
     const strong = [], done = new Set();
     for (const c of regionEl._cells || []) { const m = c.isConnected && modelOf(c), pos = m && posOf(m, c);
       if (pos && pos.row && !done.has(pos.row)) { done.add(pos.row); pos.row.labelCells.forEach(l => { if (!l.contains(c)) strong.push(rect(l)); }); } }
-    return {strong, soft: [], els: []};
+    return {strong, soft: [], els: [], table: []};
   }
-  const m = t && modelOf(t); if (!m) return {strong: [], soft: [], els: []};
+  const m = t && modelOf(t); if (!m) return {strong: [], soft: [], els: [], table: []};
   const pos = posOf(m, t), strong = [], els = [], soft = [], v = vp();
   const near = c => { const q = rect(c); if (q.bottom > v.y - 200 && q.top < v.y + v.h + 200) soft.push(q); };
   m.headCells.forEach(near);
@@ -390,7 +394,8 @@ function guards(t) {   // what gives a figure its meaning: its row label and col
   const own = c => c !== t && !t.contains(c) && !c.contains(t);   // a cell inside the place is already in its frame: no second box
   if (pos && pos.row) pos.row.labelCells.forEach(c => { if (own(c)) { strong.push(rect(c)); els.push(c); } });
   if (pos && pos.c >= 0) (m.headAt[pos.c] || []).forEach(c => { if (own(c)) { strong.push(rect(c)); els.push(c); } });
-  return {strong, soft, els};
+  const table = m.headCells.filter(own).map(rect).filter(q => q.bottom > v.y && q.top < v.y + v.h);   // every header of its own table: the bubble never sits on one
+  return {strong, soft, els, table, box: rect(m.el)};
 }
 function totalRects(zone) {   // "Tổng", bold and table-foot rows: a bubble never sits on them
   const out = [];
@@ -451,10 +456,10 @@ function sideways(e, dx, t) {
   if (!hsave.some(h => h.e === e)) hsave.push({e, x: e === window ? scrollX : e.scrollLeft, vx: vp().x});
   if (e !== window || !t) { e.scrollBy({left: dx, behavior: "auto"}); return; }
   // the page: on a phone the screen can be narrower than the page's own width, and only the browser moves that view
-  const sy = scrollY; t.scrollIntoView({block: "nearest", inline: "nearest", behavior: "auto"});
+  const sy = scrollY; t.scrollIntoView({block: "nearest", inline: "center", behavior: "auto"});
   if (Math.abs(scrollY - sy) > 1) scrollTo({left: scrollX, top: sy, behavior: "auto"});   // up and down is keepVisible's job
-  const v = vp(), r = rect(t);
-  if (r.right > v.x + v.w || r.left < v.x) scrollBy({left: r.right > v.x + v.w ? r.right - (v.x + v.w) + 12 : r.left - v.x - 12, behavior: "auto"});
+  const v = vp(), r0 = rect(t), ex = pad(r0) + 6, r = {left: r0.left - ex, right: r0.right + ex};   // the frame's padding and its white ring too
+  if (r.right > v.x + v.w || r.left < v.x) scrollBy({left: r.right > v.x + v.w ? r.right - (v.x + v.w) + 8 : r.left - v.x - 8, behavior: "auto"});
   fitBar(); placePanel();
 }
 function restoreSideways() { if (!hsave) return;
@@ -497,10 +502,11 @@ function keepVisible(t) {   // the framed place is never under the bar, the pane
     ceil = Math.max(ceil, c.top); floor = Math.min(floor, c.bottom);
     if (!sc.querySelector(":scope > [data-clicky-layer]")) {   // room after the last rows of a scroll box too
       const sp = document.createElement("div"); sp.setAttribute("aria-hidden", "true"); sp.setAttribute("data-clicky-layer", "1"); sp.style.cssText = "height:55vh"; LIVE.add(sp); sc.appendChild(sp); } }
-  if (r.width <= v.w - 16 && (r.right > v.x + v.w || r.left < v.x)) {   // sideways only for a place that fits the screen
+  const ex = pad(r) + 6;   // the frame's padding and ring are part of what must show
+  if (r.width + 2 * ex <= v.w - 16 && (r.right + ex > v.x + v.w || r.left - ex < v.x)) {   // sideways only for a place that fits the screen
     const hs = scrollerOf(t) && scrollerOf(t).scrollWidth > scrollerOf(t).clientWidth + 1 ? scrollerOf(t) : window;
     const box = hs === window ? {left: v.x, right: v.x + v.w} : rect(hs);
-    sideways(hs, r.right > box.right ? r.right - box.right + 12 : r.left - box.left - 12, t); r = rect(t); moved = true;
+    sideways(hs, r.right + ex > box.right ? r.right + ex - box.right + 8 : r.left - ex - box.left - 8, t); r = rect(t); moved = true;
   } else if (r.width > v.w - 16 && (r.left < v.x || r.left > v.x + v.w * 0.5)) {   // a wide row: its label, at the left edge
     sideways(window, r.left - v.x - 8); r = rect(t); moved = true;
   }
@@ -537,7 +543,7 @@ function frame(target, keep, noDim, still) {   // still: one more frame, the pag
   if (!target) return;
   if (!keep) clearFrames();
   const mk = (w, color) => { const b = document.createElement("div");
-    b.style.cssText = `position:fixed;border:${w}px solid ${color};border-radius:8px;box-shadow:0 0 0 2px ${RING}` + (calm() ? "" : ";transition:opacity .3s,transform .3s;opacity:0;transform:scale(1.03)");
+    b.style.cssText = `position:fixed;box-sizing:border-box;border:${w}px solid ${color};border-radius:8px;box-shadow:0 0 0 2px ${RING}` + (calm() ? "" : ";transition:opacity .3s,transform .3s;opacity:0;transform:scale(1.03)");
     layer.appendChild(b); return b; };
   const box = mk(3, FRAME); box.setAttribute("data-clicky-frame", still ? "also" : "main");
   const soft = still ? [] : guards(target).els.map(c => { const b = mk(2, FRAME + "cc"); b.setAttribute("data-clicky-frame", "soft"); return {target: c, w: 2, box: b}; });   // its row label and header, not dimmed
@@ -586,9 +592,10 @@ function playFit() {   // the play button keeps one width for all its labels: �
   const b = $("play"), key = host.hasAttribute("data-small") + "|" + host.hasAttribute("data-mid"); if (key === playKey) return;
   if (host.hasAttribute("data-small")) { b.style.minWidth = ""; playKey = key; return; }
   const keep = b.innerHTML; b.style.minWidth = "0"; let w = 0;
-  for (const t of PLAY_T) { b.innerHTML = playHtml("↻", t); w = Math.max(w, b.getBoundingClientRect().width); }
+  for (const t of PLAY_T) for (const ic of ["⏸", "↻", "↩", "▶"]) { b.innerHTML = playHtml(ic, t); w = Math.max(w, b.getBoundingClientRect().width); }
   b.innerHTML = keep; if (w > 0) { b.style.minWidth = Math.ceil(w + 1) + "px"; playKey = key; } else b.style.minWidth = "";
 }
+try { document.fonts && document.fonts.ready.then(() => { playKey = ""; playFit(); }); } catch (_) {}   // a font that comes late is measured again
 function setPlaying(v) {
   playing = v;
   const [ic, t] = v ? ["⏸", PLAY_T[0]] : ended ? ["↻", PLAY_T[1]] : aside && resumeAt ? ["↩", PLAY_T[2]]
@@ -643,21 +650,24 @@ function has(t, p) { p = fold(p); if (p.length < 2) return false; return new Reg
 // question words and fillers; "chi phí" is joined first so the "chị" here never drops it
 const STOP = new Set(("la bao nhieu cua the nao va o trong tren cho em anh chi hoi xem bang so muc dong cot gi vay a ah nhe nha ha " +
   "khong voi vi sao tai do dau nao nhat ly nguyen nhan lai thi con duoc may hay cac nhung mot nay kia").split(" "));
-const GENERIC = new Set("khoi phong bo phan kenh vung mien nhom".split(" "));   // "Khối Bán hàng" is also just "bán hàng"
+const GENERIC = new Set("khoi phong bo phan kenh vung mien nhom net".split(" "));   // "Khối Bán hàng" is also just "bán hàng"
 // "nhà máy", "lãi vay" are one word, like "chi phí"; "công ty B", "khối A": the letter is kept
 function joined(f) { return f.replace(/(^| )(chi phi|nha may|lai vay)(?= |$)/g, (m, a, b) => a + b.replace(" ", "_")).replace(/(^| )(cong ty|khoi|mien|chi nhanh) ([a-z])(?= |$)/g, "$1$2 _$3"); }
 function words(s) {
   return joined(fold(s)).replace(/[0-9%,.\-+]+/g, " ").split(" ").filter(w => w.length >= 2 && !STOP.has(w));
 }
 function allWords(s) { return joined(fold(s)).replace(/[0-9%,.\-+]+/g, " ").split(" ").filter(w => w.length >= 2); }   // a label made only of short words ("Lãi")
-function core(label) { const w = words(label); while (w.length > 1 && GENERIC.has(w[0])) w.shift(); if (w[0] === "bo" && w[1] === "phan" && w.length > 2) w.splice(0, 2); return w; }
+const NUMBERING = /^\s*([IVXLC]+|[A-Z]|\d+)[.)]\s+/;   // "II. Các khoản…": the numbering is not a word
+function core(label) { const w = words(String(label).replace(NUMBERING, "")); while (w.length > 1 && GENERIC.has(w[0])) w.shift(); if (w[0] === "bo" && w[1] === "phan" && w.length > 2) w.splice(0, 2); return w; }
 function ids(s) {   // numbers that name a thing ("tháng 3", "T3", "Q3", "FY2526", "Nhà máy 20"), never figures like 14,1
   const f = fold(s).replace(/\b(?:thang|th|t)\s?0?(\d{1,2})\b/g, " m$1 ").replace(/\b(?:quy|q)\s?([1-4])\b/g, " q$1 ").replace(/\bfy\s?(\d{2,4})\b/g, " fy$1 ");
   return new Set((f.match(/(?<![\d.,a-z])(?:m\d{1,2}|q[1-4]|fy\d{2,4}|[a-z]{1,3}\d{1,4}|\d{1,4})(?![\d.,]*\d)(?![a-z])/g) || []).filter(x => !/^\d+$/.test(x) || !/\d[.,]\d/.test(x)));
 }
 const ALIAS = {}; Object.entries(D.aliases || {}).forEach(([k, v]) => { ALIAS[fold(k)] = v.map(fold); });
 // the English names teams use for their own departments ("IT" only in capitals: "ít" is a Vietnamese word)
-[["sales", "ban hang"], ["hr", "nhan su"], ["admin", "hanh chinh"], ["supply chain", "chuoi cung ung"], ["marketing", "tiep thi"]]
+[["th", "thuc hien"], ["kh", "ke hoach"], ["lk", "luy ke"], ["ck", "cung ky"], ["nt", "nam truoc"], ["ytd", "luy ke"],
+ ["var", "chenh lech"], ["variance", "chenh lech"], ["actual", "thuc hien"], ["budget", "ke hoach"], ["revenue", "doanh thu"],
+ ["sales", "ban hang"], ["hr", "nhan su"], ["hr", "hanh chinh"], ["admin", "hanh chinh"], ["supply chain", "chuoi cung ung"], ["marketing", "tiep thi"]]
   .forEach(([k, v]) => { ALIAS[k] = [...new Set((ALIAS[k] || []).concat(v))]; });
 function widen(t) {   // the question with every abbreviation in it also said in words, and back
   let more = "";
@@ -665,6 +675,8 @@ function widen(t) {   // the question with every abbreviation in it also said in
     if (has(t, k)) more += " " + v.join(" ");
     else if (v.some(x => has(t, x))) more += " " + k;
   }
+  const t1 = t + more;   // "variance" → "chênh lệch" → "var"; only back to the short name, so "nhân sự" never grows "hành chính"
+  for (const [k, v] of Object.entries(ALIAS)) if (!has(t1, k) && v.some(x => has(t1, x))) more += " " + k;
   if (has(t, "tren")) more += " ty le";   // "chi phí nhân sự trên doanh thu" asks for a ratio
   if (/phan tram|%/.test(t)) more += " %";
   return more ? t + " " + more : t;
@@ -718,22 +730,31 @@ function model(el, grid) {
   const heads = grid.slice(0, first), titles = [];
   const headRows = heads.filter(r => { const u = new Set(r.cells.filter(Boolean)); if (u.size === 1 && n > 2) { titles.push(cellText([...u][0])); return false; } return true; });
   const body = grid.slice(first);
-  // label columns: leading columns that hold words, not figures, in most rows
-  let lc = 1; while (lc < n - 1 && body.filter(r => r.cells[lc] && cellText(r.cells[lc]) && !isNum(cellText(r.cells[lc]))).length > body.length / 2) lc++;
   const head = [], headAt = [];
   for (let c = 0; c < n; c++) {
     const seenT = [], at = [];
     headRows.forEach(r => { const x = r.cells[c]; if (!x) return; const t = cellText(x); at.push(x); if (t && !seenT.includes(t)) seenT.push(t); });
     head.push(seenT.join(" ")); headAt.push(at);
   }
+  // the builder's own reading of the columns (data.cot), when the page has it; the header rules below are for older pages
+  const cot = (D.cot || {})[el.getAttribute && el.getAttribute("data-clicky")] || null, cotAt = c => cot && cot.find(x => x.i === c);
+  // "Mã số", "STT", "Thuyết minh": codes that name a row, never figures
+  const CODE = /^(ma so|ma|stt|so tt|tt|thuyet minh|tm|code|no|ma chi tieu|ma tk|note)$/;
+  const codeCol = c => c > 0 && (CODE.test(fold(head[c] || "")) || !!(cotAt(c) && cotAt(c).cot_nhan && CODE.test(fold(cotAt(c).ten || ""))));
+  // label columns: leading columns that hold words (or codes), not figures, in most rows
+  let lc = 1;
+  if (cot && cot.length) { while (lc < n - 1 && cotAt(lc) && cotAt(lc).cot_nhan) lc++; }
+  else while (lc < n - 1 && (codeCol(lc) || body.filter(r => r.cells[lc] && cellText(r.cells[lc]) && !isNum(cellText(r.cells[lc]))).length > body.length / 2)) lc++;
+  const numBody = r => r.cells.filter((c, i) => c && i >= lc && r.cells.indexOf(c) === i && isNum(cellText(c)) && !isYear(cellText(c))).length;
   const rows = []; let group = "";
   body.forEach(r => {
-    const labs = []; for (let c = 0; c < lc; c++) { const x = r.cells[c]; const t = cellText(x); if (x && t && !labs.some(l => l.t === t)) labs.push({x, t}); }
-    if (!numIn(r)) { if (labs.length) group = labs.map(l => l.t).join(" · "); return; }   // a group row with no figures
+    const labs = [], codes = []; for (let c = 0; c < lc; c++) { const x = r.cells[c]; const t = cellText(x);
+      if (codeCol(c)) { if (t) codes.push(t); continue; } if (x && t && !labs.some(l => l.t === t)) labs.push({x, t}); }
+    if (!numBody(r)) { if (labs.length) group = labs.map(l => l.t).join(" · "); return; }   // a group row with no figures
     const label = labs.length ? labs[labs.length - 1].t : "";
     let grp = labs.slice(0, -1).map(l => l.t).join(" · ");
     if (!grp && group && fold(label) !== fold(group)) grp = group;
-    rows.push({r: r.el, cells: r.cells, label: label || "dòng " + (rows.length + 1), group: grp, labelCells: labs.map(l => l.x),
+    rows.push({r: r.el, cells: r.cells, label: label || "dòng " + (rows.length + 1), group: grp, labelCells: labs.map(l => l.x), codes,
                total: /^(tong|cong|total|grand total)\b/.test(fold(label))});
   });
   // "Khối Bán hàng" with figures heads the plain rows below it ("Lương", "Thưởng"), never other "Khối ..." rows
@@ -751,29 +772,32 @@ function model(el, grid) {
   if (!rows.length) return null;
   const sample = rows.flatMap(r => r.cells.slice(lc).map(cellText)).filter(isNum);
   const en = !!M.en_numbers || M.dau_so === "en" || (sample.some(s => /\d\.\d{1,2}(?!\d)/.test(s)) && !sample.some(s => /\d,\d{1,2}(?!\d)/.test(s)));
-  const m = {el, grid, n, lc, head, headAt, headCells: [...new Set(headAt.flat())], rows, en, titles,
+  const m = {el, grid, n, lc, head, headAt, headCells: [...new Set(headAt.flat())], rows, en, titles, cot,
              heading: headingFor(el), cap: cellText(el.querySelector && el.querySelector("caption"))};
   m.units = units(m);
+  if (cot) m.units = m.units.map((u, c) => { const k = cotAt(c); return c < lc ? "" : k && k.don_vi && u !== "%" ? k.don_vi : u; });   // the builder's unit for each column
   return m;
 }
 function units(m) {   // unit of each column: its header, then the table's or page's "Đơn vị", then the same figure written with a unit
-  const tableU = unitIn(m.titles.join(" ") + " " + m.cap) || unitIn(m.heading) || unitIn((m.el.previousElementSibling ? cellText(m.el.previousElementSibling) : ""))
+  const HC = /\b(headcount|hc|so nguoi|so nhan vien|so lao dong|lao dong|nhan su binh quan|nguoi)\b/, about = fold(m.titles.join(" ") + " " + m.cap + " " + m.heading);
+  const ints = m.rows.flatMap(r => r.cells.slice(m.lc).map(c => c ? cellText(c) : "")).filter(isNum).every(v => /^[\d.\s]+$/.test(v.replace(/[()]/g, "")));
+  const tableU = (/\b(headcount|hc|so nguoi|so nhan vien|so lao dong|lao dong)\b/.test(about) || (/\bnhan su\b/.test(about) && !/chi phi|luong/.test(about) && ints) ? "người" : "") || unitIn(m.titles.join(" ") + " " + m.cap) || unitIn(m.heading) || unitIn((m.el.previousElementSibling ? cellText(m.el.previousElementSibling) : ""))
     || unitIn(pageText().slice(0, 700)), um = unitMap(), out = [], dp = [];
   for (let c = 0; c < m.n; c++) {
     const h = m.head[c] || "", vals = m.rows.map(r => r.cells[c] && cellText(r.cells[c])).filter(isNum);
     dp.push(vals.length ? (vals[0].match(/[.,](\d+)\D*$/) || [, ""])[1].length : -1);
-    let u = c < m.lc || !vals.length ? "" : vals.every(v => /%$/.test(v)) ? "" : /%/.test(h) ? "%" : unitIn("(" + h + ")") || unitIn(h)
-      || (/\b(headcount|hc|so nguoi|so nhan vien|so lao dong|nhan su binh quan)\b/.test(fold(h)) ? "người" : /^ty dong$/.test(fold(h)) ? "tỷ" : "");
+    let u = c < m.lc || !vals.length ? "" : vals.every(v => /%$/.test(v)) || /%/.test(h) ? "%" : unitIn("(" + h + ")") || unitIn(h)
+      || (HC.test(fold(h)) ? "người" : /^ty dong$/.test(fold(h)) ? "tỷ" : "");
     if (!u && c >= m.lc && vals.length && !vals.some(v => /%$/.test(v))) {
       for (const v of vals) { if (v.replace(/\D/g, "").length < 3) continue;
         const k = v.trim(); if (um.has(k)) { u = um.get(k); break; } }
-      if (!u && tableU) u = tableU;
     }
     out.push(u);
   }
-  for (let c = m.lc; c < m.n; c++) if (!out[c] && dp[c] >= 0) {   // a column with no unit takes the one of columns written the same way
+  for (let c = m.lc; c < m.n; c++) if (!out[c] && dp[c] >= 0) {   // a column with no unit takes the one of its neighbours written the same way, then the page's
     const same = [...new Set(out.filter((u, k) => u && u !== "%" && dp[k] === dp[c]))];
     if (same.length === 1) out[c] = same[0];
+    else if (tableU && !m.rows.some(r => r.cells[c] && /%$/.test(cellText(r.cells[c])))) out[c] = tableU;
   }
   return out;
 }
@@ -887,13 +911,20 @@ function qinfo(q) {
   let sup = null;
   if (sm) { sup = /^(thap|it|nho|cham|kem)$/.test(sm[1]) ? "min" : "max"; if (/\bgiam\b/.test(f) && sup === "max" && !/\btang\b/.test(f)) sup = "min"; }
   const t = widen(f.replace(/\b(cao|thap|nhieu|it|lon|nho|manh|nhanh|cham|tot|kem)\s+nhat\b/, " ")) + (/\bIT\b/.test(q) ? " cntt cong nghe thong tin" : "");
-  const delta = /\b(tang|giam|chenh)\b/.test(f) && /\b(bao nhieu|so voi|the nao|may|nhieu|bao)\b/.test(f) && !sup;
+  const delta = /\b(tang|giam|chenh)\b/.test(f) && /\b(bao nhieu|so voi|the nao|may|nhieu|bao)\b/.test(f) && !sup && !/\btop\s*\d/.test(f);
   const share = /\b(chiem|ty trong)\b/.test(f);
   const yoy = /\b(nam truoc|nam ngoai|cung ky|so voi nam|yoy|ky truoc)\b/.test(f);
   const tc = t.replace(/\bso voi\s+[a-z0-9 ]*?(?=\s+(tang|giam|bao|the|thi|la|$)|$)/, " ");   // "so với AOP gốc" is the base, not the column asked
   const unit = /\b(bao nhieu|may|them|bot) nguoi\b/.test(f) || (/\b(tang|giam)\b.*\bnguoi\s*$/.test(f) && !/\bmoi nguoi\b/.test(f)) ? "người" : /\b(phan tram|%)/.test(f) || /%/.test(q) ? "%" : "";
   const define = /\b(la gi|nghia la gi|viet tat cua gi|la viet tat)\b/.test(f);
-  return {q, f, t, tc, why, sup, delta, share, yoy, unit, define, w: [...new Set(words(t))], wa: [...new Set(allWords(f))], w0: [...new Set(words(f))], wc: [...new Set(words(tc))],
+  const pct = /\bphan tram\b/.test(f) || /%/.test(q);
+  const how = /\b(tinh the nao|tinh sao|tinh ra sao|cach tinh|tu dau ra|o dau ra|lay o dau|tinh nhu the nao)\b/.test(f);
+  const cmp = /\b(nhanh|cham|cao|thap|nhieu|lon|nho) hon\b/.test(f) && /\b(bao nhieu|may|bao)\b/.test(f);
+  const topN = +((f.match(/\btop\s*(\d{1,2})\b/) || f.match(/\b(\d{1,2})\s+\w+(\s+\w+)?\s+(nao\s+)?(tang|giam|cao|thap|lon|nho|nhieu|it)\b.*\bnhat\b/) || [])[1] || 0);
+  const thr = f.match(/\b(tren|hon|vuot|lon hon|cao hon|duoi|thap hon|nho hon|it hon)\s+(-?\d+(?:[.,]\d+)?)\s*(%|phan tram|ty|trieu|nguoi)?/);
+  const which = /\b(nao|nhung)\b/.test(f);   // "khối nào": a list of rows, not one figure
+  if (topN && !sup) sup = /\b(giam|thap|it|nho)\b/.test(f) && !/\btang\b/.test(f) ? "min" : "max";
+  return {q, f, t, tc, why: why || false, sup, delta: delta && !cmp, share, yoy, unit, define, pct, how, cmp, topN, thr, which, w: [...new Set(words(t))], wa: [...new Set(allWords(f))], w0: [...new Set(words(f))], wc: [...new Set(words(tc))],
           ids: ids(q), accented: /[^\x00-\x7f]/.test(q)};
 }
 function subject(x, accented) {   // words the reader leaves out because the whole report is about them: title, h1, the section heading
@@ -915,27 +946,41 @@ function leftover(Q, cover, ctxEl) {   // the reader's words the answer does not
   });
 }
 function colMatch(Q, m) {   // the column the question names: words, "%" or a period ("T3", "tháng 3")
-  let best = -1, bs = 0;
+  let best = -1, bs = 0, ties = [];
   for (let c = m.lc; c < m.n; c++) {
     const h = m.head[c]; if (!h) continue;
-    const hw = words(h).filter(w => !/^(tang|giam)$/.test(w)), hi = ids(h);
+    // "Lũy kế", "Kế hoạch": two-word headings match as one phrase, so "kế" of "kế hoạch" never hits "Lũy kế"
+    const hw = joined(fold(h)).replace(/\b(luy ke|ke hoach|thuc hien|cung ky|nam truoc)\b/g, x => x.replace(" ", "_")).replace(/[0-9%,.\-+]+/g, " ").split(" ")
+      .filter(w => w.length >= 2 && !STOP.has(w) && !/^(tang|giam)$/.test(w)), hi = ids(h);
     if ([...hi].length && [...Q.ids].length && ![...Q.ids].some(i => hi.has(i))) continue;
     let s = hw.filter(w => Q.wc.includes(w) || has(Q.tc, w)).length * 6;
     if (s && hw.length) s += 3 * s / 6 / hw.length;
     if ([...Q.ids].some(i => hi.has(i))) s += 15;
     if (/%/.test(h) && /%/.test(Q.t)) s += 6;
-    if (s > bs) { bs = s; best = c; }
+    const svp = Q.f.match(/\bso voi\s+(.*)$/), cmpH = /\+\s*\/\s*-|±|\bso\b|chenh|\bvar\b/.test(h + " " + fold(h));
+    if (svp && cmpH && [...ids(svp[1])].some(i => hi.has(i))) s += 12;                         // "+/- so T9" for "so với tháng 9"
+    if (svp && cmpH && /cung ky|nam truoc|ke hoach|kh\b/.test(svp[1]) && words(widen(svp[1])).some(w => words(widen(fold(h))).includes(w))) s += 12;
+    if (s > bs) { bs = s; best = c; ties = [c]; } else if (s && s === bs) ties.push(c);
   }
-  return {c: best, s: bs};
+  return {c: best, s: bs, ties: bs >= 6 && ties.length > 1 && ties.length <= 4 && ties.every(k => m.units[k] === m.units[best] || m.units[k] === "%") ? ties : null};
+}
+function parentRow(m, row) {   // the row it sits under: the nearest row above whose label the table writes only once
+  const rs = m.rows, k = rs.indexOf(row), n = l => rs.filter(r => r.label === l).length;
+  if (n(row.label) < 2) return null;
+  for (let j = k - 1; j >= 0; j--) if (!rs[j].total && rs[j].label !== row.label && n(rs[j].label) === 1) return rs[j];
+  return null;
 }
 function rowMatch(Q, row) {   // most of the row's own words; "khối", "phòng"... may be left out
   let L = core(row.label), qw = Q.w; const short = !L.length;
   if (short) {   // "Lãi": a label is never left with no word at all; with accents typed, "lại" is not "Lãi"
     const tok = t => t.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(x => x.length >= 2 && !/^\d+$/.test(x));
     if (Q.accented) { L = tok(row.label); qw = tok(Q.q); } else { L = allWords(row.label); qw = Q.wa; } }
-  const G = words(row.group), hit = L.filter(w => qw.includes(w)).length, li = [...ids(row.label)];
+  const G = words(row.group), hit = L.filter(w => qw.includes(w)).length, li = [...ids(String(row.label).replace(NUMBERING, ""))];
+  if (row.codes && row.codes.length && /\b(ma so|ma chi tieu|stt|code)\b|\bma \d/.test(Q.f))   // "mã số 110": the row with that code
+    return row.codes.some(k => [...ids(k)].some(i => Q.ids.has(i))) ? 40 + 10 * hit : 0;
   if (li.length && [...Q.ids].length && !li.some(i => Q.ids.has(i))) return 0;
-  if (!L.length || (hit < Math.max(1, Math.ceil(L.length * 2 / 3)) && (short || !has(Q.t, row.label)))) return 0;
+  let pre = 0; while (pre < L.length && qw.includes(L[pre])) pre++;   // "Các khoản phải thu" is the start of "Các khoản phải thu ngắn hạn"
+  if (!L.length || (hit < Math.max(1, Math.ceil(L.length * 2 / 3)) && (short || !has(Q.t, row.label)) && !(pre >= 2 && pre >= L.length / 2 && L.slice(0, pre).some(w => !subject(null, false).has(w))))) return 0;
   const idHit = li.filter(i => Q.ids.has(i)).length, idMiss = [...Q.ids].length ? li.length - idHit : 0;   // "Nhà máy 2" is not "Nhà máy 12"
   return 10 * hit + 8 * G.filter(w => Q.w.includes(w)).length + 15 * idHit - 12 * idMiss - 3 * (L.length - hit);
 }
@@ -963,7 +1008,7 @@ function placeText(c) {   // everything that says which period a candidate is ab
   return [c.row.label, c.row.group, cols ? cols.map(k => c.m.head[k]).join(" ") : c.m.head.join(" "), c.m.titles.join(" "), c.m.heading, c.m.cap, TITLE].join(" ");
 }
 function deltaCols(m) {   // "tăng bao nhiêu": the difference column and the % column of a table
-  const abs = m.head.findIndex((h, i) => i >= m.lc && /chenh|tang giam|bien dong|delta|var|\+\/-/.test(fold(h)) && !/%/.test(h));
+  const abs = m.head.findIndex((h, i) => i >= m.lc && ((m.cot && (m.cot.find(x => x.i === i) || {}).loai === "var" && m.units[i] !== "%") || /chenh|tang giam|bien dong|delta|\bvar\b|variance/.test(fold(h)) || /\+\s*\/\s*-|±/.test(h)) && !/%/.test(h));
   const pct = m.head.findIndex((h, i) => i >= m.lc && /%/.test(h) && i !== abs);
   return [abs, pct].filter(c => c >= 0);
 }
@@ -1007,32 +1052,80 @@ function bankMatch(Q, scope) {
   }
   return best && best.b;
 }
-function superlative(Q, scope) {   // "khối nào tăng nhiều nhất": ordered from the page's own figures, over the place asked about
+const RANKW = new Set("tang giam chenh nhieu cao thap lon nho manh nhanh cham tot kem nhat top co khong tren duoi hon vuot dan dau theo xep hang thu tu nhung bang".split(" "));
+function rankPool(Q, scope) {   // the rows a ranking runs over: the lasso, the clicked table, else every table; never the Tổng row
   let pool = [];
   if (scope && scope.rows && scope.rows.length) pool = scope.rows;
   else for (const m of (scope && scope.m ? [scope.m] : tables())) m.rows.forEach(row => pool.push({m, row}));
   pool = pool.filter(x => !x.row.total);
   const byM = new Map(); pool.forEach(x => { if (!byM.has(x.m)) byM.set(x.m, []); byM.get(x.m).push(x.row); });
-  let pick = null;
-  for (const [m, rows] of byM) {
-    let {c} = colMatch(Q, m);
-    if (c < 0 && scope && scope.m === m && scope.c >= m.lc) c = scope.c;
-    if (c < 0) { const pct = /%/.test(Q.t);
-      const want = h => pct ? /%/.test(h) : /chenh|tang giam|bien dong|delta|var|\+\/-/.test(fold(h)) && !/%/.test(h);
-      c = m.head.findIndex((h, i) => i >= m.lc && want(h));
-      if (c < 0) c = m.head.findIndex((h, i) => i >= m.lc && /%|chenh|tang|giam/.test(fold(h)));
-      if (c < 0) c = numCols(m, rows[0]).pop() ?? -1; }
-    if (c < 0) continue;
-    const vals = rows.map(row => ({row, x: row.cells[c], v: row.cells[c] ? toNum(cellText(row.cells[c]), m.en) : null})).filter(o => o.v !== null && isNum(cellText(o.x)));
-    if (vals.length < 2) continue;
-    const score = (scope && scope.m === m ? 50 : 0) + rows.filter(r => Q.w.some(w => GENERIC.has(w) && words(r.label)[0] === w)).length + vals.length / 100;
-    if (!pick || score > pick.score) pick = {m, c, vals, score};
+  return byM;
+}
+function measureOf(Q, m, rows, scope) {   // the column a ranking uses: only one whose header says what the question measures
+  const subj = subject(m.el, false), rowW = new Set(rows.flatMap(r => words(r.label + " " + r.group)));
+  const meas = Q.w0.filter(w => !GENERIC.has(w) && !UNITW.has(w) && !subj.has(w) && !rowW.has(w) && !RANKW.has(w) && !/^\d/.test(w));
+  const mv = /\b(tang|giam|chenh)\b/.test(Q.f), dc = deltaCols(m), num = i => i >= m.lc && rows.some(r => r.cells[i] && isNum(cellText(r.cells[i])));
+  const pctOf = c => { if (c === undefined || c < 0) return null; if (!Q.pct || colUnit(m, c) === "%") return c;
+    return dc.includes(c) ? (dc.find(k => colUnit(m, k) === "%") ?? null) : null; };
+  if (!meas.length) {
+    if (mv) return {c: pctOf(Q.pct ? dc.find(k => colUnit(m, k) === "%") : dc.find(k => colUnit(m, k) !== "%"))};
+    if (Q.pct) { const ps = m.head.map((h, i) => i).filter(i => num(i) && colUnit(m, i) === "%"); return {c: ps.length === 1 ? ps[0] : null, ask: ps.length > 1}; }
+    if (scope && scope.m === m && scope.c >= m.lc && num(scope.c)) return {c: scope.c};
+    return {c: null, ask: true};
   }
-  if (!pick) return null;
-  const top = Q.sup === "max" ? Math.max(...pick.vals.map(o => o.v)) : Math.min(...pick.vals.map(o => o.v));
-  const win = pick.vals.filter(o => o.v === top);
-  return {kind: "sup", m: pick.m, c: pick.c, win, n: pick.vals.length, region: !!(scope && scope.rows), dir: Q.sup,
-          total: pick.m.rows.some(r => r.total)};
+  let best = null;
+  m.head.forEach((h, i) => { if (!num(i) || !h) return; const hw = words(widen(fold(h)));
+    if (meas.every(w => hw.includes(w))) { const extra = words(h).length - meas.length; if (!best || extra < best.extra) best = {i, extra}; } });
+  if (best) return {c: pctOf(best.i)};
+  if (meas.every(w => /^(binh|quan|moi|nguoi|dau|trung)$/.test(w))) {   // "bình quân": a cost column ÷ a people column, computed and said so
+    const v = valueCol(Q, m), pc = m.head.findIndex((h, i) => num(i) && colUnit(m, i) === "người");
+    if (v >= 0 && pc >= 0 && /^(tỷ|triệu)$/.test(colUnit(m, v))) return {per: [v, pc]};
+  }
+  return {c: null, missing: Q.q.split(/\s+/).map(x => x.replace(/[?.,!:;"“”()«»]+/g, "")).filter(x => words(fold(x)).some(w => meas.includes(w))).join(" ")};
+}
+function perHead(a, b, en, u) {   // a cost ÷ people, in triệu per person, one decimal, from the two figures as written
+  const x = decimal(a, en), y = decimal(b, en); if (!x || !y || y.n <= 0) return null;
+  const n = Math.round(x.n * (u === "tỷ" ? 1000 : 1) * 10 * 10 ** y.d / (10 ** x.d * y.n));
+  return {n, s: vn(n, 1)};
+}
+function valOf(m, row, c, per) {   // the figure a ranking compares, as a scaled integer, with what is shown
+  if (per) { const [v, pc] = per, a = row.cells[v], b = row.cells[pc]; if (!a || !b || !isNum(cellText(a)) || !isNum(cellText(b))) return null;
+    const r = perHead(cellText(a), cellText(b), m.en, colUnit(m, v)); return r && {k: r.n, d: 1, show: r.s + " triệu/người", x: a,
+      how: colName(m, v) + " " + withUnit(cellText(a), m.units[v]) + " ÷ " + colName(m, pc) + " " + withUnit(cellText(b), m.units[pc])}; }
+  const x = row.cells[c]; if (!x || !isNum(cellText(x))) return null;
+  const t = cellText(x), neg = /^\(.*\)$/.test(t.trim()), dd = decimal(t, m.en); if (!dd) return null;
+  return {k: neg ? -Math.abs(dd.n) : dd.n, d: dd.d, show: withUnit(t, uOf(m, row, c)), x};
+}
+function scaled(v, d) { return v.k * 10 ** (d - v.d); }
+function superlative(Q, scope) {   // "khối nào tăng nhiều nhất", "top 3", "khối nào tăng trên 10%", "khối nào giảm": from the page's own figures
+  const filter = Q.which && !Q.sup && !Q.why && !Q.share && (Q.thr || (/\b(tang|giam)\b/.test(Q.f) && !/\b(bao nhieu|may)\b/.test(Q.f)));
+  if (!Q.sup && !filter) return null;
+  let pick = null;
+  for (const [m, rows] of rankPool(Q, scope)) {
+    const mo = measureOf(Q, m, rows, scope);
+    const score = (scope && scope.m === m ? 50 : 0) + rows.filter(r => Q.w.some(w => GENERIC.has(w) && words(r.label)[0] === w)).length + rows.length / 100 + (mo.c != null || mo.per ? 100 : 0);
+    if (!pick || score > pick.score) pick = {m, rows, mo, score};
+  }
+  if (!pick || pick.rows.length < 2) return null;
+  const {m, rows, mo} = pick, region = !!(scope && scope.rows), total = m.rows.some(r => r.total);
+  const noun = (() => { const w = fold(rows[0].label).split(" ")[0]; return GENERIC.has(w) ? rows[0].label.split(/\s+/)[0].toLowerCase() : "dòng"; })();
+  if (mo.c == null && !mo.per) return mo.ask ? {kind: "pickcol", m, rows, noun} : {kind: "none", why: "measure", missing: mo.missing};
+  const vals = rows.map(row => ({row, v: valOf(m, row, mo.c, mo.per)})).filter(o => o.v);
+  if (vals.length < 2) return null;
+  const DD = Math.max(...vals.map(o => o.v.d)); vals.forEach(o => { o.s = scaled(o.v, DD); });
+  const base = {m, c: mo.c, per: mo.per, n: vals.length, region, total, noun};
+  if (filter) {
+    let t = 0, dir = /\b(giam)\b/.test(Q.f) && !Q.thr ? "lt" : "gt", said = dir, sign = 0;
+    const dn = /\bgiam\b/.test(Q.f) && !/\btang\b/.test(Q.f), up = /\btang\b/.test(Q.f) && !dn;
+    if (Q.thr) { const td = decimal(Q.thr[2]); if (!td) return null; t = td.n * 10 ** (DD - td.d); dir = said = /^(duoi|thap hon|nho hon|it hon)$/.test(Q.thr[1]) ? "lt" : "gt";
+      if (dn) { t = -t; dir = dir === "gt" ? "lt" : "gt"; sign = -1; } else if (up) sign = 1; }   // "giảm trên 5%": below −5%; "tăng dưới 10%": up, but less than 10%
+    const win = vals.filter(o => (dir === "gt" ? o.s > t : o.s < t) && (sign > 0 ? o.s > 0 : sign < 0 ? o.s < 0 : true));
+    return Object.assign(base, {kind: "filter", win, dir, said, thr: Q.thr ? Q.thr[2] + (Q.thr[3] && /%|phan tram/.test(Q.thr[3]) ? "%" : Q.thr[3] ? " " + Q.thr[3] : "") : "", all: vals});
+  }
+  const sorted = vals.slice().sort((a, b) => Q.sup === "max" ? b.s - a.s : a.s - b.s);
+  const n = Q.topN ? Math.min(Q.topN, sorted.length) : 1, cut = sorted[n - 1].s;
+  const win = sorted.filter((o, i) => i < n || o.s === cut);   // a tie at the edge is shown, never dropped silently
+  return Object.assign(base, {kind: "sup", win, dir: Q.sup, top: Q.topN});
 }
 function whyAnswer(Q, scope, entity, strict) {   // strict: a tile's label, every word of it ("mỗi người" is not "tuyển mới")   // "vì sao": the report's own sentence that names the thing and gives a reason
   const need = entity ? core(entity).filter((w, i, l) => !(/^(binh|trung)$/.test(w) && /^(quan|binh)$/.test(l[i + 1] || "")) && !(/^(quan|binh)$/.test(w) && /^(binh|trung)$/.test(l[i - 1] || "")) && w !== "tong") : [], other = Q.w.filter(w => !need.includes(w));
@@ -1061,6 +1154,9 @@ function figureSentence(Q) {   // a sentence of the report holding every word of
     if (need.every(x => w.includes(x))) return {b, s, fig: /\d/.test(s)}; }
   return null;
 }
+// "Số nhân viên", "Headcount" in a table of money: that row counts people, whatever its columns say
+const PEOPLE_ROW = /^(so (luong )?(nhan vien|lao dong|nguoi|nhan su|cbnv)|nhan vien|lao dong|headcount|hc|so nguoi)\b|\(nguoi\)/;
+function uOf(m, row, c) { const u = m.units[c]; return u && u !== "%" && row && PEOPLE_ROW.test(fold(row.label)) ? "người" : u; }
 function colUnit(m, c) {   // "tỷ", "người", "%" or "" for one column
   if (c < m.lc) return ""; if (m.units[c]) return m.units[c];
   const v = m.rows.map(r => r.cells[c] && cellText(r.cells[c])).filter(isNum);
@@ -1081,6 +1177,22 @@ function valueCol(Q, m) {   // the column a share is taken from: named, else the
   const subj = subject(m.el, false);
   return m.head.findIndex((h, i) => i >= m.lc && h && !/%/.test(h) && !deltaCols(m).includes(i) && words(h).length && words(h).every(w => subj.has(w)));
 }
+function howSentence(Q) {   // a figure the reader quotes, or two things compared: the sentence of the report that has them
+  const figs = (Q.q.match(/\d[\d.,]*\d|\d/g) || []).filter(x => /[.,]/.test(x) || x.length > 2);
+  const need = Q.w0.filter(w => !UNITW.has(w) && !RANKW.has(w) && !/^(tinh|cach|sao|ra|dau|nhanh|cham)$/.test(w));
+  let best = null;
+  for (const b of blocks()) for (const sn of splitSent(b.text)) {
+    const w = words(widen(fold(sn))), nf = (sn.match(/\d[\d.,]*%?/g) || []).length;
+    if (figs.length ? !figs.every(x => sn.includes(x)) : (nf < 2 || !need.length || !need.every(x => w.includes(x)))) continue;
+    const sc = need.filter(x => w.includes(x)).length + (CAUSE.test(sn) ? 1 : 0) + (/(tức|bằng|nhân|chia|trên)/i.test(sn) ? 1 : 0);
+    if (!best || sc > best.sc) best = {sc, b, s: sn};
+  }
+  if (!best) return null;
+  let calc = "";   // two percentages compared: the gap, computed and said so
+  const ps = best.s.match(/\d[\d.,]*(?=\s*%)/g) || [];
+  if (Q.cmp && ps.length === 2) { const ch = change(ps[1], ps[0]); if (ch) calc = "Em tính: chênh " + ch.diff.replace(/^-/, "") + " điểm phần trăm (" + ps[0] + "% so với " + ps[1] + "%)."; }
+  return {kind: "sentence", b: best.b, s: best.s, calc};
+}
 function resolve(q, scope) {
   const Q = qinfo(q);
   const known = bankMatch(Q, scope); if (known) return {kind: "bank", b: known, Q};
@@ -1089,13 +1201,19 @@ function resolve(q, scope) {
     const key = Object.keys(D.aliases || {}).find(k => fold(k) === fold(term));
     if (key) return {kind: "define", term: key, says: D.aliases[key], Q};
   }
-  if (Q.sup) { const s = superlative(Q, scope); if (s) return Object.assign(s, {Q}); }
+  if (Q.how || Q.cmp) {   // "tính thế nào", "nhanh hơn bao nhiêu": the report's own sentence that holds it
+    const hs = howSentence(Q); if (hs) return Object.assign(hs, {Q});
+    if (Q.how) Q.why = true;
+  }
+  { const s = superlative(Q, scope); if (s) return Object.assign(s, {Q}); }
   // places the question names itself
   let cands = [];
   for (const m of tables()) {
     const col = colMatch(Q, m), dc = Q.delta && col.s < 6 ? deltaCols(m) : [];
-    const cOf = () => dc.length ? {c: dc[0], cols: dc} : {c: col.c};
-    for (const row of m.rows) { const rs = rowMatch(Q, row); if (rs) cands.push(Object.assign({score: rs + col.s + (dc.length ? 10 : 0) + (scope && scope.rows && scope.rows.some(x => x.row === row) ? 5 : 0), m, row}, cOf())); }
+    const cOf = () => dc.length ? {c: dc[0], cols: dc} : col.ties ? {c: col.c, cols: col.ties} : {c: col.c};
+    for (const row of m.rows) { let rs = rowMatch(Q, row); const pa = rs && parentRow(m, row);
+      if (pa && !row.group && core(pa.label).every(w => Q.w.includes(w))) rs += 12;   // "Lương khối văn phòng": the Lương under Khối Văn phòng
+      if (rs) cands.push(Object.assign({score: rs + col.s + (dc.length ? 10 : 0) + (scope && scope.rows && scope.rows.some(x => x.row === row) ? 5 : 0), m, row}, cOf())); }
     if ((col.c >= 0 && col.s >= 6) || dc.length) {   // only the column: the reader's row, else the table's total
       const sr = scope && scope.m === m && scope.row, tot = m.rows.find(r => r.total);
       if (sr) cands.push(Object.assign({score: (dc.length ? 16 : col.s) + 12, m, row: sr, scoped: true}, cOf()));
@@ -1116,7 +1234,8 @@ function resolve(q, scope) {
   if (Q.share) {   // "chiếm bao nhiêu % tổng": computed here from two figures of the table, and said so
     const rc = cands.filter(c => c.row && !c.scoped && !c.colOnly && !c.row.total).sort((a, b) => b.score - a.score)[0];
     const m = rc ? rc.m : scope && scope.row ? scope.m : null, row = rc ? rc.row : scope && scope.row;
-    const tot = m && m.rows.find(r => r.total), c = m ? valueCol(Q, m) : -1;
+    const chg = /\b(phan tang|muc tang|phan chenh|muc chenh|chenh lech|phan giam|muc giam)\b/.test(Q.f);   // "chiếm bao nhiêu % phần tăng": change ÷ total change
+    const tot = m && m.rows.find(r => r.total), c = !m ? -1 : chg ? (deltaCols(m).find(k => colUnit(m, k) !== "%") ?? -1) : valueCol(Q, m);
     if (m && row && tot && c >= 0 && row.cells[c] && tot.cells[c]) {
       const pct = share(cellText(row.cells[c]), cellText(tot.cells[c]), m.en);
       if (pct) return {kind: "share", m, row, tot, c, pct, Q};
@@ -1149,12 +1268,17 @@ function resolve(q, scope) {
       if (c.card) return Q.unit === "%" || cardFigs(c.card).some(f => f.u === Q.unit);
       const cols = (c.cols || [c.c]).filter(k => k >= 0 && colUnit(c.m, k) === Q.unit);
       if (cols.length) { if (c.cols) { c.cols = cols; c.c = cols[0]; } return true; }
-      if (Q.unit === "%") return true;
+      if (Q.unit === "%") {   // "bao nhiêu phần trăm": the % column next to the difference, never the difference itself
+        const dc = deltaCols(c.m), pc = dc.find(k => colUnit(c.m, k) === "%");
+        if (pc !== undefined && (c.c < 0 || dc.includes(c.c))) { c.asked = c.c >= 0 ? c.m.head[c.c] : ""; c.c = pc; c.cols = null; return true; }   // "chênh lệch … %" is the % change
+        return false;
+      }
       if (c.c < 0 && !c.cols && !Q.delta) { const k = numCols(c.m, c.row).find(k => colUnit(c.m, k) === Q.unit); if (k !== undefined) { c.c = k; return true; } }
       return false;
     };
     const kept = cands.filter(fit);
-    if (!kept.length) { const r0 = cands.find(c => c.row && c.scoped) || cands.find(c => c.row && !c.colOnly) || null;
+    if (!kept.length) { const r0 = cands.find(c => c.row && c.scoped) || cands.find(c => c.row && !c.colOnly) || null, f0 = figureSentence(Q);
+      if (f0 && f0.fig) return {kind: "sentence", b: f0.b, s: f0.s, Q};
       return {kind: "none", Q, why: "unit", m: r0 && r0.m, row: r0 && r0.row}; }
     cands = kept;
   }
@@ -1174,9 +1298,19 @@ function resolve(q, scope) {
   if (!cands.length && !fs && [...Q.ids].some(PER) && ![...Q.ids].filter(PER).some(i => ids(pageText()).has(i))) return {kind: "none", Q, why: "period"};
   if (!cands.length) return fs ? {kind: fs.fig ? "sentence" : "mention", b: fs.b, s: fs.s, Q} : {kind: "none", Q};
   // which candidate explains most of the question
-  cands.forEach(c => { c.cover = coverOf(c.card ? [c.card.text] : c.chart ? [c.text] : [c.row.label, c.row.group, (c.cols || [c.c]).map(k => k >= 0 ? c.m.head[k] + " " + c.m.units[k] : "").join(" "), c.c >= 0 && !c.cols ? "" : c.m.head.join(" ")]);
+  // what a figure covers is only what is shown with it: its row label and its own column headers, or a tile's label and value;
+  // a tile's "so với AOP gốc" is its base, not its subject, and counts only when the reader asks "so với" the same base
+  const svw = (Q.f.match(/\bso voi\s+([a-z0-9 ]+?)(?=\s+(tang|giam|bao|the|thi|la|nhu|nhieu|chenh)\b|\s*[?.!]*$)/) || [])[1];
+  const base = (m, shown) => { if (!svw || !shown.some(k => deltaCols(m).includes(k))) return "";
+    const pw = words(widen(svw)); return m.head.filter((h, i) => i >= m.lc && h && words(h).length && words(h).every(w => pw.includes(w))).join(" "); };
+  const cardCover = k => { const [lab, ...rest] = k.text.split(":"), val = rest.join(":"), cmpw = (val.match(/\bso với\b[^,.;]*/i) || [""])[0];
+    return [lab, val.replace(/\bso với\b[^,.;]*/gi, " "), svw && words(widen(svw)).every(w => words(widen(fold(cmpw))).includes(w)) ? cmpw : ""]; };
+  cands.forEach(c => { const shown = c.row ? (c.cols || (c.c >= 0 ? [c.c] : numCols(c.m, c.row).slice(0, 5))) : [];
+    c.cover = coverOf(c.card ? cardCover(c.card) : c.chart ? [c.text] : [c.row.label, c.row.group, shown.map(k => c.m.head[k] + " " + c.m.units[k]).join(" "), base(c.m, shown), c.asked || ""]);
     if (scope && scope.words) scope.words.forEach(w => c.cover.add(w));
-    c.rest = leftover(Q, c.cover, c.card ? c.card.el : c.m ? c.m.el : null); c.total = c.score - 8 * c.rest.length;
+    if (c.row) { const pa = parentRow(c.m, c.row); if (pa) coverOf([pa.label]).forEach(w => c.cover.add(w));
+      if (c.row.codes && c.row.codes.length) coverOf(["mã số " + c.row.codes.join(" ")]).forEach(w => c.cover.add(w)); }   // "mã số 110": the code is shown with the row
+    c.rest = leftover(Q, c.cover, c.card ? c.card.el : c.m ? c.m.el : null); c.total = c.score - 8 * c.rest.length + (c.rest.length ? 0 : 1000);   // a place that covers the question first
     if (Q.delta && c.row && !c.cols && c.c >= 0 && !deltaCols(c.m).includes(c.c)) c.total -= 15; });
   cands.sort((a, b) => b.total - a.total);
   const same = (a, b) => a === b || (a.row && a.row === b.row && a.c === b.c) || (a.card && a.card === b.card) || (a.chart && a.text === b.text);
@@ -1189,6 +1323,19 @@ function resolve(q, scope) {
   }
   const isPer = x => /^(tháng|thang|quý|quy|fy|q|t)\d/i.test(x);
   if (top.length === 1 && top[0].rest.some(isPer)) return {kind: "none", Q, why: "period"};   // "tháng 3" is nowhere: never a figure of another period
+  // two rows the reader names together ("Marketing so với CNTT"): both, side by side
+  rowsNamed.sort((a, b) => (b.total || 0) - (a.total || 0));
+  const pr = rowsNamed.filter((c, i, l) => l.findIndex(o => o.row.label === c.row.label) === i && core(c.row.label).every(w => Q.w.includes(w)));   // two different names, not one name in two groups
+  const tk = r => words(String(r.label).replace(NUMBERING, "")), inside = (a, b) => a !== b && tk(a).every(x => tk(b).includes(x));   // "Lãi" inside "Lãi vay": one row, not two
+  const heads = (a, b) => a.m === b.m && (parentRow(b.m, b.row) === a.row || (b.row.group && fold(b.row.group) === fold(a.row.label)));   // "Lương khối Văn phòng": one row under its heading
+  for (let i = pr.length - 1; i >= 0; i--) if (pr.some(o => inside(pr[i].row, o.row) || heads(pr[i], o))) pr.splice(i, 1);
+  if (pr.length >= 2 && pr.every(c => c.m === pr[0].m) && !Q.which) {
+    const m = pr[0].m, cm = colMatch(Q, m), cols = cm.s >= 6 ? [cm.c] : Q.delta ? deltaCols(m) : numCols(m, pr[0].row);
+    return {kind: "pair", m, rows: pr.slice(0, 4).map(c => ({m, row: c.row, cols})), Q};
+  }
+  // the precision gate: a figure is shown only when its row label and column header (or a tile's own label) cover every word asked
+  if (top.every(c => c.rest.length && !c.wider)) return {kind: "none", Q, why: "gate", near: top.slice(0, 4), rest: top[0].rest};
+  top = top.filter(c => !c.rest.length || c.wider);
   if (top.length > 1) return {kind: "many", top, Q};
   const one = top[0]; if (Q.delta) one.delta = true;
   if (scope && scope.rows && one.row && one.row.total && /\b(tong|cong)\b/.test(Q.f))
@@ -1198,12 +1345,12 @@ function resolve(q, scope) {
 }
 function cellAnswer(m, row, c, cols) {   // "Khối Bán hàng, AOPR: 92,3 tỷ."; never "undefined", never an empty figure
   if (cols && cols.length > 1) {
-    const parts = cols.filter(k => row.cells[k] && isNum(cellText(row.cells[k]))).map(k => colName(m, k) + " " + withUnit(cellText(row.cells[k]), m.units[k]));
+    const parts = cols.filter(k => row.cells[k] && isNum(cellText(row.cells[k]))).map(k => colName(m, k) + " " + withUnit(cellText(row.cells[k]), uOf(m, row, k)));
     if (parts.length) return {text: rowName(row) + ": " + parts.join("; ") + ".", target: row.cells[cols[0]] || row.r};
   }
   const x = c >= 0 ? row.cells[c] : null, v = x ? cellText(x) : "";
-  if (x && v && isNum(v)) return {text: rowName(row) + ", " + colName(m, c) + ": " + withUnit(v, m.units[c]) + ".", target: x};
-  const parts = numCols(m, row).slice(0, 5).map(k => colName(m, k) + " " + withUnit(cellText(row.cells[k]), m.units[k]));
+  if (x && v && isNum(v)) return {text: rowName(row) + ", " + colName(m, c) + ": " + withUnit(v, uOf(m, row, c)) + ".", target: x};
+  const parts = numCols(m, row).slice(0, 5).map(k => colName(m, k) + " " + withUnit(cellText(row.cells[k]), uOf(m, row, k)));
   return {text: rowName(row) + ": " + (parts.length ? parts.join("; ") : "dòng này không có số") + ".", target: row.r};
 }
 function rowAnswer(m, row, c, extra, opts, cols) { const a = cellAnswer(m, row, c, cols); answer(a.text, a.target, Object.assign({extra}, opts || {})); }
@@ -1278,17 +1425,46 @@ function ask(q, scope) {
   if (r.kind === "none" && r.why === "unit") {
     const k = r.m && r.row ? numCols(r.m, r.row).find(k => colUnit(r.m, k) === r.Q.unit) : undefined, who = r.row ? " của " + rowName(r.row) : "";
     const what = r.Q.delta ? "số tăng giảm tính bằng «" + r.Q.unit + "»" : "số tính bằng «" + r.Q.unit + "»";
-    answer("Báo cáo chưa có " + what + who + "." + (k !== undefined && r.Q.delta ? " Bảng chỉ ghi " + colName(r.m, k) + ": " + withUnit(cellText(r.row.cells[k]), r.m.units[k]) + "." : ""),
+    answer("Báo cáo chưa có " + what + who + "." + (k !== undefined && r.Q.delta ? " Bảng chỉ ghi " + colName(r.m, k) + ": " + withUnit(cellText(r.row.cells[k]), uOf(r.m, r.row, k)) + "." : ""),
       k !== undefined ? r.row.cells[k] : null, {cls: "park", extra: parkNote(q)});
     return;
   }
-  if (r.kind === "sup") {
-    const w = r.win[0], head = colName(r.m, r.c), word = r.dir === "max" ? "cao nhất" : "thấp nhất";
-    const who = r.win.map(o => rowName(o.row)).join(" và ");
-    answer(who + " " + word + " về " + head + ": " + withUnit(cellText(w.x), r.m.units[r.c]) + ".", w.x,
-      {extra: quiet("So " + r.n + " dòng" + (r.region ? " trong vùng anh chị khoanh" : " của bảng") + (r.total ? ", không tính dòng Tổng" : "") + ". Em xếp theo chính các số trên báo cáo.")});
+  if (r.kind === "sup" || r.kind === "filter") {
+    const head = r.per ? "chi phí bình quân mỗi người" : colName(r.m, r.c), how = r.per ? " (em tính từng " + r.noun + ": " + colName(r.m, r.per[0]) + " ÷ " + colName(r.m, r.per[1]) + ")" : "";
+    const item = o => rowName(o.row) + " " + o.v.show, where = (r.region ? " trong vùng anh chị khoanh" : " của bảng") + (r.total ? ", không tính dòng Tổng" : "");
+    let text;
+    if (r.kind === "filter") {
+      const verb = /\bgiam\b/.test(r.Q.f) && !/\btang\b/.test(r.Q.f) ? "giảm" : /\btang\b/.test(r.Q.f) ? "tăng" : r.dir === "gt" ? "cao hơn" : "thấp hơn";
+      const cond = r.thr ? verb + (r.said === "gt" ? " trên " : " dưới ") + r.thr : verb;   // the reader's own direction: "giảm trên 5%" 
+      text = r.win.length ? "Có " + r.win.length + "/" + r.n + " " + r.noun + " " + cond + " (theo cột " + head + "): " + r.win.map(item).join("; ") + "."
+        : "Không " + r.noun + " nào " + cond + (r.thr ? "" : "; " + r.n + "/" + r.n + " " + r.noun + " đều " + (verb === "giảm" ? "tăng hoặc giữ nguyên" : "giảm hoặc giữ nguyên")) + " (theo cột " + head + ").";
+      if (!r.win.length && !r.thr && verb === "giảm" && r.all.every(o => o.s > 0)) text = "Không " + r.noun + " nào giảm; " + r.n + "/" + r.n + " " + r.noun + " đều tăng (theo cột " + head + ").";
+    } else {
+      const word = r.dir === "max" ? "cao nhất" : "thấp nhất";
+      text = r.top ? r.win.length + " " + r.noun + " " + word + " về " + head + how + ": " + r.win.map(item).join("; ") + "."
+        : r.win.map(o => rowName(o.row)).join(" và ") + " " + word + " về " + head + how + ": " + r.win[0].v.show + ".";
+    }
+    answer(text, r.win.length ? (r.per ? r.win[0].row.r : r.win[0].v.x) : null,
+      {extra: quiet("So " + r.n + " dòng" + where + ". Em " + (r.kind === "filter" ? "lọc" : "xếp") + " theo chính các số trên báo cáo" + (r.per ? "; số bình quân là em tính" : "") + ".")});
+    if (r.win.length > 1) r.win.slice(1, 6).forEach(o => frame(r.per ? o.row.r : o.v.x, true, true, true));
     return;
   }
+  if (r.kind === "pickcol") {
+    const cols = r.m.head.map((h, i) => i).filter(i => i >= r.m.lc && r.m.head[i] && r.rows.some(row => row.cells[i] && isNum(cellText(row.cells[i]))));
+    answer("Anh chị muốn so các " + r.noun + " theo cột nào ạ?", null, {extra: chips(cols.slice(0, 8).map(i => [r.m.head[i], () => ask(q.replace(/[?.!\s]+$/, "") + " theo " + r.m.head[i] + "?", scope)]))});
+    return;
+  }
+  if (r.kind === "pair") {
+    const rs = r.rows; answer(rs.map(x => rowName(x.row)).join(" và ") + ":", rs[0].row.r, {extra: miniTable(rs), src: "Lấy từ báo cáo «" + TITLE + "», các dòng đang khoanh"});
+    rs.slice(1).forEach(x => frame(x.row.r, true, true, true)); return;
+  }
+  if (r.kind === "none" && r.why === "gate") {
+    const words_ = r.rest.map(x => x.replace(/_/g, " ").replace(/^(tháng|thang|quý|quy|fy)(\d)/i, "$1 $2")).join(" ");
+    const near = chips(r.near.map(b => ["Xem " + candLabel(b), () => showCand(b, null)]));
+    answer("Em chưa thấy «" + words_ + "» trong báo cáo, nên em không đưa số.", null, {cls: "park", extra: [near, parkNote(q)]}); return;
+  }
+  if (r.kind === "none" && r.why === "measure") {
+    answer("Báo cáo chưa có cột " + (r.missing ? "«" + r.missing + "»" : "nào cho câu này") + " để xếp hạng, nên em không đưa số.", null, {cls: "park", extra: parkNote(q)}); return; }
   if (r.kind === "why") {
     if (r.w && r.w.cause) { answer("Báo cáo viết: «" + whole(r.w.text) + "»", r.w.b.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "», đoạn đang khoanh"}); return; }
     const what = r.entity ? " vì sao " + r.entity + " thay đổi" : " lý do";
@@ -1310,7 +1486,7 @@ function ask(q, scope) {
       r.ch.el, {src: "Số trên biểu đồ «" + shortText(chartTitle(r.ch.el, r.ch.c), 60) + "»" + (ch ? "; phần chênh lệch em tính" : "")});
     return;
   }
-  if (r.kind === "sentence") { answer("Báo cáo viết: «" + whole(r.s) + "»", r.b.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "», đoạn đang khoanh"}); return; }
+  if (r.kind === "sentence") { answer("Báo cáo viết: «" + whole(r.s) + "»" + (r.calc ? " " + esc(r.calc) : ""), r.b.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "», đoạn đang khoanh" + (r.calc ? "; phần chênh lệch em tính" : "")}); return; }
   if (r.kind === "mention") { answer(esc("Em chưa thấy số này trong bảng hay thẻ số. Báo cáo có nhắc: ") + "«" + whole(r.s) + "»", r.b.el, {html: true, cls: "park", extra: parkNote(q), src: "Trên báo cáo «" + TITLE + "»"}); return; }
   if (r.kind === "none" && r.why === "period") {
     const asked = perPhrase(q), has = perPhrase(TITLE) || perPhrase(cellText(H1));
@@ -1322,10 +1498,7 @@ function ask(q, scope) {
     const where = b => b.m ? (b.m.heading || b.m.cap || b.m.titles[0] || "") : b.card ? headingFor(b.card.el) : "";
     const twice = () => labs.map(l => labs.filter(x => x === l).length > 1);
     let dup = twice(); dup.forEach((d, i) => { if (d && where(top[i]) && !labs[i].includes(where(top[i]))) labs[i] += " · " + where(top[i]); });
-    const parent = b => {   // the row it sits under: the nearest row above whose label the table writes only once
-      if (!b.m || !b.row) return ""; const rs = b.m.rows, k = rs.indexOf(b.row), n = l => rs.filter(r => r.label === l).length;
-      for (let j = k - 1; j >= 0; j--) if (!rs[j].total && rs[j].label !== b.row.label && n(rs[j].label) === 1) return rs[j].label;
-      return ""; };
+    const parent = b => { const pa = b.m && b.row && parentRow(b.m, b.row); return pa ? pa.label : ""; };
     dup = twice(); dup.forEach((d, i) => { const pa = d && parent(top[i]); if (pa) { const ps = labs[i].split(" · "); ps.splice(1, 0, pa); labs[i] = ps.join(" · "); } });
     dup = twice(); dup.forEach((d, i) => { if (d && top[i].m) labs[i] += " · bảng " + (tables().indexOf(top[i].m) + 1); });
     answer("Anh chị muốn hỏi chỗ nào ạ?", null, {extra: chips(top.map((b, i) => [labs[i], () => showCand(b, null)]))});
@@ -1362,7 +1535,7 @@ function placeBubble(follow) {   // beside the place, never on it or on its row 
   if (!anchor || !isOpen($("bub"))) { lead.style.display = "none"; return; }
   const b = $("bub"), v = vp(), small = v.w <= 700, bar = rect($("bar")), g = 14, top0 = v.y + 8, bot0 = bar.top - 8;
   const set = (x, y) => { b.style.left = x + "px"; b.style.top = y + "px"; };
-  const sheet = !small && v.h < 600; b.classList.toggle("sheet", sheet);
+  const sheet = !small && v.h < 600; b.classList.toggle("sheet", sheet || !!(follow && bubAt && bubAt.anchor === anchor && bubAt.sheet));
   if (sheet) {   // a short screen (a laptop at 150%): the answer docks above the bar; keepVisible keeps the place above it
     b.style.width = (v.w - 24) + "px"; bubbleCap(Math.max(120, (bot0 - top0) * 0.45));
     const r = rect(anchor), h = b.offsetHeight, x = v.x + 12, y = bot0 - h, q = {left: x, top: y, right: x + v.w - 24, bottom: y + h};
@@ -1370,8 +1543,10 @@ function placeBubble(follow) {   // beside the place, never on it or on its row 
   }
   if (follow && bubAt && bubAt.anchor === anchor) {   // on scroll: move with the place; choose again only when it no longer fits
     const r = rect(anchor), x = r.left + bubAt.dx, y = r.top + bubAt.dy, w = b.offsetWidth, h = b.offsetHeight, q = {left: x, top: y, right: x + w, bottom: y + h};
+    if (bubAt.sheet) { const yy = bot0 - h; set(v.x + 12, yy); pointAt(r, {left: v.x + 12, top: yy, right: v.x + 12 + w, bottom: yy + h}); return; }
     if (x >= v.x + 8 && q.right <= v.x + v.w - 8 && y >= top0 && q.bottom <= bot0 && (bubAt.over || !hit(q, r))) { set(x, y); pointAt(r, q); return; }
   }
+  b.classList.remove("sheet");
   b.style.width = small ? (v.w - 16) + "px" : "";
   bubbleCap(bot0 - top0);   // never taller than the screen above the bar: a long answer scrolls inside
   const view = {left: v.x, top: v.y, right: v.x + v.w, bottom: v.y + v.h};
@@ -1394,11 +1569,14 @@ function placeBubble(follow) {   // beside the place, never on it or on its row 
       if (hit(q, r)) continue;
       // a hidden figure in the place's own row or column counts ten times, its row label and header a hundred, a chart five;
       // and every 40px between the bubble and its place costs as much as one hidden figure
-      const cost = figs.filter(n => hit(n, q)).reduce((k, n) => k + ((n.bottom > r.top && n.top < r.bottom) || (n.right > r.left && n.left < r.right) ? 10 : 1), 0)
-        + 100 * gd.strong.filter(s => hit(s, q)).length + 10 * gd.soft.filter(s => hit(s, q)).length + 5 * charts.filter(s => hit(s, q)).length
+      // a figure of its own table counts five, its own headers as much as its row label
+      const inBox = n => gd.box && n.left >= gd.box.left - 1 && n.right <= gd.box.right + 1 && n.top >= gd.box.top - 1 && n.bottom <= gd.box.bottom + 1;
+      const sh = gd.strong.concat(gd.table).filter(s => hit(s, q)).length;
+      const cost = figs.filter(n => hit(n, q)).reduce((k, n) => k + ((n.bottom > r.top && n.top < r.bottom) || (n.right > r.left && n.left < r.right) ? 10 : inBox(n) ? 5 : 1), 0)
+        + 100 * sh + 10 * gd.soft.filter(s => hit(s, q)).length + 5 * charts.filter(s => hit(s, q)).length
         + 60 * tots.filter(s => hit(s, q)).length
         + gapOf(q, r) / 40;
-      if (!best || cost < best.cost - 1e-6) best = {x, y, cost};
+      if (!best || cost < best.cost - 1e-6) best = {x, y, cost, sh};
     }
     return best;
   };
@@ -1421,6 +1599,7 @@ function placeBubble(follow) {   // beside the place, never on it or on its row 
     const below = bot0 - g - r.bottom - 6, above = r.top - g - top0 - 6, side = bot0 - top0;
     for (const room of [below, above, side].filter(x => x >= 110).sort((a, b) => b - a)) { bubbleCap(room); best = choose(r); if (best) break; }
   }
+  if (best && best.sh && !small && dockSheet(r)) return;   // every spot hides a row label or a header: a sheet above the bar instead
   let over = false;
   if (!best) {   // a place taller than the screen: a short bubble docked above the bar, beside the place when there is room
     bubbleCap(Math.min(bot0 - top0, 220)); const w = b.offsetWidth, h = b.offsetHeight;
@@ -1430,6 +1609,19 @@ function placeBubble(follow) {   // beside the place, never on it or on its row 
   const w = b.offsetWidth, h = b.offsetHeight, q = {left: best.x, top: best.y, right: best.x + w, bottom: best.y + h};
   set(best.x, best.y); bubAt = {anchor, dx: best.x - r.left, dy: best.y - r.top, over};
   pointAt(r, q);
+}
+function dockSheet(r) {   // the answer as a sheet above the bar, the place lifted above it; false when the place cannot be lifted clear
+  const b = $("bub"), v = vp(), bar = rect($("bar")), top0 = v.y + 8, bot0 = bar.top - 8;
+  b.classList.add("sheet"); b.style.width = (v.w - 24) + "px"; bubbleCap(Math.max(120, Math.min(260, (bot0 - top0) * 0.45)));
+  const h = b.offsetHeight, y = bot0 - h, gd = guards(anchor), head = gd.strong.concat(gd.table).reduce((t, q) => Math.min(t, q.top), r.top);
+  if (r.bottom > y - 8) {   // lift the place (and its headers) above the sheet
+    const dy = Math.min(r.bottom - (y - 12), head - top0 - 4), sc = scrollerOf(anchor);
+    if (dy > 0) { if (sc) sc.scrollBy({top: dy, behavior: "auto"}); if (Math.abs(rect(anchor).top - r.top) < 2) window.scrollBy({top: dy, behavior: "auto"}); redraw(); r = rect(anchor); }
+  }
+  if (r.bottom > y - 4 || r.top < top0) { b.classList.remove("sheet"); b.style.width = ""; bubbleCap(bot0 - top0); return false; }
+  const x = v.x + 12, q = {left: x, top: y, right: x + v.w - 24, bottom: y + h};
+  b.style.left = x + "px"; b.style.top = y + "px"; bubAt = {anchor, dx: x - r.left, dy: y - r.top, over: true, sheet: true}; pointAt(r, q);
+  return true;
 }
 function pointAt(r, q) {   // the tail touches the place when it can reach it; otherwise a thin leader line goes to it
   const tl = $("tail"), w = q.right - q.left, h = q.bottom - q.top, gap = gapOf(q, r), v = vp();
@@ -1447,13 +1639,63 @@ function pointAt(r, q) {   // the tail touches the place when it can reach it; o
     return;
   }
   tl.className = "tail hidden";
-  const rc = {x: Math.max(v.x, Math.min(v.x + v.w, (r.left + r.right) / 2)), y: Math.max(v.y, Math.min(v.y + v.h, (r.top + r.bottom) / 2))};
-  const px = Math.max(q.left, Math.min(q.right, rc.x)), py = Math.max(q.top, Math.min(q.bottom, rc.y));
-  const tx = Math.max(r.left, Math.min(r.right, px)), ty = Math.max(r.top, Math.min(r.bottom, py));
-  if (hit(q, r) || Math.hypot(tx - px, ty - py) < 4 || ty < v.y || ty > v.y + v.h) { lead.style.display = "none"; return; }
-  const dot = lead.lastChild;
-  [lead.children[0], lead.children[1]].forEach(ln => { ln.setAttribute("x1", px); ln.setAttribute("y1", py); ln.setAttribute("x2", tx); ln.setAttribute("y2", ty); });
-  dot.setAttribute("cx", tx); dot.setAttribute("cy", ty); lead.style.display = "block";
+  const path = hit(q, r) ? null : leaderPath(r, q, v);
+  lead._pts = path;
+  if (!path) { lead.style.display = "none"; return; }   // no clear way to the place: its frame alone shows it
+  const [tx, ty] = path[path.length - 1];
+  lead.firstChild.setAttribute("points", path.map(p => p.join(",")).join(" "));
+  lead.lastChild.setAttribute("cx", tx); lead.lastChild.setAttribute("cy", ty); lead.style.display = "block";
+}
+function textRects(zone, skip) {   // every line of words or figures on the page inside a box (the leader line never crosses one)
+  const out = [], tw = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {acceptNode: n => {
+    if (n.nodeType === 1) { if (mine(n) || n === host || /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(n.tagName)) return NodeFilter.FILTER_REJECT;
+      const q = n.getBoundingClientRect(); return !(q.width || q.height) || hit(q, zone) ? NodeFilter.FILTER_SKIP : NodeFilter.FILTER_REJECT; }
+    return /\S/.test(n.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT; }});
+  for (let n = tw.nextNode(), k = 0; n && k < 4000; n = tw.nextNode(), k++) {
+    if (skip && skip.contains(n)) continue;
+    const rg = document.createRange(); rg.selectNodeContents(n);
+    for (const q of rg.getClientRects()) if (q.width > 1 && q.height > 1 && hit(q, zone)) out.push(q);
+  }
+  return out;
+}
+function segCross(a, b, q) {   // does the segment a→b pass through the box q (1px inside its edges)?
+  const L = q.left + 1, R = q.right - 1, T = q.top + 1, B = q.bottom - 1; if (L >= R || T >= B) return false;
+  let t0 = 0, t1 = 1; const dx = b[0] - a[0], dy = b[1] - a[1];
+  for (const [p, d] of [[-dx, a[0] - L], [dx, R - a[0]], [-dy, a[1] - T], [dy, B - a[1]]]) {
+    if (p === 0) { if (d < 0) return false; continue; }
+    const t = d / p; if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; } else { if (t < t0) return false; if (t < t1) t1 = t; }
+  }
+  return t0 < t1;
+}
+function leaderCrosses(path, r, skip) {   // the words and figures a leader path runs over, other than its own place
+  const z = path.reduce((a, [x, y]) => ({left: Math.min(a.left, x - 2), top: Math.min(a.top, y - 2), right: Math.max(a.right, x + 2), bottom: Math.max(a.bottom, y + 2)}), {left: 1e9, top: 1e9, right: -1e9, bottom: -1e9});
+  const own = {left: r.left - 2, top: r.top - 2, right: r.right + 2, bottom: r.bottom + 2}, inOwn = q => q.left >= own.left && q.right <= own.right && q.top >= own.top && q.bottom <= own.bottom;
+  return textRects(z, skip).filter(q => !inOwn(q) && path.slice(1).some((p, i) => segCross(path[i], p, q)));
+}
+function leaderPath(r, q, v) {   // straight, else with one bend; it ends in the blank side of the place's own cell, never on a digit
+  const a = anchor && anchor.nodeType === 1 ? anchor : null, mid = (r.top + r.bottom) / 2;
+  let aim = null;
+  if (a && a !== regionEl && r.width < v.w * 0.6) {   // a figure is written at one side of its cell: aim at the blank side
+    const rg = document.createRange(); rg.selectNodeContents(a); const tr = [...rg.getClientRects()].filter(x => x.width > 1);
+    if (tr.length) { const tl = Math.min(...tr.map(x => x.left)), tR = Math.max(...tr.map(x => x.right));
+      if (tl - r.left >= 10) aim = [r.left + Math.min(8, (tl - r.left) / 2), mid];
+      else if (r.right - tR >= 10) aim = [r.right - Math.min(8, (r.right - tR) / 2), mid]; }
+  }
+  if (!aim) { const cx = Math.max(q.left, Math.min(q.right, (r.left + r.right) / 2)), cy = Math.max(q.top, Math.min(q.bottom, mid));
+    aim = [Math.max(r.left, Math.min(r.right, cx)), Math.max(r.top, Math.min(r.bottom, cy))]; }
+  aim = [Math.round(aim[0]), Math.round(aim[1])];
+  if (aim[1] < v.y || aim[1] > v.y + v.h || aim[0] < v.x || aim[0] > v.x + v.w) return null;
+  const edge = (x, y) => [Math.max(q.left, Math.min(q.right, x)), Math.max(q.top, Math.min(q.bottom, y))];
+  const tries = [[edge(aim[0], aim[1]), aim]];
+  const qy = Math.max(q.top + 14, Math.min(q.bottom - 14, aim[1])), qx = Math.max(q.left + 14, Math.min(q.right - 14, aim[0]));
+  if (aim[0] < q.left || aim[0] > q.right) tries.push([[aim[0] < q.left ? q.left : q.right, qy], [aim[0], qy], aim]);   // across, then down the blank side of the column
+  if (aim[1] < q.top || aim[1] > q.bottom) tries.push([[qx, aim[1] < q.top ? q.top : q.bottom], [qx, aim[1]], aim]);   // down, then across
+  for (const p of tries) {
+    const pts = p.filter((x, i) => !i || Math.hypot(x[0] - p[i - 1][0], x[1] - p[i - 1][1]) >= 1);
+    if (pts.length < 2 || Math.hypot(pts[pts.length - 1][0] - pts[0][0], pts[pts.length - 1][1] - pts[0][1]) < 4) continue;
+    if (!leaderCrosses(pts, r, a).length) return pts.map(([x, y]) => [Math.round(x), Math.round(y)]);
+  }
+  return null;
 }
 $("bx").onclick = () => { closeBubble(); clearFrames(); };
 $("bf").onsubmit = e => { e.preventDefault(); const q = $("bq").value.trim(); if (q) ask(q, scope); };
@@ -1597,7 +1839,7 @@ function inside(e, box) { const r = rect(e), cx = (r.left + r.right) / 2, cy = (
 function regionSummary(box) {   // what is inside, in the report's own labels and figures
   const lines = [], labels = [], rows = [], cells = [];
   for (const m of tables()) for (const row of m.rows) {
-    const got = [], cs = []; for (const c of numCols(m, row)) { const x = row.cells[c]; if (inside(x, box)) { got.push(colName(m, c) + " " + withUnit(cellText(x), m.units[c])); cs.push(c); cells.push(x); } }
+    const got = [], cs = []; for (const c of numCols(m, row)) { const x = row.cells[c]; if (inside(x, box)) { got.push(colName(m, c) + " " + withUnit(cellText(x), uOf(m, row, c))); cs.push(c); cells.push(x); } }
     if (got.length) { lines.push(rowName(row) + ": " + got.join("; ")); labels.push(row.label); rows.push({m, row, cols: cs}); }
   }
   for (const c of allCards()) if (inside(c.el, box)) { lines.push(c.text); labels.push(c.text.split(":")[0]); cells.push(c.el); }
@@ -1621,7 +1863,7 @@ function miniTable(rows, all) {   // more than three rows of one table: a small 
   const t = document.createElement("table"); t.className = "mini";
   const tr = (cells, tag) => { const r = document.createElement("tr"); cells.forEach(x => { const c = document.createElement(tag); c.textContent = x; r.appendChild(c); }); return r; };
   t.appendChild(tr(["", ...cols.map(c => colName(m, c) + (one || !m.units[c] || m.units[c] === "%" ? "" : " (" + m.units[c] + ")"))], "th"));
-  rows.slice(0, 12).forEach(x => t.appendChild(tr([rowName(x.row), ...cols.map(c => x.cols.includes(c) && x.row.cells[c] ? cellText(x.row.cells[c]) + (m.units[c] === "%" && !/%/.test(cellText(x.row.cells[c])) ? "%" : "") : "")], "td")));
+  rows.slice(0, 12).forEach(x => t.appendChild(tr([rowName(x.row), ...cols.map(c => x.cols.includes(c) && x.row.cells[c] ? cellText(x.row.cells[c]) + (m.units[c] === "%" && !/%/.test(cellText(x.row.cells[c])) ? "%" : uOf(m, x.row, c) === "người" && m.units[c] !== "người" ? " người" : "") : "")], "td")));
   if (one || rows.length > 12) { const cap = document.createElement("caption");
     cap.textContent = [one ? "Đơn vị: " + one : "", rows.length > 12 ? "… và " + (rows.length - 12) + " dòng nữa" : ""].filter(Boolean).join(" · "); t.appendChild(cap); }
   [...t.querySelectorAll("td:first-child")].forEach(c => { c.title = c.textContent; });
@@ -1727,7 +1969,12 @@ fitBar();
 window.__clickyThuCau = function (list) {   // which usual questions this report can answer, and with what: the live engine
   return list.map(q => { const r = resolve(q, null); let ok = false, partial = false, label = "";
     if (r.kind === "bank") { ok = !r.b.cu; partial = !!r.b.cu; label = (r.b.cu ? "câu đã trả lời kỳ " + (r.b.ky || "trước") + ", số hiện tại đã khác: " : "câu đã trả lời: ") + r.b.q; }
-    else if (r.kind === "sup") { ok = true; label = r.win.map(o => o.row.label).join(", ") + " (" + colName(r.m, r.c) + ")"; }
+    else if (r.kind === "sup" || r.kind === "filter") { ok = true; label = (r.win.map(o => o.row.label).join(", ") || "không dòng nào") + " (" + (r.per ? "bình quân, em tính" : colName(r.m, r.c)) + ")"; }
+    else if (r.kind === "pair") { ok = true; label = r.rows.map(x => x.row.label).join(" và "); }
+    else if (r.kind === "share") { ok = true; label = rowName(r.row) + " chiếm " + r.pct + "% (em tính)"; }
+    else if (r.kind === "sentence") { ok = true; label = "báo cáo viết: " + shortText(r.s, 120); }
+    else if (r.kind === "define") { ok = true; label = r.term + " = " + r.says.join(", "); }
+    else if (r.kind === "none" && r.why === "gate") { partial = true; label = candLabel(r.near[0]) + " (thiếu «" + r.rest.join(" ") + "»)"; }
     else if (r.kind === "why") { ok = !!(r.w && r.w.cause); partial = !ok && !!(r.w || r.row); label = r.w ? "báo cáo viết: " + shortText(r.w.text, 120) : r.entity || ""; }
     else if (r.kind === "mention") { partial = true; label = "chỉ có câu nhắc: " + shortText(r.s, 120); }
     else if (r.kind === "many") { label = "phải chọn giữa " + r.top.length + " chỗ"; ok = true; }
@@ -1739,6 +1986,13 @@ window.__clickyThuCau = function (list) {   // which usual questions this report
     return {q, ok, partial, label}; });
 };
 window.__clickyAudio = audio;   // for the browser tests only
+window.__clickyChi = function (q) {   // for the browser tests only: what a figure answer shows, as row label and column headers
+  const r = resolve(q, null);
+  if (r.kind === "one" && r.b.row) { const b = r.b, shown = b.cols || (b.c >= 0 ? [b.c] : numCols(b.m, b.row).slice(0, 5));
+    return {kind: "cell", label: b.row.label, group: b.row.group, heads: shown.map(k => b.m.head[k]), title: [TITLE, document.title, cellText(H1), headingFor(b.m.el)].join(" "), wider: !!b.wider}; }
+  if (r.kind === "one" && r.b.card) return {kind: "card", text: r.b.card.text, title: [TITLE, document.title, cellText(H1), headingFor(r.b.card.el)].join(" ")};
+  return {kind: r.kind, why: r.why || ""};
+};
 window.__clickyHoi = function (q, sel) {   // ask as a reader would, on a place or in the panel; returns the answer shown
   const t = sel ? document.querySelector(sel) : null;
   if (t) { pick(t); $("bq").value = q; ask(q, scope); return cellText($("ba")); }
@@ -1774,9 +2028,11 @@ window.__clickyKiemHinh = async function () {
         if (open === "bubble" && hit(q, r) && r.height < (rect($("bar")).top - v.y) * 0.75) problems.push(where + ": khung hỏi tại chỗ che chính chỗ đang hỏi");
         if (q.top < v.y - 1 || q.bottom > v.y + v.h + 1 || q.left < v.x - 1 || q.right > v.x + v.w + 1) problems.push(where + ": " + what + " ra ngoài màn hình");
         if (open === "bubble" && hit(q, rect($("bar")))) problems.push(where + ": khung hỏi tại chỗ đè lên thanh Clicky");
-        if (small && gd.some(g => hit(g, q))) problems.push(where + ": " + what + " che tên dòng hoặc tiêu đề cột của số"); }
+        if (small && gd.some(g => hit(g, q))) problems.push(where + ": " + what + " che tên dòng hoặc tiêu đề cột của số");
+        if (open === "bubble" && lead.style.display !== "none" && lead._pts && leaderCrosses(lead._pts, r, t).length) problems.push(where + ": đường chỉ dẫn cắt qua chữ hoặc số của trang");
+        if (open === "bubble" && small && !$("bub").classList.contains("sheet") && guards(t).table.some(g => hit(g, q))) problems.push(where + ": khung hỏi tại chỗ che tiêu đề bảng của chính số đó"); }
       const f = frames[0] && frames[0].box.style.display !== "none" ? rect(frames[0].box) : null, sr = seen(t);
-      if (!f || !sr || f.left > sr.left + 1 || f.top > sr.top + 1 || f.right < sr.right - 1 || f.bottom < sr.bottom - 1) problems.push(where + ": khung lệch khỏi chỗ cần khoanh");
+      if (!f || !sr || f.left > sr.left + 4 || f.top > sr.top + 1 || f.right < sr.right - 4 || f.bottom < sr.bottom - 1) problems.push(where + ": khung lệch khỏi chỗ cần khoanh");   // 3px: a frame at the screen's edge sits on the cell's own edge
       if (small && (r.top < v.y || r.bottom > v.y + v.h)) problems.push(where + ": số nằm ngoài màn hình");
       if (small && covers().some(q => hit(r, q))) problems.push(where + ": thanh hoặc bảng hỏi của Clicky che số");
       if (small && hiddenBy(t)) problems.push(where + ": phần cố định của trang (như tiêu đề) che số");

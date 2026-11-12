@@ -795,7 +795,8 @@ def test_a_failed_build_keeps_last_times_page_at_its_name_and_says_how_old_it_is
     assert clicky_html.main([str(report)]) == 2
     assert out.read_bytes() == before and not list(report.parent.glob("*bản cũ*"))
     err = capsys.readouterr().err
-    assert f"Bản trình bày cũ từ {dt.datetime.fromtimestamp(out.stat().st_mtime):%d/%m} vẫn ở chỗ cũ, chưa cập nhật" in err
+    assert f"Bản trình bày cũ từ {dt.datetime.fromtimestamp(out.stat().st_mtime):%d/%m %H:%M} vẫn ở chỗ cũ, chưa cập nhật" \
+        in err
 
 
 def test_the_launcher_flow_prints_three_lines_and_keeps_the_rest_in_a_log(report, tmp_path, monkeypatch, capsys):
@@ -830,7 +831,7 @@ def test_the_launcher_flow_prints_three_lines_and_keeps_the_rest_in_a_log(report
     lines = capsys.readouterr().out.strip().splitlines()
     assert len(lines) == 3 and lines[0].startswith("KHÔNG ĐẠT") and "187,4" in lines[1]
     # last time's page stays at its name, untouched, and the owner is told its date
-    assert f"Bản trình bày cũ từ {dt.datetime.fromtimestamp(out.stat().st_mtime):%d/%m} vẫn ở chỗ cũ" in lines[0]
+    assert f"Bản trình bày cũ từ {dt.datetime.fromtimestamp(out.stat().st_mtime):%d/%m %H:%M} vẫn ở chỗ cũ" in lines[0]
     assert out.read_bytes() == before and not list(amp.parent.glob("*bản cũ*")) and not list(amp.parent.glob("~*"))
     assert "vẫn ở chỗ cũ, chưa cập nhật" in logs[0].read_text(encoding="utf-8") or any(
         "vẫn ở chỗ cũ, chưa cập nhật" in f.read_text(encoding="utf-8") for f in (tmp_path / "nho" / "nhat_ky").glob("*"))
@@ -1096,7 +1097,9 @@ def test_superlatives_and_from_to_must_agree_with_the_table(report):
     # "từ X lên Y" with Y below X says the opposite of its own figures
     assert "là giảm, câu nói lại là tăng" in _lock(report, "Khối CNTT", "Khối CNTT từ 17,7 lên 15,8 tỷ.")
     assert "câu nói tăng nhưng «còn»" in _lock(report, "Khối CNTT", "Khối CNTT tăng từ 17,7 còn 15,8 tỷ.")
-    assert _lock(report, "Khối CNTT", "Khối CNTT giảm từ 17,7 xuống 15,8 tỷ.") == ""
+    # "từ" is the base column (AOP gốc 15,8), the end is the current one (AOPR 17,7): swapped, it stops
+    assert "ngược thứ tự" in _lock(report, "Khối CNTT", "Khối CNTT giảm từ 17,7 xuống 15,8 tỷ.")
+    assert _lock(report, "Khối CNTT", "Khối CNTT tăng từ 15,8 lên 17,7 tỷ.") == ""
 
 
 def test_kiem_bien_ban_reads_the_same_sentence_rules(report):
@@ -1136,3 +1139,226 @@ def test_a_cost_under_plan_is_a_saving_only_when_revenue_is_not_under_plan_too(r
     rep = clicky_html.build(str(_page(tmp_path, html)), voice=voice)
     lines = [c["noi"] for s in _draft(rep)["canh"] for c in s["cau"]]
     assert any(x.startswith("Thứ hai, Giá vốn tiết kiệm so với AOP 10,060 triệu") for x in lines), lines
+
+
+# --- QA round 4 (real packs) and FP&A owner round 4 ----------------------------------------------------------
+
+def _table(head, rows):
+    return ("<table><tr>" + "".join(f"<th>{h}</th>" for h in head) + "</tr>"
+            + "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows) + "</table>")
+
+
+B01 = ('<html><head><meta charset="utf-8"><title>BCĐKT 31/10</title></head><body><h1>Bảng cân đối kế toán tại ngày '
+       '31/10/2026 (SỐ GIẢ LẬP)</h1><p>Đơn vị tính: tỷ đồng</p><h2>1. Bảng cân đối</h2>'
+       + _table(["Chỉ tiêu", "Mã số", "Thuyết minh", "Số cuối kỳ", "Số đầu năm"],
+                [["A. TÀI SẢN NGẮN HẠN", "100", "", "1.245,6", "1.198,3"],
+                 ["I. Tiền và các khoản tương đương tiền", "110", "V.01", "231,4", "187,9"],
+                 ["B. TÀI SẢN DÀI HẠN", "200", "", "2.010,2", "2.055,8"],
+                 ["TỔNG CỘNG TÀI SẢN", "270", "", "3.255,8", "3.254,1"]]) + "</body></html>")
+B02 = ('<html><head><meta charset="utf-8"><title>B02-DN</title></head><body><h1>Báo cáo kết quả hoạt động kinh doanh '
+       '10 tháng 2026 (SỐ GIẢ LẬP)</h1><p>Đơn vị tính: tỷ đồng</p><h2>1. Kết quả</h2>'
+       + _table(["Chỉ tiêu", "Mã số", "Thuyết minh", "Năm nay", "Năm trước"],
+                [["1. Doanh thu bán hàng và cung cấp dịch vụ", "01", "VI.25", "4.120,5", "3.871,2"],
+                 ["11. Giá vốn hàng bán", "11", "VI.27", "(2.950,2)", "(2.801,9)"],
+                 ["20. Lợi nhuận gộp", "20", "", "1.150,2", "1.050,6"],
+                 ["50. Tổng lợi nhuận kế toán trước thuế", "50", "", "540,8", "498,3"]]) + "</body></html>")
+HEADCOUNT = ('<html><head><meta charset="utf-8"><title>NS T10</title></head><body><h1>Nhân sự tháng 10 (SỐ GIẢ LẬP)</h1>'
+             '<p>Đơn vị: tỷ đồng</p><h2>1. Chi phí</h2>'
+             + _table(["Khối", "Kế hoạch", "Thực hiện", "Chênh lệch"], [["Bán hàng", "40,1", "45,9", "5,8"],
+                                                                        ["Quản lý", "21,0", "21,4", "0,4"]])
+             + "<h2>2. Số người</h2>"
+             + _table(["Khối", "Kế hoạch (người)", "Thực hiện (người)", "Chênh lệch"],
+                      [["Bán hàng", "700", "718", "18"], ["Quản lý", "165", "161", "(4)"]])
+             + "<h2>3. Nhân sự</h2>"
+             + _table(["Khối", "T9/2026", "T10/2026"], [["Bán hàng", "712", "718"], ["Quản lý", "164", "161"]])
+             + "</body></html>")
+
+
+def _all_said(rep):
+    return [c["noi"] for s in _draft(rep)["canh"] for c in s["cau"]]
+
+
+def test_code_columns_are_labels_never_figures(report, tmp_path):
+    from present import kiem_bien_ban
+    for name, html in (("b01.html", B01), ("b02.html", B02)):
+        src = _page(tmp_path, html, name)
+        rep = clicky_html.build(str(src), voice=voice)
+        said = " ".join(_all_said(rep))
+        assert "mã số" not in said.lower() and " 270 " not in said and " 01 tỷ" not in said, said
+        assert kiem_bien_ban.verify(rep["out"], str(src))["ok"]
+        cols = next(iter(_data_of(rep["out"])["cot"].values()))
+        assert [c["cot_nhan"] for c in cols] == [True, True, True, False, False]
+        assert [c["don_vi"] for c in cols][3:] == ["tỷ", "tỷ"]
+    # spoken, "mã số 270" names the line; with a unit it is a figure the report does not have there
+    assert clicky_html.numbers("Tổng cộng tài sản, mã số 270, là 3.255,8 tỷ.") == ["3.255,8"]
+    assert _lock(_page(tmp_path, B01, "b01.html"), "TỔNG CỘNG TÀI SẢN", "Tổng cộng tài sản là 270 tỷ.") != ""
+
+
+def test_people_columns_never_get_the_money_unit(report, tmp_path):
+    src = _page(tmp_path, HEADCOUNT, "ns.html")
+    rep = clicky_html.build(str(src), voice=voice)
+    said = _all_said(rep)
+    assert "Bán hàng kế hoạch là 700 người, thực hiện là 718 người, chênh lệch là 18 người." in said
+    assert "Bán hàng tháng 9/2026 là 712 người, tháng 10/2026 là 718 người." in said
+    assert not any(re.search(r"\b(712|718|700|18) tỷ", s) for s in said)
+    # the page gets each column's unit, so a click answer says "người" too
+    units = [[c["don_vi"] for c in cols] for cols in _data_of(rep["out"])["cot"].values()]
+    assert units == [["", "tỷ", "tỷ", "tỷ"], ["", "người", "người", "người"], ["", "người", "người"]]
+    # and the lock: "18 tỷ" on the people row is a wrong unit
+    assert "người" in _lock(src, "Bán hàng", "Bán hàng chênh lệch 18 tỷ.")
+
+
+def test_a_balance_sheet_and_a_b02_say_their_bottom_line_and_biggest_change(report, tmp_path):
+    rep = clicky_html.build(str(_page(tmp_path, B02, "b02.html")), voice=voice)
+    said = _all_said(rep)
+    assert "Tổng lợi nhuận kế toán trước thuế năm nay là 540,8 tỷ, năm trước là 498,3 tỷ." in said
+    assert not any(s.startswith("1. ") for s in said)
+    rep = clicky_html.build(str(_page(tmp_path, B01, "b01.html")), voice=voice)
+    assert "Tổng cộng tài sản số cuối kỳ là 3.255,8 tỷ, số đầu năm là 3.254,1 tỷ." in _all_said(rep)
+
+
+def test_a_merged_header_pl_and_a_twelve_month_table_say_the_reports_month(report, tmp_path):
+    merged = ('<html><head><meta charset="utf-8"><title>KQKD tháng 10</title></head><body><h1>Báo cáo kết quả kinh '
+              'doanh tháng 10/2026 (SỐ GIẢ LẬP)</h1><p>Đơn vị: tỷ đồng</p><h2>2. Kết quả kinh doanh</h2><table><tr>'
+              '<th rowspan="2">Chỉ tiêu</th><th colspan="3">Tháng 10</th><th colspan="3">Lũy kế 10 tháng</th></tr>'
+              '<tr><th>KH</th><th>TH</th><th>% TH/KH</th><th>KH</th><th>TH</th><th>% TH/KH</th></tr>'
+              '<tr><td>Doanh thu thuần</td><td>412,5</td><td>398,2</td><td>96,5%</td><td>3.950,0</td><td>3.871,4</td>'
+              '<td>98,0%</td></tr><tr><td>Lợi nhuận trước thuế</td><td>60,4</td><td>49,9</td><td>82,6%</td>'
+              '<td>575,0</td><td>523,8</td><td>91,1%</td></tr></table></body></html>')
+    said = _all_said(clicky_html.build(str(_page(tmp_path, merged, "kqkd.html")), voice=voice))
+    assert "Lợi nhuận trước thuế tháng 10: kế hoạch là 60,4 tỷ, thực hiện là 49,9 tỷ, tỷ lệ thực hiện so với kế " \
+           "hoạch là 82,6%." in said
+    months = ["T%d" % k for k in range(1, 13)]
+    year = ('<html><head><meta charset="utf-8"><title>DT theo miền</title></head><body><h1>Doanh thu theo miền 12 '
+            'tháng 2026 (SỐ GIẢ LẬP)</h1><p>Đơn vị: tỷ đồng</p><h2>1. Nhận xét</h2><p class="note">Miền Nam tháng 10 '
+            'đạt 81,0 tỷ, cao nhất năm.</p><h2>2. Chi tiết</h2>'
+            + _table(["Miền"] + months, [["Miền Bắc"] + ["%d,1" % (50 + k) for k in range(1, 13)],
+                                         ["Miền Nam"] + ["%d,0" % (70 + k) for k in range(1, 13)]]) + "</body></html>")
+    said = _all_said(clicky_html.build(str(_page(tmp_path, year, "mien.html")), voice=voice))
+    assert any("tháng 9 là" in s and "tháng 10 là" in s for s in said), said
+    assert not any("tháng 1 là" in s or "T1 " in s for s in said)
+
+
+def test_an_english_pack_drafts_its_variances_with_the_period_in_words(report, tmp_path):
+    html = ('<html><head><meta charset="utf-8"><title>Mgmt accounts Oct-26</title></head><body><h1>Management '
+            'accounts Oct-26 (SYNTHETIC)</h1><p>VND bn</p><h2>2. P&amp;L</h2>'
+            + _table(["Line", "Budget Oct-26", "Actual Oct-26", "Var"],
+                     [["Net revenue", "412.5", "398.2", "(14.3)"], ["Gross profit", "123.7", "117.2", "(6.5)"],
+                      ["PBT", "60.4", "49.9", "(10.5)"]]) + "</body></html>")
+    rep = clicky_html.build(str(_page(tmp_path, html, "mgmt.html")), voice=voice)
+    said = _all_said(rep)
+    assert "Thứ nhất, Net revenue so với ngân sách tháng 10/2026, thấp hơn 14.3 tỷ." in said
+    assert not any("chưa rõ" in n for n in rep["canh_bao"])
+
+
+def test_a_drafted_line_never_puts_a_period_code_right_before_a_figure(report, tmp_path):
+    html = EN_REPORT.replace("<th>AOP</th>", "<th>AOP T10</th>")
+    said = _all_said(clicky_html.build(str(_page(tmp_path, html)), voice=voice))
+    assert "Thứ hai, Giá vốn so với AOP tháng 10, thấp hơn 10,060 triệu, tức 3.3%." in said
+    code = re.compile(r"(?<!\w)(?:T\d{1,2}|Q[1-4]|tháng \d{1,2}(?:/\d{4})?|[A-Z][a-z]{2}-\d\d|20\d\d)\s+\d")
+    assert not [s for s in said if code.search(s)]
+
+
+def test_an_offset_is_said_after_the_causes_never_as_one_of_them(report, tmp_path):
+    html = report.read_text(encoding="utf-8").replace(
+        "<td>15,8</td><td>17,7</td><td>1,9</td><td>12,0%</td>", "<td>15,8</td><td>13,9</td><td>(1,9)</td><td>(12,0%)</td>")
+    said = _all_said(clicky_html.build(str(_page(tmp_path, html, "bu.html")), voice=voice))
+    causes = [s for s in said if s.startswith(("Thứ nhất", "Thứ hai", "Thứ ba"))]
+    assert causes and not any("CNTT" in s for s in causes)
+    assert any(s.startswith("Bù lại, khối CNTT") and "1,9 tỷ" in s for s in said), said
+
+
+def _next_month_card(html: str) -> str:
+    """A month later: the ratio card and the totals moved (FP&A round 4, nm2)."""
+    return html.replace("2,52%", "2,61%").replace("186,4 tỷ", "182,6 tỷ").replace(
+        "<td>165,5</td><td>186,4</td><td>20,9</td><td>12,6%</td>", "<td>165,5</td><td>182,6</td><td>17,1</td><td>10,3%</td>")
+
+
+def test_next_month_refuses_his_own_figure_from_last_period_and_keeps_so_cho(report, monkeypatch, capsys):
+    rep = clicky_html.build(str(report), voice=voice)
+    kb = Path(rep["kich_ban"])
+    script = clicky_html.load_script(kb)
+    card = _id(report, "Tỷ lệ chi phí nhân sự/DTT")
+    script["canh"][-1]["cau"].insert(0, {"noi": "Tỷ lệ chi phí nhân sự trên doanh thu là 2,52%.", "chi": card,
+                                         "neo": "Tỷ lệ chi phí nhân sự/DTT", "so_rieng": ["2,52"]})
+    kb.write_text(clicky_html.dump_script(script, report.name, clicky_html.snapshot(
+        script, clicky_html.make_places(*clicky_html.tag_targets(report.read_text(encoding="utf-8"), clicky_html.parse(
+            report.read_text(encoding="utf-8")))[1:], clicky_html.parse(report.read_text(encoding="utf-8")))),
+        draft=False).replace("da_duyet: 'chưa'", "da_duyet: 'có'"), encoding="utf-8")
+    assert clicky_html.build(str(report), voice=voice)["trang_thai"].startswith("CHÍNH THỨC")
+    before = clicky_html.load_script(kb)["so_cho"]
+    report.write_text(_next_month_card(report.read_text(encoding="utf-8")), encoding="utf-8")
+    with pytest.raises(goi_html.PackError) as exc:
+        clicky_html.build(str(report), voice=voice)
+    msg = str(exc.value)
+    assert msg.startswith("Đây là báo cáo kỳ mới; câu anh tự thêm số còn số kỳ trước: «Tỷ lệ chi phí nhân sự")
+    assert "(báo cáo bây giờ ghi 2,61%" in msg
+    # the stopped run left last period's figures in so_cho: nothing looks current that is not
+    assert clicky_html.load_script(kb)["so_cho"] == before
+    # running again gives the same advice, and the kept "(kỳ trước)" script is not renamed twice
+    with pytest.raises(goi_html.PackError, match="câu anh tự thêm số còn số kỳ trước"):
+        clicky_html.build(str(report), voice=voice)
+    assert len(list(report.parent.glob("*kỳ trước*"))) == 1
+    # he writes this month's figure: the build passes and so_cho now holds this month's figures
+    kb.write_text(kb.read_text(encoding="utf-8").replace("là 2,52%.", "là 2,61%.").replace("'2,52'", "'2,61'"),
+                  encoding="utf-8")
+    rep = clicky_html.build(str(report), voice=voice)
+    assert rep["trang_thai"].startswith("SƠ BỘ") and "2,61%" in clicky_html.load_script(kb)["so_cho"][
+        "Tỷ lệ chi phí nhân sự/DTT"]
+    # and last period's figure typed as his own later is refused against the "(kỳ trước)" script
+    kb.write_text(kb.read_text(encoding="utf-8").replace("là 2,61%.", "là 2,52%.").replace("'2,61'", "'2,52'"),
+                  encoding="utf-8")
+    with pytest.raises(goi_html.PackError, match="là số kỳ trước"):
+        clicky_html.build(str(report), voice=voice)
+
+
+def test_the_launcher_says_a_new_period_first_on_line_two(report, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(clicky_html, "build", BUILD)
+    monkeypatch.setattr(clicky_html, "offline_voice", lambda: voice)
+    monkeypatch.setenv("CLICKY_TRI_NHO", str(tmp_path / "nho"))
+    clicky_html.tri_nho.save_owner("anh Tuấn", "tuan@congty.vn", str(tmp_path / "nho"))
+    assert clicky_html.run_drop([str(report)], cmdline="", look=False) == 0
+    kb = report.with_name("bao_cao_kich_ban_Clicky.yaml")
+    text = kb.read_text(encoding="utf-8")
+    card = _id(report, "Tỷ lệ chi phí nhân sự/DTT")
+    text = text.replace("canh:\n", "canh:\n- muc: 'Riêng'\n  cau:\n  - noi: 'Tỷ lệ chi phí nhân sự trên doanh thu là "
+                        f"2,52%.'\n    chi: {card}\n    neo: 'Tỷ lệ chi phí nhân sự/DTT'\n    so_rieng: ['2,52']\n", 1)
+    assert "'Tỷ lệ chi phí nhân sự/DTT': '2,52% 2,40%'" in text           # last period's figures at that card
+    kb.write_text(text, encoding="utf-8")
+    report.write_text(_next_month_card(report.read_text(encoding="utf-8")), encoding="utf-8")
+    capsys.readouterr()
+    assert clicky_html.run_drop([str(report)], cmdline="", look=False) == 1
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[1].startswith("Đây là báo cáo kỳ mới; câu anh tự thêm số còn số kỳ trước: «")
+    assert "báo cáo bây giờ ghi 2,61%" in lines[1]
+
+
+def test_words_the_voice_spells_are_named_to_the_owner(report, tmp_path):
+    import io
+    import wave
+
+    class Voice:                        # knows every word except the brand "Xyzco"
+        missing = []
+
+        def synthesize(self, text):
+            self.missing = [w for w in re.findall(r"\w+", text) if w.lower() == "xyzco"]
+            out = io.BytesIO()
+            with wave.open(out, "wb") as w:
+                w.setnchannels(1), w.setsampwidth(2), w.setframerate(8000)
+                w.writeframes(b"\0\0" * 80)
+            return out.getvalue()
+
+    html = FIXTURE.read_text(encoding="utf-8").replace("Thông điệp chính:", "Thông điệp chính: kênh Xyzco ổn định.", 1)
+    rep = clicky_html.build(str(_page(tmp_path, html, "xyz.html")), voice=Voice().synthesize)
+    note = next(n for n in rep["canh_bao"] if n.startswith("Chữ em đang đánh vần:"))
+    assert "Xyzco" in note and "TU_DOC.txt" in note
+    assert "MT" not in note.split("—")[0] and "KA" not in note.split("—")[0]     # short codes are said as letters
+    assert any(t.startswith("Chữ em đang đánh vần:") for t in clicky_html.todo_list(rep))
+
+
+def test_the_lock_reads_a_slash_as_the_voice_does():
+    # one shared rule (vn_format.slash_kind): a date is skipped, a count is a figure
+    assert clicky_html.numbers("cập nhật 5/11, doanh thu 5 tỷ") == ["5"]
+    assert clicky_html.numbers("3/10 khối đạt kế hoạch") == ["3/10"]
+    assert clicky_html.numbers("4/4 khối đạt kế hoạch") == ["4/4"]
+    assert clicky_html.numbers("tỷ lệ 2/5") == ["2/5"]

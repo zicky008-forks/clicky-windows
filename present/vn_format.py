@@ -137,3 +137,35 @@ def speakable(text: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r" (?=[,.;:!?)])", "", text)
     return re.sub(r"(?<=\() ", "", text).strip()
+
+
+# a/b followed by one of these counts things ("4/4 khối", "2/5 vị trí"): never a date
+COUNTED = (r"khối|phần|vị trí|nhân viên|nhân sự|người|chỉ tiêu|tiêu chí|số|bậc|phòng|ban|chi nhánh|mục|hạng mục|"
+           r"cửa hàng|kênh|dự án|sản phẩm|đơn vị|nhà máy|NV|lần|tháng|quý|tuần|vùng|miền|tỉnh|đại lý")
+_FRACTION_CUE = re.compile(r"(?i)\b(?:tỷ lệ|chiếm|chỉ(?!\s+(?:tiêu|số))|bậc)\b")
+_DATE_CUE = re.compile(r"(?i)\b(?:ngày|hạn|hạn chót|từ|đến|trước|sau|dịp|khuyến mãi|chương trình|lúc|cập nhật|"
+                       r"chốt|tính đến|kể từ|hết)\s*$")
+
+
+def slash_kind(a, b, before: str = "", after: str = "") -> str:
+    """How 'a/b' (two small whole numbers) is read: 'date' ('5/11', 'cập nhật 3/11'), 'fraction'
+    ('3/10 khối' = 'ba phần mười', 'tỷ lệ 2/5'), or 'ratio' ('4/4 khối', '8/8 chỉ tiêu', 'bậc 3/7' = 'trên').
+    before/after: the text around it. Shared by the voice (present.doc_tai_chinh) and the build's figure
+    check (present.clicky_html.figures), so both see the same date.
+    - A counted noun right after ('khối', 'vị trí', 'người', 'chỉ tiêu'...) makes it a count: a < b is a
+      fraction, a >= b is 'a trên b'.
+    - A date cue right before ('ngày', 'hạn', 'từ', 'cập nhật'...) makes it a date.
+    - 'tỷ lệ', 'chiếm', 'chỉ' or 'bậc' within the last few words makes it a fraction ('bậc' a ratio).
+    - Otherwise it is a date when 1 <= a <= 31 and 1 <= b <= 12; else a fraction when a < b, else a ratio."""
+    a, b = int(a), int(b)
+    valid = 1 <= a <= 31 and 1 <= b <= 12
+    count = "fraction" if a < b else "ratio"
+    if re.match(rf"\s*(?:{COUNTED})\b", after):
+        return count
+    if valid and _DATE_CUE.search(before):
+        return "date"
+    near = " ".join(re.split(r"[,;:(]", before)[-1].split()[-4:])
+    cue = _FRACTION_CUE.search(near)
+    if cue:
+        return "ratio" if cue.group(0).lower() == "bậc" else count
+    return "date" if valid else count
