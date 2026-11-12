@@ -154,7 +154,7 @@ function go(i, autoplay) {
   idx = Math.max(0, Math.min(S.length - 1, i));
   asideMode = false; $("resume").classList.add("hidden");
   showSlide(S[idx].slide); render();
-  audio.src = "data:audio/mpeg;base64," + S[idx].audio; audio.playbackRate = SPEEDS[speedIx];
+  audio.src = "data:" + (S[idx].mime || "audio/mpeg") + ";base64," + S[idx].audio; audio.playbackRate = SPEEDS[speedIx];
   if (autoplay) play(); else setPlaying(false);
 }
 function play() { $("start").classList.add("hidden"); audio.play().then(() => setPlaying(true)).catch(() => setPlaying(false)); }
@@ -222,7 +222,7 @@ $("askForm").onsubmit = ev => { ev.preventDefault(); const q = $("q").value.trim
 
 function say(clip) {
   if (!asideMode) { asideMode = true; $("resume").classList.remove("hidden"); }
-  audio.pause(); audio.src = "data:audio/mpeg;base64," + clip.audio; audio.playbackRate = SPEEDS[speedIx];
+  audio.pause(); audio.src = "data:" + (clip.mime || "audio/mpeg") + ";base64," + clip.audio; audio.playbackRate = SPEEDS[speedIx];
   audio.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
   $("start").classList.add("hidden");
 }

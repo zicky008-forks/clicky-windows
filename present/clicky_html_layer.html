@@ -1,0 +1,196 @@
+
+<!-- Clicky layer: added by present/clicky_html.py. Runs offline, sends nothing, uses no AI. -->
+<div id="clicky-host" data-clicky-layer="1"></div>
+<script id="clicky-data" type="application/json">__DATA__</script>
+<script>
+(function () {
+"use strict";
+const D = JSON.parse(document.getElementById("clicky-data").textContent);
+const M = D.meta, S = D.scenes;
+const host = document.getElementById("clicky-host");
+const root = host.attachShadow({mode: "open"});
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const HAT = '<svg viewBox="0 0 32 32" width="22" height="22" aria-hidden="true"><path d="M16 3 L30 22 Q16 28 2 22 Z" fill="#2f8a5f" stroke="#fff" stroke-width="1.5"/><path d="M2 22 Q16 28 30 22" stroke="#174d34" stroke-width="2" fill="none"/></svg>';
+root.innerHTML = `
+<style>
+:host{all:initial}
+*{box-sizing:border-box;font-family:"Segoe UI",system-ui,-apple-system,Roboto,sans-serif}
+.bar{position:fixed;left:12px;right:12px;bottom:12px;z-index:2147483000;background:#fff;color:#1d2421;border:1px solid #d9d3c7;border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:10px 12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:15px}
+.who{display:flex;gap:6px;align-items:center;font-size:13px;background:#eef4f0;border-radius:99px;padding:3px 10px}
+.cap{flex:1 1 320px;min-width:0;font-size:15px;line-height:1.45}
+.cap small{display:block;color:#5d6b66;font-size:12.5px}
+button{font:inherit;font-size:14px;border:1px solid #d9d3c7;background:#fff;color:#1d2421;border-radius:8px;padding:6px 11px;cursor:pointer}
+button.p{background:#1f7a5a;border-color:#1f7a5a;color:#fff}
+button:focus-visible,input:focus-visible{outline:3px solid #e8a33d;outline-offset:2px}
+.panel{position:fixed;right:12px;bottom:84px;width:360px;max-height:70vh;overflow:auto;z-index:2147483000;background:#fff;color:#1d2421;border:1px solid #d9d3c7;border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:14px;display:flex;flex-direction:column;gap:10px;font-size:15px}
+.panel h3{margin:0;font-size:15px}
+.ask{display:flex;gap:6px}.ask input{flex:1;min-width:0;font:inherit;padding:7px 9px;border:1px solid #d9d3c7;border-radius:8px}
+.ans{border-left:4px solid #1f7a5a;background:#eef4f0;border-radius:6px;padding:8px 10px}
+.ans.park{border-color:#e8a33d}.ans .src{color:#5d6b66;font-size:12.5px;margin-top:4px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}.chips button{background:#eef4f0;border:0;font-size:13.5px}
+.hint{color:#5d6b66;font-size:13px}
+.hidden{display:none!important}
+@media (max-width:700px){.panel{left:8px;right:8px;width:auto;bottom:auto;top:8px;max-height:55vh}.bar{left:6px;right:6px;bottom:6px}}
+</style>
+<div class="panel hidden" id="panel" role="dialog" aria-label="Hỏi Clicky">
+  <h3>Hỏi Clicky</h3>
+  <form class="ask" id="f"><input id="q" placeholder="Ví dụ: lương khối bán hàng AOPR?" autocomplete="off"><button class="p">Hỏi</button></form>
+  <div class="hint">Clicky tìm câu trả lời trong chính báo cáo này, khoanh đúng ô và đọc lên. Câu chưa có trong báo cáo được ghi lại cho ${esc(M.owner)}.</div>
+  <div id="a" class="hidden"></div>
+  <div id="tb" class="hidden"><h3>Câu đang chờ ${esc(M.owner)} trả lời</h3><ol id="tl"></ol><button class="p" id="send">Gửi các câu này qua email</button></div>
+</div>
+<div class="bar" role="region" aria-label="Clicky trình bày">
+  <span class="who" title="Trình bày do trợ lý AI thực hiện">${HAT}Trợ lý AI của ${esc(M.owner)}</span>
+  <button class="p" id="play">▶ Nghe trình bày · ${String(M.minutes).replace(".", ",")} phút</button>
+  <button id="prev" aria-label="Phần trước">⏮</button><button id="next" aria-label="Phần sau">⏭</button>
+  <button id="askb">Hỏi Clicky</button>
+  <button id="hide" aria-label="Thu gọn">—</button>
+  <div class="cap" id="cap"></div>
+</div>`;
+const $ = id => root.getElementById(id);
+const audio = new Audio();
+let idx = 0, playing = false, shown = new Set(), aside = false, frames = [];
+
+// --- frames and the nón lá pointer, drawn over the real report elements ---
+const layer = document.createElement("div");
+layer.setAttribute("aria-hidden", "true");
+layer.style.cssText = "position:absolute;left:0;top:0;width:0;height:0;z-index:2147482999;pointer-events:none";
+document.body.appendChild(layer);
+const hat = document.createElement("div");
+hat.innerHTML = HAT.replace('width="22" height="22"', 'width="34" height="34"');
+hat.style.cssText = "position:absolute;opacity:0;transition:left .55s cubic-bezier(.3,.7,.2,1),top .55s cubic-bezier(.3,.7,.2,1),opacity .2s";
+layer.appendChild(hat);
+function el(id) { return document.querySelector('[data-clicky="' + id + '"]'); }
+function place(f) {
+  const r = f.target.getBoundingClientRect(), x = r.left + scrollX - 5, y = r.top + scrollY - 5;
+  Object.assign(f.box.style, {left: x + "px", top: y + "px", width: (r.width + 10) + "px", height: (r.height + 10) + "px"});
+  return {x, y: y + r.height + 10};
+}
+function frame(target, keep) {
+  if (!target) return;
+  if (!keep) clearFrames();
+  const box = document.createElement("div");
+  box.style.cssText = "position:absolute;border:3px solid #e8a33d;border-radius:8px;opacity:0;transform:scale(1.04);transition:opacity .35s,transform .35s";
+  layer.appendChild(box);
+  const f = {target, box}; frames.push(f);
+  const r = target.getBoundingClientRect();
+  if (r.top < 60 || r.bottom > innerHeight - 140) target.scrollIntoView({behavior: "smooth", block: "center"});
+  setTimeout(() => { const p = place(f); box.style.opacity = 1; box.style.transform = "none";
+    hat.style.left = p.x + "px"; hat.style.top = p.y + "px"; hat.style.opacity = 1;
+    clearTimeout(hat._fade); hat._fade = setTimeout(() => { hat.style.opacity = 0.3; }, 1400); }, 350);   // never sit on a number
+}
+function clearFrames() { frames.forEach(f => f.box.remove()); frames = []; hat.style.opacity = 0; }
+addEventListener("scroll", () => frames.forEach(place), {passive: true});
+addEventListener("resize", () => frames.forEach(place));
+
+// --- the talk: one sentence on screen at a time, following the voice ---
+function caption(t) {
+  const s = S[idx]; let acc = 0, k = 0;
+  for (; k < s.sentences.length - 1; k++) { acc += s.sentences[k].length + 1; if (acc / s.line.length * s.secs > t) break; }
+  $("cap").innerHTML = esc(s.sentences[k] || "") + "<small>Phần " + (idx + 1) + "/" + S.length + (s.title ? " · " + esc(s.title) : "") + "</small>";
+}
+function go(i, autoplay) {
+  idx = Math.max(0, Math.min(S.length - 1, i)); aside = false; shown = new Set(); clearFrames();
+  audio.src = "data:" + (S[idx].mime || "audio/mpeg") + ";base64," + S[idx].audio; caption(0);
+  if (autoplay) start(); else setPlaying(false);
+}
+function start() { audio.play().then(() => setPlaying(true)).catch(() => setPlaying(false)); }
+function setPlaying(v) { playing = v; $("play").textContent = v ? "⏸ Tạm dừng" : (aside ? "↩ Tiếp tục trình bày" : "▶ Nghe trình bày"); }
+audio.addEventListener("timeupdate", () => {
+  if (aside) return;
+  const s = S[idx], t = audio.currentTime; caption(t);
+  s.points.forEach((p, k) => { if (!shown.has(k) && t >= p.at * s.secs) { shown.add(k); frame(el(p.id)); } });
+});
+audio.addEventListener("ended", () => {
+  if (aside) { setPlaying(false); return; }
+  if (idx < S.length - 1) setTimeout(() => { if (playing && !aside) go(idx + 1, true); }, 1200); else setPlaying(false);
+});
+$("play").onclick = () => { if (aside) { go(idx, true); return; } if (playing) { audio.pause(); setPlaying(false); } else if (audio.src) start(); else go(0, true); };
+$("prev").onclick = () => go(idx - 1, playing);
+$("next").onclick = () => go(idx + 1, playing);
+$("askb").onclick = () => { $("panel").classList.toggle("hidden"); if (!$("panel").classList.contains("hidden")) $("q").focus(); };
+$("hide").onclick = () => { const c = $("cap"); c.classList.toggle("hidden"); $("hide").textContent = c.classList.contains("hidden") ? "＋" : "—"; };
+
+// --- questions: find the answer in the report itself ---
+function fold(s) { return String(s || "").normalize("NFD").replace(/đ/g, "d").replace(/Đ/g, "D").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9%,.\-+ ]+/g, " ").replace(/\s+/g, " ").trim(); }
+function has(t, p) { p = fold(p); if (p.length < 2) return false; return new RegExp("(?<![a-z0-9])" + p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![a-z0-9])").test(t); }
+const STOP = new Set("la bao nhieu cua the nao va o trong cho em anh chi hoi xem bang so muc dong cot".split(" "));
+function words(s) { return fold(s).replace(/[0-9%,.\-+]+/g, " ").split(" ").filter(w => w.length >= 2 && !STOP.has(w)); }
+function match(t, label, loose) {   // whole label = strong; most of its words = weaker
+  if (!label) return 0;
+  if (has(t, label)) return 100 + fold(label).length;
+  const w = words(label); if (!w.length) return 0;
+  const hit = w.filter(x => has(t, x)).length;
+  if (loose) return hit && hit / w.length >= 0.5 ? 10 * hit : 0;   // column headers: "Headcount AOPR" ~ "headcount"
+  return hit / w.length >= 0.67 && hit >= Math.min(2, w.length) ? 10 * hit : 0;
+}
+function cellText(c) { return (c.innerText || c.textContent || "").replace(/\s+/g, " ").trim(); }
+function tables() {
+  return [...document.querySelectorAll("table[data-clicky]")].map(tb => {
+    const rows = [...tb.rows];
+    const hi = Math.max(0, rows.findIndex(r => r.querySelector("th"))) ;
+    const head = rows[hi] ? [...rows[hi].cells].map(cellText) : [];
+    return {tb, head, body: rows.filter((r, i) => i !== hi && r.cells.length > 1).map(r => ({r, label: cellText(r.cells[0])}))};
+  });
+}
+function answer(text, target, cls, extra) {
+  const a = $("a"); a.className = "ans " + (cls || ""); a.innerHTML = "<div>" + esc(text) + "</div>";
+  if (target) a.innerHTML += '<div class="src">Khoanh trên báo cáo · ' + esc(M.report) + "</div>";
+  if (extra) a.appendChild(extra);
+  aside = true; audio.pause(); setPlaying(false);
+  if (target) frame(target);
+  speak(text);
+}
+let viVoice = null;
+function pickVoice() { const v = (speechSynthesis && speechSynthesis.getVoices()) || []; viVoice = v.find(x => /^vi/i.test(x.lang) && x.localService) || null; }
+if (window.speechSynthesis) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+function speak(text) {   // only a Vietnamese voice that runs on this device; otherwise the answer is shown, not read
+  if (text === D.fallback) { audio.src = "data:" + (D.fallback_clip.mime || "audio/mpeg") + ";base64," + D.fallback_clip.audio; audio.play().catch(() => {}); return; }
+  if (!viVoice) return;
+  speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.voice = viVoice; u.lang = viVoice.lang; speechSynthesis.speak(u);
+}
+function chips(list) { const box = document.createElement("div"); box.className = "chips";
+  list.forEach(([label, fn]) => { const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.onclick = fn; box.appendChild(b); }); return box; }
+function rowAnswer(tb, row, col) {
+  if (col >= 0 && row.r.cells[col]) {
+    const c = row.r.cells[col]; c.setAttribute("data-clicky-cell", "1");
+    answer(row.label + ", " + tb.head[col] + ": " + cellText(c) + ".", c);
+    return;
+  }
+  const parts = []; for (let i = 1; i < row.r.cells.length && parts.length < 4; i++) { const v = cellText(row.r.cells[i]); if (v && tb.head[i]) parts.push(tb.head[i] + " " + v); }
+  answer(row.label + ": " + parts.join("; ") + ".", row.r);
+}
+function ask(q) {
+  const t = fold(q); let best = [];
+  for (const tb of tables()) {
+    const cs = tb.head.map((h, i) => i === 0 ? 0 : match(t, h, true)); const cbest = Math.max(0, ...cs); const col = cbest ? cs.indexOf(cbest) : -1;
+    for (const row of tb.body) { const rs = match(t, row.label); if (rs) best.push({score: rs * 10 + cbest, tb, row, col}); }
+  }
+  for (const c of D.cards) { const label = c.text.split(":")[0]; const s = match(t, label); if (s) best.push({score: s * 10, card: c}); }
+  best.sort((a, b) => b.score - a.score);
+  if (!best.length) { park(q); answer(D.fallback, null, "park"); return; }
+  const top = best.filter(b => b.score === best[0].score);
+  if (top.length > 1) {
+    answer("Anh chị muốn hỏi dòng nào ạ?", null, "", chips(top.slice(0, 8).map(b => [b.card ? b.card.text : b.row.label,
+      () => b.card ? answer(b.card.text, el(b.card.id)) : rowAnswer(b.tb, b.row, b.col)])));
+    return;
+  }
+  const b = top[0]; if (b.card) answer(b.card.text, el(b.card.id)); else rowAnswer(b.tb, b.row, b.col);
+}
+$("f").onsubmit = e => { e.preventDefault(); const q = $("q").value.trim(); if (q) ask(q); };
+
+// --- parked questions: kept on this device, sent only when the reader presses Send ---
+const key = "clicky-treo-" + M.pack_id; let mem = [];
+function load() { try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch (_) { return mem; } }
+function save(l) { mem = l; try { localStorage.setItem(key, JSON.stringify(l)); } catch (_) {} }
+function park(q) { const l = load(); l.push({q, part: idx + 1, at: new Date().toLocaleString("vi-VN")}); save(l); draw(); }
+function draw() { const l = load(); $("tb").classList.toggle("hidden", !l.length); $("tl").innerHTML = l.map(x => "<li>" + esc(x.q) + "</li>").join(""); }
+$("send").onclick = () => {
+  const l = load();
+  const body = "Chào " + M.owner + ",\n\nKhi xem báo cáo \"" + M.report + "\", tôi có các câu hỏi sau:\n\n" + l.map((x, i) => (i + 1) + ". " + x.q).join("\n") + "\n\n(Gửi từ Clicky, mã báo cáo " + M.pack_id + ")";
+  location.href = "mailto:" + encodeURIComponent(M.contact || "") + "?subject=" + encodeURIComponent("Câu hỏi về " + M.report) + "&body=" + encodeURIComponent(body);
+};
+draw(); caption(0); $("cap").innerHTML = "Em là Clicky, trợ lý AI của " + esc(M.owner) + ". Bấm ▶ để nghe trình bày, hoặc Hỏi Clicky về bất kỳ số nào trong báo cáo.";
+audio.src = "data:" + (S[0].mime || "audio/mpeg") + ";base64," + S[0].audio;
+})();
+</script>

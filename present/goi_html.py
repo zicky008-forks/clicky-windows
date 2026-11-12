@@ -111,6 +111,10 @@ def render_slides(pptx: str, workdir: Path, width_px: int = 1600) -> list:
 
 # --- voice ------------------------------------------------------------------------------------------
 
+def audio_mime(data: bytes) -> str:
+    return "audio/wav" if data[:4] == b"RIFF" else "audio/mpeg"
+
+
 def offline_voice() -> Callable[[str], bytes]:
     """WAV bytes from the offline Vietnamese voice. Never an online voice: real figures may be in the text."""
     from audio.tts.vi_offline_tts import engine, preferred_order
@@ -125,7 +129,13 @@ def offline_voice() -> Callable[[str], bytes]:
 
 
 def wav_to_mp3(wav: bytes) -> tuple:
-    """(mp3 bytes, seconds). Mono 48 kbps keeps a 7-minute talk around 2.5 MB."""
+    """(mp3 bytes, seconds). Mono 48 kbps keeps a 7-minute talk around 2.5 MB.
+    Without ffmpeg on the PC the WAV is kept as is (larger file, same sound); audio_mime() tells which."""
+    if not shutil.which("ffmpeg"):
+        import io
+        import wave
+        with wave.open(io.BytesIO(wav)) as w:
+            return wav, round(w.getnframes() / float(w.getframerate()), 2)
     with tempfile.TemporaryDirectory() as d:
         src, dst = Path(d) / "a.wav", Path(d) / "a.mp3"
         src.write_bytes(wav)
@@ -262,7 +272,7 @@ def voice_all(scenes: list, answers: dict, voice: Callable[[str], bytes],
     def clip(text: str) -> dict:
         if text not in cache:
             mp3, secs = encode(voice(text))
-            cache[text] = {"audio": base64.b64encode(mp3).decode("ascii"), "secs": secs}
+            cache[text] = {"audio": base64.b64encode(mp3).decode("ascii"), "secs": secs, "mime": audio_mime(mp3)}
         return cache[text]
 
     for s in scenes:
