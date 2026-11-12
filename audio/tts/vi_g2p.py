@@ -17,8 +17,9 @@ from pathlib import Path
 TABLE = Path(__file__).with_name("vi_phonemes.tsv")
 _PUNCT = ",.;:!?"
 # Words people say in English in a finance meeting, spelled the way a Vietnamese voice should say them.
+# No "bi" here: it is also a Vietnamese word ("bi quan"); BI is spelled by present.doc_tai_chinh.
 LOANWORDS = {"slide": "xờ lai", "marketing": "ma két tinh", "excel": "ếch xeo", "power": "pao ơ",
-             "bi": "bi ai", "pivot": "pi vốt", "dashboard": "đét bọt", "file": "phai", "email": "i meo",
+             "pivot": "pi vốt", "ebit": "ê bít", "dashboard": "đét bọt", "file": "phai", "email": "i meo",
              "ok": "ô kê", "kpi": "kê pê i", "aop": "a ô pê", "fy": "ép oai", "ebitda": "i bít đa"}
 
 

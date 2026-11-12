@@ -3,8 +3,10 @@
 Reads only the output file (and the original report when given). It trusts nothing the builder kept in memory:
 1. the record's seal is recomputed;
 2. the sentences in the record are the sentences the page will actually speak;
-3. every figure in every sentence is listed, and is found again at the place the record names;
-4. with --goc, the original report's SHA-256 matches the record.
+3. every figure in every sentence is listed, and is found again at the place the record names, with the same
+   direction (tăng/giảm/âm) and unit, read with the report's own number marks (412,580.5 or 412.580,5);
+4. with --goc, the original report's SHA-256 matches the record;
+5. a talk that says no figure at all does not pass: there is nothing it could have checked.
 
 The seal is a plain SHA-256: it catches accidental edits, not a deliberate forgery (that needs a signature).
 """
@@ -18,7 +20,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from present.clicky_html import numbers, page_numbers, parse, seal, target_texts
+from present.clicky_html import _labels, check_figure, figures, numbers, parse, seal, target_texts, value
 
 SCRIPT = r'<script id="{}" type="application/json">(.*?)</script>'
 
@@ -43,27 +45,33 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
         if hashlib.sha256(Path(original).read_bytes()).hexdigest() != record.get("sha256"):
             errors.append("File gốc đưa vào không phải là báo cáo mà biên bản này được lập từ đó.")
     root = parse(page)
-    texts, on_page = target_texts(root), page_numbers(root)
+    en, unit = record.get("dau_so") == "en", record.get("don_vi") or None
+    texts = target_texts(root)
+    on_page = {value(t, en) for t in numbers(root.text() + " " + _labels(root))}
     count = {"cau": 0, "so": 0, "dung_cho_khoanh": 0, "cho_khac_trong_bao_cao": 0, "nguoi_soan_them": 0}
     for row in record.get("cau", []):
         count["cau"] += 1
         listed = [x["so"] for x in row.get("so", [])]
-        if numbers(row["noi"]) != listed:
+        spoken = figures(row["noi"])
+        if [f.tok for f in spoken] != listed:
             errors.append(f"Câu «{row['noi'][:70]}» có số chưa được ghi trong biên bản.")
             continue
-        for x in row["so"]:
+        for f, x in zip(spoken, row["so"]):
             count["so"] += 1
             tok, where = x["so"], x["nguon"]
             if where == "nguoi_soan":
                 count["nguoi_soan_them"] += 1
             elif where == "bao_cao":
                 count["cho_khac_trong_bao_cao"] += 1
-                if tok not in on_page:
+                if value(tok, en) not in on_page:
                     errors.append(f"Số {tok} không còn trong báo cáo (câu «{row['noi'][:70]}»).")
             else:
                 count["dung_cho_khoanh"] += 1
-                if tok not in numbers(texts.get(where, "")):
+                why = check_figure(f, figures(texts.get(where, "")), en, unit)
+                if why == "missing":
                     errors.append(f"Số {tok} không có ở chỗ Clicky khoanh ({where}) (câu «{row['noi'][:70]}»).")
+                elif why:
+                    errors.append(f"Số {tok} ở chỗ Clicky khoanh ({where}): {why} (câu «{row['noi'][:70]}»).")
     # ready answers from the owner's memory: the page must hold exactly the recorded answers
     bank = record.get("tra_loi_san", [])
     if [(b.get("q"), b.get("a")) for b in data.get("bank", [])] != [(b["cau"], b["tra_loi"]) for b in bank]:
@@ -72,11 +80,14 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
         if numbers(b["tra_loi"]) != [x["so"] for x in b.get("so", [])]:
             errors.append(f"Câu trả lời «{b['tra_loi'][:70]}» có số chưa được ghi trong biên bản.")
         for x in b.get("so", []):
-            if x["nguon"] == "bao_cao" and x["so"] not in on_page:
+            if x["nguon"] == "bao_cao" and value(x["so"], en) not in on_page:
                 errors.append(f"Số {x['so']} không còn trong báo cáo (câu trả lời «{b['tra_loi'][:70]}»).")
     count["tra_loi_san"] = len(bank)
+    if not errors and count["so"] == 0:
+        errors.append("Bài trình bày không nói con số nào, nên không có gì để đối chiếu với báo cáo.")
     return {"ok": not errors, "errors": errors, "tong": count, "ma_bam": record.get("ma_bam", ""),
-            "bao_cao": record.get("bao_cao", ""), "nguoi_chiu_trach_nhiem": record.get("nguoi_chiu_trach_nhiem", "")}
+            "bao_cao": record.get("bao_cao", ""), "nguoi_chiu_trach_nhiem": record.get("nguoi_chiu_trach_nhiem", ""),
+            "trang_thai": record.get("trang_thai", "")}
 
 
 def main(argv=None) -> int:
@@ -89,7 +100,8 @@ def main(argv=None) -> int:
     if rep["ok"]:
         print(f"ĐẠT. {t['so']} con số trong {t['cau']} câu: {t['dung_cho_khoanh']} ở đúng chỗ Clicky khoanh, "
               f"{t['cho_khac_trong_bao_cao']} ở chỗ khác trong báo cáo, {t['nguoi_soan_them']} do "
-              f"{rep['nguoi_chiu_trach_nhiem']} bổ sung. Mã biên bản {rep['ma_bam'][:12]}.")
+              f"{rep['nguoi_chiu_trach_nhiem']} bổ sung. Mã biên bản {rep['ma_bam'][:12]}."
+              + (f" {rep['trang_thai']}." if rep.get("trang_thai") else ""))
         return 0
     print("KHÔNG ĐẠT:", file=sys.stderr)
     for e in rep["errors"]:

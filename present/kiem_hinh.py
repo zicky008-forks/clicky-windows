@@ -1,10 +1,15 @@
 """Open a "<name>_Clicky.html" file in a headless browser and check what the boss will see.
 
 For every place Clicky frames (each pointed place of the talk, each number card, one figure per table row), with
-the question panel closed and open, at two laptop screen sizes:
+the question panel closed, open, and with the answer bubble open beside the place, at two laptop screen sizes:
 - the frame encloses the place it should;
-- the figure is on screen and not under Clicky's own bar or question panel;
-- the nón lá pointer does not sit on any figure.
+- the figure is on screen and not under Clicky's own bar, question panel or bubble, nor under the report's own
+  fixed header (checked with elementFromPoint);
+- the panel and the bubble never cover the figure's row label or column header;
+- the nón lá pointer does not sit on any figure or label.
+On a phone screen (390x844) the bar, the caption, the question panel and a bubble stay on the screen, and every
+button of the bar is at least 44px.
+If Clicky's layer never starts on the page (a script error), the check says KHÔNG ĐẠT with the error.
 
 The geometry is measured by the page itself (window.__clickyKiemHinh in clicky_html_layer.html), so the check
 measures the same code the boss runs. Nothing leaves the PC: the browser opens the local file and no screenshot
@@ -24,6 +29,7 @@ from typing import Optional
 from present import tri_nho
 
 SIZES = ((1366, 768), (1920, 1080))
+PHONE = (390, 844)
 SKIPPED = 3
 
 
@@ -43,7 +49,8 @@ def _launch(pw):
     raise RuntimeError(f"không mở được trình duyệt ({last})")
 
 
-def check(packed: str, sizes=SIZES, timeout_ms: int = 60000, questions: Optional[list] = None) -> dict:
+def check(packed: str, sizes=SIZES, timeout_ms: int = 60000, questions: Optional[list] = None,
+          phone: Optional[tuple] = PHONE) -> dict:
     """Return {"ok", "skipped", "checked", "problems", "sizes", "cau"}; skipped=True when no browser could run.
     questions: the bosses' usual questions; "cau" says for each whether this report can answer it. They are
     passed to the page only inside this check and are never written into the file."""
@@ -51,6 +58,9 @@ def check(packed: str, sizes=SIZES, timeout_ms: int = 60000, questions: Optional
         from playwright.sync_api import sync_playwright
     except ImportError:
         return {"ok": False, "skipped": True, "reason": "máy chưa có gói playwright", "problems": [], "checked": 0}
+    if not Path(packed).is_file():
+        return {"ok": False, "skipped": False, "checked": 0, "sizes": [], "cau": [],
+                "problems": [f"không thấy file {packed}"]}
     url = Path(packed).resolve().as_uri()
     problems, checked, done, tried = [], 0, [], []
     with sync_playwright() as pw:
@@ -59,18 +69,36 @@ def check(packed: str, sizes=SIZES, timeout_ms: int = 60000, questions: Optional
         except RuntimeError as exc:
             return {"ok": False, "skipped": True, "reason": str(exc), "problems": [], "checked": 0}
         try:
-            for w, h in sizes:
-                page = browser.new_page(viewport={"width": w, "height": h})
+            runs = [((w, h), False) for w, h in sizes] + ([(phone, True)] if phone else [])
+            for (w, h), mobile in runs:
+                ctx = browser.new_context(viewport={"width": w, "height": h},
+                                          **({"is_mobile": True, "has_touch": True} if mobile else {}))
+                page = ctx.new_page()
+                errors = []
+                page.on("pageerror", lambda e, errors=errors: errors.append(str(e).splitlines()[0][:200]))
                 page.set_default_timeout(timeout_ms)
-                page.goto(url, wait_until="load")
-                page.wait_for_function("typeof window.__clickyKiemHinh === 'function'")
+                try:
+                    page.goto(url, wait_until="load")
+                    page.wait_for_function("typeof window.__clickyKiemHinh === 'function'",
+                                           timeout=min(timeout_ms, 15000))
+                except Exception:  # the layer never started: say so, never a traceback
+                    why = "; ".join(errors) or "lớp Clicky không khởi động; dữ liệu nhúng có thể đã làm hỏng thẻ script"
+                    problems.append(f"màn {w}x{h}: Clicky không chạy trên trang này ({why})")
+                    ctx.close()
+                    break
                 if questions and not tried:
                     tried = page.evaluate("qs => window.__clickyThuCau(qs)", questions)
-                res = page.evaluate("window.__clickyKiemHinh()")
-                checked += res["checked"]
-                problems += [f"màn {res['size']}: {p}" for p in res["problems"]]
-                done.append(res["size"])
-                page.close()
+                if mobile:
+                    res = page.evaluate("window.__clickyKiemDienThoai()")
+                    problems += [f"điện thoại {res['size']}: {p}" for p in res["problems"]]
+                    done.append(res["size"] + " (điện thoại)")
+                else:
+                    res = page.evaluate("window.__clickyKiemHinh()")
+                    checked += res["checked"]
+                    problems += [f"màn {res['size']}: {p}" for p in res["problems"]]
+                    done.append(res["size"])
+                problems += [f"màn {w}x{h}: lỗi trên trang: {e}" for e in errors]
+                ctx.close()
         finally:
             browser.close()
     return {"ok": not problems and checked > 0, "skipped": False, "checked": checked, "problems": problems,
@@ -97,7 +125,7 @@ def main(argv=None) -> int:
         return SKIPPED
     if res["ok"]:
         print(f"ĐẠT. {res['checked']} lần khoanh trên màn {', '.join(res['sizes'])}: khung đúng chỗ, "
-              "không có số nào bị thanh, bảng hỏi hay nón lá che.")
+              "không có số, tên dòng hay tiêu đề cột nào bị thanh, bảng hỏi, khung hỏi hay nón lá che.")
         return 0
     print("KHÔNG ĐẠT:")
     for p in res["problems"][:30]:

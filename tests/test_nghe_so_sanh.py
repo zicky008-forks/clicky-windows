@@ -28,7 +28,7 @@ def test_page_has_every_line_for_every_voice(tmp_path, monkeypatch):
     assert page.count("<audio") == 2 * len(nghe_so_sanh.LINES)
     # the voices hear the finance reading, not the raw abbreviations
     said = " ".join(heard)
-    assert "ây-ô-pi điều chỉnh" in said and "AOPR" not in said and "héc-cao" in said
+    assert "ây-ô-pi điều chỉnh" in said and "AOPR" not in said and "số nhân sự" in said
 
 
 def test_the_pick_is_kept_and_used(tmp_path, monkeypatch):

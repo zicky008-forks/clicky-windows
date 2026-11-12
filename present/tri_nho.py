@@ -6,8 +6,11 @@
 - SEP_HAY_HOI.md: what each boss usually asks. After a build, these questions are tried on the new file so the
   owner learns which ones the report cannot answer yet. This file never goes into a report.
 - BAI_HOC.md: lessons from earlier months, shown to the owner after each build.
+- CHU_BAO_CAO.txt: the owner's name as readers call him ("anh Tuấn") and his e-mail, asked once by the launcher.
+- TU_DOC.txt: the company's own words and how to say them ("VNM = vi-na-mín").
 
 The files live on the owner's PC (default: "Clicky tri nho" in Documents, or CLICKY_TRI_NHO). Nothing is sent.
+Notepad may save them as UTF-8 with or without a BOM, or in the old ANSI code page: read_text() accepts all three.
 A parked question reaches the owner by e-mail (the page's "Gửi" button). He copies that e-mail and runs
 `python -m present.tri_nho ghi` (or the Ghi_cau_treo.bat launcher): the questions are added to CAU_TREO.md.
 """
@@ -24,14 +27,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-TREO, SEP, BAI_HOC = "CAU_TREO.md", "SEP_HAY_HOI.md", "BAI_HOC.md"
+TREO, SEP, BAI_HOC, TU_DOC, CHU = "CAU_TREO.md", "SEP_HAY_HOI.md", "BAI_HOC.md", "TU_DOC.txt", "CHU_BAO_CAO.txt"
 MAIL_MARK = "Gửi từ Clicky"
 
 TEMPLATES = {
     TREO: """# Câu treo và lời hứa
 
 > Mỗi câu hỏi bắt đầu bằng "- Câu:". Anh điền dòng "Trả lời:" rồi kéo báo cáo vào Clicky như mọi khi.
-> Câu đã có trả lời được Clicky đọc ở đầu bản trình bày kế tiếp (một lần cho mỗi báo cáo),
+> Câu đã có trả lời được Clicky đọc ngay sau lời chào của bản trình bày kế tiếp (một lần cho mỗi kỳ báo cáo),
 > và dùng để trả lời khi có người hỏi lại. Đừng xóa dòng "Đã nói trong:", Clicky dùng nó để không nhắc lại.
 > Lời hứa bắt đầu bằng "- Hứa:". Ghi "Xong: có" khi đã làm. Clicky nhắc anh các lời hứa chưa xong sau mỗi lần dựng.
 > Ví dụ:
@@ -60,6 +63,10 @@ TEMPLATES = {
 >     - Tháng 9 sếp hỏi lương bình quân theo khối, báo cáo chưa có cột này.
 
 """,
+    TU_DOC: """# Cách đọc riêng của công ty anh. Mỗi dòng: CHỮ VIẾT = cách đọc.
+# Dòng bắt đầu bằng dấu # là ghi chú, Clicky bỏ qua. Muốn dùng ví dụ dưới, xóa dấu # ở đầu dòng.
+# VNM = vi-na-mín
+""",
 }
 
 
@@ -69,12 +76,36 @@ def fold(s: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9%,.\- ]+", " ", s)).strip()
 
 
+def read_text(path) -> str:
+    """A text file the owner saved in Notepad: UTF-8 with or without BOM, else the Vietnamese ANSI page."""
+    raw = Path(path).read_bytes()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1258", errors="replace")
+    return unicodedata.normalize("NFC", text).replace("\r\n", "\n")
+
+
+def documents() -> Path:
+    """The real Documents folder. With OneDrive backup it is not ~/Documents, so ask Windows."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            buf = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
+            if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0 and buf.value:  # CSIDL_PERSONAL
+                return Path(buf.value)
+        except Exception:                                    # noqa: BLE001 - fall back to the usual place
+            pass
+    return Path.home() / "Documents"
+
+
 def folder(path: Optional[str] = None) -> Path:
     if path:
         return Path(path)
     if os.environ.get("CLICKY_TRI_NHO"):
         return Path(os.environ["CLICKY_TRI_NHO"])
-    return Path.home() / "Documents" / "Clicky tri nho"
+    return documents() / "Clicky tri nho"
 
 
 def ensure(path: Optional[str] = None) -> Path:
@@ -140,7 +171,7 @@ def add_questions(questions: list, report: str = "", asked_by: str = "", when: s
     """Append parked questions to CAU_TREO.md; a question already there (same words) is not added twice."""
     d = ensure(path)
     f = d / TREO
-    text = f.read_text(encoding="utf-8")
+    text = read_text(f)
     have = {fold(e.text) for e in read_treo(text) if e.kind == "cau"}
     when = when or dt.date.today().strftime("%d/%m/%Y")
     added, same = [], []
@@ -161,13 +192,38 @@ def add_questions(questions: list, report: str = "", asked_by: str = "", when: s
     return {"file": str(f), "added": added, "already": same}
 
 
-def mark_said(report: str, entries: list, path: Optional[str] = None) -> None:
-    """Write "Đã nói trong: <report>" under each answered question the talk now reads, so the next report does
-    not repeat it. Only those lines change; the owner's text stays as he wrote it."""
+def report_period(name: str, title: str = "") -> str:
+    """The reporting period a report belongs to ("10/2026", "Q3/2026"), so v1 and final of the same month share
+    it. Without one, the file name without version words ("v2", "final", "nháp")."""
+    texts = [fold(Path(name).stem.replace("_", " ")), fold(title)]
+    year = next((m.group(1) for t in texts for m in [re.search(r"\b(20\d\d)\b", t)] if m), "")
+    for t in texts:
+        m = re.search(r"(?:\bt|\bthang|\bmonth)\s*0?(\d{1,2})\s*[-/._ ]\s*(20\d\d)\b", t)
+        if m and 1 <= int(m.group(1)) <= 12:
+            return f"{int(m.group(1)):02d}/{m.group(2)}"
+        m = re.search(r"\bq\s*([1-4])\s*[-/._ ]\s*(20\d\d)\b", t)
+        if m:
+            return f"Q{m.group(1)}/{m.group(2)}"
+    for t in texts:
+        m = re.search(r"(?:\bt|\bthang)\s*0?(\d{1,2})\b", t)
+        if m and 1 <= int(m.group(1)) <= 12:
+            return f"{int(m.group(1)):02d}/{year}" if year else f"T{int(m.group(1)):02d}"
+    stem = texts[0]
+    while True:
+        cut = re.sub(r"[\s.\-]*(v\d+|ver\s?\d+|final|ban cuoi|cuoi|draft|nhap|sua\s?\d*)$", "", stem).strip()
+        if cut == stem or not cut:
+            return stem or Path(name).stem
+        stem = cut
+
+
+def mark_said(period: str, entries: list, path: Optional[str] = None) -> None:
+    """Write "Đã nói trong: <period>" under each answered question the talk now reads, so the next period does
+    not repeat it while every version of this period (v1, final) still reads it. Only those lines change."""
     if not entries:
         return
+    report = period
     f = folder(path) / TREO
-    lines = f.read_text(encoding="utf-8").splitlines()
+    lines = read_text(f).splitlines()
     fresh = {e.line: e for e in read_treo("\n".join(lines))}
     for e in sorted(entries, key=lambda x: -x.line):
         cur = fresh.get(e.line)
@@ -207,9 +263,10 @@ class Memory:
     bosses: dict              # boss -> usual questions
     lessons: list
 
-    def for_talk(self, report: str) -> list:
-        """Answered questions to read at the start of this report's talk: not yet said in another report."""
-        return [e for e in self.questions if e.answer and (not e.said_in() or report in e.said_in())]
+    def for_talk(self, *keys: str) -> list:
+        """Answered questions to read at the start of this period's talk: not yet said in another period. Keys are
+        the period and the report's file name (older versions wrote the file name)."""
+        return [e for e in self.questions if e.answer and (not e.said_in() or set(keys) & set(e.said_in()))]
 
     def bank(self, limit: int = 60) -> list:
         """Answered questions, newest last, kept as ready answers on the page."""
@@ -224,10 +281,59 @@ class Memory:
 
 def load(path: Optional[str] = None) -> Memory:
     d = ensure(path)
-    entries = read_treo((d / TREO).read_text(encoding="utf-8"))
+    entries = read_treo(read_text(d / TREO))
     return Memory(d, [e for e in entries if e.kind == "cau"], [e for e in entries if e.kind == "hua"],
-                  read_sep((d / SEP).read_text(encoding="utf-8")),
-                  read_lessons((d / BAI_HOC).read_text(encoding="utf-8")))
+                  read_sep(read_text(d / SEP)), read_lessons(read_text(d / BAI_HOC)))
+
+
+# --- CHU_BAO_CAO.txt: who answers for the report ---------------------------------------------------------
+
+EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def owner_info(path: Optional[str] = None) -> tuple:
+    """(name as readers call him, e-mail) from CHU_BAO_CAO.txt, or ("", "") when not set yet."""
+    f = folder(path) / CHU
+    name = mail = ""
+    if f.is_file():
+        for line in read_text(f).splitlines():
+            k, _, v = line.partition(":")
+            if fold(k) == "ten":
+                name = v.strip()
+            elif fold(k) == "email":
+                mail = v.strip()
+    return name, mail
+
+
+def save_owner(name: str, mail: str, path: Optional[str] = None) -> Path:
+    name, mail = re.sub(r"\s+", " ", name).strip(), mail.strip()
+    if not name:
+        raise ValueError("Chưa có tên. Hãy gõ tên như người xem vẫn gọi anh, ví dụ: anh Tuấn.")
+    if not EMAIL.match(mail):
+        raise ValueError(f"Email «{mail}» chưa đúng. Ví dụ đúng: tuan.nguyen@congty.vn")
+    d = ensure(path)
+    f = d / CHU
+    f.write_text("# Người chịu trách nhiệm báo cáo. Clicky xưng là trợ lý AI của người này, và câu hỏi của người xem\n"
+                 "# được gửi về email này. Anh sửa được bằng Notepad.\n"
+                 f"Tên: {name}\nEmail: {mail}\n", encoding="utf-8")
+    return f
+
+
+def ask_owner(path: Optional[str] = None, again: bool = False, ask=input) -> tuple:
+    """Ask once: the name readers call the owner and his e-mail. Saved in CHU_BAO_CAO.txt for every later build."""
+    name, mail = owner_info(path)
+    if name and EMAIL.match(mail) and not again:
+        return name, mail
+    print("Lần đầu dùng: em cần biết ai chịu trách nhiệm báo cáo, để giới thiệu và để người xem gửi câu hỏi về.")
+    while True:
+        name = ask("Người xem gọi anh/chị là gì (ví dụ: anh Tuấn, chị Lan): ").strip() or name
+        mail = ask("Email nhận câu hỏi của người xem: ").strip() or mail
+        try:
+            f = save_owner(name, mail, path)
+            print(f"Đã lưu vào {f}. Muốn đổi, sửa file này bằng Notepad.")
+            return owner_info(path)
+        except ValueError as exc:
+            print(exc)
 
 
 # --- the e-mail a reader sends from the page -----------------------------------------------------------
@@ -270,11 +376,13 @@ def main(argv=None) -> int:
     g.add_argument("file", nargs="?", help="file .txt/.eml chứa email; bỏ trống = lấy từ bộ nhớ tạm")
     g.add_argument("--ai-hoi", default="")
     sub.add_parser("xem", help="tóm tắt: câu chưa trả lời, lời hứa chưa xong")
+    c = sub.add_parser("chu", help="hỏi một lần tên và email người chịu trách nhiệm báo cáo")
+    c.add_argument("--doi", action="store_true", help="hỏi lại để đổi")
     ap.add_argument("--thu-muc", help="thư mục trí nhớ (mặc định CLICKY_TRI_NHO hoặc Documents\\Clicky tri nho)")
     a = ap.parse_args(argv)
     try:
         if a.lenh == "ghi":
-            text = (Path(a.file).read_text(encoding="utf-8", errors="replace") if a.file else clipboard())
+            text = read_text(a.file) if a.file else clipboard()
             mail = parse_mail(text)
             res = add_questions(mail["questions"], mail["report"], a.ai_hoi, path=a.thu_muc)
             print(f"Đã ghi {len(res['added'])} câu mới vào {res['file']}.")
@@ -282,6 +390,11 @@ def main(argv=None) -> int:
                 print("  +", q)
             if res["already"]:
                 print(f"{len(res['already'])} câu đã có sẵn, không ghi lại.")
+            return 0
+        if a.lenh == "chu":
+            ensure(a.thu_muc)                      # the templates, TU_DOC.txt included, exist from the first run
+            name, mail = ask_owner(a.thu_muc, a.doi)
+            print(f"Người chịu trách nhiệm: {name} <{mail}>")
             return 0
         mem = load(a.thu_muc)
         print(f"Trí nhớ: {mem.path}")
@@ -291,7 +404,7 @@ def main(argv=None) -> int:
         for e in mem.open_promises():
             print("  * ", e.text, f"(hạn {e.fields['han']})" if e.fields.get("han") else "")
         return 0
-    except (ValueError, RuntimeError, OSError) as exc:
+    except (ValueError, RuntimeError, OSError, EOFError) as exc:
         print(f"Chưa làm được: {exc}", file=sys.stderr)
         return 2
 

@@ -109,10 +109,16 @@ def number_words(text: str) -> str:
     return ("âm " if neg else "") + out
 
 
-_NUM = re.compile(r"-?\d{1,3}(?:\.\d{3})+(?:,\d+)?|-?\d+(?:,\d+)?")   # 1.234,5 · 2026 · 12,6
+# 1.234,5 · 2026 · 12,6 · -2,1 (a minus only when it is not between two figures: "3-5" is a range)
+_NUM = re.compile(r"(?:(?<![\w.,])-)?(?:\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:,\d+)?)")
 
 
 def speakable(text: str) -> str:
-    """Turn every displayed number in a sentence into Vietnamese words for an offline voice."""
-    text = text.replace("%", " phần trăm").replace("điểm  phần trăm", "điểm phần trăm")
-    return _NUM.sub(lambda m: number_words(m.group(0)), text).replace("  ", " ")
+    """Turn every displayed number in a sentence into Vietnamese words for an offline voice.
+    Number words always get a space on each side, so "3%so" or "Q3" never glue into one unknown word."""
+    text = re.sub(r"(?<=\d)\s*[-–—]\s*(?=\d)", " đến ", text)            # 3-5 người, 2026–2027
+    text = re.sub(r"\s*%", " phần trăm ", text)
+    text = _NUM.sub(lambda m: " " + number_words(m.group(0)) + " ", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r" (?=[,.;:!?)])", "", text)
+    return re.sub(r"(?<=\() ", "", text).strip()

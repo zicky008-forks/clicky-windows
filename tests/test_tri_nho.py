@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 
 from present import clicky_html, kiem_bien_ban, tri_nho
 
@@ -21,9 +22,14 @@ Khi xem báo cáo "bao_cao.html", tôi có các câu hỏi sau:
 (Gửi từ Clicky, mã báo cáo 0123456789abcdef)"""
 
 
+BUILD = clicky_html.build
+OWNER = {"owner": "anh Tuấn", "contact": "tuan@congty.vn"}
+
+
 @pytest.fixture
 def report(tmp_path, monkeypatch):
     monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    monkeypatch.setattr(clicky_html, "build", lambda *a, **k: BUILD(*a, **{**OWNER, **k}))
     dst = tmp_path / "bao_cao.html"
     shutil.copyfile(FIXTURE, dst)
     return dst
@@ -35,7 +41,9 @@ def voice(text):
 
 def test_templates_are_created_once_and_never_rewritten(tmp_path):
     d = tri_nho.ensure(str(tmp_path / "nho"))
-    assert sorted(p.name for p in d.iterdir()) == ["BAI_HOC.md", "CAU_TREO.md", "SEP_HAY_HOI.md"]
+    assert sorted(p.name for p in d.iterdir()) == ["BAI_HOC.md", "CAU_TREO.md", "SEP_HAY_HOI.md", "TU_DOC.txt"]
+    # the example in TU_DOC.txt is a comment: it shows the format without changing how anything is read
+    assert all(l.startswith("#") for l in (d / "TU_DOC.txt").read_text(encoding="utf-8").splitlines() if l.strip())
     (d / "BAI_HOC.md").write_text("- Tháng 9 thiếu cột lương bình quân.\n", encoding="utf-8")
     tri_nho.ensure(str(d))
     mem = tri_nho.load(str(d))
@@ -93,8 +101,12 @@ def test_an_answer_is_read_once_kept_ready_and_recorded(report, tmp_path):
     page = Path(rep["out"]).read_text(encoding="utf-8")
     data = _data(page)
     said = [s for sc in data["scenes"] for s in sc["sentences"]]
-    assert data["scenes"][1]["title"] == "Trả lời câu hỏi lần trước"
-    assert "Anh Tuấn trả lời: Khối CNTT từ 15,8 lên 17,7 tỷ do dự án ERP thêm 2,7 tỷ thuê ngoài." in said
+    # right after the greeting, worded the way a person says it, and in the script the owner can edit
+    assert data["scenes"][1]["title"] == "Câu hỏi lần trước"
+    assert data["scenes"][1]["sentences"][0] == "Lần trước có anh chị hỏi: Vì sao khối CNTT tăng 12%?"
+    assert "Anh Tuấn xin trả lời: Khối CNTT từ 15,8 lên 17,7 tỷ do dự án ERP thêm 2,7 tỷ thuê ngoài." in said
+    script = yaml.safe_load(Path(rep["kich_ban"]).read_text(encoding="utf-8"))
+    assert script["canh"][1]["muc"] == "Câu hỏi lần trước" and script["canh"][1]["tri_nho"] is True
     # the open question is not read; it is reminded to the owner with the open promise
     assert not any("Lương bình quân" in s for s in said)
     m = rep["tri_nho"]
@@ -102,14 +114,14 @@ def test_an_answer_is_read_once_kept_ready_and_recorded(report, tmp_path):
     assert m["cau_chua_tra_loi"] == ["Lương bình quân khối bán hàng là bao nhiêu?"]
     assert m["hua_chua_xong"] == ["Gửi chi tiết lương khối bán hàng cho CFO (hạn 20/11/2026)"]
     assert "Còn 1 câu treo" in clicky_html.remind(rep)
-    # figures: the owner's 2,7 is his, the others are in the report; the record re-check passes
-    ev = data["scenes"][1]["ev"][2]
-    assert ["2,7", "o"] in ev and ["15,8", "b"] in ev
+    # figures: 15,8 and 17,7 sit on the CNTT row the answer is about, so that row is framed; 2,7 is his
+    ev = data["scenes"][1]["ev"][1]
+    assert ev == [["15,8", "k"], ["17,7", "k"], ["2,7", "o"]]
     res = kiem_bien_ban.verify(rep["out"], str(report))
     assert res["ok"], res["errors"]
     assert res["tong"]["tra_loi_san"] == 1 and data["bank"][0]["q"] == "Vì sao khối CNTT tăng 12%?"
     # read once per report: the same report again still reads it, another report does not
-    assert "Đã nói trong: bao_cao.html" in (Path(d) / tri_nho.TREO).read_text(encoding="utf-8")
+    assert "Đã nói trong: bao cao" in (Path(d) / tri_nho.TREO).read_text(encoding="utf-8")
     Path(rep["out"]).unlink()
     assert clicky_html.build(str(report), voice=voice, memory=d)["tri_nho"]["doc_dau"] == 1
     other = report.with_name("thang_sau.html")
@@ -125,5 +137,69 @@ def test_an_answer_is_read_once_kept_ready_and_recorded(report, tmp_path):
 
 def test_the_page_writes_the_email_that_ghi_reads():
     layer = (Path(clicky_html.__file__).with_name("clicky_html_layer.html")).read_text(encoding="utf-8")
-    assert 'Khi xem báo cáo \\"" + M.report + "\\", tôi có các câu hỏi sau' in layer
+    assert re.search(r'Khi xem báo cáo \\"" \+ [\w.]+ \+ "\\", tôi có các câu hỏi sau', layer)
     assert '(i + 1) + ". " + x.q' in layer and "(" + tri_nho.MAIL_MARK + ", mã báo cáo" in layer
+
+
+def _cp1258(text):
+    """What Notepad's "ANSI" writes on a Vietnamese Windows: Windows-1258, tone marks as combining characters."""
+    import unicodedata
+    out = b""
+    for ch in text:
+        try:
+            out += ch.encode("cp1258")
+        except UnicodeEncodeError:
+            d = unicodedata.normalize("NFD", ch)
+            tone = "".join(c for c in d if c in "\u0300\u0301\u0303\u0309\u0323")
+            out += unicodedata.normalize("NFC", "".join(c for c in d if c not in tone)).encode("cp1258") + \
+                tone.encode("cp1258")
+    return out
+
+
+def test_owner_files_saved_by_notepad_in_any_encoding_are_read(tmp_path):
+    text = "- Câu: Vì sao khối CNTT tăng?\n  Trả lời: Do dự án ERP.\n"
+    f = tmp_path / "a.md"
+    for data in (text.encode("utf-8"), b"\xef\xbb\xbf" + text.encode("utf-8"),
+                 _cp1258(text)):
+        f.write_bytes(data)
+        entries = tri_nho.read_treo(tri_nho.read_text(f))
+        assert len(entries) == 1 and entries[0].answer == "Do dự án ERP."   # the BOM never hides the first entry
+
+
+def test_owner_name_and_email_are_asked_once_and_kept(tmp_path, capsys):
+    d = str(tmp_path / "nho")
+    answers = iter(["anh Tuấn", "khong-phai-email", "anh Tuấn", "tuan@congty.vn"])
+    assert tri_nho.ask_owner(d, ask=lambda _: next(answers)) == ("anh Tuấn", "tuan@congty.vn")
+    assert "chưa đúng" in capsys.readouterr().out
+    assert tri_nho.ask_owner(d, ask=lambda _: pytest.fail("asked twice")) == ("anh Tuấn", "tuan@congty.vn")
+    assert "Email: tuan@congty.vn" in (Path(d) / tri_nho.CHU).read_text(encoding="utf-8")
+
+
+def test_period_key_lets_every_version_of_the_month_read_the_answer():
+    assert tri_nho.report_period("BC nhan su T10 v1.html", "Báo cáo tháng 10/2026") == "10/2026"
+    assert tri_nho.report_period("BC nhan su T10 final.html", "Báo cáo tháng 10/2026") == "10/2026"
+    assert tri_nho.report_period("PL T10-2026 Actual vs AOP.html") == "10/2026"
+    assert tri_nho.report_period("BC Q3 2026.html") == "Q3/2026"
+    assert tri_nho.report_period("Bao cao nhan su v2.html") == tri_nho.report_period("Bao cao nhan su final.html")
+
+
+def test_v1_and_final_both_read_last_months_answer_and_a_coincidence_is_not_the_reports(report, tmp_path):
+    d = str(tmp_path / "nho")
+    tri_nho.add_questions(["Vì sao khối CNTT tăng?"], "thang 9.html", "anh Hùng", path=d)
+    # 1,5 is also on the page (Marketing's variance) but this answer is about CNTT: it is the owner's figure
+    _answer(d, "Vì sao khối CNTT tăng?", "Khối CNTT từ 15,8 lên 17,7 tỷ, chủ yếu do dự án ERP chuyển 1,5 tỷ thuê ngoài.")
+    html = FIXTURE.read_text(encoding="utf-8").replace("<h1>AOP Revised", "<h1>Tháng 10/2026: AOP Revised")
+    for name in ("BC nhan su T10 v1.html", "BC nhan su T10 final.html"):
+        (tmp_path / name).write_text(html, encoding="utf-8")
+        rep = clicky_html.build(str(tmp_path / name), voice=voice, memory=d)
+        assert rep["tri_nho"]["doc_dau"] == 1 and rep["tri_nho"]["ky"] == "10/2026"
+        data = _data(Path(rep["out"]).read_text(encoding="utf-8"))
+        scene = data["scenes"][1]
+        assert scene["sentences"][:2] == ["Lần trước anh Hùng hỏi: Vì sao khối CNTT tăng?",
+                                          "Anh Tuấn xin trả lời: Khối CNTT từ 15,8 lên 17,7 tỷ, chủ yếu do dự án ERP "
+                                          "chuyển 1,5 tỷ thuê ngoài."]
+        assert scene["ev"][1] == [["15,8", "k"], ["17,7", "k"], ["1,5", "o"]]
+    assert "Đã nói trong: 10/2026" in (Path(d) / tri_nho.TREO).read_text(encoding="utf-8")
+    nov = tmp_path / "BC nhan su T11.html"
+    nov.write_text(html.replace("Tháng 10/2026", "Tháng 11/2026"), encoding="utf-8")
+    assert clicky_html.build(str(nov), voice=voice, memory=d)["tri_nho"]["doc_dau"] == 0
