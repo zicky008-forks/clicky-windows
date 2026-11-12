@@ -394,22 +394,46 @@ def _wav(data: bytes):
         return w.getparams(), w.readframes(w.getnframes())
 
 
-def voice_lines(sentences: list, say: Callable[[str], bytes]) -> tuple:
+LEAD_IN = 0.25    # seconds of silence before the first word: Bluetooth and Windows audio wake-up eat the first syllable
+
+
+def voice_lines(sentences: list, say: Callable[[str], bytes], en_numbers: bool = False) -> tuple:
     """Voice each sentence piece by piece, the way a person reads a report: a short breath inside a long
     sentence, a longer pause between sentences. Returns (wav bytes, start second of each sentence).
-    A voice that does not return WAV (tests) gives one clip and no timings."""
+    A word the offline voice cannot say is spelled letter by letter instead of being dropped; if even that
+    fails the build stops (a dropped word can change a figure). A voice that does not return WAV (tests)
+    gives one clip and no timings."""
     import io
     import wave
-    params, frames, starts, t = None, [], [], 0.0
+    engine = getattr(say, "__self__", None)
+
+    def voiced(text):
+        data = say(text)
+        missed = list(getattr(engine, "missing", None) or [])
+        if missed:                                  # e.g. a brand name: spell it rather than skip it
+            for w in sorted(set(missed), key=len, reverse=True):
+                text = re.sub(rf"(?<!\w){re.escape(w)}(?!\w)", doc_tai_chinh._spell(w.upper()).replace("-", " "),
+                              text, flags=re.I)
+            data = say(text)
+            still = list(getattr(engine, "missing", None) or [])
+            if still:
+                raise PackError("Giọng đọc chưa đọc được: " + ", ".join(sorted(set(still))) + ". Anh thêm cách đọc vào "
+                                "file TU_DOC.txt trong thư mục trí nhớ (mỗi dòng: CHỮ = cách đọc) rồi chạy lại.")
+        return data
+
+    params, frames, starts = None, [], []
+    t = LEAD_IN
     for k, sentence in enumerate(sentences):
         starts.append(round(t, 3))
         parts = doc_tai_chinh.pieces(sentence) or [sentence]
         for j, piece in enumerate(parts):
-            data = say(doc_tai_chinh.doc(piece))
+            data = voiced(doc_tai_chinh.doc(piece, en_numbers))
             if not data.startswith(b"RIFF"):
-                return b"".join(say(doc_tai_chinh.doc(x)) for x in sentences), None
+                return b"".join(say(doc_tai_chinh.doc(x, en_numbers)) for x in sentences), None
             pr, fr = _wav(data)
-            params = params or pr
+            if params is None:
+                params = pr
+                frames.append(b"\0" * (int(pr.framerate * LEAD_IN) * pr.sampwidth * pr.nchannels))
             rate, width = params.framerate, params.sampwidth * params.nchannels
             frames.append(fr)
             t += len(fr) / width / rate

@@ -110,7 +110,8 @@ def test_frames_come_just_before_the_sentence_that_names_them(report, tmp_path):
                                 Path(rep["out"]).read_text(encoding="utf-8"), re.S).group(1))
     s = data["scenes"][0]
     first = 0.05 * len(clicky_html.doc_tai_chinh.doc("Kính chào anh chị."))
-    assert s["starts"][0] == 0 and abs(s["starts"][1] - (first + clicky_html.PAUSE_SENTENCE)) < 0.01
+    lead_in = clicky_html.LEAD_IN                 # a breath of silence so audio wake-up never eats the first word
+    assert s["starts"][0] == lead_in and abs(s["starts"][1] - (lead_in + first + clicky_html.PAUSE_SENTENCE)) < 0.01
     assert s["points"] == [{"id": "c2", "t": round(s["starts"][1] - clicky_html.LEAD, 3)}]
 
 
@@ -186,3 +187,33 @@ def test_layer_script_parses():
     js = re.findall(r"<script>(.*?)</script>", layer, re.S)[0]
     r = subprocess.run([node, "--check", "-"], input=js, capture_output=True, text=True, encoding="utf-8")
     assert r.returncode == 0, r.stderr
+
+
+def test_a_word_the_voice_cannot_say_is_spelled_not_dropped():
+    import io
+    import wave
+
+    class Voice:                        # knows every word except "Xyzco"
+        missing = []
+
+        def synthesize(self, text):
+            self.missing = [w for w in re.findall(r"\w+", text) if w.lower() == "xyzco"]
+            self.heard = text
+            out = io.BytesIO()
+            with wave.open(out, "wb") as w:
+                w.setnchannels(1), w.setsampwidth(2), w.setframerate(8000)
+                w.writeframes(b"\0\0" * 80)
+            return out.getvalue()
+
+    v = Voice()
+    clicky_html.voice_lines(["Doanh thu kênh Xyzco tăng."], v.synthesize)
+    assert "Xyzco" not in v.heard and "ích oai dét xi ô" in v.heard
+
+    class Mute(Voice):                  # even the letters fail: stop, never skip a word silently
+        def synthesize(self, text):
+            data = super().synthesize(text)
+            self.missing = self.missing or ["ích"]
+            return data
+
+    with pytest.raises(clicky_html.PackError, match="TU_DOC"):
+        clicky_html.voice_lines(["Doanh thu kênh Xyzco tăng."], Mute().synthesize)

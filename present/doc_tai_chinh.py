@@ -41,7 +41,7 @@ ENGLISH = {"aop revised": "ây-ô-pi điều chỉnh", "revised": "điều chỉ
 # English letter names written so a Vietnamese voice says them right
 LETTERS = {"A": "ây", "B": "bi", "C": "xi", "D": "đi", "E": "i", "F": "ép", "G": "di", "H": "hát", "I": "ai",
            "J": "giây", "K": "cây", "L": "e-lờ", "M": "em", "N": "en", "O": "ô", "P": "pi", "Q": "kiêu", "R": "a",
-           "S": "ét", "T": "ti", "U": "giu", "V": "vi", "W": "đáp-bờ-liu", "X": "ích", "Y": "oai", "Z": "di"}
+           "S": "ét", "T": "ti", "U": "giu", "V": "vi", "W": "đáp-bờ-liu", "X": "ích", "Y": "oai", "Z": "dét"}
 VN_WORD = re.compile(r"[ĂÂĐÊÔƠƯÁÀẢÃẠẮẰẲẴẶẤẦẨẪẬÉÈẺẼẸẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌỐỒỔỖỘỚỜỞỠỢÚÙỦŨỤỨỪỬỮỰÝỲỶỸỴ]")
 
 
@@ -86,10 +86,16 @@ def _abbr(m: re.Match, table: dict) -> str:
     return w
 
 
-def doc(text: str) -> str:
-    """The sentence as it should be heard."""
+def vn_numbers(text: str) -> str:
+    """A report written with English number marks (412,580.5) rewritten the Vietnamese way (412.580,5)."""
+    swap = {",": ".", ".": ","}
+    return re.sub(r"\d[\d,]*(?:\.\d+)?", lambda m: "".join(swap.get(c, c) for c in m.group(0)), str(text))
+
+
+def doc(text: str, en_numbers: bool = False) -> str:
+    """The sentence as it should be heard. en_numbers: the report writes 412,580.5 (English marks)."""
     table = {**WORDS, **owner_words()}
-    t = str(text or "")
+    t = vn_numbers(text or "") if en_numbers else str(text or "")
     t = re.sub(r"\bFY\s?(\d{2,4})", r"năm tài chính \1", t)
     t = re.sub(r"(\d)\s*[–—]\s*(\d)", r"\1 đến \2", t)              # 2026–2027, 3–5 người
     t = re.sub(r"(?<![\w,.])\+\s?(?=\d)", "tăng ", t)                 # +12,6% so với AOP
