@@ -1,6 +1,6 @@
 @echo off
 rem Nghe hai giọng tiếng Việt offline đọc cùng mấy câu báo cáo (số giả lập), rồi chọn giọng Clicky dùng.
-rem Lần đầu tải giọng VieNeu (khoảng 1 GB, chỉ tải mô hình giọng, không gửi dữ liệu). Sau đó chạy không cần mạng.
+rem Lần đầu tải giọng VieNeu (khoảng 740 MB, chỉ tải mô hình giọng, không gửi dữ liệu). Sau đó chạy không cần mạng.
 chcp 65001 >nul
 setlocal
 set CLICKY_LOCAL_ONLY=1
