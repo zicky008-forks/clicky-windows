@@ -8,6 +8,7 @@ set PYTHONIOENCODING=utf-8
 if not defined CLICKY_TRI_NHO set "CLICKY_TRI_NHO=%USERPROFILE%\Documents\Clicky tri nho"
 if not defined CLICKY_TU_DOC set "CLICKY_TU_DOC=%CLICKY_TRI_NHO%\TU_DOC.txt"
 cd /d "%~dp0"
+call tim_python.bat || (pause & exit /b 1)
 if exist giong_chon.txt set /p CLICKY_GIONG=<giong_chon.txt
 if "%~1"=="" (
   echo Hãy kéo thả file báo cáo .html vào biểu tượng này.
@@ -16,20 +17,20 @@ if "%~1"=="" (
 )
 if not exist "%LOCALAPPDATA%\Clicky\voice\tts-piper-vi\tokens.txt" if not exist "voice\tts-piper-vi\tokens.txt" (
   echo Lần đầu: tải giọng tiếng Việt offline (khoảng 60 MB, chỉ tải mô hình giọng, không gửi dữ liệu^)...
-  python tools\giong_noi\tai_model.py --model piper-vais1000 --out "%LOCALAPPDATA%\Clicky\voice\tts-piper-vi"
+  %PY% tools\giong_noi\tai_model.py --model piper-vais1000 --out "%LOCALAPPDATA%\Clicky\voice\tts-piper-vi"
 )
-python -m pip install -q --disable-pip-version-check "sherpa-onnx>=2.0.1,<3" PyYAML openpyxl python-pptx numpy "playwright>=1.47,<2"
-python -m present.clicky_html "%~1" %2 %3 %4 %5 %6
+%PY% -m pip install -q --disable-pip-version-check "sherpa-onnx>=2.0.1,<3" PyYAML openpyxl python-pptx numpy "playwright>=1.47,<2"
+%PY% -m present.clicky_html "%~1" %2 %3 %4 %5 %6
 if errorlevel 1 (
   pause
   exit /b 1
 )
 echo.
 echo Kiểm lại: mọi con số Clicky nói có nằm trong báo cáo không...
-if exist "%~dpn1_Clicky.html" python -m present.kiem_bien_ban "%~dpn1_Clicky.html" --goc "%~1"
+if exist "%~dpn1_Clicky.html" %PY% -m present.kiem_bien_ban "%~dpn1_Clicky.html" --goc "%~1"
 echo.
 echo Kiểm hình: mở bản vừa dựng bằng Edge chạy ẩn, xem Clicky có che con số nào không...
-if exist "%~dpn1_Clicky.html" python -m present.kiem_hinh "%~dpn1_Clicky.html"
+if exist "%~dpn1_Clicky.html" %PY% -m present.kiem_hinh "%~dpn1_Clicky.html"
 echo.
 echo Xong. Mở file _Clicky.html để xem. Muốn sửa lời: sửa file _kich_ban_Clicky.yaml rồi kéo thả lại kèm --kich-ban.
 pause

@@ -6,19 +6,20 @@ setlocal
 set CLICKY_LOCAL_ONLY=1
 set PYTHONIOENCODING=utf-8
 cd /d "%~dp0"
+call tim_python.bat || (pause & exit /b 1)
 if not exist "%LOCALAPPDATA%\Clicky\voice\tts-piper-vi\tokens.txt" if not exist "voice\tts-piper-vi\tokens.txt" (
   echo Tải giọng Piper (khoảng 60 MB^)...
-  python tools\giong_noi\tai_model.py --model piper-vais1000 --out "%LOCALAPPDATA%\Clicky\voice\tts-piper-vi"
+  %PY% tools\giong_noi\tai_model.py --model piper-vais1000 --out "%LOCALAPPDATA%\Clicky\voice\tts-piper-vi"
 )
 echo Cài bộ đọc giọng VieNeu (một lần)...
-python -m pip install -q --disable-pip-version-check "sherpa-onnx>=2.0.1,<3" -r requirements-vieneu.txt
-python -m pip install -q --disable-pip-version-check --no-deps vieneu==3.8.3
+%PY% -m pip install -q --disable-pip-version-check "sherpa-onnx>=2.0.1,<3" -r requirements-vieneu.txt
+%PY% -m pip install -q --disable-pip-version-check --no-deps vieneu==3.8.3
 if not exist "%LOCALAPPDATA%\Clicky\voice\vieneu\NGUON.txt" (
   echo Tải giọng VieNeu (một lần, vài phút^)...
-  python tools\giong_noi\tai_vieneu.py --out "%LOCALAPPDATA%\Clicky\voice\vieneu"
+  %PY% tools\giong_noi\tai_vieneu.py --out "%LOCALAPPDATA%\Clicky\voice\vieneu"
 )
 echo Đang cho hai giọng đọc thử...
-python tools\giong_noi\nghe_so_sanh.py --ra "So sanh giong.html"
+%PY% tools\giong_noi\nghe_so_sanh.py --ra "So sanh giong.html"
 if errorlevel 1 (
   pause
   exit /b 1
@@ -26,6 +27,6 @@ if errorlevel 1 (
 start "" "So sanh giong.html"
 echo.
 choice /c 12 /n /m "Nghe xong, gõ 1 để dùng VieNeu, gõ 2 để dùng Piper: "
-if errorlevel 2 (python tools\giong_noi\nghe_so_sanh.py --chon piper) else (python tools\giong_noi\nghe_so_sanh.py --chon vieneu)
+if errorlevel 2 (%PY% tools\giong_noi\nghe_so_sanh.py --chon piper) else (%PY% tools\giong_noi\nghe_so_sanh.py --chon vieneu)
 echo Lần sau kéo thả báo cáo vào Gan_Clicky_vao_bao_cao.bat, Clicky đọc bằng giọng này.
 pause

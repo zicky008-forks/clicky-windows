@@ -7,7 +7,8 @@ setlocal
 set PYTHONIOENCODING=utf-8
 if not defined CLICKY_TRI_NHO set "CLICKY_TRI_NHO=%USERPROFILE%\Documents\Clicky tri nho"
 cd /d "%~dp0"
-python -m present.tri_nho --thu-muc "%CLICKY_TRI_NHO%" ghi %1
+call tim_python.bat || (pause & exit /b 1)
+%PY% -m present.tri_nho --thu-muc "%CLICKY_TRI_NHO%" ghi %1
 if errorlevel 1 (
   pause
   exit /b 1
