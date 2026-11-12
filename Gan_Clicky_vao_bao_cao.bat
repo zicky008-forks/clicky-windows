@@ -6,6 +6,7 @@ setlocal
 set CLICKY_LOCAL_ONLY=1
 set PYTHONIOENCODING=utf-8
 if not defined CLICKY_TRI_NHO set "CLICKY_TRI_NHO=%USERPROFILE%\Documents\Clicky tri nho"
+if not defined CLICKY_TU_DOC set "CLICKY_TU_DOC=%CLICKY_TRI_NHO%\TU_DOC.txt"
 cd /d "%~dp0"
 if exist giong_chon.txt set /p CLICKY_GIONG=<giong_chon.txt
 if "%~1"=="" (
