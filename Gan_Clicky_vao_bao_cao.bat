@@ -5,6 +5,7 @@ chcp 65001 >nul
 setlocal
 set CLICKY_LOCAL_ONLY=1
 set PYTHONIOENCODING=utf-8
+if not defined CLICKY_TRI_NHO set "CLICKY_TRI_NHO=%USERPROFILE%\Documents\Clicky tri nho"
 cd /d "%~dp0"
 if "%~1"=="" (
   echo Hãy kéo thả file báo cáo .html vào biểu tượng này.

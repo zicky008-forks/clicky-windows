@@ -19,6 +19,9 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from typing import Optional
+
+from present import tri_nho
 
 SIZES = ((1366, 768), (1920, 1080))
 SKIPPED = 3
@@ -40,14 +43,16 @@ def _launch(pw):
     raise RuntimeError(f"không mở được trình duyệt ({last})")
 
 
-def check(packed: str, sizes=SIZES, timeout_ms: int = 60000) -> dict:
-    """Return {"ok", "skipped", "checked", "problems", "sizes"}; skipped=True when no browser could run."""
+def check(packed: str, sizes=SIZES, timeout_ms: int = 60000, questions: Optional[list] = None) -> dict:
+    """Return {"ok", "skipped", "checked", "problems", "sizes", "cau"}; skipped=True when no browser could run.
+    questions: the bosses' usual questions; "cau" says for each whether this report can answer it. They are
+    passed to the page only inside this check and are never written into the file."""
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         return {"ok": False, "skipped": True, "reason": "máy chưa có gói playwright", "problems": [], "checked": 0}
     url = Path(packed).resolve().as_uri()
-    problems, checked, done = [], 0, []
+    problems, checked, done, tried = [], 0, [], []
     with sync_playwright() as pw:
         try:
             browser = _launch(pw)
@@ -59,6 +64,8 @@ def check(packed: str, sizes=SIZES, timeout_ms: int = 60000) -> dict:
                 page.set_default_timeout(timeout_ms)
                 page.goto(url, wait_until="load")
                 page.wait_for_function("typeof window.__clickyKiemHinh === 'function'")
+                if questions and not tried:
+                    tried = page.evaluate("qs => window.__clickyThuCau(qs)", questions)
                 res = page.evaluate("window.__clickyKiemHinh()")
                 checked += res["checked"]
                 problems += [f"màn {res['size']}: {p}" for p in res["problems"]]
@@ -67,14 +74,24 @@ def check(packed: str, sizes=SIZES, timeout_ms: int = 60000) -> dict:
         finally:
             browser.close()
     return {"ok": not problems and checked > 0, "skipped": False, "checked": checked, "problems": problems,
-            "sizes": done}
+            "sizes": done, "cau": tried}
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Kiểm bằng trình duyệt: Clicky không che số, khoanh đúng chỗ.")
     ap.add_argument("file", help="file <tên>_Clicky.html")
+    ap.add_argument("--tri-nho", default=os.environ.get("CLICKY_TRI_NHO") or None,
+                    help="thư mục trí nhớ: thử luôn các câu các sếp hay hỏi (SEP_HAY_HOI.md)")
     a = ap.parse_args(argv)
-    res = check(a.file)
+    bosses = tri_nho.load(a.tri_nho).bosses if a.tri_nho else {}
+    asked = [(boss, q) for boss, qs in bosses.items() for q in qs]
+    res = check(a.file, questions=[q for _, q in asked])
+    if res.get("cau"):
+        ok = sum(1 for r in res["cau"] if r["ok"])
+        print(f"Câu các sếp hay hỏi: báo cáo này trả lời được {ok}/{len(res['cau'])}.")
+        for (boss, _), r in zip(asked, res["cau"]):
+            mark = "✓" if r["ok"] else "~" if r.get("partial") else "✗"
+            print(f"  {mark} {boss}: {r['q']}  →  {r['label'] or 'chưa có trong báo cáo'}")
     if res["skipped"]:
         print(f"BỎ QUA kiểm hình: {res['reason']}. Mở file và xem bằng mắt vài chỗ khoanh trước khi gửi.")
         return SKIPPED

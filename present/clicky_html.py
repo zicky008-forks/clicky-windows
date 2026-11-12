@@ -28,6 +28,7 @@ import base64
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -37,6 +38,7 @@ from typing import Callable, Optional
 
 import yaml
 
+from present import tri_nho
 from present.goi_html import PackError, audio_mime, offline_voice, wav_to_mp3
 
 VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track",
@@ -425,6 +427,31 @@ def attach_evidence(scenes: list, record: dict) -> None:
                             for x in r["so"]])
 
 
+def memory_scene(mem, report: str, owner: str, on_page: set) -> tuple:
+    """A short scene that answers last time's parked questions, read once per report. Figures in the owner's
+    answers that are not on this page are recorded as his ("nguoi_soan")."""
+    items = mem.for_talk(report)[:5] if mem else []
+    if not items:
+        return None, []
+    who = owner[:1].upper() + owner[1:]
+    own = lambda text: [t for t in numbers(text) if t not in on_page]
+    cau = [{"noi": "Trước hết, em xin trả lời các câu anh chị đã hỏi lần trước.", "chi": ""}]
+    for e in items:
+        q, a = _sentence(e.text), _sentence(e.answer)
+        cau += [{"noi": f"Câu hỏi: {q}", "chi": "", "so_rieng": own(q)},
+                {"noi": f"{who} trả lời: {a}", "chi": "", "so_rieng": own(a)}]
+    return {"muc": "Trả lời câu hỏi lần trước", "cau": cau}, items
+
+
+def ready_answers(mem, on_page: set, limit: int = 30) -> list:
+    """Answered questions kept on the page as ready answers, each figure with its source."""
+    out = []
+    for e in (mem.bank(limit) if mem else []):
+        out.append({"cau": e.text, "tra_loi": e.answer, "ngay": e.fields.get("ngay", ""),
+                    "so": [{"so": t, "nguon": "bao_cao" if t in on_page else "nguoi_soan"} for t in numbers(e.answer)]})
+    return out
+
+
 def _blob(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
 
@@ -442,7 +469,7 @@ def inject(source: str, data: dict, record: dict) -> str:
 
 def build(report: str, out: Optional[str] = None, owner: str = "anh Tuấn", contact: str = "",
           script_path: Optional[str] = None, label: str = "",
-          voice: Optional[Callable[[str], bytes]] = None) -> dict:
+          voice: Optional[Callable[[str], bytes]] = None, memory: Optional[str] = None) -> dict:
     src_path = Path(report)
     raw = src_path.read_bytes()
     source = raw.decode("utf-8-sig", errors="replace")
@@ -459,12 +486,22 @@ def build(report: str, out: Optional[str] = None, owner: str = "anh Tuấn", con
         draft_path.write_text(yaml.safe_dump(draft, allow_unicode=True, sort_keys=False, width=110),
                               encoding="utf-8")
         script = draft
+    mem = tri_nho.load(memory) if memory else None
+    on_page = page_numbers(root)
+    extra, told = memory_scene(mem, src_path.name, owner, on_page)
+    if extra:                                          # after the greeting scene, before the first section
+        script = dict(script, canh=list(script.get("canh") or []))
+        script["canh"].insert(1 if script["canh"] else 0, extra)
     scenes = scenes_from_script(script, known)
     now = dt.datetime.now()
     meta = {"owner": owner, "contact": contact, "label": label, "report": src_path.name,
             "report_sha256": hashlib.sha256(raw).hexdigest(), "built": now.strftime("%d/%m/%Y %H:%M"),
             "built_iso": now.isoformat(timespec="seconds")}
     record = make_record(script, root, meta)          # before the voice: a wrong figure costs no waiting
+    bank = ready_answers(mem, on_page)
+    if bank:
+        record["tra_loi_san"] = bank
+        record["ma_bam"] = seal(record)
     attach_evidence(scenes, record)
     say = voice or offline_voice()
     cache: dict = {}
@@ -483,18 +520,28 @@ def build(report: str, out: Optional[str] = None, owner: str = "anh Tuấn", con
     meta["record"] = dict(record["tong"], ma=record["ma_bam"][:12])
     data = {"meta": meta, "scenes": scenes,
             "cards": [{"id": it.node.attrs["data-clicky"], "text": it.text} for it in items if it.kind == "card"],
-            "fallback": fallback, "fallback_clip": clip(fallback)}
+            "fallback": fallback, "fallback_clip": clip(fallback),
+            "bank": [dict(clip(f"{owner[:1].upper() + owner[1:]} trả lời: {_sentence(b['tra_loi'])}"),
+                          q=b["cau"], a=b["tra_loi"], ngay=b["ngay"]) for b in bank]}
     page = inject(tagged, data, record)
     out_path = Path(out) if out else src_path.with_name(src_path.stem + "_Clicky.html")
     if out_path.resolve() == src_path.resolve():
         raise PackError("Không ghi đè file báo cáo gốc.")
     out_path.write_text(page, encoding="utf-8")
+    if mem:
+        tri_nho.mark_said(src_path.name, told, memory)
     return {"out": str(out_path), "draft": None if script_path else str(draft_path), "scenes": len(scenes),
             "minutes": meta["minutes"], "bytes": len(page.encode("utf-8")), "record": meta["record"],
             # figures found in the report but not at the framed place: weaker evidence, the owner should look
             "xem_lai": [{"cau": r["noi"], "so": [x["so"] for x in r["so"] if x["nguon"] == "bao_cao"]}
                         for r in record["cau"] if any(x["nguon"] == "bao_cao" for x in r["so"])],
-            "found": {k: sum(1 for i in items if i.kind == k) for k in ("section", "note", "card", "table", "chart")}}
+            "found": {k: sum(1 for i in items if i.kind == k) for k in ("section", "note", "card", "table", "chart")},
+            "tri_nho": None if not mem else {
+                "thu_muc": str(mem.path), "doc_dau": len(told), "tra_loi_san": len(bank),
+                "cau_chua_tra_loi": [e.text for e in mem.open_questions()],
+                "hua_chua_xong": [e.text + (f" (hạn {e.fields['han']})" if e.fields.get("han") else "")
+                                  for e in mem.open_promises()],
+                "bai_hoc": mem.lessons}}
 
 
 def main(argv=None) -> int:
@@ -505,14 +552,36 @@ def main(argv=None) -> int:
     ap.add_argument("--chu", default="anh Tuấn")
     ap.add_argument("--email", default="")
     ap.add_argument("--nhan", default="")
+    ap.add_argument("--tri-nho", default=os.environ.get("CLICKY_TRI_NHO") or None,
+                    help="thư mục trí nhớ (câu treo, sếp hay hỏi, bài học); mặc định CLICKY_TRI_NHO")
     a = ap.parse_args(argv)
     try:
-        rep = build(a.bao_cao, a.ra, a.chu, a.email, a.kich_ban, a.nhan)
+        rep = build(a.bao_cao, a.ra, a.chu, a.email, a.kich_ban, a.nhan, memory=a.tri_nho)
     except PackError as exc:
         print(f"Chưa làm được: {exc}", file=sys.stderr)
         return 2
-    print(json.dumps(rep, ensure_ascii=False, indent=1))
+    print(json.dumps({k: v for k, v in rep.items() if k != "tri_nho"}, ensure_ascii=False, indent=1))
+    print(remind(rep))
     return 0
+
+
+def remind(rep: dict) -> str:
+    """What the owner should know before sending, in plain words."""
+    m = rep.get("tri_nho")
+    if not m:
+        return ""
+    lines = [f"Trí nhớ ({m['thu_muc']}): đọc {m['doc_dau']} câu trả lời ở đầu bài, "
+             f"giữ {m['tra_loi_san']} câu trả lời sẵn để ai hỏi lại thì đáp ngay."]
+    if m["cau_chua_tra_loi"]:
+        lines.append(f"Còn {len(m['cau_chua_tra_loi'])} câu treo anh chưa trả lời:")
+        lines += [f"  ? {q}" for q in m["cau_chua_tra_loi"][:10]]
+    if m["hua_chua_xong"]:
+        lines.append("Lời hứa chưa xong:")
+        lines += [f"  * {x}" for x in m["hua_chua_xong"][:10]]
+    if m["bai_hoc"]:
+        lines.append("Nhắc từ các kỳ trước:")
+        lines += [f"  - {x}" for x in m["bai_hoc"][:10]]
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

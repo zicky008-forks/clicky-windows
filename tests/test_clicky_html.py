@@ -135,3 +135,15 @@ def test_each_spoken_figure_carries_its_source_for_the_caption(report, tmp_path)
     data = json.loads(re.search(r'<script id="clicky-data" type="application/json">(.*?)</script>', page, re.S).group(1))
     # framed place = k, owner's own = o, elsewhere in the report = b, and one list per spoken sentence
     assert data["scenes"][0]["ev"] == [[["186,4", "k"], ["3", "o"]], [["1.248", "b"]], []]
+
+
+def test_layer_script_parses():
+    # a syntax error in the layer only shows in a browser; node catches it on the Windows CI too
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    import subprocess
+    layer = (Path(clicky_html.__file__).with_name("clicky_html_layer.html")).read_text(encoding="utf-8")
+    js = re.findall(r"<script>(.*?)</script>", layer, re.S)[0]
+    r = subprocess.run([node, "--check", "-"], input=js, capture_output=True, text=True, encoding="utf-8")
+    assert r.returncode == 0, r.stderr

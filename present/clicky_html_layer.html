@@ -207,13 +207,15 @@ function tables() {
     return {tb, head, body: rows.filter((r, i) => i !== hi && r.cells.length > 1).map(r => ({r, label: cellText(r.cells[0])}))};
   });
 }
-function answer(text, target, cls, extra) {
+function answer(text, target, cls, extra, src, clip) {
   const a = $("a"); a.className = "ans " + (cls || ""); a.innerHTML = "<div>" + esc(text) + "</div>";
-  if (target) a.innerHTML += '<div class="src">Lấy từ báo cáo, đúng ô đang khoanh · ' + esc(M.report) + "</div>";
+  src = src || (target ? "Lấy từ báo cáo, đúng ô đang khoanh · " + M.report : "");
+  if (src) a.innerHTML += '<div class="src">' + esc(src) + "</div>";
   if (extra) a.appendChild(extra);
   aside = true; audio.pause(); setPlaying(false);
-  if (target) frame(target);
-  speak(text);
+  if (target) frame(target); else clearFrames();
+  if (clip) { audio.src = "data:" + (clip.mime || "audio/mpeg") + ";base64," + clip.audio; audio.play().catch(() => {}); }
+  else speak(text);
 }
 let viVoice = null;
 function pickVoice() { const v = (speechSynthesis && speechSynthesis.getVoices()) || []; viVoice = v.find(x => /^vi/i.test(x.lang) && x.localService) || null; }
@@ -234,22 +236,55 @@ function rowAnswer(tb, row, col, extra) {
   const parts = []; for (let i = 1; i < row.r.cells.length && parts.length < 4; i++) { const v = cellText(row.r.cells[i]); if (v && tb.head[i]) parts.push(tb.head[i] + " " + v); }
   answer(row.label + ": " + parts.join("; ") + ".", row.r, "", extra);
 }
-function ask(q) {
-  const t = fold(q); let best = [];
+// ready answers: questions the owner already answered in his memory file (CAU_TREO.md), with his voice clip
+const BANK = (D.bank || []).map(b => ({...b, w: words(b.q)}));
+function bankMatch(t) {
+  const tw = words(t); if (!tw.length) return null; let best = null;
+  for (const b of BANK) {
+    if (!b.w.length) continue;
+    const both = b.w.filter(x => tw.includes(x)).length, score = both / Math.max(b.w.length, tw.length);
+    if (score >= 0.6 && (!best || score > best.score)) best = {score, b};
+  }
+  return best && best.b;
+}
+function answerBank(b) { answer(b.a, null, "", null, M.owner + " trả lời ngày " + b.ngay + " · từ câu hỏi đã gửi trước đây", b); }
+// where a question lands, without side effects (the build-time check uses this too)
+function resolve(q) {
+  const t = fold(q); const known = bankMatch(q); if (known) return {kind: "bank", b: known};
+  let best = [];
   for (const tb of tables()) {
     const cs = tb.head.map((h, i) => i === 0 ? 0 : match(t, h, true)); const cbest = Math.max(0, ...cs); const col = cbest ? cs.indexOf(cbest) : -1;
     for (const row of tb.body) { const rs = match(t, row.label); if (rs) best.push({score: rs * 10 + cbest, tb, row, col}); }
   }
   for (const c of D.cards) { const label = c.text.split(":")[0]; const s = match(t, label); if (s) best.push({score: s * 10, card: c}); }
   best.sort((a, b) => b.score - a.score);
-  if (!best.length) { park(q); answer(D.fallback, null, "park"); return; }
+  if (!best.length) return {kind: "none"};
   const top = best.filter(b => b.score === best[0].score);
+  if (top.length > 1) return {kind: "many", top};
+  // words of the question that the matched label does not cover ("lương bình quân" when only the row matched)
+  const one = top[0], cover = fold(one.card ? one.card.text : one.row.label + " " + (one.col >= 0 ? one.tb.head[one.col] : ""));
+  const rest = q.split(/\s+/).map(x => x.replace(/[?.,!:;"“”()]+/g, ""))
+    .filter(x => { const w = words(x); return w.length && w.every(y => !has(cover, y)); });   // in the reader's own words
+  return {kind: "one", b: one, rest};
+}
+function ask(q) {
+  const r = resolve(q);
+  if (r.kind === "bank") { answerBank(r.b); return; }
+  if (r.kind === "none") { park(q); answer(D.fallback, null, "park"); return; }
+  const top = r.top || [r.b];
   if (top.length > 1) {
     answer("Anh chị muốn hỏi dòng nào ạ?", null, "", chips(top.slice(0, 8).map(b => [b.card ? b.card.text : b.row.label,
       () => b.card ? answer(b.card.text, el(b.card.id)) : rowAnswer(b.tb, b.row, b.col)])));
     return;
   }
-  const b = top[0]; if (b.card) answer(b.card.text, el(b.card.id)); else rowAnswer(b.tb, b.row, b.col);
+  const b = top[0], note = r.rest && r.rest.length ? missing(q, r.rest) : null;
+  if (b.card) answer(b.card.text, el(b.card.id), "", note); else rowAnswer(b.tb, b.row, b.col, note);
+}
+function missing(q, rest) {   // show the nearest place, say plainly what is not there, and keep the question
+  park(q);
+  const n = document.createElement("div"); n.className = "src";
+  n.textContent = "Em chưa thấy «" + rest.join(" ") + "» trong báo cáo, đây là chỗ gần nhất. Em đã ghi câu này lại cho " + M.owner + ".";
+  return n;
 }
 $("f").onsubmit = e => { e.preventDefault(); const q = $("q").value.trim(); if (q) ask(q); };
 
@@ -309,6 +344,13 @@ audio.src = "data:" + (S[0].mime || "audio/mpeg") + ";base64," + S[0].audio;
 // --- visual check, run by present/kiem_hinh.py in a headless browser after each build ---
 // For every place Clicky frames (talk, cards, one figure per table row), with the question panel closed and open:
 // the frame encloses the target, the target is not under Clicky's bar or panel, and the hat covers no figure.
+window.__clickyThuCau = function (list) {   // which usual questions this report can answer, and with what
+  return list.map(q => { const r = resolve(q);
+    const part = r.kind === "one" && r.rest.length > 0;
+    const label = r.kind === "bank" ? "câu đã trả lời: " + r.b.q : r.kind === "one" ? (r.b.card ? r.b.card.text : r.b.row.label)
+      + (part ? " (thiếu «" + r.rest.join(" ") + "»)" : "") : r.kind === "many" ? "phải chọn giữa " + r.top.length + " dòng" : "";
+    return {q, ok: r.kind !== "none" && !part, partial: part, label}; });
+};
 window.__clickyKiemHinh = async function () {
   FAST = true; const moving = hat.style.transition; hat.style.transition = "none";   // measure where it lands
   const wait = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));

@@ -64,6 +64,17 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
                 count["dung_cho_khoanh"] += 1
                 if tok not in numbers(texts.get(where, "")):
                     errors.append(f"Số {tok} không có ở chỗ Clicky khoanh ({where}) (câu «{row['noi'][:70]}»).")
+    # ready answers from the owner's memory: the page must hold exactly the recorded answers
+    bank = record.get("tra_loi_san", [])
+    if [(b.get("q"), b.get("a")) for b in data.get("bank", [])] != [(b["cau"], b["tra_loi"]) for b in bank]:
+        errors.append("Câu trả lời sẵn trên trang khác với câu trả lời ghi trong biên bản.")
+    for b in bank:
+        if numbers(b["tra_loi"]) != [x["so"] for x in b.get("so", [])]:
+            errors.append(f"Câu trả lời «{b['tra_loi'][:70]}» có số chưa được ghi trong biên bản.")
+        for x in b.get("so", []):
+            if x["nguon"] == "bao_cao" and x["so"] not in on_page:
+                errors.append(f"Số {x['so']} không còn trong báo cáo (câu trả lời «{b['tra_loi'][:70]}»).")
+    count["tra_loi_san"] = len(bank)
     return {"ok": not errors, "errors": errors, "tong": count, "ma_bam": record.get("ma_bam", ""),
             "bao_cao": record.get("bao_cao", ""), "nguoi_chiu_trach_nhiem": record.get("nguoi_chiu_trach_nhiem", "")}
 

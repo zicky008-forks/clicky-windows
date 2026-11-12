@@ -24,8 +24,8 @@ def built(tmp_path_factory):
     return out
 
 
-@pytest.fixture(scope="module")
-def page(built):
+@pytest.fixture
+def page(built):   # per test: a running sync browser blocks kiem_hinh.check() in later tests
     from playwright.sync_api import sync_playwright
     with sync_playwright() as pw:
         try:
@@ -86,3 +86,26 @@ def test_skipped_without_playwright(built, monkeypatch, capsys):
     monkeypatch.setitem(sys.modules, "playwright.sync_api", None)
     assert kiem_hinh.main([str(built)]) == kiem_hinh.SKIPPED
     assert "BỎ QUA" in capsys.readouterr().out
+
+
+def test_ready_answers_and_the_bosses_usual_questions(tmp_path, monkeypatch):
+    from present import tri_nho
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    d = str(tmp_path / "nho")
+    tri_nho.add_questions(["Vì sao khối CNTT tăng?"], path=d)
+    f = Path(d) / tri_nho.TREO
+    f.write_text(f.read_text(encoding="utf-8").replace("  Trả lời: ", "  Trả lời: Do dự án ERP."), encoding="utf-8")
+    dst = tmp_path / "bao_cao.html"
+    shutil.copyfile(FIXTURE, dst)
+    out = clicky_html.build(str(dst), voice=lambda t: t.encode("utf-8"), memory=d)["out"]
+    res = kiem_hinh.check(out, sizes=((1366, 768),), questions=[
+        "Headcount khối bán hàng?", "khối CNTT vì sao tăng", "Doanh thu theo kênh MT?", "Lương bình quân khối bán hàng?"])
+    if res["skipped"]:
+        pytest.skip(res["reason"])
+    assert res["ok"], res["problems"]
+    assert [r["ok"] for r in res["cau"]] == [True, True, False, False]
+    # only the row matched: not counted as answered, and the missing words are named
+    assert res["cau"][3]["partial"] and "thiếu «Lương bình quân»" in res["cau"][3]["label"]
+    assert res["cau"][0]["label"] == "Khối Bán hàng" and res["cau"][1]["label"].startswith("câu đã trả lời")
+    # the usual questions are only tried in the check; they never go into the file
+    assert "Doanh thu theo kênh MT" not in Path(out).read_text(encoding="utf-8")
