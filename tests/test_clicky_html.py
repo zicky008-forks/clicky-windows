@@ -1,4 +1,5 @@
 """Clicky inside an HTML report: the talk uses only the report's own words, the original file is never touched."""
+import json
 import re
 import shutil
 from pathlib import Path
@@ -123,3 +124,14 @@ def test_draft_never_cuts_a_figure_in_half():
     long = "Chi phí " + "rất dài " * 60 + "1.234.567 đồng"
     cut = clicky_html._clean(long[:395] + " 1.234.567 đồng và còn nữa", 400)
     assert all(tok in ("1.234.567",) for tok in clicky_html.numbers(cut))
+
+
+def test_each_spoken_figure_carries_its_source_for_the_caption(report, tmp_path):
+    path = _script(tmp_path, [{"noi": "Tổng chi phí nhân sự 186,4 tỷ, em có 3 ý.", "chi": "c2", "so_rieng": [3]},
+                              {"noi": "Headcount 1.248 người.", "chi": "c2"},
+                              {"noi": "Chưa có số ở câu này.", "chi": ""}])
+    rep = clicky_html.build(str(report), script_path=path, voice=voice)
+    page = Path(rep["out"]).read_text(encoding="utf-8")
+    data = json.loads(re.search(r'<script id="clicky-data" type="application/json">(.*?)</script>', page, re.S).group(1))
+    # framed place = k, owner's own = o, elsewhere in the report = b, and one list per spoken sentence
+    assert data["scenes"][0]["ev"] == [[["186,4", "k"], ["3", "o"]], [["1.248", "b"]], []]

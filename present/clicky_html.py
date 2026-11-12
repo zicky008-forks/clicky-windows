@@ -14,9 +14,12 @@ Run on the owner's PC. Nothing is sent anywhere and no AI is used:
 6. A machine-readable record ("biên bản") is embedded: every spoken figure, where it is in the report, the
    report's SHA-256 and a seal over the record. present/kiem_bien_ban.py re-checks it from the output file.
 
-On the page, a reader can also ask about any table cell ("chi phí lương khối bán hàng AOPR?"): Clicky finds the
-row and the column by their labels, frames the real cell and reads it out. Questions it cannot place are kept
-and e-mailed to the owner only when the reader presses Send.
+On the page, a reader can also ask about any table cell ("chi phí lương khối bán hàng AOPR?"), or simply click a
+figure: Clicky finds the row and the column by their labels, frames the real cell and reads it out. Questions it
+cannot place are kept and e-mailed to the owner only when the reader presses Send.
+While Clicky talks, the rest of the page fades, and each figure in the caption shows its source from the record
+(the framed place, elsewhere in the report, or added by the owner). present/kiem_hinh.py opens the result in a
+headless browser and checks that nothing of Clicky covers a figure.
 """
 from __future__ import annotations
 
@@ -408,6 +411,20 @@ def scenes_from_script(script: dict, known: set) -> list:
     return scenes
 
 
+def attach_evidence(scenes: list, record: dict) -> None:
+    """Give each spoken sentence the source of each of its figures, taken from the sealed record, so the page can
+    show it beside the caption: k = the framed place, b = elsewhere in the report, o = added by the owner."""
+    rows = iter(record["cau"])
+    for s in scenes:
+        s["ev"] = []
+        for sentence in s["sentences"]:
+            r = next(rows)
+            if r["noi"] != sentence:                 # both come from the same script in the same order
+                raise PackError("Biên bản và lời nói lệch nhau. Hãy dựng lại.")
+            s["ev"].append([[x["so"], "o" if x["nguon"] == "nguoi_soan" else "b" if x["nguon"] == "bao_cao" else "k"]
+                            for x in r["so"]])
+
+
 def _blob(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
 
@@ -448,6 +465,7 @@ def build(report: str, out: Optional[str] = None, owner: str = "anh Tuấn", con
             "report_sha256": hashlib.sha256(raw).hexdigest(), "built": now.strftime("%d/%m/%Y %H:%M"),
             "built_iso": now.isoformat(timespec="seconds")}
     record = make_record(script, root, meta)          # before the voice: a wrong figure costs no waiting
+    attach_evidence(scenes, record)
     say = voice or offline_voice()
     cache: dict = {}
 
