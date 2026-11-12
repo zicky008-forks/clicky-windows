@@ -13,9 +13,9 @@ if "%~1"=="" (
 )
 if not exist "%LOCALAPPDATA%\Clicky\voice\tts-piper-vi\tokens.txt" if not exist "voice\tts-piper-vi\tokens.txt" (
   echo Lần đầu: tải giọng tiếng Việt offline (khoảng 60 MB, chỉ tải mô hình giọng, không gửi dữ liệu)...
-  python -m pip install -q "sherpa-onnx>=2.0.1,<3" PyYAML openpyxl python-pptx numpy
   python tools\giong_noi\tai_model.py --model piper-vais1000 --out "%LOCALAPPDATA%\Clicky\voice\tts-piper-vi"
 )
+python -m pip install -q --disable-pip-version-check "sherpa-onnx>=2.0.1,<3" PyYAML openpyxl python-pptx numpy
 python -m present.clicky_html "%~1" %2 %3 %4 %5 %6
 echo.
 echo Xong. Mở file _Clicky.html để xem. Muốn sửa lời: sửa file _kich_ban_Clicky.yaml rồi kéo thả lại kèm --kich-ban.
