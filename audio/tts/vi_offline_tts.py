@@ -188,6 +188,7 @@ def preferred_order() -> list:
         chosen = (setting("tts_vi_engine", "") or "").strip().lower()
     except Exception:
         chosen = ""
+    chosen = os.environ.get("CLICKY_GIONG", "").strip().lower() or chosen   # the owner's pick (nghe_so_sanh.py)
     order = ["vieneu", "piper"] if chosen != "piper" else ["piper", "vieneu"]
     return [n for n in order if (vieneu_available() if n == "vieneu" else piper_available())]
 

@@ -109,7 +109,7 @@ def number_words(text: str) -> str:
     return ("âm " if neg else "") + out
 
 
-_NUM = re.compile(r"-?\d{1,3}(?:\.\d{3})*(?:,\d+)?|-?\d+(?:,\d+)?")
+_NUM = re.compile(r"-?\d{1,3}(?:\.\d{3})+(?:,\d+)?|-?\d+(?:,\d+)?")   # 1.234,5 · 2026 · 12,6
 
 
 def speakable(text: str) -> str:

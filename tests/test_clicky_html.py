@@ -71,8 +71,47 @@ def test_edited_script_is_used_and_a_stale_target_stops_the_build(report, tmp_pa
         clicky_html.build(str(report), script_path=str(path), voice=voice)
 
 
-def test_voice_wording():
-    assert clicky_html.for_voice("149,4 triệu/năm; nhân sự/DTT; FP&A") == "149,4 triệu mỗi năm; nhân sự trên DTT; FP và A"
+def test_voice_reads_like_a_finance_person():
+    from present.doc_tai_chinh import doc, pieces
+    assert doc("Tổng chi phí nhân sự AOPR: 186,4 tỷ, +12,6% so với AOP gốc.") == (
+        "Tổng chi phí nhân sự ây-ô-pi điều chỉnh: một trăm tám mươi sáu phẩy bốn tỷ, "
+        "tăng mười hai phẩy sáu phần trăm so với ây-ô-pi gốc.")
+    assert doc("149,4 triệu/năm; nhân sự/DTT; FP&A") == (
+        "một trăm bốn mươi chín phẩy bốn triệu mỗi năm; nhân sự trên doanh thu thuần; ép-pi-en-ây")
+    assert doc("AOP Revised FY2026–2027, kênh MT và HRC+KA, Headcount") == (
+        "ây-ô-pi điều chỉnh năm tài chính hai nghìn không trăm hai mươi sáu đến hai nghìn không trăm hai mươi bảy, "
+        "kênh em-ti và hát-a-xi và cây-ây, héc-cao")
+    assert pieces("Đề xuất: giữ 2,40%; giãn tuyển 30 vị trí.") == ["Đề xuất:", "giữ 2,40%;", "giãn tuyển 30 vị trí."]
+
+
+def test_every_word_the_finance_reader_adds_is_known_to_the_offline_voice():
+    from audio.tts.vi_g2p import phonemize
+    from present.doc_tai_chinh import ENGLISH, LETTERS, WORDS
+    missing = []
+    phonemize(" ".join([*LETTERS.values(), *WORDS.values(), *ENGLISH.values()]).replace("-", " "), missing)
+    assert not missing
+
+
+def test_frames_come_just_before_the_sentence_that_names_them(report, tmp_path):
+    import io
+    import wave
+
+    def wav_voice(text):              # 0.05 s of silence per character: a real WAV with a known length
+        out = io.BytesIO()
+        with wave.open(out, "wb") as w:
+            w.setnchannels(1), w.setsampwidth(2), w.setframerate(8000)
+            w.writeframes(b"\0\0" * int(400 * len(text)))
+        return out.getvalue()
+
+    path = _script(tmp_path, [{"noi": "Kính chào anh chị.", "chi": ""},
+                              {"noi": "Tổng chi phí nhân sự AOPR: 186,4 tỷ.", "chi": "c2"}])
+    rep = clicky_html.build(str(report), script_path=path, voice=wav_voice)
+    data = json.loads(re.search(r'<script id="clicky-data" type="application/json">(.*?)</script>',
+                                Path(rep["out"]).read_text(encoding="utf-8"), re.S).group(1))
+    s = data["scenes"][0]
+    first = 0.05 * len(clicky_html.doc_tai_chinh.doc("Kính chào anh chị."))
+    assert s["starts"][0] == 0 and abs(s["starts"][1] - (first + clicky_html.PAUSE_SENTENCE)) < 0.01
+    assert s["points"] == [{"id": "c2", "t": round(s["starts"][1] - clicky_html.LEAD, 3)}]
 
 
 def _script(tmp_path, cau):

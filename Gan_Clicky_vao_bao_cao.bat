@@ -7,13 +7,14 @@ set CLICKY_LOCAL_ONLY=1
 set PYTHONIOENCODING=utf-8
 if not defined CLICKY_TRI_NHO set "CLICKY_TRI_NHO=%USERPROFILE%\Documents\Clicky tri nho"
 cd /d "%~dp0"
+if exist giong_chon.txt set /p CLICKY_GIONG=<giong_chon.txt
 if "%~1"=="" (
   echo Hãy kéo thả file báo cáo .html vào biểu tượng này.
   pause
   exit /b 1
 )
 if not exist "%LOCALAPPDATA%\Clicky\voice\tts-piper-vi\tokens.txt" if not exist "voice\tts-piper-vi\tokens.txt" (
-  echo Lần đầu: tải giọng tiếng Việt offline (khoảng 60 MB, chỉ tải mô hình giọng, không gửi dữ liệu)...
+  echo Lần đầu: tải giọng tiếng Việt offline (khoảng 60 MB, chỉ tải mô hình giọng, không gửi dữ liệu^)...
   python tools\giong_noi\tai_model.py --model piper-vais1000 --out "%LOCALAPPDATA%\Clicky\voice\tts-piper-vi"
 )
 python -m pip install -q --disable-pip-version-check "sherpa-onnx>=2.0.1,<3" PyYAML openpyxl python-pptx numpy "playwright>=1.47,<2"

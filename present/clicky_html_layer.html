@@ -38,6 +38,14 @@ button:focus-visible,input:focus-visible{outline:3px solid #e8a33d;outline-offse
 .ev span{font-size:12px;border-radius:99px;padding:1px 8px;background:#eef4f0;color:#174d34;white-space:nowrap}
 .ev span.k{background:#f3efe6;color:#4d473b}.ev span.o{background:#fbefd9;color:#7a4b06}
 .panel.left{right:auto;left:12px}
+.bubble{position:fixed;z-index:2147483001;width:350px;max-width:calc(100vw - 24px);background:#fff;color:#1d2421;border:1px solid #d9d3c7;border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.2);padding:10px 12px 12px;display:flex;flex-direction:column;gap:8px;font-size:15px}
+.bubble .x{position:absolute;top:4px;right:6px;border:0;background:none;font-size:18px;line-height:1;padding:4px 7px;color:#5d6b66}
+.bubble .ans{margin-right:22px}
+.bubble ul{margin:4px 0 0;padding-left:18px}.bubble li{margin:2px 0}
+.lasso{position:fixed;inset:0;z-index:2147482998;cursor:crosshair;background:rgba(248,246,241,.15)}
+.lasso .r{position:fixed;border:2px dashed #e8a33d;border-radius:6px;background:rgba(232,163,61,.06)}
+.lasso .tip{position:fixed;left:50%;top:14px;transform:translateX(-50%);background:#1d2421;color:#fff;border-radius:8px;padding:6px 12px;font-size:14px}
+button.on{background:#fbefd9;border-color:#e8a33d}
 .hidden{display:none!important}
 @media (max-width:700px){.panel{left:8px;right:8px;width:auto;bottom:auto;top:8px;max-height:55vh}.bar{left:6px;right:6px;bottom:6px}}
 </style>
@@ -49,11 +57,18 @@ button:focus-visible,input:focus-visible{outline:3px solid #e8a33d;outline-offse
   <div class="hint" id="bb">${RECORD}</div>
   <div id="tb" class="hidden"><h3>Câu đang chờ ${esc(M.owner)} trả lời</h3><ol id="tl"></ol><button class="p" id="send">Gửi các câu này qua email</button></div>
 </div>
+<div class="bubble hidden" id="bub" role="dialog" aria-label="Hỏi Clicky tại chỗ này">
+  <button class="x" id="bx" type="button" aria-label="Đóng">×</button>
+  <div id="ba" class="ans"></div>
+  <form class="ask" id="bf"><input id="bq" placeholder="Hỏi thêm về chỗ này…" autocomplete="off"><button class="p">Hỏi</button></form>
+</div>
+<div class="lasso hidden" id="lasso"><div class="tip">Kéo chuột để khoanh vùng muốn hỏi · Esc để thôi</div><div class="r hidden" id="lr"></div></div>
 <div class="bar" id="bar" role="region" aria-label="Clicky trình bày">
   <span class="who" title="Trình bày do trợ lý AI thực hiện">${HAT}Trợ lý AI của ${esc(M.owner)}</span>
   <button class="p" id="play">▶ Nghe trình bày · ${String(M.minutes).replace(".", ",")} phút</button>
   <button id="prev" aria-label="Phần trước">⏮</button><button id="next" aria-label="Phần sau">⏭</button>
   <button id="askb">Hỏi Clicky</button>
+  <button id="lassob" title="Kéo chuột khoanh một vùng trên báo cáo để hỏi về vùng đó">⬚ Khoanh vùng</button>
   <button id="hide" aria-label="Thu gọn">—</button>
   <div class="cap" id="cap"></div>
 </div>`;
@@ -94,9 +109,13 @@ function numberRects(near, pad = 120) {   // where figures are written near a bo
   }
   return out;
 }
-function covers() { const l = [rect($("bar"))]; if (isOpen($("panel"))) l.push(rect($("panel"))); return l; }
+function covers(withBubble) {
+  const l = [rect($("bar"))]; if (isOpen($("panel"))) l.push(rect($("panel")));
+  if (withBubble && isOpen($("bub"))) l.push(rect($("bub")));
+  return l;
+}
 function placeHat(t) {   // first free spot next to the target that covers no figure; none free = no hat
-  const r = rect(t), s = 34, nums = numberRects(r), cov = covers();
+  const r = rect(t), s = 34, nums = numberRects(r), cov = covers(true);
   const spots = [[r.left, r.bottom + 6], [r.right + 6, r.top], [r.left - s - 6, r.top], [r.left, r.top - s - 6],
                  [r.right - s, r.bottom + 6]];
   for (const [x, y] of spots) {
@@ -126,9 +145,12 @@ function keepVisible(t) {   // the framed figure is never under Clicky's own bar
   const small = r.height < innerHeight * 0.6, room = floor - 16;
   if (small && (r.top < 8 || r.bottom > floor - 8)) {
     scrollTo({top: scrollY + r.top - Math.max(8, (room - r.height) / 2), behavior: FAST ? "auto" : "smooth"});
+    return true;
   } else if (!small && (r.top > floor - 40 || r.bottom < 40)) {
     t.scrollIntoView({behavior: FAST ? "auto" : "smooth", block: "start"});
+    return true;
   }
+  return false;
 }
 function frame(target, keep) {
   if (!target) return;
@@ -139,19 +161,19 @@ function frame(target, keep) {
   if (!frames.length) box.style.boxShadow = DIM;
   layer.appendChild(box);
   const f = {target, box}; frames.push(f);
-  keepVisible(target);
-  const show = () => { place(f); box.style.opacity = 1; box.style.transform = "none"; placeHat(target); };
-  if (FAST) show(); else setTimeout(show, 450);
+  const moved = keepVisible(target);
+  const show = () => { place(f); box.style.opacity = 1; box.style.transform = "none"; placeBubble(); placeHat(target); };
+  if (FAST) show(); else setTimeout(show, moved ? 420 : 30);   // wait only when the page had to scroll
 }
 function clearFrames() { frames.forEach(f => f.box.remove()); frames = []; clearTimeout(hat._fade); hat.style.opacity = 0; }
-addEventListener("scroll", () => frames.forEach(place), {passive: true});
+addEventListener("scroll", () => { frames.forEach(place); placeBubble(); }, {passive: true});
 addEventListener("resize", () => frames.forEach(place));
 addEventListener("keydown", e => { if (e.key === "Escape") clearFrames(); });
 
 // --- the talk: one sentence on screen at a time, following the voice ---
-function caption(t) {
-  const s = S[idx]; let acc = 0, k = 0;
-  for (; k < s.sentences.length - 1; k++) { acc += s.sentences[k].length + 1; if (acc / s.line.length * s.secs > t) break; }
+function caption(t) {   // the sentence being said now, from the voice's own timings
+  const s = S[idx]; let k = 0;
+  while (k < s.sentences.length - 1 && s.starts[k + 1] <= t + 0.05) k++;
   $("cap").innerHTML = esc(s.sentences[k] || "") + evidence((s.ev || [])[k]) +
     "<small>Phần " + (idx + 1) + "/" + S.length + (s.title ? " · " + esc(s.title) : "") + "</small>";
 }
@@ -170,14 +192,16 @@ function go(i, autoplay) {
 }
 function start() { audio.play().then(() => setPlaying(true)).catch(() => setPlaying(false)); }
 function setPlaying(v) { playing = v; $("play").textContent = v ? "⏸ Tạm dừng" : (aside ? "↩ Tiếp tục trình bày" : "▶ Nghe trình bày"); }
-audio.addEventListener("timeupdate", () => {
+function onTime() {
   if (aside) return;
   const s = S[idx], t = audio.currentTime; caption(t);
-  s.points.forEach((p, k) => { if (!shown.has(k) && t >= p.at * s.secs) { shown.add(k); frame(el(p.id)); } });
-});
+  s.points.forEach((p, k) => { if (!shown.has(k) && t >= p.t) { shown.add(k); frame(el(p.id)); } });
+}
+audio.addEventListener("timeupdate", onTime);
+(function tick() { if (playing && !audio.paused) onTime(); requestAnimationFrame(tick); })();   // every frame, not every 250 ms
 audio.addEventListener("ended", () => {
   if (aside) { setPlaying(false); return; }
-  if (idx < S.length - 1) setTimeout(() => { if (playing && !aside) go(idx + 1, true); }, 1200); else setPlaying(false);
+  if (idx < S.length - 1) setTimeout(() => { if (playing && !aside) go(idx + 1, true); }, 900); else setPlaying(false);
 });
 $("play").onclick = () => { if (aside) { go(idx, true); return; } if (playing) { audio.pause(); setPlaying(false); } else if (audio.src) start(); else go(0, true); };
 $("prev").onclick = () => go(idx - 1, playing);
@@ -188,8 +212,21 @@ $("hide").onclick = () => { const c = $("cap"); c.classList.toggle("hidden"); $(
 // --- questions: find the answer in the report itself ---
 function fold(s) { return String(s || "").normalize("NFD").replace(/đ/g, "d").replace(/Đ/g, "D").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9%,.\-+ ]+/g, " ").replace(/\s+/g, " ").trim(); }
 function has(t, p) { p = fold(p); if (p.length < 2) return false; return new RegExp("(?<![a-z0-9])" + p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![a-z0-9])").test(t); }
-const STOP = new Set("la bao nhieu cua the nao va o trong cho em anh chi hoi xem bang so muc dong cot".split(" "));
-function words(s) { return fold(s).replace(/[0-9%,.\-+]+/g, " ").split(" ").filter(w => w.length >= 2 && !STOP.has(w)); }
+const STOP = new Set("la bao nhieu cua the nao va o trong tren cho em anh chi hoi xem bang so muc dong cot".split(" "));
+function words(s) {   // "chi phí" is one word here, so the "chị" in STOP never drops it
+  return fold(s).replace(/(^| )chi phi(?= |$)/g, "$1chi_phi").replace(/[0-9%,.\-+]+/g, " ").split(" ").filter(w => w.length >= 2 && !STOP.has(w));
+}
+// finance abbreviations and what people say instead: "DTT" ~ "doanh thu thuần" ~ "doanh thu"
+const ALIAS = {}; Object.entries(D.aliases || {}).forEach(([k, v]) => { ALIAS[fold(k)] = v.map(fold); });
+function widen(t) {   // the question with every abbreviation in it also said in words, and back
+  let more = "";
+  for (const [k, v] of Object.entries(ALIAS)) {
+    if (has(t, k)) more += " " + v.join(" ");
+    else if (v.some(x => has(t, x))) more += " " + k;
+  }
+  if (has(t, "tren")) more += " ty le";   // "chi phí nhân sự trên doanh thu" asks for a ratio
+  return more ? t + " " + more : t;
+}
 function match(t, label, loose) {   // whole label = strong; most of its words = weaker
   if (!label) return 0;
   if (has(t, label)) return 100 + fold(label).length;
@@ -208,7 +245,7 @@ function tables() {
   });
 }
 function answer(text, target, cls, extra, src, clip) {
-  const a = $("a"); a.className = "ans " + (cls || ""); a.innerHTML = "<div>" + esc(text) + "</div>";
+  const a = isOpen($("bub")) ? $("ba") : $("a"); a.className = "ans " + (cls || ""); a.innerHTML = "<div>" + esc(text) + "</div>";
   src = src || (target ? "Lấy từ báo cáo, đúng ô đang khoanh · " + M.report : "");
   if (src) a.innerHTML += '<div class="src">' + esc(src) + "</div>";
   if (extra) a.appendChild(extra);
@@ -250,7 +287,7 @@ function bankMatch(t) {
 function answerBank(b) { answer(b.a, null, "", null, M.owner + " trả lời ngày " + b.ngay + " · từ câu hỏi đã gửi trước đây", b); }
 // where a question lands, without side effects (the build-time check uses this too)
 function resolve(q) {
-  const t = fold(q); const known = bankMatch(q); if (known) return {kind: "bank", b: known};
+  const t = widen(fold(q)); const known = bankMatch(q); if (known) return {kind: "bank", b: known};
   let best = [];
   for (const tb of tables()) {
     const cs = tb.head.map((h, i) => i === 0 ? 0 : match(t, h, true)); const cbest = Math.max(0, ...cs); const col = cbest ? cs.indexOf(cbest) : -1;
@@ -262,13 +299,16 @@ function resolve(q) {
   const top = best.filter(b => b.score === best[0].score);
   if (top.length > 1) return {kind: "many", top};
   // words of the question that the matched label does not cover ("lương bình quân" when only the row matched)
-  const one = top[0], cover = fold(one.card ? one.card.text : one.row.label + " " + (one.col >= 0 ? one.tb.head[one.col] : ""));
+  const one = top[0], cover = widen(fold(one.card ? one.card.text : one.row.label + " " + (one.col >= 0 ? one.tb.head[one.col] : "")));
   const rest = q.split(/\s+/).map(x => x.replace(/[?.,!:;"“”()]+/g, ""))
     .filter(x => { const w = words(x); return w.length && w.every(y => !has(cover, y)); });   // in the reader's own words
   return {kind: "one", b: one, rest};
 }
-function ask(q) {
-  const r = resolve(q);
+function ask(q, ctx) {
+  let r = resolve(q);
+  if (ctx && (r.kind === "none" || (r.kind === "one" && r.rest.length))) {   // "so với AOP gốc?" asked on a row
+    const r2 = resolve(q + " " + ctx); if (r2.kind !== "none") r = r2;
+  }
   if (r.kind === "bank") { answerBank(r.b); return; }
   if (r.kind === "none") { park(q); answer(D.fallback, null, "park"); return; }
   const top = r.top || [r.b];
@@ -288,8 +328,38 @@ function missing(q, rest) {   // show the nearest place, say plainly what is not
 }
 $("f").onsubmit = e => { e.preventDefault(); const q = $("q").value.trim(); if (q) ask(q); };
 
-// --- click a figure in the report: Clicky says what it is, frames it, and offers the next questions ---
-function openPanel() { $("panel").classList.remove("hidden"); }
+// --- click anywhere in the report: Clicky answers right there, in a small bubble next to the place ---
+let anchor = null, ctx = "";
+function openPanel() { closeBubble(); $("panel").classList.remove("hidden"); }
+function openBubble(target, context, hint) {
+  $("panel").classList.add("hidden"); anchor = target; ctx = context || "";
+  $("bub").classList.remove("hidden"); $("bq").value = ""; $("bq").placeholder = hint || "Hỏi thêm về chỗ này…";
+}
+function closeBubble() { $("bub").classList.add("hidden"); anchor = null; ctx = ""; }
+function placeBubble() {   // beside the place, never on it, never under the bar, hiding the fewest figures
+  if (!anchor || !isOpen($("bub"))) return;
+  const b = $("bub"), r = rect(anchor), w = b.offsetWidth, h = b.offsetHeight, bar = rect($("bar")), g = 12;
+  const box = anchor.closest && anchor.closest("table,figure,svg,canvas,img"), c = box ? rect(box) : r;
+  // corners first: a bubble there leaves the place's own row and column readable; then the sides; then outside its table
+  const spots = [[r.right + g, r.bottom + g], [r.left - w - g, r.bottom + g], [r.right + g, r.top - h - g], [r.left - w - g, r.top - h - g],
+                 [r.left, r.bottom + g], [r.left, r.top - h - g], [r.right + g, r.top], [r.left - w - g, r.top],
+                 [r.right - w, r.bottom + g], [r.right - w, r.top - h - g], [r.left, c.top - h - g], [r.left, c.bottom + g]];
+  const figs = numberRects({left: 0, top: 0, right: innerWidth, bottom: innerHeight}, 0);
+  let best = null;
+  for (let [x, y] of spots) {
+    x = Math.max(8, Math.min(x, innerWidth - w - 8));
+    const q = {left: x, top: y, right: x + w, bottom: y + h};
+    if (y < 8 || q.bottom > bar.top - 8 || hit(q, r)) continue;
+    // a hidden figure in the same row or column as the place counts ten times: that is what the reader compares
+    const cost = figs.filter(n => hit(n, q)).reduce((k, n) => k + ((n.bottom > r.top && n.top < r.bottom) || (n.right > r.left && n.left < r.right) ? 10 : 1), 0);
+    const far = Math.hypot(x + w / 2 - (r.left + r.right) / 2, y + h / 2 - (r.top + r.bottom) / 2);
+    if (!best || cost < best.cost || (cost === best.cost && far < best.far)) best = {x, y, cost, far};
+  }
+  if (!best) best = {x: Math.max(8, Math.min(r.left, innerWidth - w - 8)), y: Math.max(8, bar.top - h - 12), cost: 0};
+  b.style.left = best.x + "px"; b.style.top = best.y + "px";
+}
+$("bx").onclick = () => { closeBubble(); clearFrames(); };
+$("bf").onsubmit = e => { e.preventDefault(); const q = $("bq").value.trim(); if (q) ask(q, ctx); };
 function talkAbout(text) {   // the part of the talk that says this figure, if any
   const toks = (String(text).match(/\d[\d.,]*/g) || []).map(t => t.replace(/[.,]+$/, "")).filter(t => t.replace(/\D/g, "").length >= 3);
   for (let i = 0; i < S.length; i++) if (toks.some(t => S[i].sentences.some(x => (x.match(/\d[\d.,]*/g) || []).map(y => y.replace(/[.,]+$/, "")).includes(t)))) return i;
@@ -297,31 +367,106 @@ function talkAbout(text) {   // the part of the talk that says this figure, if a
 }
 function nextQs(text, whole) {
   const l = []; if (whole) l.push(whole);
-  const i = talkAbout(text); if (i >= 0) l.push(["Nghe lại đoạn Clicky nói về số này", () => go(i, true)]);
-  l.push(["Hỏi câu khác", () => { $("q").value = ""; $("q").focus(); }]);
+  const i = talkAbout(text); if (i >= 0) l.push(["Nghe lại đoạn Clicky nói về số này", () => { closeBubble(); go(i, true); }]);
   return chips(l);
+}
+function shortText(t, n) {   // the first sentence or two, never cut inside a figure
+  t = String(t || "").replace(/\s+/g, " ").trim(); if (t.length <= n) return t;
+  const cut = t.slice(0, n), end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("; "));
+  return end > 40 ? cut.slice(0, end + 1) : cut.replace(/\s+\S*$/, "") + "…";
+}
+function headingFor(x) {   // the section title above a place
+  for (let e = x; e && e !== document.body; e = e.parentElement) {
+    for (let p = e.previousElementSibling; p; p = p.previousElementSibling)
+      if (/^H[1-4]$/.test(p.tagName)) return cellText(p);
+    const h = e.querySelector && e.querySelector("h1,h2,h3,h4"); if (h && h !== x && !x.contains(h)) return cellText(h);
+  }
+  return "";
+}
+function blockAt(t) {   // the readable thing the reader pointed at
+  const tagged = t.closest("[data-clicky]");
+  if (tagged && !/^(TABLE|TR)$/.test(tagged.tagName)) return tagged;
+  return t.closest("figure,svg,canvas,img,p,li,blockquote,h1,h2,h3,h4,dd,dt,caption") || null;
+}
+function aboutBlock(x) {
+  const label = x.getAttribute("aria-label") || x.getAttribute("title") || x.getAttribute("alt") || "";
+  const chart = /^(SVG|CANVAS|IMG|FIGURE)$/i.test(x.tagName) || x.querySelector("svg,canvas");
+  const text = cellText(x), head = headingFor(x);
+  if (chart) return (label || text ? "Biểu đồ: " + shortText(label || text, 220) : "Đây là biểu đồ" + (head ? " trong phần «" + head + "»" : "") + ".");
+  if (/^H[1-4]$/.test(x.tagName)) return "Phần «" + text + "». Anh chị bấm vào một con số hay một đoạn trong phần này để em nói rõ hơn.";
+  return shortText(text || label, 260);
 }
 document.addEventListener("click", e => {
   const t = e.target;
-  if (!(t instanceof Element) || host.contains(t) || t.closest("a,button,input,select,textarea,label,summary")) return;
+  if (!(t instanceof Element) || host.contains(t) || layer.contains(t) || t.closest("a,button,input,select,textarea,label,summary")) return;
   if (String(getSelection && getSelection()).trim()) return;   // the reader is selecting text, not asking
   const cell = t.closest("td,th"), tbEl = cell && cell.closest("table[data-clicky]");
   if (cell && tbEl) {
     const tb = tables().find(x => x.tb === tbEl), row = tb && tb.body.find(x => x.r === cell.parentElement);
     if (!row) return;
-    const col = cell.cellIndex;
-    if (col > 0 && !/\d/.test(cellText(cell))) return;
-    openPanel();
-    rowAnswer(tb, row, col > 0 ? col : -1, nextQs(cellText(col > 0 ? cell : row.r),
-      col > 0 ? ["Cả dòng " + row.label, () => rowAnswer(tb, row, -1, nextQs(cellText(row.r)))] : null));
+    const col = cell.cellIndex, num = col > 0 && /\d/.test(cellText(cell));
+    openBubble(num ? cell : row.r, row.label + (num && tb.head[col] ? " " + tb.head[col] : ""), "Hỏi thêm về " + row.label + "…");
+    rowAnswer(tb, row, num ? col : -1, nextQs(cellText(num ? cell : row.r),
+      num ? ["Cả dòng " + row.label, () => rowAnswer(tb, row, -1, nextQs(cellText(row.r)))] : null));
     return;
   }
   const card = D.cards.find(c => { const x = el(c.id); return x && x.contains(t); });
-  if (card) { openPanel(); answer(card.text, el(card.id), "", nextQs(card.text)); }
+  if (card) { const x = el(card.id); openBubble(x, card.text.split(":")[0]); answer(card.text, x, "", nextQs(card.text)); return; }
+  const blk = blockAt(t); if (!blk || blk === document.body) return;
+  const say = aboutBlock(blk);
+  openBubble(blk, headingFor(blk), "Hỏi về đoạn này…");
+  answer(say, blk, "", nextQs(say), "Trên báo cáo · " + M.report);
 });
+addEventListener("keydown", e => { if (e.key === "Escape") { closeBubble(); stopLasso(); } });
+
+// --- draw a box around any part of the report and ask about what is inside ---
+let lassoFrom = null;
+const regionEl = document.createElement("div"); regionEl.style.cssText = "position:absolute;pointer-events:none"; layer.appendChild(regionEl);
+function stopLasso() { $("lasso").classList.add("hidden"); $("lr").classList.add("hidden"); $("lassob").classList.remove("on"); lassoFrom = null; }
+$("lassob").onclick = () => { if (isOpen($("lasso"))) { stopLasso(); return; } closeBubble(); $("lasso").classList.remove("hidden"); $("lassob").classList.add("on"); };
+$("lasso").addEventListener("pointerdown", e => { lassoFrom = {x: e.clientX, y: e.clientY}; $("lasso").setPointerCapture(e.pointerId); });
+$("lasso").addEventListener("pointermove", e => {
+  if (!lassoFrom) return; const r = $("lr"); r.classList.remove("hidden");
+  Object.assign(r.style, {left: Math.min(lassoFrom.x, e.clientX) + "px", top: Math.min(lassoFrom.y, e.clientY) + "px",
+    width: Math.abs(e.clientX - lassoFrom.x) + "px", height: Math.abs(e.clientY - lassoFrom.y) + "px"});
+});
+$("lasso").addEventListener("pointerup", e => {
+  if (!lassoFrom) return;
+  const box = {left: Math.min(lassoFrom.x, e.clientX), top: Math.min(lassoFrom.y, e.clientY),
+               right: Math.max(lassoFrom.x, e.clientX), bottom: Math.max(lassoFrom.y, e.clientY)};
+  stopLasso();
+  if (box.right - box.left < 12 || box.bottom - box.top < 12) return;
+  askRegion(box);
+});
+function inside(e, box) { const r = rect(e), cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+  return cx >= box.left && cx <= box.right && cy >= box.top && cy <= box.bottom; }
+function regionSummary(box) {   // what is inside, in the report's own labels and figures
+  const lines = [], labels = [];
+  for (const tb of tables()) for (const row of tb.body) {
+    const got = []; for (let i = 1; i < row.r.cells.length; i++) { const c = row.r.cells[i];
+      if (/\d/.test(cellText(c)) && inside(c, box)) got.push((tb.head[i] ? tb.head[i] + " " : "") + cellText(c)); }
+    if (got.length) { lines.push(row.label + ": " + got.join("; ")); labels.push(row.label); }
+  }
+  for (const c of D.cards) { const x = el(c.id); if (x && inside(x, box)) { lines.push(c.text); labels.push(c.text.split(":")[0]); } }
+  return {lines, labels};
+}
+function askRegion(box) {
+  Object.assign(regionEl.style, {left: (box.left + scrollX) + "px", top: (box.top + scrollY) + "px",
+    width: (box.right - box.left) + "px", height: (box.bottom - box.top) + "px"});
+  const {lines, labels} = regionSummary(box);
+  openBubble(regionEl, labels.join(" "), "Hỏi về vùng này…");
+  if (!lines.length) {
+    const words = [...document.querySelectorAll("p,li,h2,h3,h4,figcaption")].filter(x => inside(x, box)).map(cellText).join(" ");
+    answer(words ? shortText(words, 260) : "Vùng này chưa có con số nào em đọc được. Anh chị hỏi em ở ô dưới nhé.", regionEl, "", null, "Trên báo cáo · " + M.report);
+    return;
+  }
+  const list = document.createElement("ul"); lines.slice(0, 8).forEach(l => { const li = document.createElement("li"); li.textContent = l; list.appendChild(li); });
+  if (lines.length > 8) { const li = document.createElement("li"); li.textContent = "… và " + (lines.length - 8) + " dòng nữa"; list.appendChild(li); }
+  answer("Vùng anh chị khoanh có " + lines.length + (lines.length > 1 ? " mục:" : " mục."), regionEl, "", list, "Lấy từ báo cáo · " + M.report);
+}
 (function markAskable() {   // a quiet hint only: the cursor changes over figures that can be asked about
   const st = document.createElement("style");
-  st.textContent = "[data-clicky-hoi]{cursor:help}";
+  st.textContent = "[data-clicky-hoi]{cursor:help} [data-clicky]:not(table):not(tr){cursor:help}";
   document.head.appendChild(st);
   document.querySelectorAll("table[data-clicky] td").forEach(c => { if (/\d/.test(cellText(c))) c.setAttribute("data-clicky-hoi", "1"); });
   D.cards.forEach(c => { const x = el(c.id); if (x) x.setAttribute("data-clicky-hoi", "1"); });
@@ -338,7 +483,7 @@ $("send").onclick = () => {
   const body = "Chào " + M.owner + ",\n\nKhi xem báo cáo \"" + M.report + "\", tôi có các câu hỏi sau:\n\n" + l.map((x, i) => (i + 1) + ". " + x.q).join("\n") + "\n\n(Gửi từ Clicky, mã báo cáo " + M.pack_id + ")";
   location.href = "mailto:" + encodeURIComponent(M.contact || "") + "?subject=" + encodeURIComponent("Câu hỏi về " + M.report) + "&body=" + encodeURIComponent(body);
 };
-draw(); caption(0); $("cap").innerHTML = "Em là Clicky, trợ lý AI của " + esc(M.owner) + ". Bấm ▶ để nghe trình bày, hoặc bấm vào bất kỳ con số nào trong báo cáo để hỏi.";
+draw(); caption(0); $("cap").innerHTML = "Em là Clicky, trợ lý AI của " + esc(M.owner) + ". Bấm ▶ để nghe trình bày. Bấm vào bất kỳ chỗ nào trên báo cáo, hoặc ⬚ Khoanh vùng, để hỏi ngay tại đó.";
 audio.src = "data:" + (S[0].mime || "audio/mpeg") + ";base64," + S[0].audio;
 
 // --- visual check, run by present/kiem_hinh.py in a headless browser after each build ---
@@ -363,13 +508,19 @@ window.__clickyKiemHinh = async function () {
   const list = [...targets].map(([id, why]) => ({t: el(id), name: id + " (" + why + ")"}))
     .concat(cells.slice(0, 40).map(c => ({t: c, name: (c.closest("tr").getAttribute("data-clicky") || "") + " ô " + c.cellIndex})));
   const problems = []; let n = 0;
-  for (const open of [false, true]) {
-    $("panel").classList.toggle("hidden", !open);
-    if (open) { const a = $("a"); a.className = "ans"; a.innerHTML = "<div>Câu trả lời mẫu dài vừa phải để bảng hỏi có chiều cao thật.</div>"; a.appendChild(chips([["Cả dòng", () => 0], ["Nghe lại", () => 0], ["Hỏi câu khác", () => 0]])); }
+  for (const open of [false, true, "bubble"]) {
+    $("panel").classList.toggle("hidden", open !== true); closeBubble();
+    if (open === true) { const a = $("a"); a.className = "ans"; a.innerHTML = "<div>Câu trả lời mẫu dài vừa phải để bảng hỏi có chiều cao thật.</div>"; a.appendChild(chips([["Cả dòng", () => 0], ["Nghe lại", () => 0], ["Hỏi câu khác", () => 0]])); }
     for (const {t, name} of list) {
       if (!t) { problems.push(name + ": không còn trên trang"); continue; }
+      if (open === "bubble") { openBubble(t, ""); const a = $("ba"); a.className = "ans";
+        a.innerHTML = "<div>Khối Marketing, AOPR: 14,0. Câu trả lời mẫu dài vừa phải.</div>"; a.appendChild(chips([["Cả dòng Khối Marketing", () => 0], ["Nghe lại đoạn Clicky nói về số này", () => 0]])); }
       n++; frame(t); await wait();
-      const where = name + (open ? ", khi mở bảng hỏi" : "");
+      const where = name + (open === true ? ", khi mở bảng hỏi" : open ? ", khi hỏi tại chỗ" : "");
+      if (open === "bubble") { const q = rect($("bub"));
+        if (hit(q, rect(t)) && rect(t).height < innerHeight * 0.6) problems.push(where + ": khung hỏi tại chỗ che chính chỗ đang hỏi");
+        if (q.top < 0 || q.bottom > innerHeight || q.left < 0 || q.right > innerWidth) problems.push(where + ": khung hỏi tại chỗ ra ngoài màn hình");
+        if (hit(q, rect($("bar")))) problems.push(where + ": khung hỏi tại chỗ đè lên thanh Clicky"); }
       const r = rect(t), b = rect(frames[0].box), small = r.height < innerHeight * 0.6;
       if (b.left > r.left + 1 || b.top > r.top + 1 || b.right < r.right - 1 || b.bottom < r.bottom - 1) problems.push(where + ": khung lệch khỏi chỗ cần khoanh");
       if (small && (r.top < 0 || r.bottom > innerHeight)) problems.push(where + ": số nằm ngoài màn hình");
@@ -378,7 +529,7 @@ window.__clickyKiemHinh = async function () {
         if (hit(h, r) || numberRects(r).some(q => hit(h, q))) problems.push(where + ": nón lá đè lên số"); }
     }
   }
-  $("panel").classList.add("hidden"); clearFrames(); FAST = false; hat.style.transition = moving;
+  $("panel").classList.add("hidden"); closeBubble(); clearFrames(); FAST = false; hat.style.transition = moving;
   return {checked: n, problems, size: innerWidth + "x" + innerHeight};
 };
 })();

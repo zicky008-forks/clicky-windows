@@ -38,7 +38,7 @@ from typing import Callable, Optional
 
 import yaml
 
-from present import tri_nho
+from present import doc_tai_chinh, tri_nho
 from present.goi_html import PackError, audio_mime, offline_voice, wav_to_mp3
 
 VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track",
@@ -384,11 +384,43 @@ def make_record(script: dict, root: Node, meta: dict) -> dict:
 
 # --- building ----------------------------------------------------------------------------------------
 
-def for_voice(text: str) -> str:
-    """Words a voice reads better; captions keep the report's own text."""
-    text = re.sub(r"(?<=\w)\s*/\s*(?=năm|tháng|quý|người|ngày)", " mỗi ", text)
-    text = re.sub(r"(?<=\w)\s*/\s*(?=\w)", " trên ", text)
-    return text.replace("&", " và ").replace("–", " đến ")
+PAUSE_PIECE, PAUSE_SENTENCE, LEAD = 0.3, 0.65, 0.5    # seconds: a breath, a full stop, frame before the words
+
+
+def _wav(data: bytes):
+    import io
+    import wave
+    with wave.open(io.BytesIO(data)) as w:
+        return w.getparams(), w.readframes(w.getnframes())
+
+
+def voice_lines(sentences: list, say: Callable[[str], bytes]) -> tuple:
+    """Voice each sentence piece by piece, the way a person reads a report: a short breath inside a long
+    sentence, a longer pause between sentences. Returns (wav bytes, start second of each sentence).
+    A voice that does not return WAV (tests) gives one clip and no timings."""
+    import io
+    import wave
+    params, frames, starts, t = None, [], [], 0.0
+    for k, sentence in enumerate(sentences):
+        starts.append(round(t, 3))
+        parts = doc_tai_chinh.pieces(sentence) or [sentence]
+        for j, piece in enumerate(parts):
+            data = say(doc_tai_chinh.doc(piece))
+            if not data.startswith(b"RIFF"):
+                return b"".join(say(doc_tai_chinh.doc(x)) for x in sentences), None
+            pr, fr = _wav(data)
+            params = params or pr
+            rate, width = params.framerate, params.sampwidth * params.nchannels
+            frames.append(fr)
+            t += len(fr) / width / rate
+            gap = PAUSE_PIECE if j < len(parts) - 1 else (PAUSE_SENTENCE if k < len(sentences) - 1 else 0.2)
+            frames.append(b"\0" * (int(rate * gap) * width))
+            t += gap
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setparams(params)
+        w.writeframes(b"".join(frames))
+    return out.getvalue(), starts
 
 
 def scenes_from_script(script: dict, known: set) -> list:
@@ -401,12 +433,7 @@ def scenes_from_script(script: dict, known: set) -> list:
             if c.get("chi") and c["chi"] not in known:
                 raise PackError(f"Kịch bản trỏ tới '{c['chi']}' nhưng báo cáo không còn chỗ đó. Hãy soạn lại kịch bản.")
         text = " ".join(str(c["noi"]).strip() for c in lines)
-        points, pos = [], 0
-        for c in lines:
-            if c.get("chi"):
-                points.append({"id": c["chi"], "at": round(pos / max(1, len(text)), 3)})
-            pos += len(str(c["noi"]).strip()) + 1
-        scenes.append({"title": s.get("muc", ""), "line": text, "points": points,
+        scenes.append({"title": s.get("muc", ""), "line": text, "chi": [c.get("chi") or "" for c in lines],
                        "sentences": [str(c["noi"]).strip() for c in lines]})
     if not scenes:
         raise PackError("Kịch bản không có câu nào để nói.")
@@ -506,21 +533,36 @@ def build(report: str, out: Optional[str] = None, owner: str = "anh Tuấn", con
     say = voice or offline_voice()
     cache: dict = {}
 
-    def clip(text):
-        if text not in cache:
-            mp3, secs = wav_to_mp3(say(for_voice(text)))
-            cache[text] = {"audio": base64.b64encode(mp3).decode("ascii"), "secs": secs, "mime": audio_mime(mp3)}
-        return cache[text]
+    def clip(text, sentences=None):
+        key = "\n".join(sentences) if sentences else text
+        if key not in cache:
+            wav, starts = voice_lines(sentences or [text], say)
+            mp3, secs = wav_to_mp3(wav)
+            if starts is None:                     # no timings from the voice: spread by length
+                total, starts, pos = sum(len(x) + 1 for x in (sentences or [text])), [], 0
+                for x in (sentences or [text]):
+                    starts.append(round(pos / max(1, total) * secs, 3))
+                    pos += len(x) + 1
+            cache[key] = {"audio": base64.b64encode(mp3).decode("ascii"), "secs": secs, "mime": audio_mime(mp3),
+                          "starts": starts}
+        return cache[key]
+
+    def timed(s):
+        c = clip(None, s["sentences"])
+        # the frame appears just before Clicky says the sentence, never after
+        s["points"] = [{"id": chi, "t": max(0.0, round(c["starts"][k] - LEAD, 3))}
+                       for k, chi in enumerate(s.pop("chi")) if chi]
+        return c
 
     for s in scenes:
-        s.update(clip(s["line"]))
+        s.update(timed(s))
     fallback = f"Câu này em chưa tìm thấy trong báo cáo. Em ghi lại để {owner} trả lời anh chị."
     meta["minutes"] = round(sum(s["secs"] + 0.8 for s in scenes) / 60, 1)
     meta["pack_id"] = meta["report_sha256"][:16]
     meta["record"] = dict(record["tong"], ma=record["ma_bam"][:12])
     data = {"meta": meta, "scenes": scenes,
             "cards": [{"id": it.node.attrs["data-clicky"], "text": it.text} for it in items if it.kind == "card"],
-            "fallback": fallback, "fallback_clip": clip(fallback),
+            "fallback": fallback, "fallback_clip": clip(fallback), "aliases": doc_tai_chinh.aliases(),
             "bank": [dict(clip(f"{owner[:1].upper() + owner[1:]} trả lời: {_sentence(b['tra_loi'])}"),
                           q=b["cau"], a=b["tra_loi"], ngay=b["ngay"]) for b in bank]}
     page = inject(tagged, data, record)
