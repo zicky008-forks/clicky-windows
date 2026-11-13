@@ -2,6 +2,7 @@
 import json
 import datetime as dt
 import re
+import sys
 import shutil
 from pathlib import Path
 
@@ -1395,3 +1396,25 @@ def test_a_real_mixed_mark_stop_says_which_figures_and_where():
         clicky_html.number_marks(["Doanh thu 672,7 tỷ, tăng 12,6%", "Chi phí 5,3 tỷ", "Hệ số vòng quay 1.5 lần"])
     msg = str(e.value)
     assert "3 số kiểu Việt" in msg and "1 số kiểu Anh" in msg and "«1.5» (chỗ «Hệ số vòng quay 1.5 lần»)" in msg
+
+
+def test_the_launcher_shows_each_step_while_it_works_then_only_three_lines(report, tmp_path, monkeypatch):
+    # real-report run 2026-11-13: a blank black window for minutes looked like a hang
+    import io
+
+    class Console(io.StringIO):
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(clicky_html, "build", BUILD)
+    monkeypatch.setattr(clicky_html, "offline_voice", lambda: voice)
+    monkeypatch.setenv("CLICKY_TRI_NHO", str(tmp_path / "nho"))
+    clicky_html.tri_nho.save_owner("anh Tuấn", "tuan@congty.vn", str(tmp_path / "nho"))
+    console = Console()
+    monkeypatch.setattr(sys, "stdout", console)
+    assert clicky_html.run_drop([str(report)], cmdline="", opener=lambda p: None, look=False) == 0
+    shown = console.getvalue()
+    assert "đừng tắt cửa sổ" in shown and "Đang đọc giọng: đoạn 1/" in shown and "Đang kiểm lại từng con số" in shown
+    lines = shown.rsplit("\r", 1)[1].strip().splitlines()      # what stays on screen after the last step is wiped
+    assert len(lines) == 3 and lines[0].startswith("ĐẠT")
+    assert clicky_html.progress is clicky_html._quiet               # the next build in this process is silent

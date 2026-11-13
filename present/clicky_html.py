@@ -2661,10 +2661,18 @@ def _first_caption(root) -> str:
     return ""
 
 
+def _quiet(text: str) -> None:
+    pass
+
+
+progress: Callable[[str], None] = _quiet       # the launcher shows each step on one line while the build runs
+
+
 @in_vn_marks
 def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, contact: Optional[str] = None,
           script_path: Optional[str] = None, label: str = "",
           voice: Optional[Callable[[str], bytes]] = None, memory: Optional[str] = None) -> dict:
+    progress("Đang đọc báo cáo và soạn lời trình bày…")
     owner = re.sub(r"\s+", " ", owner or "").strip()
     contact = (contact or "").strip()
     if not owner:
@@ -2887,9 +2895,12 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     say = voice or offline_voice()
     cache: dict = {}
     spelled: set = set()                       # words the voice had to spell letter by letter
+    clips = [0, len(scenes) + 1 + len(bank)]   # done, all: what the launcher shows while the voice reads
 
     def audio(text, sentences=None):
         key = "\n".join(sentences) if sentences else text
+        clips[0] += 1
+        progress(f"Đang đọc giọng: đoạn {min(clips[0], clips[1])}/{clips[1]}…")
         if key not in cache:
             info: dict = {}
             wav, starts = voice_lines([for_voice(x, en) for x in (sentences or [text])], say, en, info=info)
@@ -3046,6 +3057,16 @@ def run_drop(argv=None, cmdline: Optional[str] = None, ask=input, opener=None, l
               f"khi em hỏi (hoặc điền file {tri_nho.folder(mem) / tri_nho.CHU}).\nFile: chưa có.")
         return 1
     log, console = io.StringIO(), sys.stdout
+    live = bool(getattr(console, "isatty", lambda: False)())
+
+    def show(text):                         # one line that each step overwrites; gone before the three lines
+        if live:
+            console.write("\r" + text[:78].ljust(78))
+            console.flush()
+
+    global progress
+    progress = show
+    show("Clicky đang làm, anh chờ vài phút và đừng tắt cửa sổ này…")
     log.write(f"Clicky {dt.datetime.now():%d/%m/%Y %H:%M}\nBáo cáo: {src}\nTrí nhớ: {tri_nho.folder(mem)}\n"
               f"Người chịu trách nhiệm: {name} <{mail}>\n\n")
 
@@ -3059,6 +3080,10 @@ def run_drop(argv=None, cmdline: Optional[str] = None, ask=input, opener=None, l
             saved = False
         if not saved:
             lines = lines[:-1] + [lines[-1] + " (không ghi được nhật ký)"] if lines[-1].startswith("Nhật ký") else lines
+        global progress
+        progress = _quiet
+        if live:
+            console.write("\r" + " " * 78 + "\r")
         print("\n".join(lines), file=console)
         return code
 
@@ -3087,6 +3112,7 @@ def run_drop(argv=None, cmdline: Optional[str] = None, ask=input, opener=None, l
         if extra:
             print(extra)
         from present import kiem_bien_ban
+        show("Đang kiểm lại từng con số với báo cáo…")
         res = kiem_bien_ban.verify(str(work), str(src))
         if not res["ok"]:
             return fail("Kiểm lại biên bản: " + "; ".join(res["errors"]))
@@ -3094,6 +3120,7 @@ def run_drop(argv=None, cmdline: Optional[str] = None, ask=input, opener=None, l
         seen = "chưa kiểm hình"
         if look:
             from present import kiem_hinh
+            show("Đang mở thử bản trình bày để kiểm từng màn hình…")
             code = kiem_hinh.main([str(work)] + (["--tri-nho", mem] if mem else []))
             if code == 1:
                 return fail("Kiểm hình: Clicky che số hoặc khoanh sai chỗ trên một số màn hình (xem nhật ký).")
