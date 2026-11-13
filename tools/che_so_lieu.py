@@ -31,6 +31,8 @@ NUM_ARRAY = re.compile(r"\[\s*-?\d[\d.,\s\-eE+]*\]")
 KEY_NUMBER = re.compile(r"""((?:["'][^"'\n]{1,60}["']|\b[A-Za-z_À-ỹ][\wÀ-ỹ]*)\s*:\s*-?)(\d+(?:\.\d+)?)(?![\w.])""")
 LIBRARY = re.compile(r"/\*!|@license|Copyright|Chart\.js|echarts|plotly|Highcharts|jQuery|d3js\.org|d3\.js", re.I)
 LONG_STRING = re.compile(r'"(?:[^"\\\n]|\\.){200,}"|' + r"'(?:[^'\\\n]|\\.){200,}'|`(?:[^`\\]|\\.){200,}`", re.S)
+YEAR = re.compile(r"20(1[5-9]|2\d|3[0-5])")                    # a period, not a figure: 2015 to 2035 only
+CODE_FIGURE = re.compile(r"(?<![\w.#$\\])(?:\d+\.\d+|\d{4,})(?![\w])")
 DATA_NUM = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w])")     # in CSV a comma separates fields
 ENC = re.compile(rb"""<meta[^>]+charset=["']?([\w-]+)""", re.I)
 
@@ -86,27 +88,42 @@ class Masker:
         return NUM.sub(sub, t)
 
     def script(self, js: str) -> str:
-        fig = lambda n: self.figure(n.group(0))
-        out = NUM_ARRAY.sub(lambda m: re.sub(r"\d+(?:\.\d+)?", fig, m.group(0)), js)
-        head = out[:out.find(">") + 1]
-        if re.search(r"""type\s*=\s*["']?application/(?:ld\+)?json""", head, re.I):
-            return head + re.sub(r"(?<![\w.])\d+(?:\.\d+)?(?![\w])", fig, out[len(head):])   # data only: every number
-        if LIBRARY.search(out[:400]):
-            return out                                            # a bundled chart library: code, no report data
-        # data kept as text, CSV or JSON in a long string (window.DATA = {"t": "cột,cột\n...,12.5,..."}): every number
-        out = LONG_STRING.sub(lambda m: self.data_text(m.group(0)), out)
-        # data written as objects: {value: 186.4}, "doanh_thu": 412580 (a key, then a number)
-        return KEY_NUMBER.sub(lambda m: m.group(1) + self.figure(m.group(2)), out)
+        """Every figure of a script is found on the original text by each rule below, then masked once."""
+        spans: dict = {}
 
-    def data_text(self, t: str) -> str:
-        """A CSV or JSON text: every figure masked; years and ISO dates (2026-10-31) kept, so periods still match."""
-        def sub(m):
-            s = m.group(0)
-            if re.fullmatch(r"(19|20)\d\d", s) or re.fullmatch(r"\d\d", s) and \
-                    re.search(r"(19|20)\d\d-(\d\d-)?$", t[max(0, m.start() - 8):m.start()]):
-                return s
-            return self.figure(s)
-        return DATA_NUM.sub(sub, t)
+        def add(a, b):
+            spans.setdefault(a, b)
+
+        for m in NUM_ARRAY.finditer(js):                      # chart data as arrays: [148, 162, 186.4]
+            for n in re.finditer(r"\d+(?:\.\d+)?", m.group(0)):
+                add(m.start() + n.start(), m.start() + n.end())
+        head = js[:js.find(">") + 1]
+        if re.search(r"""type\s*=\s*["']?application/(?:ld\+)?json""", head, re.I):
+            for n in re.finditer(r"(?<![\w.])\d+(?:\.\d+)?(?![\w])", js[len(head):]):   # data only: every number
+                add(len(head) + n.start(), len(head) + n.end())
+        elif not LIBRARY.search(js[:400]):                    # a bundled chart library is code, no report data
+            # data kept as text, CSV or JSON in a long string (window.DATA = {"t": "cột,cột\n...,12.5,..."})
+            for m in LONG_STRING.finditer(js):
+                t = m.group(0)
+                for n in DATA_NUM.finditer(t):
+                    s = n.group(0)
+                    if not (YEAR.fullmatch(s) or re.fullmatch(r"\d\d", s) and
+                            re.search(r"(19|20)\d\d-(\d\d-)?$", t[max(0, n.start() - 8):n.start()])):
+                        add(m.start() + n.start(), m.start() + n.end())   # years and ISO date parts stay
+            for m in KEY_NUMBER.finditer(js):                 # data as objects: {value: 186.4}, "doanh_thu": 412580
+                add(m.start(2), m.end(2))
+            # figures typed into chart code (a target line at 672.7, a total of 41258): decimals and 4+ digits.
+            # Small whole numbers are sizes, margins and indexes: kept, so the charts keep their layout.
+            for m in CODE_FIGURE.finditer(js):
+                if not YEAR.fullmatch(m.group(0)):
+                    add(m.start(), m.end())
+        out, pos = [], 0
+        for a in sorted(spans):
+            if a < pos:
+                continue
+            out += [js[pos:a], self.figure(js[a:spans[a]])]
+            pos = spans[a]
+        return "".join(out) + js[pos:]
 
 
 def mask(html: str, swaps: dict, seed=None) -> tuple:
@@ -153,7 +170,7 @@ def leftovers(real: str, masked: str) -> int:
         have = {x for x in a if len(re.sub(r"\D", "", x)) >= 5}
         return sum(1 for x in b if x in have)
     return sum(1 for x, y in zip(a, b) if x == y and len(re.sub(r"\D", "", x).lstrip("0")) >= 3
-               and not re.fullmatch(r"(19|20)\d\d", x))
+               and not YEAR.fullmatch(x))
 
 
 def main(argv=None) -> int:

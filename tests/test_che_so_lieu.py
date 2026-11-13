@@ -56,3 +56,12 @@ def test_data_kept_as_csv_text_in_a_script_is_masked_and_the_copy_is_audited():
     assert "41258.5" not in out and "2026-10" in out and "Khối 7" in out
     assert che_so_lieu.leftovers(page, out) <= 2                     # made-up digits can match by chance
     assert che_so_lieu.leftovers(page, page) > 30
+
+
+def test_figures_typed_into_chart_code_are_masked_but_sizes_stay():
+    page = ("<script>(() => { const m = {t: 20, r: 30}; const w = 960, h = 320;"
+            " g.append('line').attr('y', y(672.7)); total(41258); color('#1f77b4'); ky(2026); })();</script>")
+    out, _, _ = che_so_lieu.mask(page, {}, seed=2)
+    assert "672.7" not in out and "41258" not in out
+    for kept in ("w = 960", "h = 320", "#1f77b4", "ky(2026)"):
+        assert kept in out, kept
