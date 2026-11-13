@@ -81,7 +81,7 @@ def _why_not(page, errors, blocked=()) -> str:
 
 
 def check(packed: str, sizes=SIZES, timeout_ms: int = 60000, questions: Optional[list] = None,
-          phone: Optional[tuple] = PHONE) -> dict:
+          phone: Optional[tuple] = PHONE, soi: Optional[list] = None) -> dict:
     """Return {"ok", "skipped", "checked", "problems", "sizes", "cau"}; skipped=True when no browser could run.
     questions: the bosses' usual questions; "cau" says for each whether this report can answer it. They are
     passed to the page only inside this check and are never written into the file."""
@@ -131,7 +131,11 @@ def check(packed: str, sizes=SIZES, timeout_ms: int = 60000, questions: Optional
                     problems += [f"điện thoại {res['size']}: {p}" for p in res["problems"]]
                     done.append(res["size"] + " (điện thoại)")
                 else:
+                    if soi is not None:
+                        page.evaluate("window.__clickySoi = true")
                     res = page.evaluate("window.__clickyKiemHinh()")
+                    if soi is not None:
+                        soi += res.get("soi") or []
                     checked += res["checked"]
                     problems += [f"màn {res['size']}: {p}" for p in res["problems"]]
                     done.append(res["size"])

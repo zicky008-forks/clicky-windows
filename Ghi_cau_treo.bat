@@ -6,7 +6,7 @@ chcp 65001 >nul
 setlocal
 set PYTHONIOENCODING=utf-8
 cd /d "%~dp0"
-call tim_python.bat || (pause & exit /b 1)
+call "%~dp0tim_python.bat" || (pause & exit /b 1)
 call :tim_tri_nho
 echo Trí nhớ của Clicky: "%CLICKY_TRI_NHO%"
 if "%~1"=="" (%PY% -m present.tri_nho --thu-muc "%CLICKY_TRI_NHO%" ghi) else (%PY% -m present.tri_nho --thu-muc "%CLICKY_TRI_NHO%" ghi "%~f1")

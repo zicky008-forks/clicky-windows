@@ -2107,7 +2107,16 @@ window.__clickyKiemHinh = async function () {
   tables().forEach(m => m.rows.forEach(row => { const c = numCols(m, row)[0]; if (c !== undefined) cells.push(row.cells[c]); }));
   const list = [...targets].map(([id, why]) => ({t: el(id), name: id + " (" + why + ")"}))
     .concat(cells.slice(0, 40).map(c => ({t: c, name: (c.closest("tr,[role=row]") && c.closest("tr,[role=row]").getAttribute("data-clicky") || "") + " ô " + (c.cellIndex ?? "") + " «" + cellText(c) + "»"})));
-  const problems = []; let n = 0;
+  const problems = [], soi = []; let n = 0;
+  // window.__clickySoi (tools/soi_hinh.py on the owner's PC): where each problem sits, as pixels and tags only, never text
+  const R4 = q => q ? [q.top, q.bottom, q.left, q.right].map(Math.round) : null;
+  const tagOf = q => { const e = document.elementFromPoint((q.left + q.right) / 2, (q.top + q.bottom) / 2); return e ? e.tagName.toLowerCase() + (e.className && typeof e.className === "string" ? "." + e.className.split(/\s+/)[0] : "") : "-"; };
+  const note = (t, kind) => { if (!window.__clickySoi) return;
+    const cr = lead.style.display !== "none" && lead._pts ? leaderCrosses(lead._pts, rect(t), t) : [];
+    const fresh = isOpen($("bub")) ? leaderPath(rect(t), rect($("bub")), vp()) : null;
+    soi.push({kind, size: Math.round(v.w) + "x" + Math.round(v.h), tag: t.tagName.toLowerCase(), id: t.getAttribute("data-clicky") || "", col: t.cellIndex ?? "",
+      place: R4(rect(t)), bub: isOpen($("bub")) ? R4(rect($("bub"))) : null, sheet: $("bub").classList.contains("sheet"), panel: isOpen($("panel")) ? R4(rect($("panel"))) : null,
+      lead: lead.style.display !== "none" ? lead._pts : null, crosses: cr.slice(0, 4).map(q => [R4(q), tagOf(q)]), fresh, sy: Math.round(scrollY), anchorIsPlace: anchor === t}); };
   const v = vp(), b0 = rect($("bar"));
   const barShown = () => { const q = rect($("bar")); if (!host.isConnected || !q.width) return false;   // really on screen and on top
     const e = document.elementFromPoint(Math.min(v.x + v.w - 2, (q.left + q.right) / 2), Math.min(v.y + v.h - 2, (q.top + q.bottom) / 2)); return e === host; };
@@ -2128,7 +2137,7 @@ window.__clickyKiemHinh = async function () {
         if (q.top < v.y - 1 || q.bottom > v.y + v.h + 1 || q.left < v.x - 1 || q.right > v.x + v.w + 1) problems.push(where + ": " + what + " ra ngoài màn hình");
         if (open === "bubble" && hit(q, rect($("bar")))) problems.push(where + ": khung hỏi tại chỗ đè lên thanh Clicky");
         if (small && gd.some(g => hit(g, q))) problems.push(where + ": " + what + " che tên dòng hoặc tiêu đề cột của số");
-        if (open === "bubble" && lead.style.display !== "none" && lead._pts && leaderCrosses(lead._pts, r, t).length) problems.push(where + ": đường chỉ dẫn cắt qua chữ hoặc số của trang");
+        if (open === "bubble" && lead.style.display !== "none" && lead._pts && leaderCrosses(lead._pts, r, t).length) { problems.push(where + ": đường chỉ dẫn cắt qua chữ hoặc số của trang"); note(t, "đường chỉ dẫn"); }
         if (open === "bubble" && small && !$("bub").classList.contains("sheet") && guards(t).table.some(g => hit(g, q))) problems.push(where + ": khung hỏi tại chỗ che tiêu đề bảng của chính số đó"); }
       const f = frames[0] && frames[0].box.style.display !== "none" ? rect(frames[0].box) : null, sr = seen(t);
       if (!f || !sr || f.left > sr.left + 4 || f.top > sr.top + 1 || f.right < sr.right - 4 || f.bottom < sr.bottom - 1) problems.push(where + ": khung lệch khỏi chỗ cần khoanh");   // 3px: a frame at the screen's edge sits on the cell's own edge
@@ -2160,7 +2169,7 @@ window.__clickyKiemHinh = async function () {
   }
   closePanel(); closeBubble(); clearFrames(); FAST = false;
   if (!barShown()) problems.push("thanh Clicky không hiện sau khi kiểm (bị gỡ hoặc bị che)");
-  return {checked: n, problems: [...new Set(problems)], size: Math.round(v.w) + "x" + Math.round(v.h)};
+  return {checked: n, problems: [...new Set(problems)], size: Math.round(v.w) + "x" + Math.round(v.h), soi};
 };
 window.__clickyKiemDienThoai = async function () {   // on a phone: the bar, the panel and a bubble stay on the screen
   const wait = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));

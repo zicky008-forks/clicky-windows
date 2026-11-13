@@ -28,7 +28,9 @@ def test_launchers_never_call_the_store_python_shortcut():
     # every launcher finds a real one first (tim_python.bat) and runs it as %PY%
     for name in BATS[:3]:
         text = (ROOT / name).read_text(encoding="utf-8")
-        assert "call tim_python.bat" in text.split("%PY%")[0], name
+        # by its full path: with NoDefaultCurrentDirectoryInExePath set (some company PCs, Claude's own shell),
+        # cmd does not run a .bat from the current folder by bare name (real run 2026-11-14)
+        assert 'call "%~dp0tim_python.bat"' in text.split("%PY%")[0], name
         bare = [l for l in text.splitlines() if re.search(r"(^|[\s(])python(\.exe)?\s+(-m|tools)", l.strip())]
         assert not bare, (name, bare)
     finder = (ROOT / "tim_python.bat").read_text(encoding="utf-8")

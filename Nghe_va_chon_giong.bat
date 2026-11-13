@@ -6,7 +6,7 @@ setlocal
 set CLICKY_LOCAL_ONLY=1
 set PYTHONIOENCODING=utf-8
 cd /d "%~dp0"
-call tim_python.bat || (pause & exit /b 1)
+call "%~dp0tim_python.bat" || (pause & exit /b 1)
 if not exist "%LOCALAPPDATA%\Clicky\voice\tts-piper-vi\tokens.txt" if not exist "voice\tts-piper-vi\tokens.txt" (
   echo Tải giọng Piper (khoảng 60 MB^)...
   %PY% tools\giong_noi\tai_model.py --model piper-vais1000 --out "%LOCALAPPDATA%\Clicky\voice\tts-piper-vi"

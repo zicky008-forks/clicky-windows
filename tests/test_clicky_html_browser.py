@@ -1590,3 +1590,19 @@ def test_frames_on_an_app_dashboard_clear_its_sticky_tabs_its_boxes_and_its_them
     if res["skipped"]:
         pytest.skip(res["reason"])
     assert res["ok"], kiem_hinh.kinds(res["problems"], top=10)
+
+
+def test_the_geometry_only_screen_check_leaves_nothing_behind(tmp_path, capsys):
+    # tools/soi_hinh.py runs on the owner's PC on a real report: it builds in a temp folder, prints pixels and tags
+    # only, and writes nothing next to the report
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+    import soi_hinh
+    src = tmp_path / "bc.html"
+    src.write_text(_app_dashboard(), encoding="utf-8")
+    code = soi_hinh.main([str(src)])
+    out = capsys.readouterr().out
+    if "playwright" in out and "Kiểm hình" not in out:
+        pytest.skip("no browser")
+    assert code == 0 and "Kiểm hình: 0 chỗ chưa ổn." in out
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["bc.html"]
+    assert "672,7" not in out

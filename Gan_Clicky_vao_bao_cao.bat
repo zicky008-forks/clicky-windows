@@ -16,7 +16,7 @@ chcp 65001 >nul
 set CLICKY_LOCAL_ONLY=1
 set PYTHONIOENCODING=utf-8
 cd /d "%~dp0"
-call tim_python.bat || (set "CODE=1" & goto :ra)
+call "%~dp0tim_python.bat" || (set "CODE=1" & goto :ra)
 call :tim_tri_nho
 if not defined CLICKY_TU_DOC set "CLICKY_TU_DOC=%CLICKY_TRI_NHO%\TU_DOC.txt"
 if exist giong_chon.txt set /p CLICKY_GIONG=<giong_chon.txt

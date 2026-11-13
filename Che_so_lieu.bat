@@ -6,7 +6,7 @@ chcp 65001 >nul
 setlocal
 set PYTHONIOENCODING=utf-8
 cd /d "%~dp0"
-call tim_python.bat || (pause & exit /b 1)
+call "%~dp0tim_python.bat" || (pause & exit /b 1)
 if "%~1"=="" (
   echo Hãy kéo thả file báo cáo .html vào biểu tượng này.
   pause
