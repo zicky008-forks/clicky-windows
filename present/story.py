@@ -558,8 +558,9 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             table_says = got and C.value(got[0], en) > C.value(rev.tok, en)
         if con_doubt and faster and table_says:
             # the printed rate disagrees with the table: say only what holds under both, the owner picks the rate
-            lines.append(("Mâu thuẫn", Line("Vì sao cần quyết? Vì chi phí đang tăng nhanh hơn doanh thu.", t.total.id,
-                                            vai="mau_thuan")))
+            # revenue's half of the sentence is not in doubt: keep its figure, frame the table's total
+            lines.append(("Mâu thuẫn", Line(f"Vì sao cần quyết? Vì doanh thu chỉ tăng {rev.tok}%, chậm hơn chi phí.",
+                                            t.total.id, vai="mau_thuan", xac_nhan=[rev.tok])))
             lines.append(("Mâu thuẫn", Line(printed.replace("Vì sao cần quyết? ", ""), cid(it), bat=False, vai="mau_thuan")))
             con_doubt["cau"] = [lines[-1][1].noi]
         else:
@@ -728,6 +729,10 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             k["cau"] = list(fl["cau"])
         if fl.get("sai"):
             k["ma_cau"] = fingerprint(fl["sai"])
+            if fl.get("so"):
+                k["ma_so"] = list(fl["so"])
+            if fl.get("tinh"):
+                k["tinh"] = fl["tinh"]
         checks.append(k)
     return {"canh": scenes, "bo_qua": [], "chua_ro": [], "phan_bien": [fl["xem"] for fl in flags], "kieu": "ke_chuyen",
             "kiem_tra": checks, "cho_kiem": [fingerprint(fl["sai"]) for fl in flags if fl.get("sai")]}
@@ -805,9 +810,12 @@ def preflight(items: list, places: dict, t: Table, en: bool, note, cut, owner: s
             printed = C.value(con[1].tok, en)
             k = decimals(con[1].tok, en)
             if not (rounded(min(lo, hi), k) <= printed <= rounded(max(lo, hi), k)):
+                table_pct = say(evaluate(expr, en), 1, en)
                 flags.append({"xem": f"Báo cáo ghi chi phí tăng {con[1].tok}%, nhưng bảng tính ra khoảng "
-                                     f"{say(evaluate(expr, en), 1, en)}%. Công thức: {expr}. Em nói theo số báo cáo ghi "
-                                     f"({con[1].tok}%); anh xem lại hai chỗ này trước khi gửi.",
+                                     f"{table_pct}%. Công thức: {expr}. Em chưa nói con số này; anh chọn: bật câu "
+                                     f"{con[1].tok}% nếu số báo cáo đúng, hoặc sửa báo cáo, rồi ghi ly_do_bo.",
+                              "so": [con[1].tok],
+                              "tinh": f"tính từ bảng {pretty(expr)} ≈ {table_pct}%",
                               "sai": next((x for x in re.split(r"(?<=[.;])\s+", con[0].text) if con[1].tok in x),
                                           con[0].text)})
         except ValueError:
@@ -970,8 +978,10 @@ def facts(script: dict, places: dict, en: bool, owner: str) -> list:
                         "a": f"{said} Em tính từ các số trên báo cáo: {formula_text(tok, expr, en)}.",
                         "noi": f"{said} Công thức em hiện trên màn hình ạ.", "chi": c.get("chi") or "", "tu": [i],
                         "tok": tok, "cong_thuc": expr})
+    has = {c.get("vai") for _i, c in lines}
     for k, beats in BEATS.items():
         used = [(i, c) for i, c in lines if c.get("vai") in beats]
+        pats = INTENT[k] + (INTENT["neu_giu"] if k == "neu_hut" and "neu_giu" not in has else [])
         if k == "hoi" and any(str(c["noi"]).startswith("Một là") for _i, c in used):
             used = used[next(j for j, (_i, c) in enumerate(used) if str(c["noi"]).startswith("Một là")):]
         if not used:
@@ -980,7 +990,7 @@ def facts(script: dict, places: dict, en: bool, owner: str) -> list:
         if k == "ai":
             said += f" Nội dung do {owner} soạn; em không tự đặt số, số nào em tính đều kèm công thức."
         x = [] if k in ANY_SCOPE else [n for n in names if n not in jfold(said)]
-        out.append({"k": k, "y": INTENT[k], "n": NOT.get(k, ""), "x": x, "a": said, "noi": said,
+        out.append({"k": k, "y": pats, "n": NOT.get(k, "") if k != "neu_hut" else "", "x": x, "a": said, "noi": said,
                     "chi": next((c.get("chi") for _i, c in used if c.get("chi")), ""), "tu": [i for i, _c in used]})
     return out
 

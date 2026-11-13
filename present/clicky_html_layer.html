@@ -1461,6 +1461,7 @@ function resolve(q, scope) {
     if (key) return {kind: "define", term: key, says: D.aliases[key], Q};
   }
   { const cd = cardDiff(Q, scope); if (cd) return cd; }
+  { const cc = capCut(Q); if (cc) return cc; }
   { const ft = footing(Q, scope); if (ft) return ft; }
   if (Q.how || Q.cmp) {   // "tính thế nào", "nhanh hơn bao nhiêu": the report's own sentence that holds it
     const hs = howSentence(Q); if (hs) return Object.assign(hs, {Q});
@@ -1716,12 +1717,55 @@ function doubted(text) {   // a report sentence the owner was asked to check: qu
 function quotesDoubted(q) {   // the reader repeats a doubted sentence and asks if it holds: its first five words
   const t = " " + fold(q) + " "; return choKiem().some(x => { const w = x.split(" "); return w.length >= 5 && t.includes(" " + w.slice(0, 5).join(" ") + " "); });
 }
-function asksDoubted(q, scope) {   // "18% đúng không?", or "câu này có đúng không?" on the box that holds it
-  const f = " " + fold(q) + " "; if (!/ (dung khong|co dung|co chac|chac khong|that khong|chinh xac khong|hay) /.test(f)) return false;
-  const list = choKiem(); if (!list.length) return false;
-  if (scope && scope.el && list.some(x => fold(cellText(scope.el)).includes(x.slice(0, 40)))) return true;
-  const figs = (q.match(/\d[\d.,]*\d|\d/g) || []).filter(x => x.length > 1 || /%/.test(q));
-  return figs.some(t => list.some(x => (" " + x + " ").includes(" " + fold(t)) || x.includes(fold(t) + "%") || x.includes(fold(t) + ",0")));
+// every doubted report sentence, open or ruled, found on the page by its fingerprint: {f (folded), s, el, it}
+let NGS = null;
+function nghiSents() {
+  if (NGS && NGS.at === pageText()) return NGS.list;
+  const items = D.nghi || [], by = new Map(items.map(it => [it.ma, it])), list = [];
+  if (items.length) document.querySelectorAll("p,li,dd,blockquote,td,div,span,section,article").forEach(e => { if (mine(e)) return;
+    for (const x of cellText(e).split(/(?<=[.;])\s+/)) { const f = fold(x), it = f.length > 12 && by.get(fnv(f));
+      if (it && !list.some(o => o.f === f)) list.push({f, s: x.trim(), el: e, it}); } });
+  NGS = {at: pageText(), list}; return list;
+}
+const VERIFY = / (dung khong|co dung|co chac|chac khong|that khong|chinh xac khong|co phai|phai khong|dung chua|hay) /;
+function doubtHit(q, scope) {   // the reader asks about a doubted sentence: it quotes it, or asks whether it is right
+  const f = " " + fold(q) + " ", list = nghiSents(); if (!list.length) return null;
+  const quoted = list.find(x => { const w = x.f.split(" "); return w.length >= 5 && f.includes(" " + w.slice(0, 5).join(" ") + " "); });
+  if (quoted) return quoted;
+  if (!VERIFY.test(f)) return null;
+  if (scope && scope.el) { const o = list.find(x => fold(cellText(scope.el)).includes(x.f.slice(0, 40))); if (o) return o; }
+  const figs = (q.match(/\d[\d.,]*\d|\d/g) || []).map(fold);   // only the doubted figure: "doanh thu 8%" stays answerable
+  const byFig = list.find(x => (x.it.so || []).some(t => figs.some(g => fold(t) === g || fold(t).replace(/,0$/, "") === g)));
+  if (byFig) return byFig;
+  const content = x => x.f.split(" ").filter(w => w.length > 1 && !ECHO_NOT.has(w));   // three words in a row of it
+  return list.find(x => { const w = content(x); for (let i = 0; i + 2 < w.length; i++) if (f.includes(" " + w.slice(i, i + 3).join(" ") + " ")) return true; return false; }) || null;
+}
+function answerDoubt(q, o) {
+  const it = o.it, t = it.tinh ? it.tinh.charAt(0).toUpperCase() + it.tinh.slice(1) : "";
+  if (!it.xong) { answer("Báo cáo có viết câu này" + (t ? "; " + it.tinh : "") + ". " + OWNER.charAt(0).toUpperCase() + OWNER.slice(1) + " đang kiểm lại, em chưa trả lời thay ạ.", null, {cls: "park", extra: parkNote(q), src: ""}); return; }
+  answer("Báo cáo ghi: «" + whole(o.s) + "» " + esc(OWNER.charAt(0).toUpperCase() + OWNER.slice(1) + " đã soát câu này" + (it.ly_do ? ": " + it.ly_do.replace(/\.$/, "") : "") + "." + (t ? " Em tính lại: " + it.tinh + "." : "")),
+    o.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"});
+}
+function pctAsk(q) {   // "chi phí tăng bao nhiêu phần trăm" while the printed rate is in doubt: both figures, never one
+  const f = " " + fold(q) + " "; if (!/ (bao nhieu|may) (phan tram|%)| (phan tram|%) (bao nhieu|may)|tang bao nhieu %| gap (bao nhieu|may) lan/.test(f.replace(/(\d)%/g, "$1 %"))) return null;
+  if (/ (chiem|ty trong|phan tang|phan giam|co cau) /.test(f)) return null;   // a share of the change is another question
+  const MOVE = /^(tang|giam|nhanh|cham|hon|bang)$/; const fj = " " + joined(fold(q)) + " ";   // the subject must match ("chi phi"), not the verb every rate shares
+  return nghiSents().find(x => !x.it.xong && (x.it.so || []).length && x.it.tinh && words(x.f).some(w => fj.includes(" " + w + " ") && w.length >= 3 && !ECHO_NOT.has(w) && !MOVE.test(w))) || null;
+}
+function clauseOf(q, o) {   // the undoubted half of a doubted sentence ("doanh thu chỉ tăng 8,0%"), when that is what is asked
+  const parts = o.s.split(/,\s+|\s+(?=trong khi\s)|\s+(?=và\s)/), f = " " + fold(q) + " ";
+  const doubted = (o.it.so || []).map(fold);
+  return parts.find(p => /\d/.test(p) && !doubted.some(t => fold(p).includes(t)) && words(fold(p)).some(w => w.length > 3 && !ECHO_NOT.has(w) && f.includes(" " + w + " "))) || null;
+}
+function capCut(Q) {   // "phải cắt bao nhiêu" when the cap is only in an ask: the table's total minus it, worked out
+  if (!/\b(cat|giam) (bao nhieu|may|di bao nhieu)\b|\b(phai|can) (cat|giam)\b/.test(Q.f)) return null;
+  if (allCards().some(c => /\b(giam|cat)\b/.test(fold(c.text.split(":")[0])))) return null;   // a printed cut answers itself
+  for (const t of QUYET) { const m = t.match(/trần[^0-9;]*?(\d[\d.,]*)\s*(tỷ|triệu)?/i); if (!m) continue;
+    for (const tb of tables()) { const tot = tb.rows.find(r => r.total), v = valueCol(Q, tb); if (!tot || v < 0 || !tot.cells[v]) continue;
+      const a = decimal(cellText(tot.cells[v]), tb.en), b = decimal(m[1], tb.en); if (!a || !b) continue;
+      const D = Math.max(a.d, b.d), x = a.n * 10 ** (D - a.d) - b.n * 10 ** (D - b.d); if (x <= 0) continue;
+      return {kind: "capcut", m: tb, tot, v, cap: m[1], u: m[2] || colUnit(tb, v), x: vn(x, D), Q}; } }
+  return null;
 }
 let NGHI = false;
 function frameTarget(t) {   // a box holding a doubted sentence: the sentence with the figures, never the doubted one
@@ -1754,21 +1798,100 @@ function markDoubted() {   // a box holding a doubted sentence: each sentence it
     }
   }
 }
+function asksDoubted(q, scope) { const o = doubtHit(q, scope); return !!(o && !o.it.xong); }
 function holdDoubted(q) { answer("Báo cáo có viết câu này; " + OWNER + " đang kiểm lại, em chưa trả lời thay ạ.", null, {cls: "park", extra: parkNote(q), src: ""}); }
-function figureAsk(q) {   // "6,7% nghĩa là gì?": the one card or cell that prints that very figure
-  if (!/\b(nghia la gi|la gi|la so gi|noi len gi|y nghia)\b/.test(fold(q))) return false;   // "tính thế nào" is the report's own sentence
-  for (const tok of (q.match(/\d[\d.,]*\d%?|\d%?/g) || [])) {
-    const t = tok.replace(/%$/, ""), re = new RegExp("(^|[^\\d.,])" + t.replace(/[.,]/g, "\\$&") + "(?![\\d]|[.,]\\d)");
-    const cards = allCards().filter(c => re.test(c.text) && (!/%$/.test(tok) || c.text.includes(tok)));
-    const cells = []; tables().forEach(m => m.rows.forEach(row => numCols(m, row).forEach(c => { const v = cellText(row.cells[c]).replace(/%$/, ""); if (v === t) cells.push({m, row, c}); })));
-    if (cards.length === 1 && !cells.length) { answer(cards[0].text.replace(/\.?$/, "."), cards[0].el); return true; }
-    if (cells.length === 1 && !cards.length) { rowAnswer(cells[0].m, cells[0].row, cells[0].c); return true; }
+function spokenWith(toks) {   // an approved line of the talk that says this figure ("1,8 lần", worked out with its formula)
+  const hit = f => toks.some(tok => { const t = tok.replace(/%$/, ""); return new RegExp("(^|[^\\d.,])" + t.replace(/[.,]/g, "\\$&") + "(?![\\d]|[.,]\\d)").test(f.a || ""); });
+  return FACTS.find(f => f.k === "t" && hit(f)) || FACTS.find(hit) || null;
+}
+function figureAsk(q) {   // "6,7% nghĩa là gì?", "6,4% là sao?": the one tile, cell or sentence that prints that very figure
+  if (!/\b(nghia la gi|la gi|la so gi|noi len gi|y nghia|la sao|o dau ra|dau ra)\b/.test(fold(q))) return false;   // "tính thế nào" is the report's own sentence
+  const toks = q.match(/\d[\d.,]*\d%?|\d%?/g) || []; if (!toks.length) return false;
+  for (const tok of toks) {
+    const pl = placesOf(tok);
+    if (pl.cards.length === 1 && !pl.cells.length) { answer(pl.cards[0].text.replace(/\.?$/, "."), pl.cards[0].el); return true; }
+    if (pl.cells.length === 1 && !pl.cards.length) { checkAnswer(q, pl.cells[0].m, pl.cells[0].row, pl.cells[0].c); return true; }
+    if (!pl.cells.length && !pl.cards.length && pl.sents.length) { const x = pl.sents[0];
+      answer("Báo cáo ghi: «" + whole(x.s) + "»", x.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"}); return true; }
   }
+  if (toks.every(t => !placesOf(t).n)) {   // a figure the page never prints: the talk's own worked-out line, else said, never explained
+    const sp = spokenWith(toks); if (sp) { answerFact(sp); return true; }
+    const t = toks[0], shown = t;
+    answer("Báo cáo không ghi " + shown + " ở chỗ nào, nên em không giải thích số này.", null, {cls: "park", extra: parkNote(q)}); return true; }
   return false;
+}
+const CHECKQ = / (co dung|dung khong|chuan khong|co chac|chac khong|chinh xac khong|dung chua|co sai|sai khong) /;
+const EXPLAINQ = / (so|con so|o|cau|doan|the) nay (nghia la gi|la gi|la sao|noi gi|the nao) /;
+function cellCheck(m, row, c) {   // a printed figure worked out again from its own row or its own column: agrees, or the gap is said
+  const t = cellText(row.cells[c]), u = colUnit(m, c), dc = deltaCols(m);
+  if (dc.includes(c)) {   // a variance cell: actual − plan of the same row, or that change as a % of plan
+    const money = m.head.map((h, i) => i).filter(i => i >= m.lc && !dc.includes(i) && colUnit(m, i) !== "%" && row.cells[i] && isNum(cellText(row.cells[i])));
+    const absU = dc.map(k => colUnit(m, k)).find(x => x !== "%"), base = money.filter(i => colUnit(m, i) === (u === "%" ? absU : u));
+    if (base.length === 2) {
+      const pct = u === "%", d = diffOf(m, row, base, pct); if (!d) return null;
+      const p = cellText(row.cells[base[0]]), a = cellText(row.cells[base[1]]);
+      const how = pct ? "(" + a + " − " + p + ") ÷ " + p + " × 100 ≈ " + d.s + "%" : a + " − " + p + " = " + withUnit(d.s, u);
+      const got = d.k / 10 ** d.d, want = toNum(t, m.en), ok = want !== null && Math.abs(got - want) < (pct ? 0.051 : 1e-9);
+      return {ok, text: "Em tính lại từ dòng này: " + how + (ok ? ", khớp." : "; báo cáo ghi " + withUnit(t, u) + ", lệch.")};
+    }
+  }
+  if (u === "%") return null;
+  const ft = footing({f: " cong lai "}, {m}), o = ft && ft.out.find(x => x.c === c); if (!o) return null;
+  const un = u ? " " + u : "";
+  return {ok: o.ok, text: "Em cộng " + o.n + " dòng cột " + colName(m, c) + (ft.subs ? " (không tính dòng gộp)" : "") + " ra " + o.sum + un +
+    (o.ok ? ", khớp dòng " + ft.tot.label + " " + o.tot + un + "." : "; dòng " + ft.tot.label + " ghi " + o.tot + un + ", lệch " + o.gap + un + ".")};
+}
+function checkAnswer(q, m, row, c) {
+  const a = cellAnswer(m, row, c), k = cellCheck(m, row, c);
+  if (k && !k.ok) { answer(a.text + " " + k.text + " Em ghi lại để " + OWNER + " kiểm.", a.target, {cls: "park", extra: parkNote(q), src: "Em tính lại từ các số trên báo cáo «" + TITLE + "»"}); return; }
+  answer(a.text + (k ? " " + k.text : " Em chỉ đọc đúng số báo cáo ghi; số này không có phép tính nào trên trang để em đối chiếu."), a.target,
+    {src: k ? "Em tính lại từ các số trên báo cáo «" + TITLE + "»" : "Lấy từ báo cáo «" + TITLE + "»"});
+}
+function placesOf(tok) {   // every place the report prints one figure: cells, tiles, sentences
+  const t = tok.replace(/%$/, ""), pc = /%$/.test(tok), z = /[.,]/.test(t) ? "" : "(?:,0)?";   // "18%" is the printed 18,0%
+  const re = new RegExp("(^|[^\\d.,])" + t.replace(/[.,]/g, "\\$&") + z + (pc ? "\\s?%" : "(?![\\d]|[.,]\\d)"));
+  const same = v => v === t || (z && v === t + ",0");
+  const cells = []; tables().forEach(m => m.rows.forEach(row => numCols(m, row).forEach(c => { const v = cellText(row.cells[c]);
+    if (same(v.replace(/%$/, "")) && (!pc || /%$/.test(v) || colUnit(m, c) === "%")) cells.push({m, row, c}); })));
+  const cards = allCards().filter(c => re.test(c.text));
+  const sents = []; blocks().forEach(b => splitSent(b.text).forEach(x => { if (re.test(x)) sents.push({el: b.el, s: x}); }));
+  return {cells, cards, sents, n: cells.length + cards.length + sents.length};
+}
+function verifyAsk(q, scope) {   // "12,6% có đúng không", "số này nghĩa là gì" on a cell: where it is printed, and the sum behind it
+  const f = " " + fold(q) + " ", check = CHECKQ.test(f), explain = scope && EXPLAINQ.test(f);
+  if (!check && !explain) return false;
+  const toks = q.match(/\d[\d.,]*\d%?|\d%?/g) || [];
+  if (!toks.length) {
+    if (!scope) { if (words(q).filter(w => !ECHO_NOT.has(w) && !/^(dung|chuan|chac|chinh|xac|sai|em|nay|that)$/.test(w)).length) return false;
+      answer("Anh chị bấm vào con số hay câu muốn em kiểm, em chỉ chỗ báo cáo ghi và tính lại cho anh chị xem.", null, {src: ""}); return true; }
+    if (scope.m && scope.row && scope.c >= 0) { checkAnswer(q, scope.m, scope.row, scope.c); return true; }
+    if (scope.card) { const cd = cardDiff({how: true, q: "", f: ""}, {card: scope.card});
+      answer(scope.card.text.replace(/\.?$/, ".") + (cd ? " Em tính lại: " + withUnit(cd.f.v, cd.f.u) + " = " + cd.a.v + " − " + cd.b.v + " (" + cd.a.from + " trừ " + cd.b.from + "), khớp." : ""), scope.card.el,
+        {src: cd ? "Em tính lại từ các số trên báo cáo «" + TITLE + "»" : "Lấy từ báo cáo «" + TITLE + "»"}); return true; }
+    if (scope.el) { const t = cellText(scope.el), figs = (t.match(/\d[\d.,]*\d%?|\d%?/g) || []).slice(0, 3);
+      const also = figs.map(x => { const p = placesOf(x).cells[0]; return p ? x + " có ở bảng: " + rowName(p.row) + ", " + colName(p.m, p.c) : ""; }).filter(Boolean);
+      answer("Đoạn này ghi: «" + whole(t) + "»" + (also.length ? " " + esc(also.join("; ") + ".") : ""), scope.el, {html: true, src: "Trên báo cáo «" + TITLE + "»"}); return true; }
+    return false;
+  }
+  const tok = toks.find(x => placesOf(x).n) || toks[0], pl = placesOf(tok), shown = /%$/.test(tok) ? tok.replace(/%$/, "") + "%" : tok;
+  if (!pl.n) { const sp = spokenWith(toks); if (sp) { answerFact(sp); return true; }
+    answer("Báo cáo không ghi " + shown + " ở chỗ nào, nên em không xác nhận số này.", null, {cls: "park", extra: parkNote(q)}); return true; }
+  if (pl.cells.length === 1) { checkAnswer(q, pl.cells[0].m, pl.cells[0].row, pl.cells[0].c); return true; }
+  const where = pl.cards.map(c => "«" + c.text.replace(/\.$/, "") + "»").concat(pl.sents.map(x => "«" + x.s.replace(/\.$/, "") + "»"), pl.cells.map(x => rowName(x.row) + ", " + colName(x.m, x.c))).slice(0, 3);
+  const card = pl.cards[0], cd = card && cardDiff({how: true, q: tok, f: ""}, {card});
+  const ck = !cd && pl.cells.map(x => cellCheck(x.m, x.row, x.c)).find(Boolean);
+  answer("Báo cáo ghi " + shown + " ở " + pl.n + " chỗ: " + where.join("; ") + "." + (cd ? " Em tính lại: " + withUnit(cd.f.v, cd.f.u) + " = " + cd.a.v + " − " + cd.b.v + ", khớp." : ck ? " " + ck.text : ""),
+    card ? card.el : pl.sents[0] ? pl.sents[0].el : pl.cells[0].row.cells[pl.cells[0].c], {src: "Lấy từ báo cáo «" + TITLE + "»"});
+  return true;
 }
 const ECHO_NOT = new Set("co chac ve tinh phai chon phuong an nao gi the nay do duoc khong nen lam sao bao nhieu moi nghia la cua cho voi va hay".split(" "));
 function ask(q, scope) {
-  if (quotesDoubted(q) || asksDoubted(q, scope)) { holdDoubted(q); return; }
+  if (/^\s*(ok|oke|okay|u|uh|um|vang|da|cam on|thanks|duoc roi|hieu roi|ro roi|tot)( (ok|oke|vang|da|cam on|thanks|em|nhe|nha|a|nhieu|roi|lam))*\s*$/.test(fold(q))) {
+    answer("Dạ.", null, {src: ""}); return; }   // a nod is not a question: nothing goes to the owner
+  { const o = doubtHit(q, scope); if (o) { answerDoubt(q, o); return; } }
+  if (quotesDoubted(q)) { holdDoubted(q); return; }
+  { const o = pctAsk(q); if (o) { answer("Báo cáo ghi " + o.it.so.map(x => x + "%").join(", ") + "; " + o.it.tinh + ". " + OWNER.charAt(0).toUpperCase() + OWNER.slice(1) + " đang kiểm lại hai số này.", null, {cls: "park", extra: parkNote(q), src: ""}); return; } }
+  if (verifyAsk(q, scope)) return;
   if (!scope && figureAsk(q)) return;
   if (/\b(da duyet chua|duyet chua|chinh thuc chua|ban chinh thuc|ban nhap|ban so bo)\b/.test(" " + fold(q) + " ")) {   // the state, as the page knows it
     answer(DRAFT ? "Đây là bản SƠ BỘ: kịch bản " + OWNER + " chưa duyệt, số trên báo cáo vẫn có thể đổi." : "Đây là bản CHÍNH THỨC: " + OWNER + " đã duyệt kịch bản cho bài trình bày này.", null, {src: ""});
@@ -1843,7 +1966,9 @@ function ask(q, scope) {
   if ((r.kind === "why" && r.w && doubted(r.w.text)) || ((r.kind === "sentence" || r.kind === "mention") && doubted(r.s))) {
     const f = factMatch(q, scope, true); if (f) { answerFact(f); return; }   // the talk's own approved reason, never the doubted sentence
     if (r.kind === "why") r.w = null;   // the reader did not quote it: answer as if the report had no such sentence
-    else { answer(D.fallback, null, {cls: "park", extra: parkNote(q, null, true)}); return; }
+    else { const o = nghiSents().find(x => fold(r.s).includes(x.f.slice(0, 40))), c = o && clauseOf(q, o);
+      if (c) { answer("Báo cáo ghi: «" + whole(c.replace(/^(trong khi|và)\s+/i, "").replace(/\.$/, "")) + "».", o.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"}); return; }
+      answer(D.fallback, null, {cls: "park", extra: parkNote(q, null, true)}); return; }
   }
   if (r.kind === "why") {
     if (r.w && r.w.cause) { answer("Báo cáo viết: «" + whole(r.w.text) + "»", r.w.b.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "», đoạn đang khoanh"}); return; }
@@ -1865,6 +1990,11 @@ function ask(q, scope) {
     const neg = r.d.k < 0, val = r.d.s.replace(/^-/, "");
     answer(rowName(r.row) + (neg ? " giảm " : " tăng ") + (r.pct ? val + "%" : withUnit(val, u)) + " từ " + P + " lên " + A + " (em tính: " +
       (r.pct ? "(" + a + " − " + p + ") ÷ " + p + " × 100" : a + " − " + p) + "); báo cáo không ghi sẵn số này.", r.d.a,
+      {src: "Em tính từ hai số trên báo cáo «" + TITLE + "»"});
+    return;
+  }
+  if (r.kind === "capcut") {
+    answer("Theo đề nghị trần " + withUnit(r.cap, r.u) + ", phải giảm " + withUnit(r.x, r.u) + " so với " + colName(r.m, r.v) + " (em tính: " + cellText(r.tot.cells[r.v]) + " − " + r.cap + "); báo cáo không ghi sẵn số này.", r.tot.cells[r.v],
       {src: "Em tính từ hai số trên báo cáo «" + TITLE + "»"});
     return;
   }

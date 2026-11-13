@@ -1301,6 +1301,25 @@ def test_round4_bod_final_phrasings(page):
     assert not errors
 
 
+def test_a_figure_checked_says_where_it_is_printed_and_the_sum_behind_it(page):
+    pg, errors = page
+    row1 = "table tbody tr:nth-child(1) td:nth-child(%d)"
+    assert _r3(pg, "12,6% có đúng không?").startswith(
+        "Tổng, % tăng: 12,6%. Em tính lại từ dòng này: (186,4 − 165,5) ÷ 165,5 × 100 ≈ 12,6%, khớp.")
+    assert _r3(pg, "18% đúng không?").startswith("Khối Bán hàng, % tăng: 18,0%.")          # "18%" is the printed 18,0%
+    a = _r3(pg, "14,1 có đúng không?")                                                     # three places, each named
+    assert a.startswith("Báo cáo ghi 14,1 ở 3 chỗ:") and "92,3 − 78,2 = 14,1 tỷ, khớp." in a
+    assert _r3(pg, "Số này có đúng không?", row1 % 4).startswith("Khối Bán hàng, Chênh lệch: 14,1 tỷ. Em tính lại từ dòng này: 92,3 − 78,2 = 14,1 tỷ, khớp.")
+    assert "(92,3 − 78,2) ÷ 78,2 × 100 ≈ 18,0%, khớp." in _r3(pg, "Số này nghĩa là gì?", row1 % 5)
+    assert "Em cộng 6 dòng cột AOPR ra 186,4 tỷ, khớp dòng Tổng 186,4 tỷ." in _r3(pg, "Có chắc không?", "table tbody tr:last-child td:nth-child(3)")
+    assert _r3(pg, "8,9 có đúng không?").startswith("Báo cáo ghi 8,9 ở 1 chỗ: «Cần giảm so với AOPR: 8,9 tỷ». Em tính lại: 8,9 tỷ = 186,4 − 177,5, khớp.")
+    assert _r3(pg, "99,9 có đúng không?").startswith("Báo cáo không ghi 99,9 ở chỗ nào, nên em không xác nhận số này.")
+    assert _r3(pg, "Có chắc không?").startswith("Anh chị bấm vào con số hay câu muốn em kiểm")     # nothing pointed at: no queue
+    for q in ("12,6% có đúng không?", "14,1 có đúng không?", "Có chắc không?"):
+        assert "chưa tìm thấy" not in _r3(pg, q) and "«có đúng»" not in _r3(pg, q)
+    assert not errors
+
+
 DEMO_QUESTIONS = (
     "Tổng chi phí AOP gốc là bao nhiêu?", "Chi phí nhân sự AOP gốc?", "AOP gốc bao nhiêu?", "AOPR khối Marketing?",
     "Headcount bán hàng bao nhiêu?", "Headcount IT?", "Headcount HR?", "Chi phí Sales?", "Marketing", "Khối CNTT AOPR?",

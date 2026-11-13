@@ -211,6 +211,9 @@ def test_next_months_report_works_the_computed_figure_out_again(report):
     assert "Khối Bán hàng chiếm phần lớn phần tăng: 18,5 tỷ." in said and not any("hai phần ba" in x for x in said)
     assert sum(x.startswith("Bỏ khối Bán hàng ra") for x in said) == 1
     assert any("đổi mức độ" in n and "phần lớn" in n for n in rep["canh_bao"])
+    # the stake line ("… tức vượt trần 8,9 tỷ") keeps its lock on the tile that still prints 8,9: month 2 builds
+    stake = [c for c in lines(rep) if "vượt trần" in c["noi"]]
+    assert len(stake) == 1 and stake[0]["xac_nhan"] == ["8,9"] and "8,9 tỷ" in report.read_text(encoding="utf-8")
     assert kiem_bien_ban.verify(rep["out"], str(report))["ok"]
 
 
@@ -254,7 +257,7 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     # 18,0 / 8,0 = 2,25, said "khoảng 2,3 lần"; the owner's own "Nếu …" sentence says what happens if nothing changes
     # ... but 18,0% disagrees with the table (17,3%): until the owner rules, the talk says only what holds under both,
     # frames the total, and keeps the printed rate and the 2,3 built on it as his to switch on
-    assert any(c["noi"] == "Vì sao cần quyết? Vì chi phí đang tăng nhanh hơn doanh thu." and c["chi"] == next(x for x in said if x.get("vai") == "quy_mo")["chi"]
+    assert any(c["noi"] == "Vì sao cần quyết? Vì doanh thu chỉ tăng 8,0%, chậm hơn chi phí." and c["xac_nhan"] == ["8,0"] and c["chi"] == next(x for x in said if x.get("vai") == "quy_mo")["chi"]
                for c in said)
     ratio = next(c for c in said if c["noi"] == "Tức là chi phí tăng nhanh gấp khoảng 2,3 lần doanh thu.")
     assert ratio["bat"] == "chưa"
@@ -386,7 +389,23 @@ def test_a_script_drawn_table_answers_questions_and_a_rows_own_explanation_is_th
         assert ask("Sao tăng nhiều vậy?", "#t tbody tr:nth-child(2) td:nth-child(3)").startswith(
             "Logistics: báo cáo ghi giải trình «Thuê kho».")
         # 18,0% printed, 17,3% from the table: the owner is asked, the Board gets neither as an answer
-        assert "đang kiểm lại" in ask("Chi phí tăng 17% hay 18%?")
+        a = ask("Chi phí tăng 17% hay 18%?")
+        assert "đang kiểm lại" in a and "17,3%" in a                      # both figures, the table's with its formula
+        a = ask("Chi phí tăng bao nhiêu phần trăm?")
+        assert "18,0%" in a and "(129,0 − 110,0) ÷ 110,0 × 100" in a and "đang kiểm lại" in a
+        assert ask("Doanh thu tăng bao nhiêu?").startswith("Báo cáo ghi: «doanh thu chỉ tăng 8,0%».")   # undoubted half
+        assert "đang kiểm lại" not in ask("Doanh thu tăng 8% có đúng không?")
+        assert ask("Phải cắt bao nhiêu tỷ?").startswith(
+            "Theo đề nghị trần 120,0 tỷ, phải giảm 9,0 tỷ so với AOPR (em tính: 129,0 − 120,0)")
+        assert ask("Nếu không duyệt trần thì sao?").startswith("Nếu doanh thu chỉ đạt 90% kế hoạch")
+        assert ask("ok cảm ơn em").startswith("Dạ.")
+        assert ask("6,4% là sao?").startswith("Báo cáo ghi: «Nếu doanh thu chỉ đạt 90% kế hoạch, tỷ lệ chi phí trên doanh thu lên 6,4%.»")
+        assert ask("2,3 ở đâu ra?").startswith("Báo cáo không ghi 2,3 ở chỗ nào")      # the ratio line is off: never explained
+        a = ask("Rủi ro lớn nhất là gì?")
+        assert a.startswith("Nếu doanh thu chỉ đạt 90% kế hoạch") and "«Rủi ro»" not in a
+        assert ask("110,0 có đúng không?").startswith("Tổng, AOP gốc: 110,0 tỷ. Em cộng 4 dòng cột AOP gốc (không tính dòng gộp) ra 110,0 tỷ, khớp")
+        a = ask("Chi phí tăng nhanh gấp mấy lần?")                               # built on the doubted rate: held with both figures
+        assert "17,3%" in a and "đang kiểm lại" in a
         # no variance column: the change is worked out per row, and the subtotal "Khối vận hành" is never ranked
         assert ask("Phòng nào tăng ít nhất?").startswith(
             "Hành chính thấp nhất về mức tăng từ AOP gốc lên AOPR (em tính: AOPR 16,5 − AOP gốc 15,0): 1,5 tỷ.")
@@ -398,6 +417,32 @@ def test_a_script_drawn_table_answers_questions_and_a_rows_own_explanation_is_th
         assert ask("Khối vận hành tăng bao nhiêu?").startswith("Khối vận hành tăng 15,0 tỷ từ AOP gốc lên AOPR")
         a = ask("Các phòng cộng lại có khớp tổng không?")
         assert "(không tính dòng gộp)" in a and "cộng ra 129,0 tỷ, khớp dòng Tổng 129,0 tỷ" in a, a
+        browser.close()
+
+
+def test_once_the_owner_rules_a_doubted_sentence_is_quoted_with_his_reason_never_not_found(drawn_report):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    from present import kiem_hinh
+    rep = build(drawn_report)
+    path = Path(rep["kich_ban"])
+    path.write_text(path.read_text(encoding="utf-8").replace("ly_do_bo: ''", "ly_do_bo: 'Số báo cáo đúng, giữ nguyên câu'")
+                    .replace("da_xem: 'chưa'", "da_xem: 'có'").replace("da_duyet: 'chưa'", "da_duyet: 'có'"), encoding="utf-8")
+    rep = build(drawn_report)
+    assert rep["trang_thai"].startswith("CHÍNH THỨC"), rep["canh_bao"]
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 768})
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(800)
+        ask = lambda q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        for q in ("18% đúng không?", "Chi phí vận hành AOPR tăng 18,0% trong khi doanh thu chỉ tăng 8,0% có đúng không?"):
+            a = ask(q)
+            assert a.startswith("Báo cáo ghi: «Chi phí vận hành AOPR tăng 18,0%") and "chưa tìm thấy" not in a, a
+            assert "đã soát câu này: Số báo cáo đúng, giữ nguyên câu" in a and "17,3%" in a
         browser.close()
 
 

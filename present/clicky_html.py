@@ -2110,7 +2110,8 @@ def next_period(script: dict, old: dict, places: dict, en: bool) -> tuple:
         for c in s.get("cau") or []:
             if c.get("so_rieng"):
                 continue                   # a sentence with his own figures: he says what changes in it
-            if c.get("so_tinh") or (c.get("vai") in ("dong_luc", "mau_thuan") and DEGREE.search(str(c.get("noi") or ""))):
+            if c.get("so_tinh") or (c.get("xac_nhan") and c.get("vai")) or \
+                    (c.get("vai") in ("dong_luc", "mau_thuan") and DEGREE.search(str(c.get("noi") or ""))):
                 flipped.append(c)          # a figure worked out, or a word of degree, from last period's figures
                 continue
             neo = str(c.get("neo") or "").strip()
@@ -2253,6 +2254,10 @@ def _check_row(k: dict) -> dict:
         row["cau"] = [_Q(str(x)) for x in k["cau"]]
     if k.get("ma_cau"):
         row["ma_cau"] = str(k["ma_cau"])
+    if k.get("ma_so"):
+        row["ma_so"] = [_Q(str(x)) for x in k["ma_so"]]
+    if k.get("tinh"):
+        row["tinh"] = _Q(str(k["tinh"]))
     row["da_xem"] = _Q("có" if _seen(k) else "chưa")
     if k.get("cau") or k.get("ma_cau"):
         row["ly_do_bo"] = _Q(str(k.get("ly_do_bo") or ""))
@@ -2284,6 +2289,15 @@ def open_checks(script: dict) -> list:
             out.append(str(k.get("muc", "")) + (f" (bật câu «{clip(str(first), 50)}» hoặc ghi ly_do_bo)" if first
                                                   else " (ghi ly_do_bo: giữ câu hay đã sửa báo cáo)"))
     return out
+
+
+def doubts(script: dict) -> list:
+    """Every doubted report sentence, for the page: its fingerprint, the doubted figures, the table's own working,
+    and, once the owner has ruled, his reason. Never the sentence or the owner's finding in words."""
+    said = _lines_on(script)
+    return [{"ma": str(k["ma_cau"]), "so": [str(x) for x in k.get("ma_so") or []], "tinh": str(k.get("tinh") or ""),
+             "xong": ruled(k, said), "ly_do": str(k.get("ly_do_bo") or "").strip() if ruled(k, said) else ""}
+            for k in script.get("kiem_tra") or [] if isinstance(k, dict) and k.get("ma_cau")]
 
 
 def doubted_open(script: dict) -> list:
@@ -3215,6 +3229,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
             "facts": [dict(audio(f["noi"]), k=f["k"], y=f["y"], n=f.get("n", ""), x=f["x"], a=f["a"], chi=f["chi"]) for f in book],
             "quyet": story.decisions(script),
             "cho_kiem": doubted_open(script) if script.get("kiem_tra") else draft.get("cho_kiem") or [],   # never quoted while in doubt
+            "nghi": doubts(script),
             "fallback": fallback, "fallback_clip": audio(fallback), "aliases": doc_tai_chinh.aliases(),
             "bank": [dict(audio(f"{who} đã trả lời" + (f" kỳ {b['ky']}" if b["cu"] and b["ky"] else "")
                                 + f": {_sentence(b['tra_loi'])}"),
