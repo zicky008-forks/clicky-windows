@@ -65,3 +65,25 @@ def test_figures_typed_into_chart_code_are_masked_but_sizes_stay():
     assert "672.7" not in out and "41258" not in out
     for kept in ("w = 960", "h = 320", "#1f77b4", "ky(2026)"):
         assert kept in out, kept
+
+
+def test_ratios_and_ranges_are_figures_and_data_attributes_are_masked():
+    out, _, _ = che_so_lieu.mask('<p>Thực hiện/AOP: 672,7/700,0 tỷ; ngày 20/11/2026</p><td data-v="412580">x</td>', {}, seed=4)
+    assert "672,7" not in out and "700,0" not in out and "412580" not in out and "20/11/2026" in out
+
+
+def test_a_big_data_block_is_masked_whole():
+    rows = ",".join(f'"r{i}": "{1234 + i}.5"' for i in range(2000))
+    page = f"<script>window.__x={{{rows}, \"ky\": \"2026-10\", \"n\": 77}};</script>"
+    out, _, _ = che_so_lieu.mask(page, {}, seed=6)
+    assert "1234.5" not in out and "2026-10" in out and '"r17"' in out and '"n": 77' not in out
+
+
+def test_a_figure_after_a_non_breaking_space_entity_is_masked():
+    out, _, _ = che_so_lieu.mask("<td>Doanh thu:&nbsp;672,7&nbsp;tỷ</td><td>&#160;</td>", {}, seed=8)
+    assert "672,7" not in out and "&#160;" in out
+
+
+def test_a_figure_glued_to_its_unit_is_masked_but_codes_stay():
+    out, _, _ = che_so_lieu.mask("<td>5,2tr</td><td>120M</td><td>FY2627 T10 v1111</td>", {}, seed=9)
+    assert "5,2tr" not in out and "120M" not in out and "FY2627 T10 v1111" in out

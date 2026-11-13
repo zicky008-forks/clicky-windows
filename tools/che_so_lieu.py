@@ -24,16 +24,16 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
 SEGMENT = re.compile(r"(<script\b.*?</script\s*>|<style\b.*?</style\s*>|<!--.*?-->|<[^>]+>)", re.S | re.I)
-NUM = re.compile(r"(?<![\w#&;])(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)(?![\w])")
+NUM = re.compile(r"(?<![\w#&])(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)(?!\d)")
 KEEP_BEFORE = re.compile(r"(?:\b(?:tháng|thang|quý|quy|ngày|ngay|kỳ|lần|phần|mục|bước)\s+|(?<!\w)(?:T|Q|H|FY)\s?)$", re.I)
-TEXT_ATTRS = re.compile(r"""(\b(?:title|aria-label|alt|data-value|data-label|value)\s*=\s*)(["'])(.*?)\2""", re.I | re.S)
+TEXT_ATTRS = re.compile(r"""(\b(?:title|aria-label|alt|data-[\w-]+|value|placeholder)\s*=\s*)(["'])(.*?)\2""", re.I | re.S)
 NUM_ARRAY = re.compile(r"\[\s*-?\d[\d.,\s\-eE+]*\]")
 KEY_NUMBER = re.compile(r"""((?:["'][^"'\n]{1,60}["']|\b[A-Za-z_À-ỹ][\wÀ-ỹ]*)\s*:\s*-?)(\d+(?:\.\d+)?)(?![\w.])""")
 LIBRARY = re.compile(r"/\*!|@license|Copyright|Chart\.js|echarts|plotly|Highcharts|jQuery|d3js\.org|d3\.js", re.I)
 LONG_STRING = re.compile(r'"(?:[^"\\\n]|\\.){200,}"|' + r"'(?:[^'\\\n]|\\.){200,}'|`(?:[^`\\]|\\.){200,}`", re.S)
 YEAR = re.compile(r"20(1[5-9]|2\d|3[0-5])")                    # a period, not a figure: 2015 to 2035 only
 CODE_FIGURE = re.compile(r"(?<![\w.#$\\])(?:\d+\.\d+|\d{4,})(?![\w])")
-DATA_NUM = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w])")     # in CSV a comma separates fields
+DATA_NUM = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?!\d)")     # in CSV a comma separates fields
 ENC = re.compile(rb"""<meta[^>]+charset=["']?([\w-]+)""", re.I)
 
 
@@ -80,8 +80,9 @@ class Masker:
                 return s                                          # a year
             if KEEP_BEFORE.search(before):
                 return s                                          # a period: tháng 10, T10, Q3, FY2627
-            if re.match(r"\s*[/\-]\s*\d", t[m.end():m.end() + 3]) or re.search(r"\d\s*/\s*$", before):
-                return s                                          # a date: 20/11, 11/2026
+            if (len(plain) <= 2 or YEAR.fullmatch(plain)) and \
+                    (re.match(r"\s*[/\-]\s*\d", t[m.end():m.end() + 3]) or re.search(r"\d\s*/\s*$", before)):
+                return s                                          # a date: 20/11, 11/2026; never 672,7/700,0
             if len(s) <= 2 and re.match(r"\.\s", t[m.end():m.end() + 2]) and not t[:m.start()].strip():
                 return s                                          # a section number: "2. Chi tiết"
             return self.figure(s)
@@ -101,6 +102,13 @@ class Masker:
         if re.search(r"""type\s*=\s*["']?application/(?:ld\+)?json""", head, re.I):
             for n in re.finditer(r"(?<![\w.])\d+(?:\.\d+)?(?![\w])", js[len(head):]):   # data only: every number
                 add(len(head) + n.start(), len(head) + n.end())
+        elif not LIBRARY.search(js[:400]) and len(js) > 20000 and js.count("function") + js.count("=>") <= 20:
+            # a data block (window.DATA = {...} of CSV text, almost no code): every figure, years and ISO parts kept
+            for n in re.finditer(r"(?<![^\W\d_])(?<![\d.])\d+(?:\.\d+)?(?![^\W\d_])(?!\d)", js):
+                v = n.group(0)
+                if not (YEAR.fullmatch(v) or re.fullmatch(r"\d\d", v) and
+                        re.search(r"(19|20)\d\d-(\d\d-)?$", js[max(0, n.start() - 8):n.start()])):
+                    add(n.start(), n.end())
         elif not LIBRARY.search(js[:400]):                    # a bundled chart library is code, no report data
             # data kept as text, CSV or JSON in a long string (window.DATA = {"t": "cột,cột\n...,12.5,..."})
             for m in LONG_STRING.finditer(js):
