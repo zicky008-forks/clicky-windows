@@ -99,9 +99,12 @@ def test_click_a_figure_to_ask_about_it(page):
                 " s.getElementById('bq').value = 'AOP gốc thì sao?'; s.getElementById('bf').requestSubmit(); })()")
     pg.wait_for_timeout(500)
     assert _answer(pg).startswith("Khối Marketing, AOP")
-    pg.locator('[data-clicky="c3"]').click()                                    # a number card
+    pg.locator('[data-clicky="c3"]').click()                                    # a number card the talk does not say
     pg.wait_for_timeout(700)
-    assert _answer(pg).startswith("Headcount bình quân: 1.248 người") and "Nghe lại đoạn" in _answer(pg)
+    assert _answer(pg).startswith("Headcount bình quân: 1.248 người") and "Nghe lại đoạn" not in _answer(pg)
+    pg.locator('[data-clicky="c5"]').click()                                    # one the talk says: listen to that part again
+    pg.wait_for_timeout(700)
+    assert _answer(pg).startswith("Tỷ lệ chi phí nhân sự/DTT") and "Nghe lại đoạn" in _answer(pg)
     pg.keyboard.press("Escape")
     assert _box(pg, "bub")["width"] == 0
     assert not errors

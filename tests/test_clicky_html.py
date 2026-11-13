@@ -14,7 +14,9 @@ from present import clicky_html, goi_html
 FIXTURE = Path(__file__).parent / "fixtures" / "bao_cao_html_gia_lap.html"
 NUM = re.compile(r"\d[\d.,]*")
 BUILD = clicky_html.build                  # the real one: build() refuses to run without an owner and an e-mail
-OWNER = {"owner": "anh Tuấn", "contact": "tuan@congty.vn"}
+# these tests pin the page-order draft (still used when a report has no plan-actual table); the story draft that is
+# the default now is tested in test_story.py
+OWNER = {"owner": "anh Tuấn", "contact": "tuan@congty.vn", "tell": False}
 
 
 @pytest.fixture
@@ -792,7 +794,7 @@ def test_a_failed_build_keeps_last_times_page_at_its_name_and_says_how_old_it_is
     out = report.with_name("bao_cao_Clicky.html")
     before = out.read_bytes()
     path = report.with_name("bao_cao_kich_ban_Clicky.yaml")
-    path.write_text(path.read_text(encoding="utf-8").replace("186,4 tỷ", "187,4 tỷ"), encoding="utf-8")
+    path.write_text(path.read_text(encoding="utf-8").replace("177,5 tỷ", "178,5 tỷ"), encoding="utf-8")   # the story draft says the cap
     assert clicky_html.main([str(report)]) == 2
     assert out.read_bytes() == before and not list(report.parent.glob("*bản cũ*"))
     err = capsys.readouterr().err
@@ -827,10 +829,10 @@ def test_the_launcher_flow_prints_three_lines_and_keeps_the_rest_in_a_log(report
     out = amp.with_name("P&L_T10_Clicky.html")
     before = out.read_bytes()
     path = amp.with_name("P&L_T10_kich_ban_Clicky.yaml")
-    path.write_text(path.read_text(encoding="utf-8").replace("186,4 tỷ", "187,4 tỷ"), encoding="utf-8")
+    path.write_text(path.read_text(encoding="utf-8").replace("177,5 tỷ", "178,5 tỷ"), encoding="utf-8")
     assert clicky_html.run_drop([str(amp)], cmdline="", look=False) == 1
     lines = capsys.readouterr().out.strip().splitlines()
-    assert len(lines) == 3 and lines[0].startswith("KHÔNG ĐẠT") and "187,4" in lines[1]
+    assert len(lines) == 3 and lines[0].startswith("KHÔNG ĐẠT") and "178,5" in lines[1]
     # last time's page stays at its name, untouched, and the owner is told its date
     assert f"Bản trình bày cũ từ {dt.datetime.fromtimestamp(out.stat().st_mtime):%d/%m %H:%M} vẫn ở chỗ cũ" in lines[0]
     assert out.read_bytes() == before and not list(amp.parent.glob("*bản cũ*")) and not list(amp.parent.glob("~*"))

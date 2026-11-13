@@ -42,7 +42,8 @@ const R = M.record || {so: 0};
 const DRAFT = /^SƠ BỘ/i.test(String(M.trang_thai || "").trim());   // a draft the owner has not approved yet; CHÍNH THỨC shows nothing
 const RECORD = !R.so ? "" : '<details class="bb"><summary>Biên bản</summary>' + (R.nguoi_soan_them
   ? `${R.so - R.nguoi_soan_them} con số em nói có trong báo cáo, ${R.nguoi_soan_them} con số do ${esc(OWNER)} bổ sung.`
-  : `${R.so} con số em nói đều có trong báo cáo.`) + ` Mã ${esc(R.ma || "")}.</details>`;
+  : `${R.so} con số em nói đều có trong báo cáo.`) + (R.em_tinh ? ` Trong đó ${R.em_tinh} con số em tính từ số trên báo cáo, có công thức.` : "") +
+  ` Mã ${esc(R.ma || "")}.</details>`;
 const mq = q => { try { return matchMedia(q).matches; } catch (_) { return false; } };
 const RM = mq("(prefers-reduced-motion: reduce)"), TOUCH = mq("(pointer: coarse)");
 if (!document.querySelector('meta[name="viewport"]')) {   // Excel "Save as Web Page" has none: a phone would shrink everything
@@ -233,9 +234,20 @@ document.querySelectorAll("[data-clicky]").forEach(e => {
   const tag = e.tagName; if (!tagAt[tag]) { tagAt[tag] = new Map(); [...document.getElementsByTagName(tag)].forEach((x, i) => tagAt[tag].set(x, i)); }
   ANCH[e.getAttribute("data-clicky")] = {tag, text: sig(e), k: tagAt[tag].get(e)};
 });
+// places the report's own script draws (rows of a table filled in after load): found by tag and words, never by a
+// tag in the file, since the script writes them anew (built by present/ve_trang.py and drawn_locators)
+const VE = D.ve || {}, squeeze = e => (e.tagName === "TABLE" && e.rows && e.rows[0] ? e.rows[0] : e).textContent.replace(/\s+/g, "");
+function drawnPlace(id) {
+  const v = VE[id]; if (!v) return null;
+  let f = null, d = Infinity;
+  [...document.getElementsByTagName(v.tag)].forEach((x, i) => { if (Math.abs(i - v.k) < d && !mine(x) && squeeze(x) === v.s) { f = x; d = Math.abs(i - v.k); } });
+  if (f) f.setAttribute("data-clicky", id);
+  return f;
+}
 function el(id) {
   if (!id) return null;
   const e = document.querySelector('[data-clicky="' + id + '"]'); if (e) return e;
+  if (VE[id]) return drawnPlace(id);
   const a = ANCH[id]; if (!a || !a.text) return null;
   let f = null, d = Infinity;   // the same words in the same kind of element, nearest to where it was
   [...document.getElementsByTagName(a.tag)].forEach((x, i) => { if (Math.abs(i - a.k) < d && !mine(x) && sig(x) === a.text) { f = x; d = Math.abs(i - a.k); } });
@@ -669,12 +681,14 @@ function idleLine() {
   fitBar();
 }
 // where each spoken figure comes from, from the sealed record: k = the framed place, b = elsewhere in the report, o = owner
-const EV = {k: "đúng chỗ đang khoanh", b: "có trong báo cáo", o: esc(OWNER) + " bổ sung"};
+// t = worked out by code from figures printed in the report (the formula is in the chip's tooltip)
+const EV = {k: "đúng chỗ đang khoanh", b: "có trong báo cáo", o: esc(OWNER) + " bổ sung", t: "em tính từ báo cáo"};
 function evidence(list) {
-  list = (list || []).filter(([so]) => /[.,]|\d\d/.test(so));   // "Phần 1." is a heading, not a figure
+  list = (list || []).filter(([so, w]) => w === "t" || /[.,]|\d\d/.test(so));   // "Phần 1." is a heading, not a figure
   if (!list.length) return "";
-  return '<span class="ev">' + list.slice(0, 4).map(([so, w]) =>
-    '<span class="' + (w === "k" ? "" : w === "o" ? "o" : "k") + '">' + esc(so) + " · " + EV[w] + "</span>").join("") + "</span>";
+  return '<span class="ev">' + list.slice(0, 4).map(([so, w, f]) =>
+    '<span class="' + (w === "k" ? "" : w === "o" ? "o" : "k") + '"' + (f ? ' title="' + esc(f) + '"' : "") + ">" +
+    esc(so) + " · " + EV[w] + "</span>").join("") + "</span>";
 }
 const sceneSrc = i => "data:" + (S[i].mime || "audio/mpeg") + ";base64," + S[i].audio;
 function stopVoice() { try { window.speechSynthesis && speechSynthesis.cancel(); } catch (_) {} }
@@ -1630,13 +1644,14 @@ function gapOf(q, r) { return Math.hypot(Math.max(0, q.left - r.right, r.left - 
 function bubbleCap(px) { $("bin").style.maxHeight = Math.max(80, Math.floor(px) - 24) + "px"; }   // 24: the bubble's own padding
 function placeBubble(follow) {   // beside the place, never on it or on its row label and header, never under the bar
   if (!anchor || !isOpen($("bub"))) { lead.style.display = "none"; return; }
-  const b = $("bub"), v = vp(), small = v.w <= 700, bar = rect($("bar")), g = 14, top0 = v.y + 8, bot0 = bar.top - 8;
+  const b = $("bub"), v = vp(), small = v.w <= 700, bar = rect($("bar")), g = 14, top0 = Math.max(v.y + 8, topCover() + 4), bot0 = bar.top - 8;   // below the page's own header
   const set = (x, y) => { b.style.left = x + "px"; b.style.top = y + "px"; };
   const sheet = !small && v.h < 600; b.classList.toggle("sheet", sheet || !!(follow && bubAt && bubAt.anchor === anchor && bubAt.sheet));
   if (sheet) {   // a short screen (a laptop at 150%): the answer docks above the bar; keepVisible keeps the place above it
     b.style.width = (v.w - 24) + "px"; bubbleCap(Math.min(Math.max(120, (bot0 - top0) * 0.45), sheetRoom || Infinity));
     const r = rect(anchor), h = b.offsetHeight, x = v.x + 12, y = bot0 - h, q = {left: x, top: y, right: x + v.w - 24, bottom: y + h};
-    set(x, y); bubAt = {anchor, dx: x - r.left, dy: y - r.top, over: true}; pointAt(r, q); return;
+    // the answer's buttons make the sheet taller than the room kept above the bar: then it goes beside the place
+    if (!hit(q, r)) { set(x, y); bubAt = {anchor, dx: x - r.left, dy: y - r.top, over: true}; pointAt(r, q); return; }
   }
   if (follow && bubAt && bubAt.anchor === anchor) {   // on scroll: move with the place; choose again only when it no longer fits
     const r = rect(anchor), x = r.left + bubAt.dx, y = r.top + bubAt.dy, w = b.offsetWidth, h = b.offsetHeight, q = {left: x, top: y, right: x + w, bottom: y + h};
@@ -1683,9 +1698,10 @@ function placeBubble(follow) {   // beside the place, never on it or on its row 
     if (room >= 240 && room < b.offsetWidth) { b.style.width = Math.floor(room) + "px"; best = choose(r); if (!best) b.style.width = ""; }
   }
   if (!best && !follow) {   // no room beside the place: move the page so the place sits high with the answer under it
-    const h = Math.min(b.offsetHeight, 200);
-    if (r.height + g + h <= bot0 - top0 - 56) {
-      const dy = r.top - top0 - 48, sc = scrollerOf(anchor);
+    const h = Math.min(b.offsetHeight, 200), hb = b.offsetHeight;
+    const slack = (bot0 - top0) - (r.height + g + Math.max(h, hb));   // the place high, the whole answer under it
+    if (r.height + g + h <= bot0 - top0 - 56 || slack >= 4) {
+      const dy = r.top - top0 - Math.max(0, Math.min(48, slack - 4)), sc = scrollerOf(anchor);
       if (sc) sc.scrollBy({top: dy, behavior: "auto"});
       if (Math.abs(rect(anchor).top - r.top) < 2) window.scrollBy({top: dy, behavior: "auto"});
       redraw(); r = rect(anchor); figs = numberRects(view, 0); best = choose(r);
@@ -1708,7 +1724,7 @@ function placeBubble(follow) {   // beside the place, never on it or on its row 
   pointAt(r, q);
 }
 function dockSheet(r) {   // the answer as a sheet above the bar, the place lifted above it; false when the place cannot be lifted clear
-  const b = $("bub"), v = vp(), bar = rect($("bar")), top0 = v.y + 8, bot0 = bar.top - 8;
+  const b = $("bub"), v = vp(), bar = rect($("bar")), top0 = Math.max(v.y + 8, topCover() + 4), bot0 = bar.top - 8;   // never under the page's own header
   b.classList.add("sheet"); b.style.width = (v.w - 24) + "px"; bubbleCap(Math.max(120, Math.min(260, (bot0 - top0) * 0.45)));
   const h = b.offsetHeight, y = bot0 - h, gd = guards(anchor), head = gd.strong.concat(gd.table).reduce((t, q) => Math.min(t, q.top), r.top);
   if (r.bottom > y - 8) {   // lift the place (and its headers) above the sheet
@@ -2122,7 +2138,8 @@ window.__clickyKiemHinh = async function () {
     const fresh = isOpen($("bub")) ? leaderPath(rect(t), rect($("bub")), vp()) : null;
     soi.push({kind, size: Math.round(v.w) + "x" + Math.round(v.h), tag: t.tagName.toLowerCase(), id: t.getAttribute("data-clicky") || "", col: t.cellIndex ?? "",
       place: R4(rect(t)), bub: isOpen($("bub")) ? R4(rect($("bub"))) : null, sheet: $("bub").classList.contains("sheet"), panel: isOpen($("panel")) ? R4(rect($("panel"))) : null,
-      lead: lead.style.display !== "none" ? lead._pts : null, crosses: cr.slice(0, 4).map(q => [R4(q), tagOf(q)]), fresh, sy: Math.round(scrollY), anchorIsPlace: anchor === t}); };
+      lead: lead.style.display !== "none" ? lead._pts : null, crosses: cr.slice(0, 4).map(q => [R4(q), tagOf(q)]), fresh, sy: Math.round(scrollY), anchorIsPlace: anchor === t, cover: Math.round(topCover()),
+      over: [0, 40, 80, 120, 160].map(y => tagOf({left: v.x + v.w / 2, right: v.x + v.w / 2, top: v.y + y, bottom: v.y + y + 2}))}); };
   const v = vp(), b0 = rect($("bar"));
   const barShown = () => { const q = rect($("bar")); if (!host.isConnected || !q.width) return false;   // really on screen and on top
     const e = document.elementFromPoint(Math.min(v.x + v.w - 2, (q.left + q.right) / 2), Math.min(v.y + v.h - 2, (q.top + q.bottom) / 2)); return e === host; };
@@ -2139,7 +2156,7 @@ window.__clickyKiemHinh = async function () {
       const where = name + (open === true ? ", khi mở bảng hỏi" : open ? ", khi hỏi tại chỗ" : "");
       const r = rect(t), small = r.height < v.h * 0.6, gd = guards(t).strong.filter(g => g.bottom > v.y && g.top < v.y + v.h);
       if (open) { const q = rect(open === true ? $("panel") : $("bub")), what = open === true ? "bảng hỏi" : "khung hỏi tại chỗ";
-        if (open === "bubble" && hit(q, r) && r.height < (rect($("bar")).top - v.y) * 0.75) problems.push(where + ": khung hỏi tại chỗ che chính chỗ đang hỏi");
+        if (open === "bubble" && hit(q, r) && r.height < (rect($("bar")).top - v.y) * 0.75) { problems.push(where + ": khung hỏi tại chỗ che chính chỗ đang hỏi"); note(t, "bubble-covers"); }
         if (q.top < v.y - 1 || q.bottom > v.y + v.h + 1 || q.left < v.x - 1 || q.right > v.x + v.w + 1) problems.push(where + ": " + what + " ra ngoài màn hình");
         if (open === "bubble" && hit(q, rect($("bar")))) problems.push(where + ": khung hỏi tại chỗ đè lên thanh Clicky");
         if (small && gd.some(g => hit(g, q))) problems.push(where + ": " + what + " che tên dòng hoặc tiêu đề cột của số");
@@ -2149,7 +2166,7 @@ window.__clickyKiemHinh = async function () {
       if (!f || !sr || f.left > sr.left + 4 || f.top > sr.top + 1 || f.right < sr.right - 4 || f.bottom < sr.bottom - 1) problems.push(where + ": khung lệch khỏi chỗ cần khoanh");   // 3px: a frame at the screen's edge sits on the cell's own edge
       if (small && (r.top < v.y || r.bottom > v.y + v.h)) problems.push(where + ": số nằm ngoài màn hình");
       if (small && covers().some(q => hit(r, q))) problems.push(where + ": thanh hoặc bảng hỏi của Clicky che số");
-      if (small && hiddenBy(t)) problems.push(where + ": phần cố định của trang (như tiêu đề) che số");
+      if (small && hiddenBy(t)) { problems.push(where + ": phần cố định của trang (như tiêu đề) che số"); note(t, "fixed-covers"); }
       if (+hat.style.opacity > 0) { const h = rect(hat.firstElementChild || hat);
         if (hit(h, r) || numberRects(r).some(q => hit(h, q))) problems.push(where + ": nón lá đè lên số");
         if (guards(t).soft.some(q => hit(h, q))) problems.push(where + ": nón lá đè lên tên dòng hoặc tiêu đề cột"); }

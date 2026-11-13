@@ -1072,11 +1072,12 @@ def _labels(n: Node) -> str:
     return " ".join(d.attrs[a] for d in n.walk() for a in LABEL_ATTRS if d.attrs.get(a))
 
 
-def tag_targets(source: str, root: Node) -> tuple:
-    """Give every candidate element a data-clicky id; return (new source, items, table rows)."""
+def tag_targets(source: str, root: Node, prefix: str = "c") -> tuple:
+    """Give every candidate element a data-clicky id; return (new source, items, table rows). prefix "v" names
+    the places of the page as the browser drew it (present/ve_trang.py)."""
     items = outline(root)
     for i, it in enumerate(items, 1):
-        it.node.attrs["data-clicky"] = f"c{i}"
+        it.node.attrs["data-clicky"] = f"{prefix}{i}"
     inserts = [(it.node.start, it.node.tag, it.node.attrs["data-clicky"]) for it in items]
     rows: list = []
     for it in items:
@@ -1227,6 +1228,79 @@ def table_columns(places: dict) -> dict:
         out[table] = ([{"i": i, "ten": c.name or c.header, "loai": c.kind, "don_vi": c.unit or "",
                         "cot_nhan": c.kind == "label"} for i, c in enumerate(p.cols)], not has)
     return {k: v[0] for k, v in out.items()}
+
+
+def squeeze(text: str) -> str:
+    """Text without any whitespace: how a drawn place is found again in the browser (textContent, squeezed)."""
+    return re.sub(r"\s+", "", text)
+
+
+def locator(node: Node, root: Node) -> dict:
+    """How the page finds a drawn place again: its tag, its words (a table: its first row's) and its position
+    among the elements with that tag."""
+    tag = node.tag
+    k = next(i for i, n in enumerate(x for x in root.walk() if x.tag == tag) if n is node)
+    first = next((n for n in node.walk() if n.tag == "tr"), node) if tag == "table" else node
+    return {"tag": tag.upper(), "s": squeeze(first.text()), "k": k}
+
+
+def find_drawn(root: Node, ve: dict) -> dict:
+    """{v-id: node} for each locator found again in a drawn page: same tag and words, nearest position."""
+    by_tag: dict = {}
+    for n in root.walk():
+        by_tag.setdefault(n.tag.upper(), []).append(n)
+    out = {}
+    for vid, loc in (ve or {}).items():
+        best, dist = None, None
+        for i, n in enumerate(by_tag.get(str(loc.get("tag", "")).upper(), [])):
+            first = next((x for x in n.walk() if x.tag == "tr"), n) if n.tag == "table" else n
+            if squeeze(first.text()) == loc.get("s") and (dist is None or abs(i - int(loc.get("k", 0))) < dist):
+                best, dist = n, abs(i - int(loc.get("k", 0)))
+        if best is not None:
+            out[vid] = best
+    return out
+
+
+def hidden_ids(items: list) -> set:
+    """Places the reader does not see when the page opens (marked by present/ve_trang.py)."""
+    return {it.node.attrs["data-clicky"] for it in items
+            if it.node.attrs.get("data-clicky-an") or it.node.has_ancestor(lambda n: bool(n.attrs.get("data-clicky-an")))}
+
+
+def drawn_places(src_path: Path, en: bool, declared: Optional[str]) -> Optional[dict]:
+    """The report as the browser draws it (tables a script fills in), its places named v1, v2…; None when no
+    browser could open it."""
+    from present import ve_trang
+    html = ve_trang.rendered(str(src_path))
+    if not html:
+        return None
+    root = parse(html)
+    try:
+        _src, items, rows = tag_targets(html, root, "v")
+    except PackError:
+        return None
+    places = make_places(items, rows, root, en, declared)
+    return {"root": root, "items": items, "places": places, "hidden": hidden_ids(items), "text": root.text()}
+
+
+def drawn_locators(script: dict, drawn: Optional[dict]) -> dict:
+    """{v-id: locator} for every drawn place a line frames, and the table of each drawn row."""
+    if not drawn:
+        return {}
+    nodes = {it.node.attrs["data-clicky"]: it.node for it in drawn["items"]}
+    for n in drawn["root"].walk():
+        if n.tag == "tr" and n.attrs.get("data-clicky"):
+            nodes[n.attrs["data-clicky"]] = n
+    want = set()
+    for sc in script.get("canh") or []:
+        for c in sc.get("cau") or []:
+            chi = str(c.get("chi") or "")
+            if chi.startswith("v") and chi in nodes:
+                want.add(chi)
+                table = re.sub(r"r\d+$", "", chi)
+                if table != chi and table in nodes:
+                    want.add(table)
+    return {k: locator(nodes[k], drawn["root"]) for k in sorted(want)}
 
 
 def target_texts(root: Node) -> dict:
@@ -1941,9 +2015,11 @@ def dump_script(script: dict, report: str, snap: Optional[dict] = None, draft: b
             row = {"noi": _Q(c["noi"]), "chi": c.get("chi") or ""}
             if c.get("neo"):
                 row["neo"] = _Q(c["neo"])
-            for k in ("so_rieng", "xac_nhan"):
+            for k in ("so_rieng", "xac_nhan", "so_tinh"):
                 if c.get(k):
                     row[k] = [_Q(str(x)) for x in c[k]]
+            if c.get("dung"):
+                row["dung"] = float(c["dung"])
             sc["cau"].append(row)
         out.append(sc)
     body = {"bao_cao": _Q(report), "da_duyet": _Q("chưa"),
@@ -2009,6 +2085,9 @@ def next_period(script: dict, old: dict, places: dict, en: bool) -> tuple:
         for c in s.get("cau") or []:
             if c.get("so_rieng"):
                 continue                   # a sentence with his own figures: he says what changes in it
+            if c.get("so_tinh"):
+                flipped.append(c)          # a figure worked out from last period's: this period's draft line
+                continue
             neo = str(c.get("neo") or "").strip()
             a, b = (old.get(neo) or "").split(), (now.get(neo) or "").split()
             if not a or len(a) != len(b):
@@ -2158,13 +2237,18 @@ def seal(record: dict) -> str:
                                      separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+def _computed(c: dict, en: bool) -> set:
+    """The values a line's so_tinh works out ("8 = …" gives 8)."""
+    return {value(str(x).partition("=")[0].strip(), en) for x in (c.get("so_tinh") or []) if "=" in str(x)} - {None}
+
+
 def stale_places(script: dict, places: dict, en: bool) -> int:
     """How many framed places no longer show a figure the line says there (a script without "so_cho")."""
     gone = set()
     for s in script.get("canh") or []:
         for c in s.get("cau") or []:
             chi = str(c.get("chi") or "")
-            own = {value(t, en) for t in _toks(c.get("so_rieng"))}
+            own = {value(t, en) for t in _toks(c.get("so_rieng"))} | _computed(c, en)
             if chi in places and any(value(f.tok, en) not in own and check_at(f, places[chi], en, None) == "missing"
                                      for f in figures(str(c.get("noi") or ""))):
                 gone.add(chi)
@@ -2325,6 +2409,14 @@ def make_record(script: dict, places: dict, page_text: str, meta: dict, en: bool
             conf = c.get("xac_nhan")
             conf_all = conf is True or tri_nho.fold(str(conf or "")) in YES
             confirmed = {value(t, en) for t in _toks(conf)}
+            computed = {}                  # so_tinh: ["8 = (20,9 - 14,1) / (165,5 - 78,2) × 100"]: a figure code works out
+            for entry in (c.get("so_tinh") or []):
+                tok, eq, expr = str(entry).partition("=")
+                if not eq or value(tok.strip(), en) is None:
+                    bad.append((noi, str(entry)[:20], "dòng so_tinh phải có dạng «số = công thức», ví dụ «8 = (20,9 - 14,1) "
+                                                      "/ (165,5 - 78,2) × 100»"))
+                    continue
+                computed[value(tok.strip(), en)] = expr.strip()
             found = []
             words = spelled_number(noi)
             if words:
@@ -2349,6 +2441,14 @@ def make_record(script: dict, places: dict, page_text: str, meta: dict, en: bool
                     why = (f"số trong ngoặc, em chưa rõ là số âm hay tỷ trọng. Anh viết «âm {f.tok}» nếu là số âm, "
                            f"hoặc «chiếm {f.tok}» nếu là tỷ trọng")
                 entry = {"so": f.tok, "gia_tri": str(v), "dau": f.sign or ""}   # gia_tri: the value as read aloud
+                if v in computed:                  # worked out from printed figures: the lock recomputes it
+                    from present import story
+                    why_t = story.check_computed(f.tok, computed[v], noi[:f.at], en, on_page)
+                    if why_t:
+                        bad.append((noi, f.tok, f"là số em tính, nhưng {why_t}"))
+                    else:
+                        found.append(dict(entry, nguon="em_tinh", cong_thuc=computed[v]))
+                    continue
                 stale_own = v in own and v in (earlier or {}).get(chi, ()) and chi in places and \
                     v not in {value(g.tok, en) for g in place_figs(places[chi])}
                 level_now = [g for g in (places[chi].figs or []) if g.level and (g.unit or "") == (f.unit or "")
@@ -2393,8 +2493,9 @@ def make_record(script: dict, places: dict, page_text: str, meta: dict, en: bool
               "lap_luc": meta["built_iso"], "nguoi_chiu_trach_nhiem": meta["owner"], "dau_so": "en" if en else "vn",
               "don_vi": declared or "", "trang_thai": meta.get("trang_thai", ""), "cau": rows,
               "tong": {"cau": len(rows), "so": len(flat),
-                       "dung_cho_khoanh": sum(1 for x in flat if x not in ("bao_cao", "nguoi_soan")),
-                       "cho_khac_trong_bao_cao": flat.count("bao_cao"), "nguoi_soan_them": flat.count("nguoi_soan")}}
+                       "dung_cho_khoanh": sum(1 for x in flat if x not in ("bao_cao", "nguoi_soan", "em_tinh")),
+                       "cho_khac_trong_bao_cao": flat.count("bao_cao"), "nguoi_soan_them": flat.count("nguoi_soan"),
+                       "em_tinh": flat.count("em_tinh")}}
     record["ma_bam"] = seal(record)
     return record
 
@@ -2415,7 +2516,7 @@ LEAD_IN = 0.25    # seconds of silence before the first word: Bluetooth and Wind
 
 
 def voice_lines(sentences: list, say: Callable[[str], bytes], en_numbers: bool = False,
-                info: dict | None = None) -> tuple:
+                info: dict | None = None, pauses: Optional[list] = None) -> tuple:
     """Voice each sentence piece by piece, the way a person reads a report: a short breath inside a long
     sentence, a longer pause between sentences. Returns (wav bytes, start second of each sentence).
     A word the offline voice cannot say is spelled letter by letter instead of being dropped; if even that
@@ -2471,6 +2572,8 @@ def voice_lines(sentences: list, say: Callable[[str], bytes], en_numbers: bool =
             frames.append(fr)
             t += len(fr) / width / rate
             gap = PAUSE_PIECE if j < len(parts) - 1 else (PAUSE_SENTENCE if k < len(sentences) - 1 else 0.2)
+            if j == len(parts) - 1 and pauses and k < len(pauses):
+                gap += pauses[k]                   # a question to the room: let it land before the answer
             frames.append(b"\0" * (int(rate * gap) * width))
             t += gap
     out = io.BytesIO()
@@ -2547,6 +2650,14 @@ def for_voice(sentence: str, en: bool = False) -> str:
     return re.sub(r"(?<!\w)vs\.?(?=\s|$)", "so với", t)
 
 
+def _pause(v) -> float:
+    """Extra seconds of silence after a line ("dung: 1.5" after a question to the room), 0 to 4."""
+    try:
+        return max(0.0, min(4.0, float(str(v).replace(",", ".")))) if v not in (None, "", False) else 0.0
+    except ValueError:
+        return 0.0
+
+
 def scenes_from_script(script: dict, known: set) -> list:
     scenes = []
     for s in script.get("canh") or []:
@@ -2558,7 +2669,8 @@ def scenes_from_script(script: dict, known: set) -> list:
                 raise PackError(f"Kịch bản trỏ tới '{c['chi']}' nhưng báo cáo không còn chỗ đó. Hãy soạn lại kịch bản.")
         text = " ".join(str(c["noi"]).strip() for c in lines)
         scenes.append({"title": str(s.get("muc", "")), "line": text, "chi": [c.get("chi") or "" for c in lines],
-                       "sentences": [str(c["noi"]).strip() for c in lines]})
+                       "sentences": [str(c["noi"]).strip() for c in lines],
+                       "dung": [_pause(c.get("dung")) for c in lines]})
     if not scenes:
         raise PackError("Kịch bản không có câu nào để nói.")
     return scenes
@@ -2574,7 +2686,8 @@ def attach_evidence(scenes: list, record: dict) -> None:
             r = next(rows)
             if r["noi"] != sentence:                 # both come from the same script in the same order
                 raise PackError("Biên bản và lời nói lệch nhau. Hãy dựng lại.")
-            s["ev"].append([[x["so"], "o" if x["nguon"] == "nguoi_soan" else "b" if x["nguon"] == "bao_cao" else "k"]
+            s["ev"].append([[x["so"], "t", x["cong_thuc"]] if x["nguon"] == "em_tinh" else
+                            [x["so"], "o" if x["nguon"] == "nguoi_soan" else "b" if x["nguon"] == "bao_cao" else "k"]
                             for x in r["so"]])
 
 
@@ -2671,7 +2784,9 @@ progress: Callable[[str], None] = _quiet       # the launcher shows each step on
 @in_vn_marks
 def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, contact: Optional[str] = None,
           script_path: Optional[str] = None, label: str = "",
-          voice: Optional[Callable[[str], bytes]] = None, memory: Optional[str] = None) -> dict:
+          voice: Optional[Callable[[str], bytes]] = None, memory: Optional[str] = None, tell: bool = True) -> dict:
+    """tell: draft the talk as a story (present/story.py) when the report has a plan-actual table; False drafts
+    the report in page order (the draft before v2)."""
     progress("Đang đọc báo cáo và soạn lời trình bày…")
     owner = re.sub(r"\s+", " ", owner or "").strip()
     contact = (contact or "").strip()
@@ -2713,8 +2828,26 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     to_tell = mem.for_talk(period, src_path.name)[:5] if mem else []
     memo = memory_scene(to_tell, owner, places, en, declared)
     month, year = talk_month(src_path.name, title + " " + (head_title.group(1) if head_title else ""), items)
-    draft = draft_script(items, rows, places, owner, en, declared, chart_series(source), net_chart, memo,
-                         head_title.group(1).strip() if head_title else "", month=month, year=year)
+    from present import story as _story
+    draft = _story.story(items, places, owner, en) if tell else None     # the story; else the report in page order
+    drawn = None
+    if draft is None and tell and re.search(r"<script\b", source, re.I):
+        # a dashboard whose script draws its tables: tell the story from the page as the Board will see it
+        progress("Đang mở báo cáo trong trình duyệt ẩn để đọc các bảng do báo cáo tự vẽ…")
+        drawn = drawn_places(src_path, en, declared)
+        if drawn is not None:
+            draft = _story.story(drawn["items"], drawn["places"], owner, en, hidden=drawn["hidden"])
+            if draft is None:
+                drawn = None
+            else:
+                places = {**places, **drawn["places"]}
+                known |= set(drawn["places"])
+                page_text += " " + drawn["text"]
+    if draft is not None and memo:
+        draft["canh"].insert(1, memo)
+    if draft is None:
+        draft = draft_script(items, rows, places, owner, en, declared, chart_series(source), net_chart, memo,
+                             head_title.group(1).strip() if head_title else "", month=month, year=year)
     if not any(figures(c["noi"]) for s in draft["canh"] for c in s["cau"]
                if c.get("chi") not in places or places[c["chi"]].kind not in ("title", "section")):
         raise _nothing_to_say(source, items, "nhưng chưa có câu nào có số để trình bày")
@@ -2747,6 +2880,12 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     if memo and not any(s.get("tri_nho") for s in script["canh"]):
         script["canh"].insert(1 if script["canh"] else 0, memo)
         notes.append("Đã thêm phần «Câu hỏi lần trước» sau lời chào (anh có thể sửa trong file nháp).")
+    if drawn is None and any(str(c.get("chi") or "").startswith("v") for sc in script["canh"] for c in sc.get("cau") or []):
+        drawn = drawn_places(src_path, en, declared)          # the owner's script frames places the report draws
+        if drawn is not None:
+            places = {**places, **drawn["places"]}
+            known |= set(drawn["places"])
+            page_text += " " + drawn["text"]
     moved = reanchor(script, places)
     if moved:
         notes.append(f"{len(moved)} chỗ khoanh đã dời theo chữ vì báo cáo thêm hoặc bớt phần.")
@@ -2788,8 +2927,13 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
             if any(c["noi"] == new for _, new in redo):
                 continue
             d = by_chi.get(str(c.get("chi")))
+            if d and d["noi"] == c["noi"] and d.get("so_tinh") == c.get("so_tinh"):
+                continue                   # worked out again, same words and formula
             redo.append((str(c.get("noi")), d["noi"] if d else ""))
             c["noi"] = d["noi"] if d else ""
+            c.pop("so_tinh", None)
+            if d and d.get("so_tinh"):
+                c["so_tinh"] = list(d["so_tinh"])
         script["canh"] = [dict(s, cau=[c for c in s["cau"] if str(c.get("noi") or "").strip()])
                           for s in script["canh"]]
         for s in script["canh"]:
@@ -2897,13 +3041,14 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     spelled: set = set()                       # words the voice had to spell letter by letter
     clips = [0, len(scenes) + 1 + len(bank)]   # done, all: what the launcher shows while the voice reads
 
-    def audio(text, sentences=None):
-        key = "\n".join(sentences) if sentences else text
+    def audio(text, sentences=None, pauses=None):
+        key = "\n".join(sentences) + repr(pauses) if sentences else text
         clips[0] += 1
         progress(f"Đang đọc giọng: đoạn {min(clips[0], clips[1])}/{clips[1]}…")
         if key not in cache:
             info: dict = {}
-            wav, starts = voice_lines([for_voice(x, en) for x in (sentences or [text])], say, en, info=info)
+            wav, starts = voice_lines([for_voice(x, en) for x in (sentences or [text])], say, en, info=info,
+                                      pauses=pauses)
             spelled.update(info.get("danh_van") or [])
             mp3, secs = wav_to_mp3(wav)
             if starts is None:                     # no timings from the voice: spread by length
@@ -2916,7 +3061,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
         return cache[key]
 
     def timed(s):
-        c = audio(None, s["sentences"])
+        c = audio(None, s["sentences"], s.pop("dung", None))
         # the frame appears just before Clicky says the sentence, never after
         s["points"] = [{"id": chi, "t": max(0.0, round(c["starts"][k] - LEAD, 3))}
                        for k, chi in enumerate(s.pop("chi")) if chi]
@@ -2934,6 +3079,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
             "cards": [{"id": it.node.attrs["data-clicky"], "text": it.text, "label": card_label(it.node)}
                       for it in items if it.kind == "card"],
             "cot": table_columns(places),
+            "ve": drawn_locators(script, drawn),
             "fallback": fallback, "fallback_clip": audio(fallback), "aliases": doc_tai_chinh.aliases(),
             "bank": [dict(audio(f"{who} đã trả lời" + (f" kỳ {b['ky']}" if b["cu"] and b["ky"] else "")
                                 + f": {_sentence(b['tra_loi'])}"),
@@ -2957,7 +3103,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     return {"out": str(out_path), "draft": str(draft_out) if draft_out else None, "kich_ban": str(used),
             "trang_thai": status, "da_duyet": ok and not reset, "canh_bao": notes, "dau_so": meta["dau_so"], "ma_hoa": encoding,
             "scenes": len(scenes), "minutes": meta["minutes"], "bytes": len(page.encode("utf-8")),
-            "record": meta["record"], "doi_neo": moved,
+            "record": meta["record"], "doi_neo": moved, "phan_bien": draft.get("phan_bien") or [],
             "xem_lai": [{"cau": r["noi"], "so": [x["so"] for x in r["so"] if x["nguon"] == "bao_cao"]}
                         for r in record["cau"] if any(x["nguon"] == "bao_cao" for x in r["so"])],
             "found": {k: sum(1 for i in items if i.kind == k) for k in ("section", "note", "card", "table", "chart")},
@@ -2971,7 +3117,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
 
 def todo_list(rep: dict) -> list:
     """What the owner should do, most important first: a new period or a changed report, then reading the draft."""
-    todo = rep["canh_bao"][:]
+    todo = rep["canh_bao"][:] + [f"Trước khi gửi, anh soát: {x}" for x in rep.get("phan_bien") or []]
     if not rep["trang_thai"].startswith("SƠ BỘ"):
         return todo
     first = 1 if todo and todo[0].startswith(("Đây là báo cáo kỳ mới", "Báo cáo đã đổi số", "Sửa câu «")) else 0
@@ -2987,7 +3133,8 @@ def summary(rep: dict) -> str:
     """Three plain lines for the console: pass or not, what to look at, where the file is."""
     r = rep["record"]
     first = (f"ĐẠT ({rep['trang_thai']}). {rep['scenes']} phần, khoảng {str(rep['minutes']).replace('.', ',')} phút, "
-             f"{r['so']} con số đều khớp với báo cáo.")
+             f"{r['so']} con số đều khớp với báo cáo"
+             + (f" ({r['em_tinh']} số em tính lại từ số trên báo cáo, có công thức)." if r.get("em_tinh") else "."))
     todo = todo_list(rep)
     second = "Cần xem: " + " ".join(todo) if todo else "Không có gì cần sửa."
     return "\n".join([first, second, f"File: {rep['out']}"])

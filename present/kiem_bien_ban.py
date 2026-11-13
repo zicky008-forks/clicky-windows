@@ -7,6 +7,7 @@ Reads only the output file (and the original report when given). It trusts nothi
    direction (tăng/giảm/âm) and unit, read with the report's own number marks (412,580.5 or 412.580,5); on a
    table row it must sit in the column the sentence names (chênh lệch, %, AOP gốc…), and the sentence must not
    name another row;
+   a figure code worked out ("em_tinh") is recomputed from its formula, whose inputs must be printed in the report;
 4. with --goc, the original report's SHA-256 matches the record;
 5. a talk that says no figure at all does not pass: there is nothing it could have checked.
 
@@ -54,7 +55,26 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
     texts = target_texts(root)
     places = page_places(root, en, unit)       # table rows by column, cards part by part: the build's own rules
     on_page = {value(t, en) for t in numbers(root.text() + " " + _labels(root))}
-    count = {"cau": 0, "so": 0, "dung_cho_khoanh": 0, "cho_khac_trong_bao_cao": 0, "nguoi_soan_them": 0}
+    if data.get("ve"):                         # places the report's own script draws: open the page in a browser
+        from present import ve_trang
+        from present.clicky_html import find_drawn, page_places as _pp, parse as _parse, target_texts as _tt
+        drawn = ve_trang.rendered(packed)
+        if not drawn:
+            errors.append("Không mở được trình duyệt để kiểm các chỗ do báo cáo tự vẽ (bảng vẽ bằng JavaScript).")
+        else:
+            root2 = _parse(drawn)
+            found = find_drawn(root2, data["ve"])
+            for n in root2.walk():             # only the drawn places named by the talk carry an id here
+                n.attrs.pop("data-clicky", None)
+            for vid, n in found.items():
+                n.attrs["data-clicky"] = vid
+            places.update(_pp(root2, en, unit))
+            texts.update(_tt(root2))
+            on_page |= {value(t, en) for t in numbers(root2.text())}
+            missing = sorted(set(data["ve"]) - set(found))
+            if missing:
+                errors.append(f"Không tìm lại được {len(missing)} chỗ do báo cáo tự vẽ ({', '.join(missing[:4])}).")
+    count = {"cau": 0, "so": 0, "dung_cho_khoanh": 0, "cho_khac_trong_bao_cao": 0, "nguoi_soan_them": 0, "em_tinh": 0}
     for row in record.get("cau", []):
         count["cau"] += 1
         listed = [x["so"] for x in row.get("so", [])]
@@ -74,6 +94,12 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
             tok, where = x["so"], x["nguon"]
             if where == "nguoi_soan":
                 count["nguoi_soan_them"] += 1
+            elif where == "em_tinh":               # worked out by code: recompute it from the page's own figures
+                count["em_tinh"] += 1
+                from present import story
+                why = story.check_computed(tok, str(x.get("cong_thuc") or ""), row["noi"][:f.at], en, on_page)
+                if why:
+                    errors.append(f"Số {tok} em tính: {why} (câu «{clip(row['noi'])}»).")
             elif where == "bao_cao":
                 count["cho_khac_trong_bao_cao"] += 1
                 if value(tok, en) not in on_page:
@@ -117,8 +143,9 @@ def main(argv=None) -> int:
     t = rep["tong"]
     if rep["ok"]:
         print(f"ĐẠT. {t['so']} con số trong {t['cau']} câu: {t['dung_cho_khoanh']} ở đúng chỗ Clicky khoanh, "
-              f"{t['cho_khac_trong_bao_cao']} ở chỗ khác trong báo cáo, {t['nguoi_soan_them']} do "
-              f"{rep['nguoi_chiu_trach_nhiem']} bổ sung. Mã biên bản {rep['ma_bam'][:12]}."
+              f"{t['cho_khac_trong_bao_cao']} ở chỗ khác trong báo cáo, "
+              + (f"{t['em_tinh']} em tính lại từ số trên báo cáo, " if t.get("em_tinh") else "")
+              + f"{t['nguoi_soan_them']} do {rep['nguoi_chiu_trach_nhiem']} bổ sung. Mã biên bản {rep['ma_bam'][:12]}."
               + (f" {rep['trang_thai']}." if rep.get("trang_thai") else ""))
         return 0
     print("KHÔNG ĐẠT:", file=sys.stderr)
