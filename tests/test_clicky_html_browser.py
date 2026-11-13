@@ -348,13 +348,13 @@ def test_figures_take_focus_and_enter_asks(page):
 
 # --- round 1 review: other report shapes ---
 
-def _build_html(tmp_path, html, name="bc"):
+def _build_html(tmp_path, html, name="bc", owner="anh Tuấn", contact="tuan@congty.vn"):
     mp = pytest.MonkeyPatch()
     mp.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
     src = tmp_path / f"{name}.html"
     src.write_text(html, encoding="utf-8")
     try:
-        return Path(clicky_html.build(str(src), owner="anh Tuấn", contact="tuan@congty.vn",
+        return Path(clicky_html.build(str(src), owner=owner, contact=contact,
                                       voice=lambda t: t.encode("utf-8"))["out"])
     finally:
         mp.undo()
@@ -1422,6 +1422,29 @@ def test_round4_leader_line_never_crosses_words_or_figures(tmp_path):
                 pg.evaluate("document.querySelector('td[data-t]').removeAttribute('data-t')")
             assert not errors
             browser.close()
+
+
+def test_a_leader_line_never_grazes_the_words_of_a_dense_table_at_an_odd_zoom(tmp_path):
+    # real report 2026-11-13: the bend was checked at y=455.6 and drawn at 456, on the top edge of a row's words
+    rows = "".join("<tr><td>Khối kinh doanh " + str(r) + " miền " + "BTN"[r % 3] + "</td>"
+                   + "".join(f"<td>{100 + r * 7 + c},{c}</td>" for c in range(1, 8))
+                   + f"<td>tăng {r % 9 + 1},4% so với kế hoạch</td></tr>" for r in range(1, 45))
+    html = f"""<html><head><meta charset="utf-8"><title>KQ</title><style>body{{font:13.3px Arial;margin:12.4px;line-height:1.37}}
+td,th{{padding:2.3px 5.1px;text-align:right;border-bottom:1px solid #ddd}} table{{border-collapse:collapse;width:100%}} p{{margin:3.3px 0}}</style>
+</head><body><h1>Báo cáo (SỐ GIẢ LẬP, tỷ đồng)</h1><h2>1. Tóm tắt</h2><p>Chi phí tăng 12,6% còn doanh thu tăng 7,2%.</p><h2>2. Chi tiết</h2>
+<table><tr><th>Đơn vị</th>{''.join(f'<th>Tháng {c}</th>' for c in range(1, 8))}<th>Ghi chú</th></tr>{rows}</table><h2>3. Diễn giải</h2>
+{''.join(f'<p>Dòng diễn giải {i}: khối {i} có doanh thu {200 + i},5 tỷ, chi phí {90 + i},2 tỷ, biên {12 + i % 5},1%.</p>' for i in range(30))}
+</body></html>"""
+    out = _build_html(tmp_path, html, "bc", owner="a", contact="a@b.c")   # the bar's width sets where the bubble goes
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, out, 1280, 720)
+        pg.wait_for_function("typeof window.__clickyKiemHinh === 'function'")
+        pg.evaluate("document.documentElement.style.zoom = '1.07'")
+        res = pg.evaluate("window.__clickyKiemHinh()")
+        assert res["checked"] > 0 and not [p for p in res["problems"] if "chỉ dẫn" in p], res["problems"][:3]
+        assert not errors
+        browser.close()
 
 
 def test_round4_bubble_never_sits_on_its_own_tables_headers_and_fits_its_content(tmp_path):

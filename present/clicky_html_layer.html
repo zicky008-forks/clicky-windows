@@ -1755,8 +1755,8 @@ function textRects(zone, skip) {   // every line of words or figures on the page
   }
   return out;
 }
-function segCross(a, b, q) {   // does the segment a→b pass through the box q (1px inside its edges)?
-  const L = q.left + 1, R = q.right - 1, T = q.top + 1, B = q.bottom - 1; if (L >= R || T >= B) return false;
+function segCross(a, b, q, pad = 0) {   // does the segment a→b pass through the box q (1px inside its edges, or pad px outside them)?
+  const k = 1 - pad, L = q.left + k, R = q.right - k, T = q.top + k, B = q.bottom - k; if (L >= R || T >= B) return false;
   let t0 = 0, t1 = 1; const dx = b[0] - a[0], dy = b[1] - a[1];
   for (const [p, d] of [[-dx, a[0] - L], [dx, R - a[0]], [-dy, a[1] - T], [dy, B - a[1]]]) {
     if (p === 0) { if (d < 0) return false; continue; }
@@ -1764,12 +1764,12 @@ function segCross(a, b, q) {   // does the segment a→b pass through the box q 
   }
   return t0 < t1;
 }
-function leaderCrosses(path, r, skip) {   // the words and figures a leader path runs over, other than its own place
-  const z = path.reduce((a, [x, y]) => ({left: Math.min(a.left, x - 2), top: Math.min(a.top, y - 2), right: Math.max(a.right, x + 2), bottom: Math.max(a.bottom, y + 2)}), {left: 1e9, top: 1e9, right: -1e9, bottom: -1e9});
+function leaderCrosses(path, r, skip, pad = 0) {   // the words and figures a leader path runs over, other than its own place
+  const m = 2 + pad, z = path.reduce((a, [x, y]) => ({left: Math.min(a.left, x - m), top: Math.min(a.top, y - m), right: Math.max(a.right, x + m), bottom: Math.max(a.bottom, y + m)}), {left: 1e9, top: 1e9, right: -1e9, bottom: -1e9});
   const own = {left: r.left - 2, top: r.top - 2, right: r.right + 2, bottom: r.bottom + 2}, inOwn = q => q.left >= own.left && q.right <= own.right && q.top >= own.top && q.bottom <= own.bottom;
   const b = isOpen($("bub")) ? rect($("bub")) : null;   // words the answer itself sits on are hidden: the line does not cross them
   const under = q => b && Math.max(0, Math.min(q.right, b.right) - Math.max(q.left, b.left)) * Math.max(0, Math.min(q.bottom, b.bottom) - Math.max(q.top, b.top)) >= 0.5 * (q.right - q.left) * (q.bottom - q.top);
-  return textRects(z, skip).filter(q => !inOwn(q) && !under(q) && path.slice(1).some((p, i) => segCross(path[i], p, q)));
+  return textRects(z, skip).filter(q => !inOwn(q) && !under(q) && path.slice(1).some((p, i) => segCross(path[i], p, q, pad)));
 }
 function leaderPath(r, q, v) {   // straight, else with one bend; it ends in the blank side of the place's own cell, never on a digit
   const a = anchor && anchor.nodeType === 1 ? anchor : null, mid = (r.top + r.bottom) / 2;
@@ -1786,13 +1786,19 @@ function leaderPath(r, q, v) {   // straight, else with one bend; it ends in the
   if (aim[1] < v.y || aim[1] > v.y + v.h || aim[0] < v.x || aim[0] > v.x + v.w) return null;
   const edge = (x, y) => [Math.max(q.left, Math.min(q.right, x)), Math.max(q.top, Math.min(q.bottom, y))];
   const tries = [[edge(aim[0], aim[1]), aim]];
-  const qy = Math.max(q.top + 14, Math.min(q.bottom - 14, aim[1])), qx = Math.max(q.left + 14, Math.min(q.right - 14, aim[0]));
-  if (aim[0] < q.left || aim[0] > q.right) tries.push([[aim[0] < q.left ? q.left : q.right, qy], [aim[0], qy], aim]);   // across, then down the blank side of the column
-  if (aim[1] < q.top || aim[1] > q.bottom) tries.push([[qx, aim[1] < q.top ? q.top : q.bottom], [qx, aim[1]], aim]);   // down, then across
+  // the bend may sit anywhere along the bubble's side: the nearest height first, then others, so the line finds a blank band between rows
+  const bends = (lo, hi, at) => { if (lo > hi) return [(lo + hi) / 2]; const c = Math.max(lo, Math.min(hi, at)), out = [c];
+    for (let d = 9; out.length < 9 && (c - d >= lo || c + d <= hi); d += 9) { if (c - d >= lo) out.push(c - d); if (c + d <= hi) out.push(c + d); }
+    return out; };
+  if (aim[0] < q.left || aim[0] > q.right) for (const qy of bends(q.top + 14, q.bottom - 14, aim[1]))   // across, then down the blank side of the column
+    tries.push([[aim[0] < q.left ? q.left : q.right, qy], [aim[0], qy], aim]);
+  if (aim[1] < q.top || aim[1] > q.bottom) for (const qx of bends(q.left + 14, q.right - 14, aim[0]))   // down, then across
+    tries.push([[qx, aim[1] < q.top ? q.top : q.bottom], [qx, aim[1]], aim]);
   for (const p of tries) {
-    const pts = p.filter((x, i) => !i || Math.hypot(x[0] - p[i - 1][0], x[1] - p[i - 1][1]) >= 1);
+    const rp = p.map(([x, y]) => [Math.round(x), Math.round(y)]);   // check the very points that are drawn
+    const pts = rp.filter((x, i) => !i || Math.hypot(x[0] - rp[i - 1][0], x[1] - rp[i - 1][1]) >= 1);
     if (pts.length < 2 || Math.hypot(pts[pts.length - 1][0] - pts[0][0], pts[pts.length - 1][1] - pts[0][1]) < 4) continue;
-    if (!leaderCrosses(pts, r, a).length) return pts.map(([x, y]) => [Math.round(x), Math.round(y)]);
+    if (!leaderCrosses(pts, r, a, 2).length) return pts;   // 2px of air: a line that grazes a word reads as crossing it
   }
   return null;
 }
