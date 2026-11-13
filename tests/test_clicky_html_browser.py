@@ -1494,3 +1494,48 @@ def test_round4_phone_ask_button_and_play_width(built):
         assert len(set(ws)) == 1, ws                                           # one width in every state, after the first press too
         assert not errors
         browser.close()
+
+
+def _bod_dashboard():
+    """A BOD dashboard laid out like the owner's real one (2026-11-13): a sticky title bar, a fixed side menu, a
+    table that scrolls in its own box under a sticky header row, and a second tab that is not open."""
+    def vn(i):
+        return f"{(i * 7919) % 99999 / 10:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    head = "<tr><th>Chỉ tiêu</th><th>Actual</th><th>AOP</th><th>AOPR</th><th>LY</th><th>Var</th><th>Var %</th></tr>"
+    rows = lambda n, t: "".join(f"<tr><td>Khoản mục {t}-{r}</td>" + "".join(f"<td>{vn(t * 1000 + r * 10 + k)}</td>"
+                                for k in range(6)) + "</tr>" for r in range(n))
+    return f"""<!doctype html><html><head><meta charset="utf-8"><title>AOPR FY2627 BOD dashboard</title>
+<style>body{{margin:0;font-family:Arial}} header{{position:sticky;top:0;background:#0a4;color:#fff;padding:14px;z-index:50}}
+nav{{position:fixed;left:0;top:60px;width:150px;bottom:0;background:#eee}} main{{margin-left:160px;padding:10px}}
+.tab{{display:none}} .tab.on{{display:block}} .scroll{{max-height:300px;overflow:auto}} table{{border-collapse:collapse}}
+td,th{{border:1px solid #ccc;padding:4px}} thead th{{position:sticky;top:0;background:#fff}}</style></head><body>
+<header><h1>AOPR FY2627 · Báo cáo cho Ban Giám đốc · cập nhật 29.10</h1></header>
+<nav><a href="#">Tổng quan</a><br><a href="#">P&amp;L</a></nav>
+<main><div class="kpi-card"><div class="kpi-label">Doanh thu thuần</div><div class="kpi-value">672,7 tỷ</div>
+<div class="kpi-delta">+5,3% so với AOP</div></div>
+<section class="tab on"><h2>1. P&amp;L tổng</h2><div class="scroll"><table><thead>{head}</thead><tbody>{rows(30, 1)}</tbody></table></div>
+<p>Thông điệp chính: doanh thu thuần tăng 5,3% so với AOP, lợi nhuận gộp giảm 2,1 tỷ.</p></section>
+<section class="tab" id="tab2"><h2>2. Chi phí theo khối</h2><table>{head}{rows(15, 2)}</table></section>
+</main></body></html>"""
+
+
+def test_frames_clear_a_sticky_title_a_sticky_table_header_and_open_a_closed_tab(tmp_path):
+    # real-report run 2026-11-13: 'Kiểm hình' failed on a BOD dashboard; this layout gave 78 problems before
+    out = _build_html(tmp_path, _bod_dashboard(), "bod")
+    res = kiem_hinh.check(str(out))
+    if res["skipped"]:
+        pytest.skip(res["reason"])
+    assert res["ok"], kiem_hinh.kinds(res["problems"], top=10)
+    # a tab with a button that names it is opened with the page's own button
+    html = _bod_dashboard().replace('<a href="#">P&amp;L</a>', '<a href="#tab2" onclick="document.getElementById(\'tab2\')'
+                                    '.classList.add(\'on\');return false">P&amp;L</a>')
+    out = _build_html(tmp_path, html, "bod2")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser, pg, errors = _open(pw, out)
+        assert _ask(pg, "Khoản mục 2-3 Actual?").startswith("Khoản mục 2-3")
+        shown = pg.evaluate("""() => ({cls: document.getElementById('tab2').className,
+                                       inline: document.getElementById('tab2').style.display})""")
+        assert shown == {"cls": "tab on", "inline": ""}
+        assert not errors
+        browser.close()

@@ -3123,7 +3123,9 @@ def run_drop(argv=None, cmdline: Optional[str] = None, ask=input, opener=None, l
             show("Đang mở thử bản trình bày để kiểm từng màn hình…")
             code = kiem_hinh.main([str(work)] + (["--tri-nho", mem] if mem else []))
             if code == 1:
-                return fail("Kiểm hình: Clicky che số hoặc khoanh sai chỗ trên một số màn hình (xem nhật ký).")
+                found = (getattr(kiem_hinh.main, "last", None) or {}).get("problems") or []
+                return fail(f"Kiểm hình: {len(found)} chỗ chưa ổn: " + kiem_hinh.kinds(found) + "."
+                            if found else "Kiểm hình: Clicky che số hoặc khoanh sai chỗ trên một số màn hình (xem nhật ký).")
             seen = "đã kiểm hình" if code == 0 else "chưa kiểm hình được, anh mở file xem vài chỗ khoanh"
         try:
             os.replace(work, out)          # same name as before: a link to it keeps working

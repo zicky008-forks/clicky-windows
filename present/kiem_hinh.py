@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -151,6 +152,7 @@ def main(argv=None) -> int:
     bosses = tri_nho.load(a.tri_nho).bosses if a.tri_nho else {}
     asked = [(boss, q) for boss, qs in bosses.items() for q in qs]
     res = check(a.file, questions=[q for _, q in asked])
+    main.last = res
     if res.get("cau"):
         ok = sum(1 for r in res["cau"] if r["ok"])
         print(f"Câu các sếp hay hỏi: báo cáo này trả lời được {ok}/{len(res['cau'])}.")
@@ -171,6 +173,23 @@ def main(argv=None) -> int:
     if len(res["problems"]) > 30:
         print(f" - và {len(res['problems']) - 30} chỗ nữa")
     return 1
+
+
+def kinds(problems: list, top: int = 3) -> str:
+    """What went wrong, by kind and count, without the cell text: safe to show on the console of a real report.
+    "màn 1366x768: c3r2 ô 1 «12,4», khi mở bảng hỏi: thanh hoặc bảng hỏi của Clicky che số" counts as
+    "thanh hoặc bảng hỏi của Clicky che số"."""
+    count, screens = {}, {}
+    for p in problems:
+        size = re.match(r"(?:màn|điện thoại) (\d+x\d+): ", p)
+        kind = re.sub(r"«[^»]*»", "«…»", p.split(": ")[-1]).strip()
+        count[kind] = count.get(kind, 0) + 1
+        if size:
+            screens.setdefault(kind, set()).add(("điện thoại " if p.startswith("điện thoại") else "") + size.group(1))
+    order = sorted(count, key=lambda k: -count[k])
+    parts = [f"{k} ({count[k]} lần" + (", màn " + ", ".join(sorted(screens[k])) if k in screens else "") + ")"
+             for k in order[:top]]
+    return "; ".join(parts) + (f"; và {len(order) - top} loại khác" if len(order) > top else "")
 
 
 if __name__ == "__main__":

@@ -1418,3 +1418,22 @@ def test_the_launcher_shows_each_step_while_it_works_then_only_three_lines(repor
     lines = shown.rsplit("\r", 1)[1].strip().splitlines()      # what stays on screen after the last step is wiped
     assert len(lines) == 3 and lines[0].startswith("ĐẠT")
     assert clicky_html.progress is clicky_html._quiet               # the next build in this process is silent
+
+
+def test_a_failed_screen_check_says_what_kind_of_problem_on_the_console(report, tmp_path, monkeypatch, capsys):
+    # real-report run 2026-11-13: "(xem nhật ký)" sent the owner into a log full of real figures
+    from present import kiem_hinh
+
+    monkeypatch.setattr(clicky_html, "build", BUILD)
+    monkeypatch.setattr(clicky_html, "offline_voice", lambda: voice)
+    monkeypatch.setenv("CLICKY_TRI_NHO", str(tmp_path / "nho"))
+    clicky_html.tri_nho.save_owner("anh Tuấn", "tuan@congty.vn", str(tmp_path / "nho"))
+    found = ["màn 1366x768: c3r2 ô 1 «186,4»: phần cố định của trang (như tiêu đề) che số",
+             "màn 911x512: c3r4 ô 2 «12,6», khi mở bảng hỏi: phần cố định của trang (như tiêu đề) che số",
+             "khoanh vùng: sau khi cuộn trang, khung không còn bao ô «1.248»"]
+    monkeypatch.setattr(kiem_hinh, "check", lambda *a, **k: {"ok": False, "skipped": False, "problems": found})
+    assert clicky_html.run_drop([str(report)], cmdline="", opener=lambda p: None) == 1
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert len(lines) == 3 and "3 chỗ chưa ổn" in lines[1]
+    assert "phần cố định của trang (như tiêu đề) che số (2 lần, màn 1366x768, 911x512)" in lines[1]
+    assert not re.search(r"186,4|12,6|1\.248", lines[1])                # kinds only: no figure on the console

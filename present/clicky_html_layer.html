@@ -470,11 +470,37 @@ function restoreSideways() { if (!hsave) return;
       mk.style.cssText = `position:absolute;left:${h.vx + scrollX}px;top:${v.y + scrollY + 4}px;width:1px;height:1px;pointer-events:none`;
       document.body.appendChild(mk); mk.scrollIntoView({block: "nearest", inline: "start", behavior: "auto"}); mk.remove(); LIVE.delete(mk); fitBar(); } });
   hsave = null; schedule(); }
+let sheetRoom = 0;   // how tall the answer sheet may be on a short screen, set by keepVisible for the framed place
+function topCover() {   // the bottom edge of the page's own fixed or sticky header(s) across the top of the screen
+  const v = vp(); let y = v.y;
+  for (let k = 0; k < 4; k++) {
+    let low = y;
+    for (const fx of [0.25, 0.5, 0.75]) {
+      const e = document.elementFromPoint(v.x + v.w * fx, y + 2);
+      if (!e || e === host || mine(e)) continue;
+      for (let x = e; x && x !== document.body && x !== document.documentElement; x = x.parentElement) {
+        if (!/^(fixed|sticky)$/.test(getComputedStyle(x).position)) continue;
+        const q = x.getBoundingClientRect();
+        if (q.top <= y + 3 && q.bottom > low && q.height < v.h * 0.4 && q.width > v.w * 0.3) low = q.bottom;
+        break;
+      }
+    }
+    if (low <= y + 0.5) break;
+    y = low;
+  }
+  return y;
+}
+function stuckHead(c) {   // a header cell that stays at the top of its table while the rows scroll under it
+  for (let x = c; x && !/^(TABLE|BODY)$/.test(x.tagName); x = x.parentElement)
+    if (/^(sticky|fixed)$/.test(getComputedStyle(x).position)) return true;
+  return false;
+}
 function keepVisible(t) {   // the framed place is never under the bar, the panel or the page's own fixed header
   const p = $("panel"), v = vp(), small = v.w <= 700;
-  p._cap = 0; p.classList.remove("left", "top"); placePanel();
-  let r = rect(t), floor = rect($("bar")).top, ceil = v.y, under = false;
-  const barTop = floor, gd = guards(t).strong;
+  p._cap = 0; p.classList.remove("left", "top"); placePanel(); sheetRoom = 0;
+  let r = rect(t), floor = rect($("bar")).top, ceil = Math.max(v.y, topCover()), under = false;
+  const G = guards(t), heads = G.els.filter(stuckHead);
+  const barTop = floor, gd = G.strong.filter((q, i) => !(G.els[i] && stuckHead(G.els[i])));   // a stuck header shows by itself
   if (isOpen(p) && !small) {   // the side that leaves the place, its row label and its header free and hides fewest figures
     const g = gd.concat([r]), across = (x, y) => x.left < y.right && y.left < x.right;
     const side = left => { p.classList.toggle("left", left); placePanel(); const q = rect(p);
@@ -485,21 +511,25 @@ function keepVisible(t) {   // the framed place is never under the bar, the pane
       p._cap = Math.max(150, Math.min(rect(p).height, floor - 48 - r.height - 40)); placePanel();
       floor = rect(p).top; under = true;
     }
-  } else if (isOpen(p)) ceil = rect(p).bottom;
+  } else if (isOpen(p)) ceil = Math.max(ceil, rect(p).bottom);
   const bub = $("bub");
   if (isOpen(bub) && anchor && (anchor === t || t.contains(anchor) || anchor.contains(t)) && r.width + bub.offsetWidth + 48 > v.w) {
     const need = Math.min(bub.offsetHeight, 260) + 28;   // a wide place: keep room under it for the answer bubble
     if (r.height + need < floor - ceil - 16) floor -= need;
   } else if (isOpen(bub) && anchor && !small && v.h < 600 && (anchor === t || t.contains(anchor) || anchor.contains(t))) {
-    const need = Math.min(bub.offsetHeight, Math.max(120, (floor - v.y - 16) * 0.45)) + 16;   // the bubble is a sheet above the bar
-    if (r.height + need < floor - ceil - 16) floor -= need;
+    let need = Math.min(bub.offsetHeight, Math.max(120, (floor - v.y - 16) * 0.45)) + 16;   // the bubble is a sheet above the bar
+    const stuck = heads.reduce((a, h) => Math.max(a, rect(h).height), 0);
+    const room = floor - ceil - 16 - r.height - stuck - 12;   // under a sticky title and a sticky table header
+    if (need > room && room >= 96) need = room;                // a tight screen: a shorter sheet, the place above it
+    if (r.height + need < floor - ceil - 16) { floor -= need; sheetRoom = need - 16; }
   }
   const sc = scrollerOf(t) || scrollerOf(t, true);
   let moved = false;
   if (sc) { let c = rect(sc);
     if (Math.min(floor, c.bottom) - Math.max(ceil, c.top) < Math.min(r.height + 60, floor - ceil - 40)) {   // too little of the box shows: the page brings it up first
-      window.scrollBy({top: c.top - ceil - 64, behavior: "auto"}); c = rect(sc); r = rect(t); moved = true; }
-    ceil = Math.max(ceil, c.top); floor = Math.min(floor, c.bottom);
+      (scrollerOf(sc) || window).scrollBy({top: c.top - ceil - Math.min(64, (floor - ceil) * 0.1), behavior: "auto"}); c = rect(sc); r = rect(t); moved = true; }   // the page, or the app frame that scrolls in its place; a short screen keeps its room
+    ceil = Math.max(ceil, c.top + heads.filter(h => sc.contains(h)).reduce((a, h) => Math.max(a, rect(h).bottom - c.top), 0));
+    floor = Math.min(floor, c.bottom);
     if (!sc.querySelector(":scope > [data-clicky-layer]")) {   // room after the last rows of a scroll box too
       const sp = document.createElement("div"); sp.setAttribute("aria-hidden", "true"); sp.setAttribute("data-clicky-layer", "1"); sp.style.cssText = "height:55vh"; LIVE.add(sp); sc.appendChild(sp); } }
   const ex = pad(r) + 6;   // the frame's padding and ring are part of what must show
@@ -527,8 +557,8 @@ function keepVisible(t) {   // the framed place is never under the bar, the pane
       dy = got; }
   }
   if (Math.abs(dy) > 1) { (sc || window).scrollBy({top: dy, behavior: calm() ? "auto" : "smooth"}); moved = true; }
-  const unhide = () => { const e = hiddenBy(t); if (!e) return; const c = rect(e), q = rect(t);
-    (scrollerOf(t) || window).scrollBy({top: c.top < q.top ? -(c.bottom - q.top + 12) : (q.bottom - c.top + 12), behavior: "auto"}); schedule(); };
+  const unhide = () => { const e = hiddenBy(t); if (!e) return; const c = rect(e), q = rect(t), box = scrollerOf(t);
+    (box && box.contains(e) ? box : window).scrollBy({top: c.top < q.top ? -(c.bottom - q.top + 12) : (q.bottom - c.top + 12), behavior: "auto"}); schedule(); };
   const settle = () => { unhide(); panelClear(t); };
   if (calm() || !moved) settle(); else setTimeout(settle, 450);
   return moved;
@@ -539,8 +569,29 @@ function panelClear(t) {   // after every scroll: if the panel still sits on the
   const barTop = rect($("bar")).top, above = r.top - v.y - 20, below = barTop - r.bottom - 24;
   p._cap = Math.max(120, Math.max(above, below)); p.classList.toggle("top", above > below); placePanel();
 }
+// A place on a tab the reader has not opened (display:none) cannot be framed. The page's own tab button is
+// pressed when one names the panel; otherwise the panel is shown for the talk and put back afterwards.
+const forced = new Map();
+function drawn(e) { return !!(e && e.isConnected && e.getClientRects().length); }
+function unforce() { forced.forEach((old, e) => { e.style.display = old; }); forced.clear(); }
+function reveal(t) {
+  if (!t) return;
+  if (drawn(t)) return;              // forced panels stay until the talk ends: the page does not jump under the frame
+  for (let d = t.closest("details:not([open])"); d; d = d.parentElement && d.parentElement.closest("details:not([open])")) d.open = true;
+  if (drawn(t)) return;
+  for (let e = t; e && e !== document.body; e = e.parentElement) {
+    if (getComputedStyle(e).display !== "none") continue;
+    if (e.id) {
+      const id = CSS.escape(e.id), q = `[href="#${id}"],[aria-controls="${id}"],[data-target="#${id}"],[data-bs-target="#${id}"],[data-tab="${id}"],[onclick*="'${id}'"],[onclick*='"${id}"']`;
+      const btn = [...document.querySelectorAll(q)].find(b => !mine(b) && drawn(b));
+      if (btn) { try { btn.click(); } catch (_) {} if (drawn(t)) return; }
+    }
+    if (getComputedStyle(e).display === "none") { forced.set(e, e.style.display); e.style.display = "block"; }
+  }
+}
 function frame(target, keep, noDim, still) {   // still: one more frame, the page does not move for it
   if (!target) return;
+  reveal(target);
   if (!keep) clearFrames();
   const mk = (w, color) => { const b = document.createElement("div");
     b.style.cssText = `position:fixed;box-sizing:border-box;border:${w}px solid ${color};border-radius:8px;box-shadow:0 0 0 2px ${RING}` + (calm() ? "" : ";transition:opacity .3s,transform .3s;opacity:0;transform:scale(1.03)");
@@ -613,7 +664,7 @@ audio.addEventListener("timeupdate", onTime);
 audio.addEventListener("ended", () => {
   if (aside) { setPlaying(false); return; }
   if (idx < S.length - 1) setTimeout(() => { if (playing && !aside) go(idx + 1, true); }, 900);
-  else { ended = true; started = false; clearFrames(); setPlaying(false); }   // the end: no dim left over the report
+  else { ended = true; started = false; clearFrames(); unforce(); setPlaying(false); }   // the end: no dim left over the report
 });
 function resume() {   // back to the exact sentence the talk was at before the question
   const {i, t} = resumeAt; resumeAt = null; idx = i; aside = false; ended = false; closeBubble(); stopVoice();
@@ -1537,7 +1588,7 @@ function placeBubble(follow) {   // beside the place, never on it or on its row 
   const set = (x, y) => { b.style.left = x + "px"; b.style.top = y + "px"; };
   const sheet = !small && v.h < 600; b.classList.toggle("sheet", sheet || !!(follow && bubAt && bubAt.anchor === anchor && bubAt.sheet));
   if (sheet) {   // a short screen (a laptop at 150%): the answer docks above the bar; keepVisible keeps the place above it
-    b.style.width = (v.w - 24) + "px"; bubbleCap(Math.max(120, (bot0 - top0) * 0.45));
+    b.style.width = (v.w - 24) + "px"; bubbleCap(Math.min(Math.max(120, (bot0 - top0) * 0.45), sheetRoom || Infinity));
     const r = rect(anchor), h = b.offsetHeight, x = v.x + 12, y = bot0 - h, q = {left: x, top: y, right: x + v.w - 24, bottom: y + h};
     set(x, y); bubAt = {anchor, dx: x - r.left, dy: y - r.top, over: true}; pointAt(r, q); return;
   }
