@@ -1996,6 +1996,8 @@ SCRIPT_HEAD = """# Kịch bản Clicky cho «{report}».
 # Câu có bat: 'chưa' là câu em đề xuất nhưng chưa nói. Anh đọc, thấy đúng thì đổi thành bat: 'có'.
 # dung: 1.5 là số giây em dừng lại sau câu đó (sau một câu hỏi để người nghe kịp nghĩ).
 # vai: cho biết câu đó trả lời loại câu hỏi nào khi người nghe hỏi lại (anh không cần sửa).
+# kiem_tra: những điểm em thấy cần anh xem trước khi gửi (Ban Giám đốc không thấy). Xem xong mục nào, đổi da_xem: 'có'.
+#   Còn mục nào da_xem: 'chưa' thì bản trình bày vẫn là SƠ BỘ, kể cả khi đã ghi da_duyet: 'có'.
 # Đọc và sửa xong: đổi da_duyet: 'chưa' thành da_duyet: 'có', rồi kéo thả báo cáo vào Clicky lần nữa.
 # Khi đó bản trình bày hết chữ SƠ BỘ.
 """
@@ -2037,7 +2039,13 @@ def dump_script(script: dict, report: str, snap: Optional[dict] = None, draft: b
             sc["cau"].append(row)
         out.append(sc)
     body = {"bao_cao": _Q(report), "da_duyet": _Q("chưa"),
-            "ma_nhap": script_hash(json.loads(json.dumps(out))) if draft else "", "canh": out}
+            "ma_nhap": script_hash(json.loads(json.dumps(out))) if draft else ""}
+    checks = script.get("kiem_tra") or [{"muc": x} for x in script.get("phan_bien") or []]
+    if checks:                                 # what the owner must look at before the Board sees it
+        body["kiem_tra"] = [{"muc": _Q(str(k.get("muc", ""))), "da_xem": _Q("có" if tri_nho.fold(str(k.get("da_xem", ""))) in YES
+                                                                         or k.get("da_xem") is True else "chưa")}
+                            for k in checks if isinstance(k, dict)]
+    body["canh"] = out
     return SCRIPT_HEAD.format(report=report) + yaml.dump(body, Dumper=_Dumper, allow_unicode=True, sort_keys=False,
                                                          width=4096) + dump_snap(snap)
 
@@ -2234,8 +2242,15 @@ def approved(script: dict) -> bool:
     return v is True or tri_nho.fold(str(v or "")) in YES
 
 
+def open_checks(script: dict) -> list:
+    """The kiem_tra items the owner has not marked as looked at (da_xem: 'có')."""
+    return [str(k.get("muc", "")) for k in script.get("kiem_tra") or []
+            if isinstance(k, dict) and not (k.get("da_xem") is True or tri_nho.fold(str(k.get("da_xem", ""))) in YES)]
+
+
 def unedited(script: dict) -> bool:
-    return bool(script.get("ma_nhap")) and script_hash(script.get("canh")) == script.get("ma_nhap")
+    return bool(script.get("ma_nhap")) and script_hash(script.get("canh")) == script.get("ma_nhap") \
+        and len(open_checks(script)) == len(script.get("kiem_tra") or [])     # a ticked check is an edit too
 
 
 def _toks(v) -> list:
@@ -2992,11 +3007,17 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
                      f"«{want.label}»." + (f" Câu nháp mới: «{d['noi']}»." if d else ""))
     scenes = scenes_from_script(script, known)
     ok = approved(script)
+    unchecked = open_checks(script)
+    if ok and unchecked:                       # approved without looking at what the pre-flight found: still a draft
+        ok = False
+        notes.insert(0, f"Anh đã ghi duyệt nhưng còn {len(unchecked)} mục cần soát chưa đánh dấu da_xem: 'có' (đầu file "
+                        f"kịch bản): " + "; ".join(f"«{clip(x, 70)}»" for x in unchecked[:3]) + ". Em giữ bản trình bày ở SƠ BỘ.")
     reset = ok and bool(changed) and kind == "chu"
     rank_first = [n for n in notes if n.startswith("Sửa câu «")]
     notes = rank_first + [n for n in notes if n not in rank_first]
     status = ("SƠ BỘ: báo cáo kỳ mới, số mới đã thay vào lời đã duyệt" if kind == "ky_moi"
               else "SƠ BỘ: báo cáo đổi số sau khi duyệt" if reset
+              else "SƠ BỘ: còn mục cần soát" if unchecked and approved(script)
               else "SƠ BỘ: thứ tự chênh lệch đã đổi" if ok and ranked
               else "CHÍNH THỨC: kịch bản đã được duyệt" if ok else "SƠ BỘ: kịch bản nháp chưa duyệt" if kind == "nhap"
               else "SƠ BỘ: kịch bản đã sửa nhưng chưa ghi duyệt")
@@ -3112,8 +3133,9 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
                       for it in items if it.kind == "card"],
             "cot": table_columns(places),
             "ve": drawn_locators(script, drawn),
-            "facts": [dict(audio(f["noi"]), k=f["k"], y=f["y"], x=f["x"], a=f["a"], chi=f["chi"]) for f in book],
+            "facts": [dict(audio(f["noi"]), k=f["k"], y=f["y"], n=f.get("n", ""), x=f["x"], a=f["a"], chi=f["chi"]) for f in book],
             "quyet": story.decisions(script),
+            "cho_kiem": draft.get("cho_kiem") or [],     # report sentences the pre-flight doubts: never quoted as an answer
             "fallback": fallback, "fallback_clip": audio(fallback), "aliases": doc_tai_chinh.aliases(),
             "bank": [dict(audio(f"{who} đã trả lời" + (f" kỳ {b['ky']}" if b["cu"] and b["ky"] else "")
                                 + f": {_sentence(b['tra_loi'])}"),

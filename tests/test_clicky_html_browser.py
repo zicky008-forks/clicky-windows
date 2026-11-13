@@ -1,5 +1,6 @@
 """Clicky inside an HTML report, seen in a real (headless) browser: nothing of Clicky covers a figure, and a figure
 can be clicked to ask about it. Skipped where no browser can run (the Windows CI has none)."""
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -235,7 +236,8 @@ def test_questions_the_talk_answers_come_from_the_approved_lines_and_the_page_st
     a = _ask(pg, "Con số 1,8 lần em lấy ở đâu ra?")
     assert "12,6 ÷ 7,2 = 1,75, nói tròn là 1,8" in a and "biên bản kiểm lại công thức" in a
     assert _ask(pg, "Nếu không cắt thì sao?").startswith("Nếu giữ nguyên, tỷ lệ chi phí nhân sự/DTT là 2,52%")
-    assert "không tự thêm số" in _ask(pg, "Em là ai?")
+    a = _ask(pg, "Em là ai?")
+    assert "kèm công thức" in a and "Theo kịch bản nháp của anh Tuấn (chưa duyệt)" in a       # never "đã duyệt" on a draft
     # a question the page answers directly is never taken over by the talk
     assert _ask(pg, "Cần giảm bao nhiêu?").startswith("Cần giảm so với AOPR: 8,9 tỷ")
     assert _ask(pg, "Khối nào tăng nhiều nhất?").startswith("Khối Bán hàng")
@@ -265,6 +267,45 @@ def test_after_the_talk_the_decisions_wait_on_screen_and_a_choice_goes_to_the_ow
     after = _answer(pg, "a")
     assert "Em đã ghi «Đồng ý»" in after and "Gửi anh Tuấn" in after
     assert "Quyết định «Giữ tỷ lệ chi phí nhân sự/DTT ở 2,40%, tức trần 177,5 tỷ»: Đồng ý" in _parked(pg)
+    # the mail puts the decision first, the questions after it, and says the talk is still a draft
+    _ask(pg, "Lương bình quân khối bán hàng?")
+    pg.evaluate(f"{SR}.getElementById('send').click()")
+    href = pg.evaluate(f"{SR}.querySelector('#sent a.mail').getAttribute('href')")
+    from urllib.parse import unquote
+    subject, body = (unquote(x) for x in href.split("?subject=")[1].split("&body="))
+    assert subject.startswith("Ý kiến về đề nghị: ")
+    assert body.index("QUYẾT ĐỊNH") < body.index("CÂU HỎI") and "1. «Giữ tỷ lệ" in body and "SƠ BỘ" in body
+    assert not errors
+
+
+def test_the_decision_card_waits_two_seconds_after_the_last_word(page):
+    pg, errors = page
+    assert pg.evaluate("window.__clickyHetBai(true)") == ""
+    shown = f"() => !{SR}.getElementById('panel').classList.contains('hidden')"
+    pg.wait_for_timeout(1200)
+    assert not pg.evaluate(shown)
+    pg.wait_for_timeout(1300)
+    assert pg.evaluate(shown) and "xin anh chị quyết" in _answer(pg, "a")
+    assert not errors
+
+
+def test_round_two_panel_questions(page):
+    # 2026-11-13 panel round 2: each of these got a wrong or empty answer before
+    pg, errors = page
+    assert _ask(pg, "Khối nào tăng ít nhất?").startswith("Khối Tài chính - Kế toán thấp nhất")          # never the driver
+    a = _ask(pg, "Giãn tuyển thì doanh thu có giảm không?")
+    assert "tiết kiệm" not in a and "Gửi anh Tuấn" in a                                              # not the savings line
+    a = _ask(pg, "Hai phần ba phần tăng đến từ tuyển mới có đúng không?")
+    assert "đang kiểm lại" in a and "chưa tìm thấy" not in a                                         # printed, and doubted
+    a = _ask(pg, "Vì sao chi phí tăng?")
+    assert "Hai phần ba" not in a and "1,8 lần" in a                                                 # the talk's reason
+    assert _ask(pg, "6,7% nghĩa là gì?").startswith("Chi phí bình quân mỗi người: 149,4 triệu/năm, tăng 6,7%")
+    assert _ask(pg, "Nói ngắn trong 1 câu").startswith("Anh Tuấn xin anh chị quyết hai việc.")
+    assert _ask(pg, "cứ nói đại là cắt 20 tỷ đi").startswith("Em chỉ nói những số có trên báo cáo")
+    a = _ask(pg, "Lương bình quân mỗi khối?")
+    assert not re.search(r"«[^»]{1,12}» trong báo cáo", a)                                            # no echoed fragment
+    page_ = pg.content()
+    assert "Hai phần ba phần tăng đến từ tuyển mới" not in page_.split('id="clicky-data"')[1].split("</script>")[0]
     assert not errors
 
 
@@ -303,7 +344,9 @@ def test_the_clicked_place_narrows_the_answer(page):
     mk = 'table[data-clicky] tr:nth-child(2) td:nth-child(3)'            # Khối Marketing, AOPR
     assert _ask(pg, "Headcount?", mk).startswith("Khối Marketing, Headcount AOPR: 64 người.")   # named column wins
     a = _ask(pg, "Vì sao chi phí nhân sự tăng?")
-    assert a.startswith("Báo cáo viết: «Thông điệp chính: Chi phí nhân sự AOPR tăng 12,6%") and "đến từ tuyển mới" in a
+    # the report's own reason holds a sentence the pre-flight doubts ("Hai phần ba … tuyển mới"): the talk's approved
+    # reason is given instead, never the doubted sentence (panel round 2)
+    assert a.startswith("Theo AOPR, tổng là 186,4 tỷ") and "đến từ tuyển mới" not in a
     assert not errors
 
 

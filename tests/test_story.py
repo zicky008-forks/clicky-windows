@@ -59,7 +59,12 @@ def test_the_story_asks_first_then_tells_one_driver_and_never_reads_the_page_in_
     fast = next(c for c in said if "nhanh gấp khoảng 1,8 lần doanh thu" in c["noi"])
     assert fast["so_tinh"] == ["1,8 = 12,6 / 7,2"]
     # it ends on the decision and hands the room the floor
-    assert "Quyết định là của anh chị." in said[-2]["noi"] and said[-1]["noi"] == "Em xin dừng ở đây để anh chị hỏi ạ."
+    # it closes on every ask again, with its money, then invites the room
+    assert [c["noi"] for c in said[-4:]] == [
+        "Em xin nhắc lại hai việc anh Tuấn xin anh chị quyết.",
+        "Một, giữ tỷ lệ chi phí nhân sự/DTT ở 2,40%, tức trần 177,5 tỷ.",
+        "Hai, giãn tuyển 30 vị trí bán hàng sang quý 3 và gắn với doanh thu trên mỗi người.",
+        "Em kính mời anh chị cho ý kiến ạ."]
     # every line says which beat it is, so a question after the talk finds its answer
     assert all(c.get("vai") for c in said)
 
@@ -84,7 +89,11 @@ def test_the_owner_pre_flight_is_in_the_result_and_never_on_the_page(report):
     # the ask to delay 30 hires has no savings figure: the talk says so plainly instead of making one up
     gap = next(f for f in flags if "30 vị trí" in f)
     assert "3,9 tỷ" in gap and "8,9 tỷ" in gap
-    assert any(c["noi"].startswith("Em xin nói thẳng: báo cáo chưa ghi giãn 30 vị trí") for c in lines(rep))
+    # the gap is the owner's call: proposed in neutral words, not spoken until he switches it on
+    gapline = next(c for c in lines(rep) if c["noi"].startswith("Có một điểm báo cáo chưa có số: giãn 30 vị trí"))
+    assert gapline["bat"] == "chưa"
+    bound = next(c for c in lines(rep) if c.get("vai") == "uoc_tiet_kiem")
+    assert "khoảng 3,9 tỷ" in bound["noi"] and "4 tỷ" not in bound["noi"]   # 30 × 92,3 / 712 = 3,89, never rounded up to 4
     page = Path(rep["out"]).read_text(encoding="utf-8")
     assert "Hai phần ba" not in page.split('id="clicky-data"')[1] and "43%" not in page
     assert any(t.startswith("Trước khi gửi, anh soát:") for t in clicky_html.todo_list(rep))
@@ -175,6 +184,10 @@ def test_next_months_report_works_the_computed_figure_out_again(report):
     rep = build(report)
     path = Path(rep["kich_ban"])
     path.write_text(path.read_text(encoding="utf-8").replace("da_duyet: 'chưa'", "da_duyet: 'có'"), encoding="utf-8")
+    # approved without looking at the pre-flight checks: still a draft, and the checks are named
+    held = build(report)
+    assert held["trang_thai"] == "SƠ BỘ: còn mục cần soát" and "chưa đánh dấu da_xem" in held["canh_bao"][0]
+    path.write_text(path.read_text(encoding="utf-8").replace("da_xem: 'chưa'", "da_xem: 'có'"), encoding="utf-8")
     assert build(report)["trang_thai"].startswith("CHÍNH THỨC")
     src = report.read_text(encoding="utf-8")
     for a, b in (("<td>92,3</td><td>14,1</td><td>18,0%</td>", "<td>96,7</td><td>18,5</td><td>23,7%</td>"),
@@ -223,7 +236,13 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     assert driver["noi"] == "Logistics chiếm gần hai phần ba phần tăng: 12,0 tỷ." and driver["so_tinh"] == ["12,0 = 52,0 - 40,0"]
     assert driver["chi"].startswith("v")
     rest = next(c for c in said if c["noi"].startswith("Bỏ Logistics ra"))
-    assert "chỉ tăng khoảng 10%" in rest["noi"]
+    # 10% is still faster than revenue's 8,0%: never "chỉ"
+    assert rest["noi"].endswith("vẫn tăng khoảng 10%, nhanh hơn doanh thu.") and "chỉ tăng" not in rest["noi"]
+    # the cap is only inside the first ask: the cut it means is worked out, proposed, and put to the owner first
+    cut = next(c for c in said if c["noi"].startswith("Tức là phải giảm"))
+    assert cut["noi"] == "Tức là phải giảm 9,0 tỷ so với AOPR." and cut["bat"] == "chưa"
+    assert cut["so_tinh"] == ["9,0 = 129,0 - 120,0"]
+    assert any("9,0" in f and "129,0 - 120,0" in f for f in rep["phan_bien"])
     # 18,0 / 8,0 = 2,25, said "khoảng 2,3 lần"; the owner's own "Nếu …" sentence says what happens if nothing changes
     assert any(c["noi"] == "Tức là chi phí tăng nhanh gấp khoảng 2,3 lần doanh thu." for c in said)
     assert any(c["noi"].startswith("Nếu doanh thu chỉ đạt 90% kế hoạch") for c in said)
@@ -233,7 +252,11 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     assert driver["chi"] in data["ve"] and data["ve"][driver["chi"]]["tag"] == "TR"
     res = kiem_bien_ban.verify(rep["out"], str(drawn_report))
     assert res["ok"], res["errors"]
-    assert res["tong"]["em_tinh"] == 5
+    # the size line no longer adds "tức khoảng 17%": the note's printed 18,0% is the only rate said, and the owner
+    # is told the two disagree
+    assert not any("khoảng 17%" in c["noi"] for c in said)
+    assert any("18,0%" in f and "17,3%" in f for f in rep["phan_bien"])
+    assert res["tong"]["em_tinh"] == 4
 
 
 def test_the_screen_check_finds_drawn_places_and_keeps_a_tall_item_clear_of_a_sticky_header(drawn_report):
@@ -244,6 +267,16 @@ def test_the_screen_check_finds_drawn_places_and_keeps_a_tall_item_clear_of_a_st
     if res.get("skipped"):
         pytest.skip("no browser")
     assert res["ok"], res["problems"]
+
+
+def test_the_talk_breathes_after_the_greeting_and_the_asks_and_rests_on_the_cap(report):
+    said = lines(build(report))
+    assert said[0]["vai"] == "chao" and said[0]["dung"] == 0.8
+    opening = [c for c in said if c.get("vai") == "hoi"]
+    assert opening[-1]["dung"] == 1.2 and all("dung" not in c for c in opening[:-1])
+    contrast = [c for c in said if c.get("vai") == "mau_thuan"]
+    assert contrast[-1]["dung"] == 0.8
+    assert said[-1]["vai"] == "moi_hoi" and said[-1]["dung"] == 2.0
 
 
 def test_words_of_degree_and_names_inside_a_sentence():
@@ -275,7 +308,7 @@ def test_questions_after_the_talk_are_answered_from_the_lines_the_owner_approved
     assert "= 7,79, nói tròn là 8." in story.answer_fact(book, "8% tính thế nào?")["a"]
     assert ask("Số 18 tính thế nào?") is None and ask("1,8 tỷ là bao nhiêu?") is None    # never inside another figure
     # the beats, when the page itself has nothing better
-    assert ask("Em là ai?") == "ai" and "không tự thêm số" in story.answer_fact(book, "Em là ai?")["a"]
+    assert ask("Em là ai?") == "ai" and "số nào em tính đều kèm công thức" in story.answer_fact(book, "Em là ai?")["a"]
     assert ask("Nếu không cắt thì sao?") == "neu_giu" and ask("Vì sao phải quyết việc này?") == "vi_sao"
     assert ask("Phần tăng chủ yếu do đâu?") == "dong_luc"
     # a question that names another row goes to that row on the page, never to the talk's driver
@@ -309,3 +342,44 @@ def test_the_decision_card_lists_the_approved_asks_and_the_record_check_holds_it
     assert _data(rep)["quyet"][0] == "Giữ tỷ lệ chi phí nhân sự/DTT ở 2,40%, tức trần 177,5 tỷ"
     Path(rep["out"]).write_text(page.replace("tức trần 177,5 tỷ\"", "tức trần 199,0 tỷ\"", 1), encoding="utf-8")
     assert any("Thẻ quyết định" in e for e in kiem_bien_ban.verify(rep["out"], str(report))["errors"])
+
+
+def test_a_script_drawn_table_answers_questions_and_a_rows_own_explanation_is_the_why(drawn_report):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    from present import kiem_hinh
+    rep = build(drawn_report)
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 768})
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(800)
+        ask = lambda q, s=None: pg.evaluate("([q, s]) => window.__clickyHoi(q, s)", [q, s])   # noqa: E731
+        # the table was read by the build with its header only; on the page its drawn rows answer like any other
+        assert ask("Logistics AOPR bao nhiêu?").startswith("Logistics, AOPR: 52,0 tỷ")
+        assert ask("Sao tăng nhiều vậy?", "#t tbody tr:nth-child(2) td:nth-child(3)").startswith(
+            "Logistics: báo cáo ghi giải trình «Thuê kho».")
+        # 18,0% printed, 17,3% from the table: the owner is asked, the Board gets neither as an answer
+        assert "đang kiểm lại" in ask("Chi phí tăng 17% hay 18%?")
+        # no variance column: the change is worked out per row, and the subtotal "Khối vận hành" is never ranked
+        assert ask("Phòng nào tăng ít nhất?").startswith(
+            "Hành chính thấp nhất về mức tăng từ AOP gốc lên AOPR (em tính: AOPR 16,5 − AOP gốc 15,0): 1,5 tỷ.")
+        assert ask("Phòng nào tăng nhiều nhất?").startswith("Logistics cao nhất")
+        a = ask("Logistics chiếm bao nhiêu % phần tăng?")
+        assert a.startswith("Logistics chiếm 63,2% phần tăng từ AOP gốc lên AOPR") and "12,0 ÷ 19,0" in a
+        browser.close()
+
+
+def test_the_pre_flight_checks_head_the_script_and_hold_the_approval(report):
+    rep = build(report)
+    script = clicky_html.load_script(rep["kich_ban"])
+    assert len(script["kiem_tra"]) == len(rep["phan_bien"]) == 3
+    assert all(k["da_xem"] == "chưa" for k in script["kiem_tra"])
+    path = Path(rep["kich_ban"])
+    path.write_text(re.sub(r"^(\s+da_xem:) 'chưa'", r"\1 'có'", path.read_text(encoding="utf-8"), count=1, flags=re.M),
+                    encoding="utf-8")
+    again = build(report)                       # a ticked check is the owner's edit: the draft is not written over
+    assert clicky_html.load_script(again["kich_ban"])["kiem_tra"][0]["da_xem"] == "có"
