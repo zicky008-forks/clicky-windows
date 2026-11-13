@@ -1409,6 +1409,49 @@ function howSentence(Q) {   // a figure the reader quotes, or two things compare
   if (Q.cmp && ps.length === 2) { const ch = change(ps[1], ps[0]); if (ch) calc = "Em tính: chênh " + ch.diff.replace(/^-/, "") + " điểm phần trăm (" + ps[0] + "% so với " + ps[1] + "%)."; }
   return {kind: "sentence", b: best.b, s: best.s, calc};
 }
+// one-step sums on printed figures, each answered with its formula and said to be Clicky's own working
+function footing(Q, scope) {   // "các khối cộng lại có ra 186,4 không": the leaf rows against the Tổng row
+  if (!/\b(cong (lai|ra|vao|don)|co khop|khop (khong|chua)|tong cac)\b/.test(Q.f)) return null;
+  const ms = scope && scope.m ? [scope.m] : tables(), m = ms.find(x => x.rows.some(r => r.total)); if (!m) return null;
+  const tot = m.rows.find(r => r.total), subs = subRows(m), leaves = m.rows.filter(r => !r.total && !subs.has(r)), out = [];
+  for (const c of numCols(m, tot)) {
+    if (colUnit(m, c) === "%") continue;
+    const vals = leaves.map(r => r.cells[c] && isNum(cellText(r.cells[c])) && decimal(cellText(r.cells[c]), m.en)).filter(Boolean), t = decimal(cellText(tot.cells[c]), m.en);
+    if (vals.length < 2 || !t) continue;
+    const D = Math.max(t.d, ...vals.map(v => v.d)); let sum = 0; vals.forEach(v => { sum += v.n * 10 ** (D - v.d); });
+    const tv = t.n * 10 ** (D - t.d); out.push({c, sum: vn(sum, D), tot: cellText(tot.cells[c]), ok: sum === tv, gap: vn(Math.abs(sum - tv), D), n: vals.length});
+    if (out.length === 3) break;
+  }
+  return out.length ? {kind: "foot", m, tot, out, subs: subs.size, Q} : null;
+}
+function rowChange(Q, scope) {   // "Logistics tăng bao nhiêu (%)": a table with plan and actual only, the change worked out
+  if (!/\b(tang|giam|chenh)\b/.test(Q.f) || Q.sup || Q.share || Q.why || Q.how) return null;
+  for (const m of scope && scope.m ? [scope.m] : tables()) {
+    const df = diffCols(Q, m); if (!df) continue;
+    const row = (scope && scope.m === m && scope.row) || m.rows.map(r => ({r, s: rowMatch(Q, r)})).filter(x => x.s).sort((a, b) => b.s - a.s).map(x => x.r)[0];
+    if (!row) continue;
+    const d = diffOf(m, row, df, !!Q.pct); if (!d) continue;
+    return {kind: "rowchange", m, row, df, d, pct: !!Q.pct, Q};
+  }
+  return null;
+}
+function cardDiff(Q, scope) {   // "8,9 tính thế nào": a tile whose figure is the gap between two printed figures
+  if (!Q.how) return null;
+  const figs = (Q.q.match(/\d[\d.,]*\d|\d/g) || []);
+  const card = scope && scope.card ? scope.card : figs.length ? allCards().find(c => cardFigs(c).some(f => figs.includes(f.v))) : null;
+  if (!card || !/\b(giam|chenh|tang|vuot|thieu|con lai|cat)\b/.test(fold(card.text.split(":")[0]))) return null;   // a gap, never the base it is taken from
+  const f = cardFigs(card).find(x => !figs.length || figs.includes(x.v)) || cardFigs(card)[0]; if (!f || f.u === "%") return null;
+  const want = decimal(f.v); if (!want) return null;
+  const pool = [];   // the other printed amounts of the same unit: tiles and Tổng rows
+  allCards().forEach(c => { if (c.el !== card.el) cardFigs(c).forEach(g => { if (!g.sign && g.u === f.u) pool.push({v: g.v, from: c.text.split(":")[0].trim(), el: c.el}); }); });
+  tables().forEach(m => { const t = m.rows.find(r => r.total); if (t) numCols(m, t).forEach(c => { if (colUnit(m, c) === f.u) pool.push({v: cellText(t.cells[c]), from: t.label + " " + colName(m, c), el: t.cells[c]}); }); });
+  for (const a of pool) for (const b of pool) {
+    if (a === b) continue; const x = decimal(a.v), y = decimal(b.v); if (!x || !y) continue;
+    const D = Math.max(x.d, y.d, want.d);
+    if (x.n * 10 ** (D - x.d) - y.n * 10 ** (D - y.d) === Math.abs(want.n) * 10 ** (D - want.d)) return {kind: "carddiff", card, f, a, b, Q};
+  }
+  return null;
+}
 function resolve(q, scope) {
   const Q = qinfo(q);
   const known = bankMatch(Q, scope); if (known) return {kind: "bank", b: known, Q};
@@ -1417,11 +1460,14 @@ function resolve(q, scope) {
     const key = Object.keys(D.aliases || {}).find(k => fold(k) === fold(term));
     if (key) return {kind: "define", term: key, says: D.aliases[key], Q};
   }
+  { const cd = cardDiff(Q, scope); if (cd) return cd; }
+  { const ft = footing(Q, scope); if (ft) return ft; }
   if (Q.how || Q.cmp) {   // "tính thế nào", "nhanh hơn bao nhiêu": the report's own sentence that holds it
     const hs = howSentence(Q); if (hs) return Object.assign(hs, {Q});
     if (Q.how) Q.why = true;
   }
   { const s = superlative(Q, scope); if (s) return Object.assign(s, {Q}); }
+  { const rc = rowChange(Q, scope); if (rc) return rc; }
   // places the question names itself
   let cands = [];
   for (const m of tables()) {
@@ -1806,6 +1852,26 @@ function ask(q, scope) {
     if (r.row && r.m) { const a = cellAnswer(r.m, r.row, -1); answer(a.text, a.target, {cls: "park", extra: parkNote(q, "Báo cáo chưa nói" + what + ".")}); return; }
     if (r.entity) { answer("Báo cáo chưa nói lý do cho số «" + r.entity + "».", null, {cls: "park", extra: parkNote(q)}); return; }
     answer(D.fallback, null, {cls: "park", extra: parkNote(q, null, true)}); return;
+  }
+  if (r.kind === "foot") {
+    const u = c => colUnit(r.m, c) ? " " + colUnit(r.m, c) : "";
+    const parts = r.out.map(o => colName(r.m, o.c) + ": cộng ra " + o.sum + u(o.c) + (o.ok ? ", khớp dòng " + r.tot.label + " " + o.tot + u(o.c) : ", dòng " + r.tot.label + " ghi " + o.tot + u(o.c) + ", lệch " + o.gap + u(o.c)));
+    answer("Em cộng " + r.out[0].n + " dòng của bảng" + (r.subs ? " (không tính dòng gộp)" : "") + ". " + parts.join("; ") + ".", r.tot.r,
+      {src: "Em tính từ các số trên báo cáo «" + TITLE + "»"});
+    return;
+  }
+  if (r.kind === "rowchange") {
+    const A = colName(r.m, r.df[1]), P = colName(r.m, r.df[0]), a = cellText(r.d.a), p = cellText(r.d.p), u = uOf(r.m, r.row, r.df[1]);
+    const neg = r.d.k < 0, val = r.d.s.replace(/^-/, "");
+    answer(rowName(r.row) + (neg ? " giảm " : " tăng ") + (r.pct ? val + "%" : withUnit(val, u)) + " từ " + P + " lên " + A + " (em tính: " +
+      (r.pct ? "(" + a + " − " + p + ") ÷ " + p + " × 100" : a + " − " + p) + "); báo cáo không ghi sẵn số này.", r.d.a,
+      {src: "Em tính từ hai số trên báo cáo «" + TITLE + "»"});
+    return;
+  }
+  if (r.kind === "carddiff") {
+    answer(r.card.text.split(":")[0].trim() + ": " + withUnit(r.f.v, r.f.u) + " = " + r.a.v + " − " + r.b.v + " (" + r.a.from + " trừ " + r.b.from + ").", r.card.el,
+      {src: "Em tính lại từ các số trên báo cáo «" + TITLE + "»"});
+    return;
   }
   if (r.kind === "share" && r.df) {
     const u = uOf(r.m, r.row, r.c), A = colName(r.m, r.df[1]), P = colName(r.m, r.df[0]);

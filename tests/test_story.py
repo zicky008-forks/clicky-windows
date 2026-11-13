@@ -393,6 +393,11 @@ def test_a_script_drawn_table_answers_questions_and_a_rows_own_explanation_is_th
         assert ask("Phòng nào tăng nhiều nhất?").startswith("Logistics cao nhất")
         a = ask("Logistics chiếm bao nhiêu % phần tăng?")
         assert a.startswith("Logistics chiếm 63,2% phần tăng từ AOP gốc lên AOPR") and "12,0 ÷ 19,0" in a
+        assert ask("Logistics tăng bao nhiêu %?").startswith(
+            "Logistics tăng 30,0% từ AOP gốc lên AOPR (em tính: (52,0 − 40,0) ÷ 40,0 × 100)")
+        assert ask("Khối vận hành tăng bao nhiêu?").startswith("Khối vận hành tăng 15,0 tỷ từ AOP gốc lên AOPR")
+        a = ask("Các phòng cộng lại có khớp tổng không?")
+        assert "(không tính dòng gộp)" in a and "cộng ra 129,0 tỷ, khớp dòng Tổng 129,0 tỷ" in a, a
         browser.close()
 
 

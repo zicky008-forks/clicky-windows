@@ -304,6 +304,15 @@ def test_round_three_panel_questions(page):
     assert not errors
 
 
+def test_one_step_sums_are_worked_out_with_their_formula(page):
+    # 2026-11-13 panel round 4 list: footing, and a tile that is the gap between two printed figures
+    pg, errors = page
+    a = _ask(pg, "Các khối cộng lại có khớp tổng không?")
+    assert "cộng ra 165,5 tỷ, khớp dòng Tổng 165,5 tỷ" in a and "cộng ra 186,4 tỷ, khớp dòng Tổng 186,4 tỷ" in a, a
+    assert _ask(pg, "8,9 tính thế nào?").startswith("Cần giảm so với AOPR: 8,9 tỷ = 186,4 − 177,5")
+    assert not errors
+
+
 def test_the_decision_card_waits_two_seconds_after_the_last_word(page):
     pg, errors = page
     assert pg.evaluate("window.__clickyHetBai(true)") == ""
