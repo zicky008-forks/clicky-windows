@@ -30,6 +30,7 @@ import argparse
 import base64
 import dataclasses
 import codecs
+import contextvars
 import functools
 import datetime as dt
 import hashlib
@@ -491,8 +492,39 @@ def subject(ctx: str) -> str:
 
 def figures(text: str) -> list:
     """Figures as written, each with its direction and unit. Years (2026), periods glued to a letter (FY2627, T10,
-    Q1), dates (11/11) and list markers "(1)" are not figures."""
-    return list(_figures(text or ""))
+    Q1), dates (11/11) and list markers "(1)" are not figures. In a report with Vietnamese marks a dotted date
+    (29.10, 01.11.2026) is not a figure either: 29.10 cannot be a Vietnamese number."""
+    return list(_figures(text or "", _VN_DATES.get()))
+
+
+# Set by build() and by the record check once the report's number marks are known.
+_VN_DATES: contextvars.ContextVar = contextvars.ContextVar("clicky_vn_dates", default=False)
+
+
+def in_vn_marks(fn):
+    """Run fn with its own number-marks setting, so one build never leaks into the next."""
+    @functools.wraps(fn)
+    def run(*a, **k):
+        token = _VN_DATES.set(False)
+        try:
+            return fn(*a, **k)
+        finally:
+            _VN_DATES.reset(token)
+    return run
+
+
+_DOT_DATE = re.compile(r"(0?[1-9]|[12]\d|3[01])\.(0[1-9]|1[0-2])(?:\.(?:19|20)?\d\d)?|"
+                       r"(0?[1-9]|[12]\d|3[01])\.([1-9])\.(?:19|20)\d\d|(0?[1-9]|1[0-2])\.(?:19|20)\d\d")
+_DOT_DATE_LOOSE = re.compile(r"(0?[1-9]|[12]\d|3[01])\.[1-9]")
+_DATE_WORD = re.compile(r"(?<!\w)(?i:ngày|cập nhật|tính đến|đến ngày|as of|updated?|update on)\s*:?\s*$")
+
+
+def dot_date(tok: str, before: str, after: str) -> bool:
+    """29.10, 01.11.2026, 10.2026 with no unit after: a date written with dots. 5.2 only after a date word
+    ("ngày 5.2"): elsewhere it is an English decimal that slipped into the report."""
+    if UNIT_AFTER.match(after):
+        return False
+    return bool(_DOT_DATE.fullmatch(tok) or (_DOT_DATE_LOOSE.fullmatch(tok) and _DATE_WORD.search(before)))
 
 
 _YEAR = re.compile(r"(19|20)\d\d")
@@ -510,7 +542,7 @@ _TUC = re.compile(r"\s*tức\b", re.I)
 
 
 @functools.lru_cache(maxsize=8192)
-def _figures(raw: str) -> tuple:
+def _figures(raw: str, vn_dates: bool = False) -> tuple:
     text = vn_format.join_groups(raw)       # "1 234 567" is one figure, as the voice reads it (same length)
     out, prev = [], 0
     for m in NUM_TOKEN.finditer(text):
@@ -524,6 +556,8 @@ def _figures(raw: str) -> tuple:
         prev = e
         if _YEAR.fullmatch(tok) or _SLASH_BEFORE.search(text[max(0, s - 2):s]):
             continue
+        if vn_dates and dot_date(tok, before, after):
+            continue                                            # "cập nhật 29.10": a date, not 2.910
         if _CODE.search(before) and re.fullmatch(r"\d{1,4}", tok) and not UNIT_AFTER.match(after):
             continue                                            # "mã số 270", "STT 3": a code, not a figure
         if _MONTH.search(before) and _MONTH_TOK.fullmatch(tok) and not UNIT_AFTER.match(after):
@@ -628,19 +662,27 @@ def number_marks(texts: list) -> bool:
     read with the wrong marks is 1000 times off."""
     seen = {("en", True): [], ("vn", True): [], ("en", False): [], ("vn", False): []}
     for t in texts:
-        for f in figures(t):
+        for f in _figures(t or "", True):                # dotted dates (29.10) say nothing about the marks
             if f.spaced:
                 continue
             kind, strong = _mark_kind(f.tok)
             if kind:
-                seen[(kind, strong)].append(f.tok)
+                seen[(kind, strong)].append((f.tok, t, f.at))
     en, vn = seen[("en", True)], seen[("vn", True)]
     if not en and not vn:
         en, vn = seen[("en", False)], seen[("vn", False)]
     if en and vn:
-        raise PackError(f"Báo cáo viết số theo hai kiểu lẫn nhau, ví dụ «{en[0]}» (kiểu Anh: dấu phẩy ngăn nghìn, dấu chấm thập phân) và "
-                        f"«{vn[0]}» (kiểu Việt: dấu chấm ngăn nghìn, dấu phẩy thập phân). Em không chắc số nào là phần nghìn, số nào là "
-                        "phần thập phân, nên chưa đọc. Anh sửa báo cáo về một kiểu rồi chạy lại.")
+        def where(hit):                                   # the words around it, so the owner finds it in the report
+            tok, t, at = hit
+            near = re.sub(r"\s+", " ", t[max(0, at - 30):at + len(tok) + 20]).strip()
+            return f"«{tok}» (chỗ «{near}»)"
+        few, many = (en, vn) if len(en) <= len(vn) else (vn, en)
+        name = "kiểu Anh" if few is en else "kiểu Việt"
+        raise PackError(f"Báo cáo viết số theo hai kiểu lẫn nhau: {len(vn)} số kiểu Việt (1.234,5) và {len(en)} số kiểu Anh "
+                        f"(1,234.5). Số {name}: " + "; ".join(where(h) for h in few[:3]) +
+                        (f" và {len(few) - 3} số nữa" if len(few) > 3 else "") +
+                        ". Em không chắc số nào là phần nghìn, số nào là phần thập phân, nên chưa đọc. "
+                        "Anh sửa mấy số đó về cùng một kiểu với phần còn lại rồi chạy lại.")
     return bool(en)
 
 
@@ -1611,7 +1653,7 @@ def draft_script(items: list, rows: list, places: dict, owner: str, en: bool = F
 
     def speakable(text):                   # nothing the lock or the voice would stop on in a first draft
         if any(f.how == "paren?" for f in figures(text)) or spelled_number(text) or \
-                doc_tai_chinh.unsaid(doc_tai_chinh.doc(for_voice(text), en)):
+                doc_tai_chinh.unsaid(doc_tai_chinh.doc(for_voice(text, en), en)):
             if text not in unclear:
                 unclear.append(text)
             return False
@@ -2495,6 +2537,13 @@ def for_voice(sentence: str, en: bool = False) -> str:
             mid = (", " if m.start() else "") + inner + ("," if re.match(r"\s*\w", tail) else "")
         t = t[:m.start()] + mid + tail
     t = re.sub(r"(?<![\d.,])(\d[\d.,]*\d|\d)\s*(?:tr\b|triệu)", lambda m: _millions(m, en), t)
+    if not en:                                     # "cập nhật 29.10" is said as the date 29/10
+        def slash(m):
+            tok = m.group(0).rstrip(".,")
+            if not dot_date(tok, t[max(0, m.start() - 60):m.start()], t[m.start() + len(tok):m.start() + len(tok) + 40]):
+                return m.group(0)
+            return tok.replace(".", "/") + m.group(0)[len(tok):]
+        t = NUM_TOKEN.sub(slash, t)
     return re.sub(r"(?<!\w)vs\.?(?=\s|$)", "so với", t)
 
 
@@ -2612,6 +2661,7 @@ def _first_caption(root) -> str:
     return ""
 
 
+@in_vn_marks
 def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, contact: Optional[str] = None,
           script_path: Optional[str] = None, label: str = "",
           voice: Optional[Callable[[str], bytes]] = None, memory: Optional[str] = None) -> dict:
@@ -2639,6 +2689,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     if not any(figures(p.text) for p in places.values() if p.kind not in ("title", "section")):
         raise _nothing_to_say(source, items, "nhưng không thấy con số nào ngoài tiêu đề")
     en = number_marks([p.text for p in places.values()] + [r.node.text() for r in rows])   # every place: a note too
+    _VN_DATES.set(not en)                       # from here on "29.10" is a date, not a figure (build() resets it)
     declared = declared_unit(page_text)
     places = make_places(items, rows, root, en, declared)
     net_chart = bool(NET_CHART.search(source)) and any(i.kind == "chart" for i in items)

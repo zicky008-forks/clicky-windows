@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from present.clicky_html import (_labels, check_at, check_figure, clip, figures, numbers, other_row, page_places, parse,
+from present.clicky_html import (_VN_DATES, _labels, check_at, in_vn_marks, check_figure, clip, figures, numbers, other_row, page_places, parse,
                                  seal, sentence_issues, spelled_number, target_texts, value)
 
 SCRIPT = r'<script id="{}" type="application/json">(.*?)</script>'
@@ -33,6 +33,7 @@ def _embedded(page: str, name: str):
     return json.loads(m.group(1)) if m else None
 
 
+@in_vn_marks
 def verify(packed: str, original: Optional[str] = None) -> dict:
     page = Path(packed).read_text(encoding="utf-8")
     errors: list = []
@@ -49,6 +50,7 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
             errors.append("File gốc đưa vào không phải là báo cáo mà biên bản này được lập từ đó.")
     root = parse(page)
     en, unit = record.get("dau_so") == "en", record.get("don_vi") or None
+    _VN_DATES.set(not en)                      # the build's own rule for dotted dates (verify() resets it)
     texts = target_texts(root)
     places = page_places(root, en, unit)       # table rows by column, cards part by part: the build's own rules
     on_page = {value(t, en) for t in numbers(root.text() + " " + _labels(root))}

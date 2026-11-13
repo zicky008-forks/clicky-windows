@@ -1362,3 +1362,36 @@ def test_the_lock_reads_a_slash_as_the_voice_does():
     assert clicky_html.numbers("3/10 khối đạt kế hoạch") == ["3/10"]
     assert clicky_html.numbers("4/4 khối đạt kế hoạch") == ["4/4"]
     assert clicky_html.numbers("tỷ lệ 2/5") == ["2/5"]
+
+
+def test_a_dotted_date_in_a_vietnamese_report_is_a_date_not_a_mixed_mark(report, tmp_path):
+    # real-report run 2026-11-13: "cập nhật 29.10" beside "672,7" stopped the build as mixed number marks
+    from present import kiem_bien_ban
+
+    report.write_text(report.read_text(encoding="utf-8").replace("cập nhật 11/11", "cập nhật 29.10"), encoding="utf-8")
+    heard = []
+    path = _script(tmp_path, [{"noi": "Số liệu cập nhật 29.10, tổng chi phí nhân sự 186,4 tỷ.", "chi": "c2"}])
+    rep = clicky_html.build(str(report), script_path=path, voice=lambda t: heard.append(t) or t.encode())
+    assert rep["dau_so"] == "vn"
+    assert [x["so"] for r in _record_of(rep["out"])["cau"] for x in r["so"]] == ["186,4"]
+    assert any("cập nhật ngày hai mươi chín tháng mười" in h for h in heard)
+    res = kiem_bien_ban.verify(rep["out"], str(report))
+    assert res["ok"], res["errors"]
+    assert clicky_html.figures("cập nhật 29.10")[0].tok == "29.10"       # outside a build: no marks known yet
+
+
+def test_dotted_dates_never_decide_the_number_marks():
+    assert clicky_html.number_marks(["Cập nhật 29.10", "Doanh thu 672,7 tỷ", "Kỳ 01.11.2026 đến 10.2026"]) is False
+    assert clicky_html.number_marks(["Revenue 12.6% as of 29.10", "EBITDA 412,580.5"]) is True
+    v = clicky_html.for_voice
+    assert v("Số liệu cập nhật 29.10.") == "Số liệu cập nhật 29/10."
+    assert v("Cập nhật ngày 5.2, tăng 12,6%.") == "Cập nhật ngày 5/2, tăng 12,6%."
+    assert v("Revenue as of 29.10", en=True) == "Revenue as of 29.10"
+    assert v("Doanh thu 29.10 tỷ") == "Doanh thu 29.10 tỷ"                # a unit after it: a figure, never a date
+
+
+def test_a_real_mixed_mark_stop_says_which_figures_and_where():
+    with pytest.raises(clicky_html.PackError) as e:
+        clicky_html.number_marks(["Doanh thu 672,7 tỷ, tăng 12,6%", "Chi phí 5,3 tỷ", "Hệ số vòng quay 1.5 lần"])
+    msg = str(e.value)
+    assert "3 số kiểu Việt" in msg and "1 số kiểu Anh" in msg and "«1.5» (chỗ «Hệ số vòng quay 1.5 lần»)" in msg
