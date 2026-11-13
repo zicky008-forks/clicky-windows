@@ -164,3 +164,16 @@ def test_a_dotted_date_in_a_vietnamese_report_stays_a_date():
 def test_in_an_english_report_a_dotted_pair_is_a_figure():
     out, _, _ = che_so_lieu.mask("<p>Revenue 672.7 bn, margin 11.11 pts, cost 1,234.5</p>", {}, seed=20)
     assert "11.11" not in out
+
+
+def test_chart_code_keeps_its_own_settings_so_the_copy_lays_out_the_same():
+    # real report 2026-11-13: a quote in one template paired with the next, the code between was read as data,
+    # and '100%' widths became '623%': the copy's charts grew 2000px wide on a phone
+    page = ("<script>const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);"
+            " const x = d3.scaleBand(R.map((r, i) => i), [m.l, W - m.r]).padding(0.25); const m = {t: 20, l: 120};"
+            " g.transition().duration(1200); if (innerWidth < 1100) y.nice(); line(672.7); total(41258);"
+            " lab.text(`Tổng ${fmt(v)} tỷ`); const k = `<b>${d.name}</b>: ${d.v}`;</script>")
+    out, _, _ = che_so_lieu.mask(page, {}, seed=21)
+    for kept in ("'100%'", "padding(0.25)", "{t: 20, l: 120}", "duration(1200)", "innerWidth < 1100", "`0 0 ${W} ${H}`"):
+        assert kept in out, kept
+    assert "672.7" not in out and "41258" not in out

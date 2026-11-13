@@ -30,13 +30,12 @@ TEXT_ATTRS = re.compile(r"""(\b(?:title|aria-label|alt|data-[\w-]+|value|placeho
 NUM_ARRAY = re.compile(r"\[\s*-?\d[\d.,\s\-eE+]*\]")
 KEY_NUMBER = re.compile(r"""((?:["'][^"'\n]{1,60}["']|\b[A-Za-z_À-ỹ][\wÀ-ỹ]*)\s*:\s*-?)(\d+(?:\.\d+)?)(?![\w.])""")
 LIBRARY = re.compile(r"/\*!|@license|Copyright|Chart\.js|echarts|plotly|Highcharts|jQuery|d3js\.org|d3\.js", re.I)
-LONG_STRING = re.compile(r'"(?:[^"\\\n]|\\.){200,}"|' + r"'(?:[^'\\\n]|\\.){200,}'|`(?:[^`\\]|\\.){200,}`", re.S)
 YEAR = re.compile(r"20(1[5-9]|2\d|3[0-5])")                    # a period, not a figure: 2015 to 2035 only
 CODE_FIGURE = re.compile(r"(?<![\w.#$\\])(?:\d+\.\d+|\d{4,})(?![\w])")
 DATA_NUM = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?!\d)")     # in CSV a comma separates fields
 SVG_SHAPE = re.compile(r"<\s*(?:rect|line|circle|ellipse|path|polyline|polygon|text|tspan|use|image)\b", re.I)
 GEOMETRY = re.compile(r"""(\s(?:x|y|x1|y1|x2|y2|cx|cy|r|rx|ry|dx|dy|width|height|d|points)\s*=\s*)(["'])(.*?)\2""", re.I | re.S)
-SHOWN_TEXT = re.compile(r"""(["'`])(?=[^"'`\n]*[A-Za-zÀ-ỹ]{2,}\s+[^"'`\n]*\d)[^"'`\\\n]{3,199}\1""")
+SHOWN_TEXT = re.compile(r"[A-Za-zÀ-ỹ]{2,}\s+.*\d", re.S)        # words and a figure: text the chart shows
 CODE_TEXT = re.compile(r"\s*(?:translate|rotate|scale|matrix|rgba?|hsla?|calc|url|[Mm]\s*-?\d|#)", re.I)
 DOT_DATE = re.compile(r"(?:0?[1-9]|[12]\d|3[01])\.(?:0?[1-9]|1[0-2])")
 STYLE = re.compile(r"""(\sstyle\s*=\s*)(["'])(.*?)\2""", re.I | re.S)
@@ -58,6 +57,86 @@ def _decode(raw: bytes) -> str:
         except (LookupError, UnicodeDecodeError):
             continue
     return raw.decode("utf-8", errors="replace")
+
+
+def code_constant(v: str) -> bool:
+    """0.5, 1.15 (opacity, padding), 1000, 1200 (durations, screen widths): the code's own settings, kept so the
+    copy lays out like the report. A typed figure (672.7, 41258) is neither."""
+    if "." in v:
+        return float(v) < 10 and len(v.split(".")[1]) <= 2
+    return int(v) % 50 == 0
+
+
+def js_strings(js: str) -> list:
+    """(start, end) of the text of every string in a script: '...', "..." and each literal part of a `...${x}...`
+    template. Comments, regular expressions and the code inside ${...} are skipped, so a quote in one string never
+    pairs with a quote in the next and the code between them is never read as text."""
+    out, n = [], len(js)
+
+    def code(i, in_expr):
+        depth, prev = 0, "("
+        while i < n:
+            ch = js[i]
+            if ch in "'\"":
+                j = i + 1
+                while j < n and js[j] != ch and js[j] != "\n":
+                    j += 2 if js[j] == "\\" else 1
+                out.append((i + 1, min(j, n)))
+                i, prev = j + 1, "a"
+                continue
+            if ch == "`":
+                i, prev = template(i + 1), "a"
+                continue
+            if ch == "/" and js.startswith("//", i):
+                j = js.find("\n", i)
+                i = n if j < 0 else j
+                continue
+            if ch == "/" and js.startswith("/*", i):
+                j = js.find("*/", i + 2)
+                i = n if j < 0 else j + 2
+                continue
+            if ch == "/" and prev in "(,=:[!&|?{};+-*%<>~^":       # a regular expression, not a division
+                j, cls = i + 1, False
+                while j < n and js[j] != "\n":
+                    if js[j] == "\\":
+                        j += 2
+                        continue
+                    if js[j] == "/" and not cls:
+                        break
+                    cls = True if js[j] == "[" else False if js[j] == "]" else cls
+                    j += 1
+                i, prev = j + 1, "a"
+                continue
+            if in_expr and ch == "{":
+                depth += 1
+            elif in_expr and ch == "}":
+                if not depth:
+                    return i + 1
+                depth -= 1
+            if not ch.isspace():
+                prev = "a" if ch.isalnum() or ch in "_$" else ch
+            i += 1
+        return i
+
+    def template(i):
+        start = i
+        while i < n:
+            if js[i] == "\\":
+                i += 2
+                continue
+            if js[i] == "`":
+                out.append((start, i))
+                return i + 1
+            if js.startswith("${", i):
+                out.append((start, i))
+                i = start = code(i + 2, True)
+                continue
+            i += 1
+        out.append((start, n))
+        return n
+
+    code(0, False)
+    return [(a, b) for a, b in out if b > a]
 
 
 def script_kind(js: str) -> str:
@@ -157,23 +236,28 @@ class Masker:
                     add(n.start(), n.end())
         elif kind == "mã":                                     # a bundled chart library is code, no report data
             # data kept as text, CSV or JSON in a long string (window.DATA = {"t": "cột,cột\n...,12.5,..."})
-            for m in LONG_STRING.finditer(js):
-                t = m.group(0)
+            strings = js_strings(js)
+            for a, b in strings:
+                if b - a < 200:
+                    continue
+                t = js[a:b]
                 for n in DATA_NUM.finditer(t):
                     s = n.group(0)
                     if not (YEAR.fullmatch(s) or re.fullmatch(r"\d\d", s) and
                             re.search(r"(19|20)\d\d-(\d\d-)?$", t[max(0, n.start() - 8):n.start()])):
-                        add(m.start() + n.start(), m.start() + n.end())   # years and ISO date parts stay
+                        add(a + n.start(), a + n.end())   # years and ISO date parts stay
             for m in KEY_NUMBER.finditer(js):                 # data as objects: {value: 186.4}, "doanh_thu": 412580
-                add(m.start(2), m.end(2))
+                if m.group(1)[0] in "\"'" or "." in m.group(2):   # {t: 20, l: 120} is a margin: kept
+                    add(m.start(2), m.end(2))
             # figures typed into chart code (a target line at 672.7, a total of 41258): decimals and 4+ digits.
             # Small whole numbers are sizes, margins and indexes: kept, so the charts keep their layout.
             # words shown on screen ('Tỷ lệ 12,5', 'Ngưỡng 150'): masked like the page's text, periods kept
-            for m in SHOWN_TEXT.finditer(js):
-                if re.search(r"\d", m.group(0)) and not CODE_TEXT.match(m.group(0)[1:]):
-                    add(m.start() + 1, m.end() - 1, self.text)
+            for a, b in strings:
+                t = js[a:b]
+                if 3 <= b - a < 200 and SHOWN_TEXT.search(t) and not CODE_TEXT.match(t):
+                    add(a, b, self.text)
             for m in CODE_FIGURE.finditer(js):
-                if not YEAR.fullmatch(m.group(0)):
+                if not (YEAR.fullmatch(m.group(0)) or code_constant(m.group(0))):
                     add(m.start(), m.end())
         out, pos = [], 0
         for a in sorted(spans):
@@ -258,6 +342,7 @@ def audit(real: str, masked: str):
             v = m.group()
             if v == n.group() and len(re.sub(r"\D", "", v).lstrip("0")) >= 3 and not YEAR.fullmatch(v) and not (
                     "dữ liệu" in place and YEAR.fullmatch(v.split(",")[0])) and not (
+                    place.endswith("(mã)") and re.fullmatch(r"\d+(?:\.\d+)?", v) and code_constant(v)) and not (
                     re.fullmatch(r"[1-9]\d?00", v) and place != "chữ" and "dữ liệu" not in place):
                 where = place
                 if place.startswith("thẻ"):
