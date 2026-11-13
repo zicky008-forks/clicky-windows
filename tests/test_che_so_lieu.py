@@ -46,3 +46,13 @@ def test_chart_data_as_objects_and_json_is_masked_but_libraries_are_not():
     for real in ("412580.5", "12.6", "98765"):
         assert real not in out, real
     assert "duration:1000" in out and "Khối A" in out and untouched == 0   # the library is code: kept, not a doubt
+
+
+def test_data_kept_as_csv_text_in_a_script_is_masked_and_the_copy_is_audited():
+    # real report 2026-11-13: ~0.9 MB of data as CSV strings inside a JSON object in a script
+    rows = "\\n".join(f"Khối {i},2026-10,{41258 + i}.5,{(i * 37) % 900}.25" for i in range(30))
+    page = f'<p>Doanh thu 41.258,5</p><script>window.__data={{"t1": "khoi,ky,doanh_thu,ty_le\\n{rows}"}};</script>'
+    out, _, _ = che_so_lieu.mask(page, {}, seed=5)
+    assert "41258.5" not in out and "2026-10" in out and "Khối 7" in out
+    assert che_so_lieu.leftovers(page, out) <= 2                     # made-up digits can match by chance
+    assert che_so_lieu.leftovers(page, page) > 30

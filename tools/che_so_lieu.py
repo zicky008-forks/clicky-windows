@@ -29,7 +29,9 @@ KEEP_BEFORE = re.compile(r"(?:\b(?:tháng|thang|quý|quy|ngày|ngay|kỳ|lần|p
 TEXT_ATTRS = re.compile(r"""(\b(?:title|aria-label|alt|data-value|data-label|value)\s*=\s*)(["'])(.*?)\2""", re.I | re.S)
 NUM_ARRAY = re.compile(r"\[\s*-?\d[\d.,\s\-eE+]*\]")
 KEY_NUMBER = re.compile(r"""((?:["'][^"'\n]{1,60}["']|\b[A-Za-z_À-ỹ][\wÀ-ỹ]*)\s*:\s*-?)(\d+(?:\.\d+)?)(?![\w.])""")
-LIBRARY = re.compile(r"/\*!|@license|Chart\.js|echarts|plotly|Highcharts|jQuery|d3\.js", re.I)
+LIBRARY = re.compile(r"/\*!|@license|Copyright|Chart\.js|echarts|plotly|Highcharts|jQuery|d3js\.org|d3\.js", re.I)
+LONG_STRING = re.compile(r'"(?:[^"\\\n]|\\.){200,}"|' + r"'(?:[^'\\\n]|\\.){200,}'|`(?:[^`\\]|\\.){200,}`", re.S)
+DATA_NUM = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w])")     # in CSV a comma separates fields
 ENC = re.compile(rb"""<meta[^>]+charset=["']?([\w-]+)""", re.I)
 
 
@@ -89,10 +91,22 @@ class Masker:
         head = out[:out.find(">") + 1]
         if re.search(r"""type\s*=\s*["']?application/(?:ld\+)?json""", head, re.I):
             return head + re.sub(r"(?<![\w.])\d+(?:\.\d+)?(?![\w])", fig, out[len(head):])   # data only: every number
-        if LIBRARY.search(out[:400]) or len(out) > 200_000:
+        if LIBRARY.search(out[:400]):
             return out                                            # a bundled chart library: code, no report data
+        # data kept as text, CSV or JSON in a long string (window.DATA = {"t": "cột,cột\n...,12.5,..."}): every number
+        out = LONG_STRING.sub(lambda m: self.data_text(m.group(0)), out)
         # data written as objects: {value: 186.4}, "doanh_thu": 412580 (a key, then a number)
         return KEY_NUMBER.sub(lambda m: m.group(1) + self.figure(m.group(2)), out)
+
+    def data_text(self, t: str) -> str:
+        """A CSV or JSON text: every figure masked; years and ISO dates (2026-10-31) kept, so periods still match."""
+        def sub(m):
+            s = m.group(0)
+            if re.fullmatch(r"(19|20)\d\d", s) or re.fullmatch(r"\d\d", s) and \
+                    re.search(r"(19|20)\d\d-(\d\d-)?$", t[max(0, m.start() - 8):m.start()]):
+                return s
+            return self.figure(s)
+        return DATA_NUM.sub(sub, t)
 
 
 def mask(html: str, swaps: dict, seed=None) -> tuple:
@@ -120,6 +134,28 @@ def mask(html: str, swaps: dict, seed=None) -> tuple:
     return out, mk.count, untouched
 
 
+def _data_parts(html: str) -> str:
+    """The report without bundled libraries and styles: where its figures can be."""
+    return " ".join(seg for seg in SEGMENT.split(html) if seg and not (
+        seg[:8].lower().startswith("<script") and LIBRARY.search(seg[:400])) and not seg[:7].lower().startswith("<style"))
+
+
+AUDIT_NUM = re.compile(r"(?<![A-Za-zÀ-ỹ_\d.,])\d(?:[\d.,]*\d)?")
+
+
+def leftovers(real: str, masked: str) -> int:
+    """How many figures of 3+ digits (not a year) are still the same, at the same place, in the masked copy, outside
+    bundled libraries. Masking keeps every figure's shape, so the figures line up one to one. 0 is the goal."""
+    def toks(t):
+        return AUDIT_NUM.findall(_data_parts(t))     # whole figures; "m104", "FY2627" are names, not figures
+    a, b = toks(real), toks(masked)
+    if len(a) != len(b):                       # names swapped into digits, or the like: compare as sets instead
+        have = {x for x in a if len(re.sub(r"\D", "", x)) >= 5}
+        return sum(1 for x in b if x in have)
+    return sum(1 for x, y in zip(a, b) if x == y and len(re.sub(r"\D", "", x).lstrip("0")) >= 3
+               and not re.fullmatch(r"(19|20)\d\d", x))
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Tạo bản che số của báo cáo HTML để thử Clicky mà số thật không rời máy.")
     ap.add_argument("bao_cao")
@@ -139,11 +175,14 @@ def main(argv=None) -> int:
             k, v = (x.strip() for x in line.split("=", 1))
             if k:
                 swaps[k] = v or "Công ty A"
-    out, n, untouched = mask(read_html(src), swaps)
+    real = read_html(src)
+    out, n, untouched = mask(real, swaps)
+    left = leftovers(real, out)
     dst = src.with_name(src.stem + "_CHE.html")
     dst.write_text(out, encoding="utf-8")
     print(f"Đã tạo bản che số: {dst}")
     print(f"  Đổi {n} con số sang số giả cùng dạng (giữ năm, tháng, quý, ngày, số mục). Đổi {len(swaps)} tên.")
+    print(f"  Kiểm lại: còn {left} số (từ 3 chữ số, không kể năm) giống hệt bản thật ở cùng chỗ (0 đến vài số là sạch, do trùng ngẫu nhiên).")
     if untouched:
         print(f"  Lưu ý: {untouched} đoạn script có số mà em không chắc là dữ liệu, nên giữ nguyên. Anh mở bản che xem lướt.")
     print("  Trước khi gửi: mở bản _CHE.html xem lướt. Còn số thật hay tên nhạy cảm thì thêm vào TEN_CAN_CHE.txt rồi chạy lại.")
