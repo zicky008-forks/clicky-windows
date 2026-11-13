@@ -38,6 +38,7 @@ SVG_SHAPE = re.compile(r"<\s*(?:rect|line|circle|ellipse|path|polyline|polygon|t
 GEOMETRY = re.compile(r"""(\s(?:x|y|x1|y1|x2|y2|cx|cy|r|rx|ry|dx|dy|width|height|d|points)\s*=\s*)(["'])(.*?)\2""", re.I | re.S)
 SHOWN_TEXT = re.compile(r"""(["'`])(?=[^"'`\n]*[A-Za-zÀ-ỹ]{2,}\s+[^"'`\n]*\d)[^"'`\\\n]{3,199}\1""")
 CODE_TEXT = re.compile(r"\s*(?:translate|rotate|scale|matrix|rgba?|hsla?|calc|url|[Mm]\s*-?\d|#)", re.I)
+DOT_DATE = re.compile(r"(?:0?[1-9]|[12]\d|3[01])\.(?:0?[1-9]|1[0-2])")
 STYLE = re.compile(r"""(\sstyle\s*=\s*)(["'])(.*?)\2""", re.I | re.S)
 ENC = re.compile(rb"""<meta[^>]+charset=["']?([\w-]+)""", re.I)
 
@@ -77,6 +78,7 @@ class Masker:
         self.rng = random.Random(seed)
         self.map: dict = {}
         self.count = 0
+        self.vn_marks = False                                     # set by mask(): decimals written 12,5
 
     def figure(self, s: str) -> str:
         """Same digits get the same made-up digits, whatever the marks: 186,4 in a card and 186.4 in a chart match."""
@@ -102,6 +104,9 @@ class Masker:
             if (len(plain) <= 2 or YEAR.fullmatch(plain)) and \
                     (re.match(r"\s*[/\-]\s*\d", t[m.end():m.end() + 3]) or re.search(r"\d\s*/\s*$", before)):
                 return s                                          # a date: 20/11, 11/2026; never 672,7/700,0
+            if self.vn_marks and DOT_DATE.fullmatch(s) and not re.match(r"\s*(?:%|tỷ|tr|triệu|nghìn|k\b|[MBK]\b|lần|x\b)",
+                                                                       t[m.end():m.end() + 8], re.I):
+                return s                                          # 29.10 in a report with 12,5 decimals: a date
             if len(s) <= 2 and re.match(r"\.\s", t[m.end():m.end() + 2]) and not t[:m.start()].strip():
                 return s                                          # a section number: "2. Chi tiết"
             return self.figure(s)
@@ -182,6 +187,11 @@ class Masker:
 
 def mask(html: str, swaps: dict, seed=None) -> tuple:
     mk = Masker(seed)
+    words = " ".join(x for x in SEGMENT.split(html) if x and not x.startswith("<"))
+    toks = [m.group(1) for m in NUM.finditer(words)]
+    vn = sum(1 for x in toks if re.search(r",\d{1,2}$|\.\d{3}(?:,|$)", x))
+    en = sum(1 for x in toks if re.search(r"\.\d{1,2}$|,\d{3}(?:\.|$)", x) and not DOT_DATE.fullmatch(x))
+    mk.vn_marks = vn > en
     parts, untouched = [], 0
     for seg in SEGMENT.split(html):
         if not seg:

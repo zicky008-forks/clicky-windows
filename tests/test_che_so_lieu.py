@@ -152,3 +152,15 @@ def test_the_audit_reads_a_year_then_a_csv_field_as_a_year():
     page = f"<script>window.__x={{{rows}}};</script>"
     out, _, _ = che_so_lieu.mask(page, {}, seed=18)
     assert "T10/2026," in out and che_so_lieu.leftovers(page, out) <= 3
+
+
+def test_a_dotted_date_in_a_vietnamese_report_stays_a_date():
+    # real report 2026-11-13: "REVISE 11.11" masked to "54.44" read as an English decimal and stopped Clicky
+    page = "<p>Doanh thu 672,7 tỷ, lãi 12,5 tỷ, chi 1.234,5 tỷ</p><p>file REVISE 11.11, cập nhật 29.10, tăng 12.5%</p>"
+    out, _, _ = che_so_lieu.mask(page, {}, seed=19)
+    assert "REVISE 11.11" in out and "29.10" in out and "12.5%" not in out and "672,7" not in out
+
+
+def test_in_an_english_report_a_dotted_pair_is_a_figure():
+    out, _, _ = che_so_lieu.mask("<p>Revenue 672.7 bn, margin 11.11 pts, cost 1,234.5</p>", {}, seed=20)
+    assert "11.11" not in out
