@@ -25,7 +25,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 SEGMENT = re.compile(r"(<script\b.*?</script\s*>|<style\b.*?</style\s*>|<!--.*?-->|<[^>]+>)", re.S | re.I)
 NUM = re.compile(r"(?<![\w#&])(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)(?!\d)")
-KEEP_BEFORE = re.compile(r"(?:\b(?:tháng|thang|quý|quy|ngày|ngay|kỳ|lần|phần|mục|bước)\s+|(?<!\w)(?:T|Q|H|FY)\s?)$", re.I)
+KEEP_BEFORE = re.compile(r"(?:\b(?P<word>tháng|thang|quý|quy|ngày|ngay|kỳ|lần|phần|mục|bước)\s+|(?<!\w)(?:T|Q|H|FY)\s?)$", re.I)
 TEXT_ATTRS = re.compile(r"""(\b(?:title|aria-label|alt|data-[\w-]+|value|placeholder)\s*=\s*)(["'])(.*?)\2""", re.I | re.S)
 NUM_ARRAY = re.compile(r"\[\s*-?\d[\d.,\s\-eE+]*\]")
 KEY_NUMBER = re.compile(r"""((?:["'][^"'\n]{1,60}["']|\b[A-Za-z_À-ỹ][\wÀ-ỹ]*)\s*:\s*-?)(\d+(?:\.\d+)?)(?![\w.])""")
@@ -36,6 +36,7 @@ CODE_FIGURE = re.compile(r"(?<![\w.#$\\])(?:\d+\.\d+|\d{4,})(?![\w])")
 DATA_NUM = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?!\d)")     # in CSV a comma separates fields
 SVG_SHAPE = re.compile(r"<\s*(?:rect|line|circle|ellipse|path|polyline|polygon|text|tspan|use|image)\b", re.I)
 GEOMETRY = re.compile(r"""(\s(?:x|y|x1|y1|x2|y2|cx|cy|r|rx|ry|dx|dy|width|height|d|points)\s*=\s*)(["'])(.*?)\2""", re.I | re.S)
+STYLE = re.compile(r"""(\sstyle\s*=\s*)(["'])(.*?)\2""", re.I | re.S)
 ENC = re.compile(rb"""<meta[^>]+charset=["']?([\w-]+)""", re.I)
 
 
@@ -93,8 +94,9 @@ class Masker:
             plain = s.replace(".", "").replace(",", "")
             if len(plain) == 4 and plain.isdigit() and 1990 <= int(plain) <= 2040 and s == plain:
                 return s                                          # a year
-            if KEEP_BEFORE.search(before):
-                return s                                          # a period: tháng 10, T10, Q3, FY2627
+            keep = KEEP_BEFORE.search(before)
+            if keep and re.fullmatch(r"\d{1,2}" if keep.group("word") else r"\d{1,4}", s):
+                return s                                          # a period: tháng 10, T10, Q3, FY2627; not "kỳ 672,7"
             if (len(plain) <= 2 or YEAR.fullmatch(plain)) and \
                     (re.match(r"\s*[/\-]\s*\d", t[m.end():m.end() + 3]) or re.search(r"\d\s*/\s*$", before)):
                 return s                                          # a date: 20/11, 11/2026; never 672,7/700,0
@@ -117,6 +119,11 @@ class Masker:
             return new
         return re.sub(r"-?\d+(?:\.\d+)?", sub, value)
 
+    def style(self, css: str) -> str:
+        """Bar widths and heights written as width:87.65%: the decimals carry a ratio, so they move like geometry."""
+        return re.sub(r"(?<![\w#.-])\d+\.\d+(?=\s*%)",
+                      lambda m: self.shape(m.group(0)), css)
+
     def script(self, js: str) -> str:
         """Every figure of a script is found on the original text by each rule below, then masked once."""
         spans: dict = {}
@@ -136,7 +143,7 @@ class Masker:
                 add(len(head) + n.start(), len(head) + n.end())
         elif kind == "dữ liệu":
             # a data block (window.DATA = {...} of CSV text, almost no code): every figure, years and ISO parts kept
-            for n in re.finditer(r"(?<![^\W\d_])(?<![\d.])\d+(?:\.\d+)?(?![^\W\d_])(?!\d)", js):
+            for n in re.finditer(r"(?<![^\W\d_])(?<![\d.#])\d+(?:\.\d+)?(?!\d)", js):   # 120tr, 500k too
                 v = n.group(0)
                 if not (YEAR.fullmatch(v) or re.fullmatch(r"\d\d", v) and
                         re.search(r"(19|20)\d\d-(\d\d-)?$", js[max(0, n.start() - 8):n.start()])):
@@ -182,6 +189,7 @@ def mask(html: str, swaps: dict, seed=None) -> tuple:
             parts.append(seg)
         elif seg.startswith("<"):
             seg = TEXT_ATTRS.sub(lambda m: m.group(1) + m.group(2) + mk.text(m.group(3)) + m.group(2), seg)
+            seg = STYLE.sub(lambda m: m.group(1) + m.group(2) + mk.style(m.group(3)) + m.group(2), seg)
             if SVG_SHAPE.match(seg):
                 seg = GEOMETRY.sub(lambda m: m.group(1) + m.group(2) + mk.shape(m.group(3)) + m.group(2), seg)
             parts.append(seg)
@@ -231,7 +239,8 @@ def audit(real: str, masked: str):
             continue
         for m, n in zip(ta, tb):
             v = m.group()
-            if v == n.group() and len(re.sub(r"\D", "", v).lstrip("0")) >= 3 and not YEAR.fullmatch(v):
+            if v == n.group() and len(re.sub(r"\D", "", v).lstrip("0")) >= 3 and not YEAR.fullmatch(v) and not (
+                    re.fullmatch(r"[1-9]\d?00", v) and place != "chữ" and "dữ liệu" not in place):
                 where = place
                 if place.startswith("thẻ"):
                     attr = re.findall(r"([\w:-]+)\s*=\s*[\"']?[^\"'=]*$", x[:m.start()])
@@ -272,11 +281,12 @@ def main(argv=None) -> int:
     if a.tu_file and Path(a.tu_file).is_file():
         lines += read_html(Path(a.tu_file)).splitlines()
     for line in lines:
-        if "=" in line and not line.lstrip().startswith("#"):
-            k, v = (x.strip() for x in line.split("=", 1))
+        if line.strip() and not line.lstrip().startswith("#"):
+            k, v = (x.strip() for x in line.split("=", 1)) if "=" in line else (line.strip(), "")
             if k:
-                swaps[k] = v or "Công ty A"
+                swaps[k] = v or f"Tên {chr(65 + len(swaps) % 26)}"
     real = read_html(src)
+    hits = {k: len(re.findall(re.escape(k), real, flags=re.I)) for k in swaps}
     out, n, untouched = mask(real, swaps)
     found = audit(real, out)
     left = leftovers(real, out) if found is None else len(found)
@@ -284,6 +294,12 @@ def main(argv=None) -> int:
     dst.write_text(out, encoding="utf-8")
     print(f"Đã tạo bản che số: {dst}")
     print(f"  Đổi {n} con số sang số giả cùng dạng (giữ năm, tháng, quý, ngày, số mục). Đổi {len(swaps)} tên.")
+    if swaps:
+        print(f"  Tên đã đổi: {sum(hits.values())} chỗ."
+              + (f" {sum(1 for v in hits.values() if not v)} tên không thấy trong báo cáo (tên thứ "
+                 + ", ".join(str(i + 1) for i, v in enumerate(hits.values()) if not v) + ")." if 0 in hits.values() else ""))
+    else:
+        print("  Chưa đổi tên nào: tên công ty, người, khách hàng vẫn giữ nguyên. Muốn che thì ghi vào TEN_CAN_CHE.txt.")
     print(f"  Kiểm lại: còn {left} số (từ 3 chữ số, không kể năm) giống hệt bản thật ở cùng chỗ (0 đến vài số là sạch, do trùng ngẫu nhiên).")
     if found:
         tally: dict = {}

@@ -112,3 +112,27 @@ def test_the_audit_says_where_each_leftover_sits_without_showing_it():
     found = che_so_lieu.audit(page, out)
     assert found == [("script 1 (mã)", "<aaaaaa>aaaaa a = [999]; aaaa(999")]
     assert che_so_lieu.leftovers(page, out) == 1
+
+
+def test_a_figure_after_cung_ky_is_masked_but_ky_10_stays():
+    out, _, _ = che_so_lieu.mask("<p>So với cùng kỳ 672,7 tỷ, kỳ 10 và mục 3; FY 2627</p>", {}, seed=13)
+    assert "672,7" not in out and "kỳ 10" in out and "mục 3" in out and "FY 2627" in out
+
+
+def test_a_data_block_masks_figures_glued_to_units_but_keeps_colours():
+    rows = ",".join(f'"r{i}": "giảm {120 + i}tr, #1f77b4"' for i in range(1500))
+    out, _, _ = che_so_lieu.mask(f"<script>window.__x={{{rows}}};</script>", {}, seed=14)
+    assert "giảm 120tr" not in out and "#1f77b4" in out
+
+
+def test_bar_widths_in_style_move_but_spacing_stays():
+    page = '<i style="left:3.25%;width:87.65%;line-height:1.4;padding:12px"></i><span style="width:calc(41.5% + 8px)">x</span>'
+    out, _, _ = che_so_lieu.mask(page, {}, seed=15)
+    assert "87.65%" not in out and "41.5%" not in out and "3.25%" not in out
+    assert "line-height:1.4" in out and "padding:12px" in out and "+ 8px" in out
+
+
+def test_the_audit_does_not_count_round_constants_in_code():
+    page = "<script>const pct = (v) => fmt(v * 100) + '%'; const w = 960;</script>"
+    out, _, _ = che_so_lieu.mask(page, {}, seed=16)
+    assert [w for w, _ in che_so_lieu.audit(page, out)] == ["script 1 (mã)"]
