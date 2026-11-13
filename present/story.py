@@ -22,6 +22,7 @@ When the report has no table with a plan, an actual and a total, story() returns
 from __future__ import annotations
 
 import itertools
+import unicodedata
 import re
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
@@ -34,6 +35,9 @@ TOTAL = re.compile(r"^\W*(tổng|total|cộng|grand)\b", re.I)
 REVENUE = re.compile(r"doanh thu|revenue|\bdtt\b|net sales|sales", re.I)
 PLAN_WORD = re.compile(r"aop|kế hoạch|\bkh\b|budget|ngân sách|plan", re.I)
 APPROX = re.compile(r"(khoảng|gần|hơn|chừng|xấp xỉ|độ)\s*$", re.I)
+CLAIM = re.compile(r"\b(hai phần ba|một phần ba|ba phần tư|một phần tư|một nửa|phần lớn)\b", re.I)
+CLAIMS = {"hai phần ba": Decimal("0.667"), "một phần ba": Decimal("0.333"), "ba phần tư": Decimal("0.75"),
+          "một phần tư": Decimal("0.25"), "một nửa": Decimal("0.5"), "phần lớn": None}
 SAVE_ASK = re.compile(r"(\d+)\s*(vị trí|nhân sự|người|headcount|hc)\b", re.I)
 
 
@@ -194,6 +198,8 @@ class Line:
     chi: str
     so_tinh: list = field(default_factory=list)     # ["7,8 = (20,9 - 14,1) / (165,5 - 78,2) × 100"]
     dung: float = 0.0                                # seconds of silence after the line (a question to the room)
+    bat: bool = True                                 # False: proposed, said only once the owner switches it on
+    vai: str = ""                                    # the beat ("hoi", "dong_luc"…): how the page answers questions
 
 
 @dataclass
@@ -344,6 +350,10 @@ COMMON_NOUN = re.compile(r"^(khối|phòng|ban|kênh|bộ phận|nhóm|chi nhán
                          r"nhà máy|công ty|cửa hàng|khu vực)\b", re.I)
 
 
+def _cap(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
 def _short(label: str) -> str:
     """'Khối Bán hàng' said inside a sentence: 'khối Bán hàng'; a name ('Logistics') stays as it is."""
     m = COMMON_NOUN.match(label)
@@ -415,18 +425,27 @@ def reco(items: list, places: dict) -> tuple:
 
 
 def asks(note) -> list:
-    """The things the owner asks the Board to decide, in his words, without the figures that follow "tức".
-    Only sentences that ask for an action ("giữ…", "giãn…"); a note that only describes the table asks nothing."""
+    """The things the owner asks the Board to decide, in his words, as (clause, money): "giữ tỷ lệ … ở 2,40%" with
+    "trần 177,5 tỷ" from the "tức …" that follows. Only sentences that ask for an action ("giữ…", "giãn…")."""
     body = C.RECO_START.sub("", note.text).strip().rstrip(".")
     parts = [p.strip() for p in re.split(r";|\.\s", body) if p.strip()]
     out = []
     for p in parts:
-        p = re.split(r",?\s+(?:tức|nghĩa là|tương đương)\b", p, maxsplit=1)[0]
-        p = re.sub(r"\s+như (AOP|kế hoạch)[^,;]*", "", p)
-        p = re.sub(r"\s+và gắn với .*$", "", p)
-        if ACTION.search(p):
-            out.append(_lc(p))
+        m = re.search(r",?\s+(?:tức|nghĩa là|tương đương)\b\s*", p)
+        clause, tail = (p[:m.start()], p[m.end():]) if m else (p, "")
+        clause = re.sub(r"\s+như (AOP|kế hoạch)[^,;]*", "", clause.strip())
+        if ACTION.search(clause):
+            out.append(_Ask(_lc(clause), tail.strip()))
     return out
+
+
+class _Ask(str):
+    """An ask in the owner's words; .money is the figure that follows "tức" ("trần 177,5 tỷ"), if any."""
+
+    def __new__(cls, text, money=""):
+        obj = str.__new__(cls, text)
+        obj.money = money
+        return obj
 
 
 def if_note(items: list) -> Optional[tuple]:
@@ -480,57 +499,72 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
     cut = next((c for c in cards if c.figs and any(f.sign == "-" for f in c.figs)), None)
     cap = next((c for c in cards if c is not cut and c.figs and c.figs[0].level), None)
 
-    # B0: the decision first, and that the speaker is an AI
+    # B0: who speaks, then the decision first, one short sentence each, money before ratios
     count_w = {1: "một việc", 2: "hai việc", 3: "ba việc", 4: "bốn việc", 5: "năm việc", 6: "sáu việc"}
+    nth = ["Một", "Hai", "Ba", "Bốn", "Năm", "Sáu"]
     many = len(ask_list) > 3                       # at most three things in one breath; the rest at the end
-    if ask_list and not many:
-        n = len(ask_list)
-        what = ask_list[0] if n == 1 else ", và ".join([", ".join(ask_list[:-1]), ask_list[-1]])
-        lines.append(("Mở đầu", Line(f"Thưa anh chị, em là trợ lý AI của {owner}. Em xin nói kết luận trước: "
-                                     f"hôm nay em xin anh chị quyết {count_w[n]}: {what}.", cid(note))))
-    elif ask_list:
-        lines.append(("Mở đầu", Line(f"Thưa anh chị, em là trợ lý AI của {owner}. Em xin nói kết luận trước: hôm nay "
-                                     f"có {count_w.get(len(ask_list), 'nhiều việc')} cần anh chị quyết, việc đầu tiên là: "
-                                     f"{_lc(ask_list[0])}.", cid(ask_pairs[0][0]))))
-    else:
-        lines.append(("Mở đầu", Line(f"Thưa anh chị, em là trợ lý AI của {owner}. Em xin nói kết luận trước.", "")))
+    who = owner[:1].upper() + owner[1:]
+    first = ask_pairs[0][0] if ask_pairs else None
+    lines.append(("Mở đầu", Line(f"Thưa anh chị, em là trợ lý AI của {owner}.", cid(first) if first else "", vai="chao")))
 
-    # B3: the contrast
+    def said(a) -> str:
+        money = getattr(a, "money", "")
+        return f"{_lc(a)}, tức {money}" if money else _lc(a)
+
+    if ask_list and not many:
+        lines.append(("Mở đầu", Line(f"{who} xin anh chị quyết {count_w[len(ask_list)]}.", cid(first), vai="hoi")))
+        for k, (n, a) in enumerate(ask_pairs):
+            lines.append(("Mở đầu", Line(f"{nth[k]}, {said(a)}." if len(ask_pairs) > 1 else f"{_cap(said(a))}.", cid(n),
+                                         vai="hoi")))
+    elif ask_list:
+        lines.append(("Mở đầu", Line(f"{who} xin anh chị quyết {count_w.get(len(ask_list), 'nhiều việc')}; việc đầu tiên "
+                                     f"là {said(ask_list[0])}.", cid(first), vai="hoi")))
+
+    # B2 + B3: how big the change is, then the contrast that makes it matter
     con = contrast(items, en)
-    if con is not None:
-        it, cost, rev = con
-        faster = C.value(cost.tok, en) > C.value(rev.tok, en)
-        lines.append(("Mâu thuẫn", Line(f"Vì sao? Chi phí tăng {cost.tok}%, trong khi doanh thu chỉ tăng {rev.tok}%."
-                                        if faster else f"Chi phí tăng {cost.tok}%, doanh thu tăng {rev.tok}%.", cid(it))))
-        words = times_words(C.value(cost.tok, en) / C.value(rev.tok, en)) if faster else None
-        if words:
-            lines.append(("Mâu thuẫn", Line(f"Tức là chi phí đang chạy {words} doanh thu.", cid(it))))
-    elif tdelta:
+    if tdelta:
         pct = tpct[0] if tpct else None
         pct_expr = "" if tpct else f"({a_tok} - {p_tok}) / {p_tok} × 100"
         got = robust_token(pct_expr, en) if pct_expr else None
         pct = pct or (got[0] if got else None)
-        lines.append(("Mâu thuẫn", Line(f"So với {t.plan_name}, tổng {'tăng' if up else 'giảm'} {tdelta[0]} {unit}"
-                                        .replace("  ", " ") + (f", tức khoảng {pct}%." if pct_expr and pct else
-                                                               f", tức {pct}%." if pct else "."),
-                                        t.total.id, so_tinh=[x for x in (f"{tdelta[0]} = {tdelta[2]}" if tdelta[2] else "",
-                                                                         f"{pct} = {pct_expr}" if pct_expr and pct else "") if x])))
+        size = (f"Theo {t.actual_name}, tổng là {a_tok} {unit}, {'cao' if up else 'thấp'} hơn {t.plan_name} "
+                f"{tdelta[0]} {unit}").replace("  ", " ")
+        same_pct = con is not None and pct and C.value(con[1].tok, en) == C.value(pct, en)
+        size += (f", tức khoảng {pct}%." if pct_expr else f", tức {pct}%.") if pct and not same_pct else "."
+        lines.append(("Mâu thuẫn", Line(size.replace(" ,", ","), t.total.id, vai="quy_mo",
+                                        so_tinh=[x for x in (f"{tdelta[0]} = {tdelta[2]}" if tdelta[2] else "",
+                                                             f"{pct} = {pct_expr}" if pct_expr and pct else "") if x])))
+    if con is not None:
+        it, cost, rev = con
+        faster = C.value(cost.tok, en) > C.value(rev.tok, en)
+        lines.append(("Mâu thuẫn", Line(f"Vì sao cần quyết? Chi phí tăng {cost.tok}%, trong khi doanh thu chỉ tăng "
+                                        f"{rev.tok}%." if faster else f"Chi phí tăng {cost.tok}%, doanh thu tăng {rev.tok}%.",
+                                        cid(it), vai="mau_thuan")))
+        if faster:
+            expr = f"{cost.tok} / {rev.tok}"
+            ratio = evaluate(expr, en)
+            if ratio >= Decimal("1.3"):
+                tok = say(ratio, 1, en)
+                tail = ", gần gấp đôi" if Decimal("1.85") <= ratio < Decimal("1.95") else ""
+                lines.append(("Mâu thuẫn", Line(f"Tức là chi phí tăng nhanh gấp khoảng {tok} lần doanh thu{tail}.", cid(it),
+                                                so_tinh=[f"{tok} = {expr}"], vai="mau_thuan")))
 
     # B4 + B5: a question to the room, then the main driver and what the rest did without it
     groups = group_rows(t, en)
     moves = [(r, delta(t, r, en)) for r in t.rows if r.id not in groups]
     same = [(r, d) for r, d in moves if d and d[1] and (d[1] > 0) == up]
+    verb = "tăng" if up else "giảm"
     if same and tdelta:
         same.sort(key=lambda x: -abs(x[1][1]))
         top, (top_tok, top_val, top_f) = same[0]
         share = top_val / tdelta[1]
         noun = t.what or "chỗ"
-        lines.append(("Động lực chính", Line(f"Vậy phần {'tăng' if up else 'giảm'} thêm nằm ở đâu?", t.total.id, dung=1.5)))
+        lines.append(("Động lực chính", Line(f"Vậy phần {verb} thêm nằm ở đâu?", t.total.id, dung=1.5, vai="cau_hoi")))
         sw = share_words(abs(share))
-        lead = f"{sw[:1].upper() + sw[1:]} nằm ở một chỗ" if sw else "Lớn nhất là"
-        lines.append(("Động lực chính", Line(f"{lead}: {_short(top.label)}, {'tăng' if up else 'giảm'} {top_tok} {unit}."
-                                             .replace(" .", "."), top.id,
-                                             so_tinh=[f"{top_tok} = {top_f}"] if top_f else [])))
+        name = _cap(_short(top.label))
+        text = (f"{name} chiếm {sw} phần {verb}: {top_tok} {unit}." if sw
+                else f"Lớn nhất là {_short(top.label)}: {verb} {top_tok} {unit}.").replace(" .", ".")
+        lines.append(("Động lực chính", Line(text, top.id, so_tinh=[f"{top_tok} = {top_f}"] if top_f else [], vai="dong_luc")))
         tp, ta = _num(top, t.plan, en), _num(top, t.actual, en)
         if tp and ta and abs(share) >= Decimal("0.4") and len(same) + len([m for m in moves if m[1]]) > 2:
             num = f"({tdelta[0]} - {top_tok})" if not (tdelta[2] or top_f) else \
@@ -545,50 +579,60 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                 others = f"các {noun} còn lại" if t.what else "phần còn lại"
                 rest_v = evaluate(expr, en)
                 whole = (a_val - p_val) / p_val * HUNDRED
-                verb = ("chỉ tăng" if rest_v < whole else "tăng") if rest_v > 0 else "giảm"
-                lines.append(("Động lực chính", Line(f"Bỏ {_short(top.label)} ra, {others} {verb} khoảng {rest_tok}%{tail}.",
-                                                     top.id, so_tinh=[f"{rest_tok} = {expr}"])))
+                how = ("chỉ tăng" if rest_v < whole else "tăng") if rest_v > 0 else "giảm"
+                lines.append(("Động lực chính", Line(f"Bỏ {_short(top.label)} ra, {others} {how} khoảng {rest_tok}%{tail}.",
+                                                     top.id, so_tinh=[f"{rest_tok} = {expr}"], vai="phan_con_lai")))
+    bridge = headcount_bridge(places, t, en)
+    if bridge is not None:                         # proposed: it may contradict the report's own words
+        lines.append(("Động lực chính", Line(bridge[0], bridge[1], so_tinh=[bridge[2]], bat=False, vai="cau_noi")))
 
-    # B6: what happens if nothing changes
+    # B6: what happens if nothing changes, the measure named
     rc = ratio_card(places, en)
     if rc is not None:
         p, a, b = rc
-        lines.append(("Nếu giữ nguyên", Line(f"Nếu giữ nguyên, tỷ lệ này là {a.tok}%, thay vì {b.tok}% như kế hoạch gốc.",
-                                             p.id)))
-
-    if rc is None:
+        lines.append(("Nếu giữ nguyên", Line(f"Nếu giữ nguyên, {_lc(p.label)} là {a.tok}%, thay vì {b.tok}% như kế hoạch "
+                                             "gốc.", p.id, vai="neu_giu")))
+    else:
         cond = if_note(items)
         if cond is not None:
-            lines.append(("Nếu giữ nguyên", Line(cond[1], cid(cond[0]))))
+            lines.append(("Nếu giữ nguyên", Line(cond[1], cid(cond[0]), vai="neu_giu")))
 
     # B8: the ask in figures
     if many:
         for k, (n, a) in enumerate(ask_pairs[:6]):
-            lead = ["Một là", "Hai là", "Ba là", "Bốn là", "Năm là", "Sáu là"][k]
-            lines.append(("Đề nghị", Line(f"{lead}, {_lc(a)}.", cid(n))))
+            lines.append(("Đề nghị", Line(f"{nth[k]} là, {said(a)}.", cid(n), vai="hoi")))
     if cap is not None:
         f = cap.figs[0]
-        lines.append(("Đề nghị", Line(f"Vì vậy em đề xuất mức trần {f.tok} {f.unit or unit}.".replace("  ", " "), cap.id)))
+        lines.append(("Đề nghị", Line(f"Vì vậy {owner} đề xuất mức trần {f.tok} {f.unit or unit}.".replace("  ", " "), cap.id,
+                                      vai="tran")))
     if cut is not None:
         f = next(g for g in cut.figs if g.sign == "-")
         lines.append(("Đề nghị", Line(f"Tức là phải giảm {f.tok} {f.unit or unit} so với bản điều chỉnh.".replace("  ", " "),
-                                      cut.id, dung=1.0)))
+                                      cut.id, dung=1.0, vai="tran")))
 
     # pre-flight (owner only) and B9: say plainly what the report does not give a figure for
     flags += preflight(items, places, t, en, note, cut, owner)
-    gap_line = next((fl for fl in flags if fl.get("noi_thang")), None)
-    if gap_line is not None and note is not None:
-        lines.append(("Đề nghị", Line(gap_line["noi_thang"], cid(note))))
+    for fl in flags:
+        if fl.get("noi_thang") and note is not None:
+            lines.append(("Đề nghị", Line(fl["noi_thang"], cid(note), vai="thang")))
+        if fl.get("de_xuat") and note is not None:       # a bound worked out from printed figures: the owner decides
+            lines.append(("Đề nghị", Line(fl["de_xuat"][0], cid(note), so_tinh=fl["de_xuat"][1], bat=False,
+                                          vai="uoc_tiet_kiem")))
 
-    # B10: close on the decision
-    if cap is None and ask_list:
-        lines.append(("Chốt", Line(f"Tóm lại, em xin anh chị cho ý kiến về {count_w.get(len(ask_list), 'các việc')} "
-                                   "trên. Quyết định là của anh chị.", cid(ask_pairs[0][0]))))
-    if cap is not None:
+    # B10: close on every decision asked at the start, then stop for questions
+    if ask_list and not many:
+        short = [_lc(a) for a in ask_list]
+        what = short[0] if len(short) == 1 else ", và ".join([", ".join(short[:-1]), short[-1]])
+        lines.append(("Chốt", Line(f"Tóm lại, {owner} xin anh chị quyết {count_w[len(ask_list)]}: {what}. "
+                                   "Quyết định là của anh chị.", cid(first), dung=1.0, vai="chot")))
+    elif ask_list:
+        lines.append(("Chốt", Line(f"Tóm lại, {owner} xin anh chị quyết {count_w.get(len(ask_list), 'các việc')} trên. "
+                                   "Quyết định là của anh chị.", cid(first), dung=1.0, vai="chot")))
+    elif cap is not None:
         f = cap.figs[0]
-        lines.append(("Chốt", Line(f"Tóm lại, em xin anh chị cho ý kiến về mức trần {f.tok} {f.unit or unit}. "
-                                   "Quyết định là của anh chị.".replace("  ", " "), cap.id)))
-    lines.append(("Chốt", Line("Anh chị muốn em đi sâu vào phần nào, cứ bấm vào con số đó hoặc hỏi em ạ.", "")))
+        lines.append(("Chốt", Line(f"Tóm lại, {owner} xin anh chị cho ý kiến về mức trần {f.tok} {f.unit or unit}. "
+                                   "Quyết định là của anh chị.".replace("  ", " "), cap.id, dung=1.0, vai="chot")))
+    lines.append(("Chốt", Line("Em xin dừng ở đây để anh chị hỏi ạ.", "", vai="moi_hoi")))
 
     scenes: list = []
     for muc, ln in lines:
@@ -601,16 +645,47 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             c["so_tinh"] = ln.so_tinh
         if ln.dung:
             c["dung"] = ln.dung
+        if not ln.bat:
+            c["bat"] = "chưa"
+        if ln.vai:
+            c["vai"] = ln.vai
         scenes[-1]["cau"].append(c)
     return {"canh": scenes, "bo_qua": [], "chua_ro": [], "phan_bien": [fl["xem"] for fl in flags], "kieu": "ke_chuyen"}
+
+
+def headcount_card(places: dict):
+    """A card with a headcount and its change ("Headcount bình quân 1.248 người, +64")."""
+    return next((p for p in places.values() if p.kind == "card" and p.figs and len(p.figs) >= 2
+                 and p.figs[0].unit == "người" and p.figs[1].unit == "người" and p.figs[1].sign), None)
+
+
+def headcount_bridge(places: dict, t: Table, en: bool) -> Optional[tuple]:
+    """(line, place, formula): how much of the change comes from more people at the plan's cost per head, said as
+    a share so it is not mistaken for another figure in tỷ. None without a headcount card."""
+    hc, d = headcount_card(places), delta(t, t.total, en)
+    if hc is None or not d or not d[1]:
+        return None
+    p_tok = _num(t.total, t.plan, en)[0]
+    n_tok, dn_tok = hc.figs[0].tok, hc.figs[1].tok
+    sign = "-" if hc.figs[1].sign == "-" else ""
+    expr = f"{sign}{dn_tok} × {p_tok} / ({n_tok} - {sign}{dn_tok}) / {d[0]} × 100".replace("- -", "+ ")
+    try:
+        got = robust_token(expr, en, most=0) or (say(evaluate(expr, en), 0, en), 0)
+        share = evaluate(expr, en)
+    except ValueError:
+        return None
+    if share <= 0 or share >= 100:
+        return None
+    rest = "phần lớn hơn" if share < 50 else "phần còn lại"
+    return (f"Phần tăng do thêm người chỉ chiếm khoảng {got[0]}%; {rest} là chi phí mỗi người tăng." if share < 50 else
+            f"Phần tăng do thêm người chiếm khoảng {got[0]}%; {rest} là chi phí mỗi người tăng.", hc.id, f"{got[0]} = {expr}")
 
 
 def preflight(items: list, places: dict, t: Table, en: bool, note, cut, owner: str = "người làm báo cáo") -> list:
     """What the owner should check before the Board sees the report. Never spoken to the Board, except the
     plain line that an ask has no figure yet ("noi_thang")."""
     flags = []
-    hc = next((p for p in places.values() if p.kind == "card" and p.figs and len(p.figs) >= 2
-               and p.figs[0].unit == "người" and p.figs[1].unit == "người" and p.figs[1].sign), None)
+    hc = headcount_card(places)
     rate = next((p for p in places.values() if p.kind == "card" and p.figs and len(p.figs) >= 2
                  and re.search(r"bình quân|trung bình|mỗi người|per head|/người", p.label, re.I)
                  and p.figs[1].unit == "%"), None)
@@ -626,14 +701,20 @@ def preflight(items: list, places: dict, t: Table, en: bool, note, cut, owner: s
             flags.append({"xem": f"Cầu chênh lệch: số người tăng góp khoảng {say(hc_part, 1, en)} {t.unit or ''}"
                                  f" ({say(share * HUNDRED, 0, en)}%), đơn giá mỗi người tăng góp phần còn lại "
                                  f"({say(d[1] - hc_part, 1, en)} {t.unit or ''}). Công thức: {heads}.".replace(" )", ")")})
-            claim = next((it for it in items if it.kind == "note" and re.search(r"phần ba|phần tư|một nửa|phần lớn", it.text, re.I)
-                          and re.search(r"tuyển|người|headcount|nhân sự mới", it.text, re.I)), None)
-            if claim is not None and share < Decimal("0.5"):
-                said = next((x for x in re.split(r"(?<=[.;])\s+", claim.text)
-                             if re.search(r"phần ba|phần tư|một nửa|phần lớn", x, re.I)), claim.text)
-                flags.append({"xem": f"Báo cáo viết «{C.clip(said, 80)}», nhưng tách theo số người × đơn giá thì "
-                                     f"phần do tăng người chỉ khoảng {say(share * HUNDRED, 0, en)}%. Phần lớn còn lại là "
-                                     "đơn giá mỗi người tăng. Anh xem lại câu này trước khi gửi."})
+            for it in items:                # a share the report claims for new people that the bridge does not give
+                if it.kind != "note" or not re.search(r"tuyển|người|headcount|nhân sự mới", it.text, re.I):
+                    continue
+                for said in re.split(r"(?<=[.;])\s+", it.text):
+                    m = CLAIM.search(said)
+                    if not m or not re.search(r"tuyển|người|headcount|nhân sự mới", said, re.I):
+                        continue
+                    want = CLAIMS[m.group(1).lower()]
+                    off = share < Decimal("0.5") if want is None else abs(share - want) > Decimal("0.10")
+                    if off:
+                        flags.append({"xem": f"Báo cáo viết «{C.clip(said, 80)}», nhưng tách theo số người × đơn giá "
+                                             f"thì phần do tăng người chỉ khoảng {say(share * HUNDRED, 0, en)}%. Phần còn "
+                                             "lại là đơn giá mỗi người tăng. Anh xem lại câu này trước khi gửi.",
+                                      "sai": C.clip(said, 80)})
         except ValueError:
             pass
     if hc and rate:
@@ -660,12 +741,159 @@ def preflight(items: list, places: dict, t: Table, en: bool, note, cut, owner: s
                 try:
                     year = evaluate(f"{m.group(1)} × {per}", en)
                     need = f" so với {cut.figs[0].tok} {cut.figs[0].unit or ''} cần giảm" if cut is not None else ""
-                    flags.append({"xem": f"Đề xuất «{m.group(0)}» chưa ghi tiết kiệm được bao nhiêu. Theo bình quân "
-                                         f"{_short(row.label)} ({per}), giãn trọn năm khoảng {say(year, 1, en)} "
-                                         f"{t.unit or ''}{need}. Anh bổ sung số tháng giãn, hoặc để em nói thẳng là chưa có số.",
-                                  "noi_thang": f"Em xin nói thẳng: báo cáo chưa ghi giãn {m.group(1)} {m.group(2)} tiết kiệm "
-                                               f"được bao nhiêu, phần này {owner} sẽ bổ sung ạ."})
+                    flag = {"xem": f"Đề xuất «{m.group(0)}» chưa ghi tiết kiệm được bao nhiêu. Theo bình quân "
+                                   f"{_short(row.label)} ({per}), giãn trọn năm khoảng {say(year, 1, en)} "
+                                   f"{t.unit or ''}{need}. Anh bổ sung số tháng giãn vào báo cáo, hoặc bật câu em đề xuất "
+                                   "(bat: 'có') trong kịch bản.",
+                            "noi_thang": f"Em xin nói thẳng: báo cáo chưa ghi giãn {m.group(1)} {m.group(2)} tiết kiệm "
+                                         "được bao nhiêu."}
+                    expr = f"{m.group(1)} × {per}"
+                    got = robust_token(expr, en)
+                    if cut is not None and got:
+                        ratio = year / C.value(cut.figs[0].tok, en)
+                        enough = ("chưa bằng một nửa" if ratio < Decimal("0.45") else "chưa đủ" if ratio < 1 else "đủ bù")
+                        flag["de_xuat"] = (f"Kể cả giãn trọn năm, {m.group(1)} {m.group(2)} cũng chỉ tiết kiệm tối đa "
+                                           f"khoảng {got[0]} {t.unit or ''}, {enough} mức {cut.figs[0].tok} "
+                                           f"{cut.figs[0].unit or ''} cần giảm.".replace("  ", " ").replace(" ,", ","),
+                                           [f"{got[0]} = {expr}"])
+                    flags.append(flag)
                 except ValueError:
                     pass
     return flags
 
+
+
+# --- questions the Board asks after the talk, answered from the talk itself ------------------------------------
+
+def jfold(s: str) -> str:
+    """The layer's fold(): no accents, lower case, only letters, digits and number marks. Kept identical to the
+    JavaScript one so a pattern written here matches there."""
+    s = unicodedata.normalize("NFD", str(s or "")).replace("đ", "d").replace("Đ", "D")
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn").lower()
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9%,.\-+ ]+", " ", s)).strip()
+
+
+# What a question is about, on the folded text (no accents). Each answer is the owner's approved lines of that beat,
+# so an answer never holds a figure the talk did not already say and the number lock did not already check.
+INTENT = {
+    "ai": [r"\b(em|ban|may|chi|anh) la ai\b", r"\bai (dang )?(noi|trinh bay|thuyet trinh)\b", r"\bla (nguoi|may) (that|hay)\b",
+           r"\b(nguoi that|ai that|tri tue nhan tao)\b"],
+    "hoi": [r"\b(tom lai|chot lai|noi gon|tom tat)\b", r"\bquyet (gi|nhung gi|viec gi|dieu gi|cai gi|may viec)\b",
+            r"\b(can|xin|muon|de nghi)( anh chi| chung toi| bod| hdqt| ban giam doc| ban tong giam doc)? (quyet|duyet|phe duyet)\b",
+            r"\b(de nghi|de xuat|xin) (gi|nhung gi|cu the|cai gi)\b"],
+    "tran": [r"\b(muc )?tran\b", r"\b(giam|cat) (bao nhieu|may|bot bao nhieu|di bao nhieu)\b", r"\b(can|phai) (giam|cat)\b"],
+    "tiet_kiem": [r"\btiet kiem\b", r"\b(du|bu) (bu|du|duoc|lai)\b", r"\b(gian|hoan|dung) (tuyen|vi tri)\b"],
+    "cau_noi": [r"\b(them nguoi|tuyen them|headcount|so nguoi|don gia|moi nguoi|binh quan|tang nguoi)\b"],
+    "neu_giu": [r"\bneu (giu nguyen|de nguyen|khong (quyet|duyet|lam gi|cat|giam|lam))\b", r"\b(rui ro|hau qua)\b",
+                r"\b(dieu|chuyen) gi (se )?xay ra\b"],
+    "dong_luc": [r"\b(nam|tang|vuot|do) (o|tu) (dau|cho nao|khoi nao|phong nao|bo phan nao)\b",
+                 r"\b(khoi|phong|bo phan|kenh|mang) nao\b", r"\b(tang|vuot) (nhieu|manh) nhat\b",
+                 r"\b(chu yeu|phan lon) (do|tu|o|la|nam)\b", r"\b(nguyen nhan|dong luc) chinh\b"],
+    "vi_sao": [r"\b(vi sao|tai sao|sao lai|ly do|vi dau)\b"],
+}
+HOW = (r"\b(o dau ra|dau ra|tu dau|lay (o|tu) dau|tinh (the nao|sao|ra sao|bang cach nao|ra|lai)|cong thuc|"
+       r"co (dung|chac|chinh xac) khong|kiem (lai|tra)|la sao|nghia la gi|lam sao ra|sao ra)\b")
+BEATS = {"ai": ("chao",), "hoi": ("hoi",), "tran": ("tran",), "tiet_kiem": ("thang", "uoc_tiet_kiem"),
+         "cau_noi": ("cau_noi",), "neu_giu": ("neu_giu",), "dong_luc": ("dong_luc", "phan_con_lai"),
+         "vi_sao": ("quy_mo", "mau_thuan")}
+ANY_SCOPE = ("t", "ai", "hoi")          # asked while pointing at a place, the rest are about that place instead
+
+
+def tok_pattern(tok: str) -> str:
+    """A figure as it stands in a folded question: "8" in "con so 8% o dau ra", never inside "18" or "8,9"."""
+    return r"(^|[^0-9.,])" + re.escape(jfold(tok)) + r"(?![0-9]|[.,][0-9])"
+
+
+def pretty(expr: str) -> str:
+    return re.sub(r"\s*\*\s*|\s+x\s+", " × ", expr).replace(" / ", " ÷ ").replace(" - ", " − ")
+
+
+def formula_text(tok: str, expr: str, en: bool) -> str:
+    """The formula behind a figure Clicky worked out, as the reader sees it: the exact result too when the talk said
+    it rounded ("= 7,79, nói tròn là 8"), so nobody takes a rounded figure for the report's own."""
+    try:
+        exact = evaluate(expr, en)
+    except ValueError:
+        return f"{pretty(expr)} = {tok}"
+    q = rounded(abs(exact), decimals(tok, en) + 2).normalize()          # 1,750 is said 1,75
+    fine = say(exact, max(0, -q.as_tuple().exponent), en)
+    return f"{pretty(expr)} = {tok}" if C.value(fine, en) == C.value(tok, en) else \
+        f"{pretty(expr)} = {fine}, nói tròn là {tok}"
+
+
+def facts(script: dict, places: dict, en: bool, owner: str) -> list:
+    """The answers a Board member gets after the talk, before any search of the page. Built from the script the owner
+    approved, so each answer is lines he read (and the number lock checked), in the order he said them:
+
+    - "t": how a figure Clicky worked out was computed (the line, then its formula), for each so_tinh;
+    - one entry per beat with lines: "hoi" (what is asked), "vi_sao", "dong_luc", "neu_giu", "tran"…
+
+    Each entry: k (kind), y (patterns on the folded question), x (row names that send the question to that row
+    instead), a (the answer shown), noi (what is said), chi (the place framed), tu (indices of the spoken lines
+    used, as in the record), and for "t" tok and cong_thuc."""
+    lines = []                                     # (index in the record, line) for every line Clicky says
+    for s in script.get("canh") or []:
+        for c in s.get("cau") or []:
+            if C.on(c) and str(c.get("noi") or "").strip():     # the record's own rule: its rows, in order
+                lines.append((len(lines), c))
+    t = main_table(places, en)
+    names = []
+    for r in (t.rows if t else []):
+        m = COMMON_NOUN.match(r.label)
+        core = jfold(r.label[m.end():] if m else r.label)
+        if len(core) >= 3:
+            names.append(core)
+    out = []
+    seen = set()
+    for i, c in lines:                              # "con số 1,8 ở đâu ra": the line that says it, then the formula
+        for f in c.get("so_tinh") or []:
+            tok, _, expr = str(f).partition("=")
+            tok, expr = tok.strip(), expr.strip()
+            if not tok or not expr or tok in seen:
+                continue
+            seen.add(tok)
+            said = str(c["noi"]).strip()
+            out.append({"k": "t", "y": [tok_pattern(tok) + r".*" + HOW, HOW + r".*" + tok_pattern(tok)], "x": [],
+                        "a": f"{said} Em tính từ các số trên báo cáo: {formula_text(tok, expr, en)}.",
+                        "noi": f"{said} Công thức em hiện trên màn hình ạ.", "chi": c.get("chi") or "", "tu": [i],
+                        "tok": tok, "cong_thuc": expr})
+    for k, beats in BEATS.items():
+        used = [(i, c) for i, c in lines if c.get("vai") in beats]
+        if k == "hoi" and any(str(c["noi"]).startswith("Một là") for _i, c in used):
+            used = used[next(j for j, (_i, c) in enumerate(used) if str(c["noi"]).startswith("Một là")):]
+        if not used:
+            continue
+        said = " ".join(str(c["noi"]).strip() for _i, c in used)
+        if k == "ai":
+            said += f" Nội dung do {owner} soạn; em trình bày lại và không tự thêm số."
+        x = [] if k in ANY_SCOPE else [n for n in names if n not in jfold(said)]
+        out.append({"k": k, "y": INTENT[k], "x": x, "a": said, "noi": said,
+                    "chi": next((c.get("chi") for _i, c in used if c.get("chi")), ""), "tu": [i for i, _c in used]})
+    return out
+
+
+def answer_fact(facts_: list, q: str, scoped: bool = False, weak: bool = True) -> Optional[dict]:
+    """The layer's factMatch(), for tests and the command line: the first entry whose pattern the question meets.
+    The page is searched first for every beat except "t", "ai" and "hoi"; weak=False is a page that found an answer."""
+    fq = " " + jfold(q) + " "
+    for f in facts_:
+        if f["k"] not in ANY_SCOPE and (scoped or not weak):
+            continue
+        if any(re.search(p, fq) for p in f["y"]) and not any(f" {n} " in fq for n in f["x"]):
+            return f
+    return None
+
+
+NTH = re.compile(r"^(Một|Hai|Ba|Bốn|Năm|Sáu)( là)?,\s*")
+
+
+def decisions(script: dict) -> list:
+    """The decisions asked, one per line, for the card shown after the talk: the owner's approved "Một, …" lines
+    without their count ("Giữ tỷ lệ … ở 2,40%, tức trần 177,5 tỷ"). A talk that asks one thing gives that line."""
+    said = [str(c["noi"]).strip() for s in script.get("canh") or [] for c in s.get("cau") or []
+            if C.on(c) and c.get("vai") == "hoi" and str(c.get("noi") or "").strip()]
+    listed = [_cap(NTH.sub("", x)).rstrip(".") for x in said if NTH.match(x)]
+    if listed:
+        return list(dict.fromkeys(listed))[:6]
+    single = [x for x in said if not re.search(r"xin anh chị quyết (một|hai|ba|bốn|năm|sáu|nhiều) việc", x)]
+    return [single[0].rstrip(".")] if single else []

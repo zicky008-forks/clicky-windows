@@ -1992,9 +1992,19 @@ SCRIPT_HEAD = """# Kịch bản Clicky cho «{report}».
 # Trong câu có dấu nháy đơn thì gõ hai dấu nháy đơn liền nhau. Thụt đầu dòng bằng dấu cách, không dùng phím Tab.
 # Số anh tự thêm (không có trong báo cáo): ghi vào dòng so_rieng của câu đó, ví dụ   so_rieng: ['0,12']
 # Số có trong báo cáo nhưng ở chỗ khác chỗ khoanh: anh xem lại rồi ghi   xac_nhan: ['14,1']
+# Số em tự tính từ số trên báo cáo: dòng so_tinh ghi công thức, ví dụ   so_tinh: ['8 = (20,9 - 14,1) / (165,5 - 78,2) × 100']
+# Câu có bat: 'chưa' là câu em đề xuất nhưng chưa nói. Anh đọc, thấy đúng thì đổi thành bat: 'có'.
+# dung: 1.5 là số giây em dừng lại sau câu đó (sau một câu hỏi để người nghe kịp nghĩ).
+# vai: cho biết câu đó trả lời loại câu hỏi nào khi người nghe hỏi lại (anh không cần sửa).
 # Đọc và sửa xong: đổi da_duyet: 'chưa' thành da_duyet: 'có', rồi kéo thả báo cáo vào Clicky lần nữa.
 # Khi đó bản trình bày hết chữ SƠ BỘ.
 """
+
+
+def on(c: dict) -> bool:
+    """A line Clicky says: every line, except one the owner has not switched on (bat: 'chưa')."""
+    v = c.get("bat", True)
+    return v is True or (v is not False and tri_nho.fold(str(v)) in YES)
 
 
 def script_hash(canh) -> str:
@@ -2020,6 +2030,10 @@ def dump_script(script: dict, report: str, snap: Optional[dict] = None, draft: b
                     row[k] = [_Q(str(x)) for x in c[k]]
             if c.get("dung"):
                 row["dung"] = float(c["dung"])
+            if "bat" in c:
+                row["bat"] = _Q("có" if on(c) else "chưa")
+            if c.get("vai"):
+                row["vai"] = _Q(c["vai"])
             sc["cau"].append(row)
         out.append(sc)
     body = {"bao_cao": _Q(report), "da_duyet": _Q("chưa"),
@@ -2074,6 +2088,9 @@ def _tok_value(t: str, en: bool) -> Optional[Decimal]:
     return value(t.lstrip("-").rstrip("%"), en)
 
 
+DEGREE = re.compile(r"phần ba|phần tư|một nửa|phần lớn|gần như toàn bộ|gấp đôi|gấp ba|gấp khoảng", re.I)
+
+
 def next_period(script: dict, old: dict, places: dict, en: bool) -> tuple:
     """The owner's sentences with this period's figures put where last period's stood (same place, same position
     in it). Returns (script, lines whose direction flipped: their wording no longer holds)."""
@@ -2085,8 +2102,8 @@ def next_period(script: dict, old: dict, places: dict, en: bool) -> tuple:
         for c in s.get("cau") or []:
             if c.get("so_rieng"):
                 continue                   # a sentence with his own figures: he says what changes in it
-            if c.get("so_tinh"):
-                flipped.append(c)          # a figure worked out from last period's: this period's draft line
+            if c.get("so_tinh") or (c.get("vai") in ("dong_luc", "mau_thuan") and DEGREE.search(str(c.get("noi") or ""))):
+                flipped.append(c)          # a figure worked out, or a word of degree, from last period's figures
                 continue
             neo = str(c.get("neo") or "").strip()
             a, b = (old.get(neo) or "").split(), (now.get(neo) or "").split()
@@ -2402,7 +2419,7 @@ def make_record(script: dict, places: dict, page_text: str, meta: dict, en: bool
     for s in script.get("canh") or []:
         for c in s.get("cau") or []:
             noi = str(c.get("noi") or "").strip()
-            if not noi:
+            if not noi or not on(c):
                 continue
             chi = str(c.get("chi") or "")
             own = {value(t, en) for t in _toks(c.get("so_rieng"))}
@@ -2661,7 +2678,7 @@ def _pause(v) -> float:
 def scenes_from_script(script: dict, known: set) -> list:
     scenes = []
     for s in script.get("canh") or []:
-        lines = [c for c in (s.get("cau") or []) if str(c.get("noi") or "").strip()]
+        lines = [c for c in (s.get("cau") or []) if str(c.get("noi") or "").strip() and on(c)]
         if not lines:
             continue
         for c in lines:
@@ -2894,6 +2911,12 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     now_snap = snapshot(script, places)
     changed = [k for k in old if k in now_snap and now_snap[k] != old[k]]
     by_chi = {str(c.get("chi")): c for s in draft["canh"] for c in s["cau"] if c.get("chi")}
+    by_beat = {(str(c.get("chi")), c["vai"]): c for s in draft["canh"] for c in s["cau"] if c.get("chi") and c.get("vai")}
+    beats = [c["vai"] for s in draft["canh"] for c in s["cau"] if c.get("vai")]
+    by_vai = {c["vai"]: c for s in draft["canh"] for c in s["cau"] if c.get("vai") and beats.count(c["vai"]) == 1}
+
+    def same_line(c):                  # the same beat at the same place; else the one line of that beat (a new driver)
+        return by_beat.get((str(c.get("chi")), c.get("vai"))) or by_vai.get(c.get("vai")) or by_chi.get(str(c.get("chi")))
     period_note = ""
     if kind == "chu" and ((old and len(changed) >= 2) or (not old and stale_places(script, places, en) >= 2)):
         # a report of the next period saved under the same name: keep what the owner approved, put in the new
@@ -2926,11 +2949,13 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
         for c in flipped:                           # its tăng/giảm no longer holds: this period's draft line
             if any(c["noi"] == new for _, new in redo):
                 continue
-            d = by_chi.get(str(c.get("chi")))
+            d = same_line(c)               # two lines can frame one place ("Khối Bán hàng chiếm…", "Bỏ khối Bán hàng ra…")
             if d and d["noi"] == c["noi"] and d.get("so_tinh") == c.get("so_tinh"):
                 continue                   # worked out again, same words and formula
             redo.append((str(c.get("noi")), d["noi"] if d else ""))
             c["noi"] = d["noi"] if d else ""
+            if d and d.get("chi"):
+                c.update(chi=d["chi"], neo=d.get("neo", ""))
             c.pop("so_tinh", None)
             if d and d.get("so_tinh"):
                 c["so_tinh"] = list(d["so_tinh"])
@@ -2957,7 +2982,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
         period_note = (f"Đây là báo cáo kỳ mới ({len(changed) or 'nhiều'} chỗ đổi số). Em giữ lời anh đã duyệt và thay "
                        f"số mới vào đúng chỗ; kịch bản cũ giữ ở «{before.name}».")
         if redo:
-            period_note += (f" {len(redo)} câu đổi nghĩa (tăng thành giảm, hoặc đổi thứ hạng), anh đọc lại: "
+            period_note += (f" {len(redo)} câu đổi nghĩa (tăng thành giảm, đổi thứ hạng hoặc đổi mức độ như «gần gấp đôi»), anh đọc lại: "
                             + "; ".join(f"«{clip(a, 50)}» → " + (f"«{clip(b, 60)}»" if b else "bỏ") for a, b in redo[:3]) + ".")
         notes.insert(0, period_note)
     ranked = ranking_issues(script, rows, en)
@@ -3010,6 +3035,13 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     bank = ready_answers(mem, places, en, declared, period=period, before=old)
     if bank:
         record["tra_loi_san"] = bank
+        record["ma_bam"] = seal(record)
+    from present import story
+    book = story.facts(script, places, en, owner)        # questions after the talk, answered from the approved lines
+    if book:
+        record["hoi_dap"] = [dict({"k": f["k"], "a": f["a"], "tu": f["tu"]},
+                                  **({"tok": f["tok"], "cong_thuc": f["cong_thuc"]} if f["k"] == "t" else {}))
+                             for f in book]
         record["ma_bam"] = seal(record)
     attach_evidence(scenes, record)
 
@@ -3080,6 +3112,8 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
                       for it in items if it.kind == "card"],
             "cot": table_columns(places),
             "ve": drawn_locators(script, drawn),
+            "facts": [dict(audio(f["noi"]), k=f["k"], y=f["y"], x=f["x"], a=f["a"], chi=f["chi"]) for f in book],
+            "quyet": story.decisions(script),
             "fallback": fallback, "fallback_clip": audio(fallback), "aliases": doc_tai_chinh.aliases(),
             "bank": [dict(audio(f"{who} đã trả lời" + (f" kỳ {b['ky']}" if b["cu"] and b["ky"] else "")
                                 + f": {_sentence(b['tra_loi'])}"),
@@ -3104,6 +3138,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
             "trang_thai": status, "da_duyet": ok and not reset, "canh_bao": notes, "dau_so": meta["dau_so"], "ma_hoa": encoding,
             "scenes": len(scenes), "minutes": meta["minutes"], "bytes": len(page.encode("utf-8")),
             "record": meta["record"], "doi_neo": moved, "phan_bien": draft.get("phan_bien") or [],
+            "cau_tat": sum(1 for sc in script["canh"] for c in sc.get("cau") or [] if not on(c)),
             "xem_lai": [{"cau": r["noi"], "so": [x["so"] for x in r["so"] if x["nguon"] == "bao_cao"]}
                         for r in record["cau"] if any(x["nguon"] == "bao_cao" for x in r["so"])],
             "found": {k: sum(1 for i in items if i.kind == k) for k in ("section", "note", "card", "table", "chart")},
@@ -3118,6 +3153,8 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
 def todo_list(rep: dict) -> list:
     """What the owner should do, most important first: a new period or a changed report, then reading the draft."""
     todo = rep["canh_bao"][:] + [f"Trước khi gửi, anh soát: {x}" for x in rep.get("phan_bien") or []]
+    if rep.get("cau_tat"):
+        todo.append(f"Có {rep['cau_tat']} câu em đề xuất nhưng chưa nói (bat: 'chưa'). Anh đọc, thấy đúng thì đổi thành bat: 'có'.")
     if not rep["trang_thai"].startswith("SƠ BỘ"):
         return todo
     first = 1 if todo and todo[0].startswith(("Đây là báo cáo kỳ mới", "Báo cáo đã đổi số", "Sửa câu «")) else 0

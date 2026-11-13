@@ -41,34 +41,38 @@ def lines(rep):
 def test_the_story_asks_first_then_tells_one_driver_and_never_reads_the_page_in_order(report):
     rep = build(report)
     said = lines(rep)
-    first = said[0]["noi"]
-    # the AI says it is an AI, and the decision comes in the first sentence, in the owner's own words
-    assert first.startswith("Thưa anh chị, em là trợ lý AI của anh Tuấn.")
-    assert "quyết hai việc" in first and "giữ tỷ lệ chi phí nhân sự/DTT ở 2,40%" in first and "giãn tuyển 30 vị trí" in first
+    # the AI says it is an AI, then the decisions come first, one short sentence each, in the owner's own words
+    assert [c["noi"] for c in said[:4]] == [
+        "Thưa anh chị, em là trợ lý AI của anh Tuấn.", "Anh Tuấn xin anh chị quyết hai việc.",
+        "Một, giữ tỷ lệ chi phí nhân sự/DTT ở 2,40%, tức trần 177,5 tỷ.",
+        "Hai, giãn tuyển 30 vị trí bán hàng sang quý 3 và gắn với doanh thu trên mỗi người."]
     text = " ".join(c["noi"] for c in said)
     assert "Tiếp theo là phần" not in text and "Thứ nhất" not in text
     # a question to the room, then a silence before the answer
-    q = next(c for c in said if c["noi"].endswith("?") and c["noi"] != "Vì sao?")
-    assert q.get("dung") == 1.5
+    q = next(c for c in said if c["noi"].endswith("?"))
+    assert q["noi"] == "Vậy phần tăng thêm nằm ở đâu?" and q.get("dung") == 1.5
     # one driver; the rest computed by code with its formula and checked by the number lock
-    rest = next(c for c in said if c.get("so_tinh"))
-    assert "khoảng 8%" in rest["noi"] and rest["so_tinh"] == ["8 = (20,9 - 14,1) / (165,5 - 78,2) × 100"]
-    assert rep["record"]["em_tinh"] == 1
-    # degree words come from computed ratios: 12,6 / 7,2 = 1,75 is "gần gấp đôi"
-    assert any("nhanh gần gấp đôi doanh thu" in c["noi"] for c in said)
+    rest = next(c for c in said if "khoảng 8%" in c["noi"])
+    assert rest["so_tinh"] == ["8 = (20,9 - 14,1) / (165,5 - 78,2) × 100"]
+    assert rep["record"]["em_tinh"] == 2
+    # how much faster is said as a figure the Board can check: 12,6 / 7,2 = 1,75, said "khoảng 1,8"
+    fast = next(c for c in said if "nhanh gấp khoảng 1,8 lần doanh thu" in c["noi"])
+    assert fast["so_tinh"] == ["1,8 = 12,6 / 7,2"]
     # it ends on the decision and hands the room the floor
-    assert "Quyết định là của anh chị." in said[-2]["noi"] and "bấm vào con số" in said[-1]["noi"]
+    assert "Quyết định là của anh chị." in said[-2]["noi"] and said[-1]["noi"] == "Em xin dừng ở đây để anh chị hỏi ạ."
+    # every line says which beat it is, so a question after the talk finds its answer
+    assert all(c.get("vai") for c in said)
 
 
 def test_a_computed_figure_is_rechecked_from_the_output_file(report):
     rep = build(report)
     res = kiem_bien_ban.verify(rep["out"], str(report))
     assert res["ok"], res["errors"]
-    assert res["tong"]["em_tinh"] == 1
+    assert res["tong"]["em_tinh"] == 2
     page = Path(rep["out"]).read_text(encoding="utf-8")
     data = json.loads(re.search(r'<script id="clicky-data" type="application/json">(.*?)</script>', page, re.S).group(1))
     chips = [e for s in data["scenes"] for ev in s["ev"] for e in ev if e[1] == "t"]
-    assert chips == [["8", "t", "(20,9 - 14,1) / (165,5 - 78,2) × 100"]]
+    assert chips == [["1,8", "t", "12,6 / 7,2"], ["8", "t", "(20,9 - 14,1) / (165,5 - 78,2) × 100"]]
 
 
 def test_the_owner_pre_flight_is_in_the_result_and_never_on_the_page(report):
@@ -180,9 +184,15 @@ def test_next_months_report_works_the_computed_figure_out_again(report):
     report.write_text(src, encoding="utf-8")
     rep = build(report)
     assert rep["trang_thai"].startswith("SƠ BỘ: báo cáo kỳ mới")
-    rest = next(c for c in lines(rep) if c.get("so_tinh"))
+    rest = next(c for c in lines(rep) if "khoảng 8%" in c["noi"])
     # (25,3 - 18,5) / (165,5 - 78,2) × 100 = 7,79: still "khoảng 8%", from this period's figures
     assert rest["so_tinh"] == ["8 = (25,3 - 18,5) / (165,5 - 78,2) × 100"]
+    # a word of degree is worked out again too: 18,5 / 25,3 = 73% is "phần lớn", no longer "hai phần ba"; the line
+    # that shares its place with "Bỏ khối Bán hàng ra" is matched by its beat and both survive
+    said = [c["noi"] for c in lines(rep)]
+    assert "Khối Bán hàng chiếm phần lớn phần tăng: 18,5 tỷ." in said and not any("hai phần ba" in x for x in said)
+    assert sum(x.startswith("Bỏ khối Bán hàng ra") for x in said) == 1
+    assert any("đổi mức độ" in n and "phần lớn" in n for n in rep["canh_bao"])
     assert kiem_bien_ban.verify(rep["out"], str(report))["ok"]
 
 
@@ -202,20 +212,20 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     rep = build(drawn_report)
     said = lines(rep)
     # the decisions come from the part headed "BOD cần quyết định": the bold title of each item, the first one first
-    assert said[0]["noi"].endswith("hôm nay có bốn việc cần anh chị quyết, việc đầu tiên là: duyệt trần chi phí vận "
-                                   "hành 120,0 tỷ.")
+    assert said[1]["noi"] == ("Anh Tuấn xin anh chị quyết bốn việc; việc đầu tiên là duyệt trần chi phí vận hành "
+                              "120,0 tỷ.")
     assert [c["noi"] for c in said if c["noi"].startswith(("Một là", "Hai là", "Ba là", "Bốn là"))] == [
         "Một là, duyệt trần chi phí vận hành 120,0 tỷ.", "Hai là, logistics phải giải trình trước khi duyệt.",
         "Ba là, giữ quỹ lương bằng AOP gốc.", "Bốn là, hoãn dự án kho mới."]
     # the table has no variance column: code works it out from the drawn rows; a group row ("Khối vận hành" adds up
     # Logistics and Mua hàng) is never the driver; the unit comes from the table's heading "(tỷ đồng)"
-    driver = next(c for c in said if "nằm ở một chỗ" in c["noi"])
-    assert driver["noi"] == "Gần hai phần ba nằm ở một chỗ: Logistics, tăng 12,0 tỷ." and driver["so_tinh"] == ["12,0 = 52,0 - 40,0"]
+    driver = next(c for c in said if c.get("vai") == "dong_luc")
+    assert driver["noi"] == "Logistics chiếm gần hai phần ba phần tăng: 12,0 tỷ." and driver["so_tinh"] == ["12,0 = 52,0 - 40,0"]
     assert driver["chi"].startswith("v")
     rest = next(c for c in said if c["noi"].startswith("Bỏ Logistics ra"))
     assert "chỉ tăng khoảng 10%" in rest["noi"]
-    # 18,0 / 8,0 = 2,25: "nhanh hơn gấp đôi", and the owner's own "Nếu …" sentence says what happens if nothing changes
-    assert any(c["noi"] == "Tức là chi phí đang chạy nhanh hơn gấp đôi doanh thu." for c in said)
+    # 18,0 / 8,0 = 2,25, said "khoảng 2,3 lần"; the owner's own "Nếu …" sentence says what happens if nothing changes
+    assert any(c["noi"] == "Tức là chi phí tăng nhanh gấp khoảng 2,3 lần doanh thu." for c in said)
     assert any(c["noi"].startswith("Nếu doanh thu chỉ đạt 90% kế hoạch") for c in said)
     # the page finds the drawn rows again by their words; the record re-check opens the page and finds them too
     page = Path(rep["out"]).read_text(encoding="utf-8")
@@ -223,7 +233,7 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     assert driver["chi"] in data["ve"] and data["ve"][driver["chi"]]["tag"] == "TR"
     res = kiem_bien_ban.verify(rep["out"], str(drawn_report))
     assert res["ok"], res["errors"]
-    assert res["tong"]["em_tinh"] == 2
+    assert res["tong"]["em_tinh"] == 5
 
 
 def test_the_screen_check_finds_drawn_places_and_keeps_a_tall_item_clear_of_a_sticky_header(drawn_report):
@@ -243,3 +253,59 @@ def test_words_of_degree_and_names_inside_a_sentence():
     assert story.times_words(Decimal("1.1")) is None
     assert story._short("Khối Bán hàng") == "khối Bán hàng" and story._short("Logistics") == "Logistics"
     assert story._lc("CNTT: phân bổ license") == "CNTT: phân bổ license" and story._lc("Giữ quỹ lương") == "giữ quỹ lương"
+
+
+def _data(rep):
+    page = Path(rep["out"]).read_text(encoding="utf-8")
+    return json.loads(re.search(r'<script id="clicky-data" type="application/json">(.*?)</script>', page, re.S).group(1))
+
+
+def test_questions_after_the_talk_are_answered_from_the_lines_the_owner_approved(report):
+    rep = build(report)
+    places = clicky_html.page_places(clicky_html.parse(Path(rep["out"]).read_text(encoding="utf-8")), False, None)
+    book = story.facts(clicky_html.load_script(rep["kich_ban"]), places, False, "anh Tuấn")
+    assert [f["a"] for f in book] == [f["a"] for f in _data(rep)["facts"]]          # what the page carries
+    ask = lambda q, **k: (story.answer_fact(book, q, **k) or {}).get("k")       # noqa: E731
+    # "tóm lại cần quyết gì": the decisions, exactly as said at the start
+    hoi = story.answer_fact(book, "Tóm lại anh Tuấn cần BOD quyết gì?")
+    assert hoi["a"].startswith("Anh Tuấn xin anh chị quyết hai việc. Một, giữ tỷ lệ")
+    # a figure Clicky worked out: the line, the formula, and the exact result beside the rounded one
+    t = story.answer_fact(book, "Con số 1,8 lần em lấy ở đâu ra?")
+    assert t["a"].endswith("Em tính từ các số trên báo cáo: 12,6 ÷ 7,2 = 1,75, nói tròn là 1,8.")
+    assert "= 7,79, nói tròn là 8." in story.answer_fact(book, "8% tính thế nào?")["a"]
+    assert ask("Số 18 tính thế nào?") is None and ask("1,8 tỷ là bao nhiêu?") is None    # never inside another figure
+    # the beats, when the page itself has nothing better
+    assert ask("Em là ai?") == "ai" and "không tự thêm số" in story.answer_fact(book, "Em là ai?")["a"]
+    assert ask("Nếu không cắt thì sao?") == "neu_giu" and ask("Vì sao phải quyết việc này?") == "vi_sao"
+    assert ask("Phần tăng chủ yếu do đâu?") == "dong_luc"
+    # a question that names another row goes to that row on the page, never to the talk's driver
+    assert ask("Vì sao Marketing tăng?") is None and ask("Vì sao khối CNTT tăng?") is None
+    # pointing at a place: only the decisions and the formulas, the rest is about that place
+    assert ask("Vì sao?", scoped=True) is None and ask("Tóm lại quyết gì?", scoped=True) == "hoi"
+    # a line the owner has not switched on is never an answer
+    assert not any("43%" in f["a"] for f in book)
+
+
+def test_the_answers_after_the_talk_are_sealed_and_rechecked(report):
+    rep = build(report)
+    res = kiem_bien_ban.verify(rep["out"], str(report))
+    assert res["ok"], res["errors"]
+    assert res["tong"]["hoi_dap"] == len(_data(rep)["facts"]) >= 6
+    page = Path(rep["out"]).read_text(encoding="utf-8")
+    Path(rep["out"]).write_text(page.replace("12,6 ÷ 7,2 = 1,75", "12,6 ÷ 6,3 = 2", 1), encoding="utf-8")
+    assert any("Câu trả lời sau bài nói" in e for e in kiem_bien_ban.verify(rep["out"], str(report))["errors"])
+
+
+def test_the_decision_card_lists_the_approved_asks_and_the_record_check_holds_it_to_them(report):
+    script = {"canh": [{"muc": "Mở đầu", "cau": [
+        {"noi": "Anh Tuấn xin anh chị quyết hai việc.", "vai": "hoi"},
+        {"noi": "Một, giữ trần 177,5 tỷ.", "vai": "hoi"}, {"noi": "Hai, giãn tuyển 30 vị trí.", "vai": "hoi"},
+        {"noi": "Ba, việc chưa bật.", "vai": "hoi", "bat": "chưa"}]}]}
+    assert story.decisions(script) == ["Giữ trần 177,5 tỷ", "Giãn tuyển 30 vị trí"]
+    assert story.decisions({"canh": [{"cau": [{"noi": "Đề nghị duyệt trần 120,0 tỷ.", "vai": "hoi"}]}]}) == \
+        ["Đề nghị duyệt trần 120,0 tỷ"]
+    rep = build(report)
+    page = Path(rep["out"]).read_text(encoding="utf-8")
+    assert _data(rep)["quyet"][0] == "Giữ tỷ lệ chi phí nhân sự/DTT ở 2,40%, tức trần 177,5 tỷ"
+    Path(rep["out"]).write_text(page.replace("tức trần 177,5 tỷ\"", "tức trần 199,0 tỷ\"", 1), encoding="utf-8")
+    assert any("Thẻ quyết định" in e for e in kiem_bien_ban.verify(rep["out"], str(report))["errors"])

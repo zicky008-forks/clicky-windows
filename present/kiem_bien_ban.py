@@ -127,6 +127,30 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
             if x["nguon"] == "bao_cao" and value(x["so"], en) not in on_page:
                 errors.append(f"Số {x['so']} không còn trong báo cáo (câu trả lời «{clip(b['tra_loi'])}»).")
     count["tra_loi_san"] = len(bank)
+    # answers after the talk: the approved lines themselves, or a figure's formula recomputed from the page
+    book, said = record.get("hoi_dap", []), [r["noi"] for r in record.get("cau", [])]
+    if [f.get("a") for f in data.get("facts", [])] != [f["a"] for f in book]:
+        errors.append("Câu trả lời sau bài nói trên trang khác với câu ghi trong biên bản.")
+    for f in book:
+        tu = [i for i in f.get("tu", []) if isinstance(i, int) and 0 <= i < len(said)]
+        base = " ".join(said[i] for i in tu)
+        if not tu or len(tu) != len(f.get("tu", [])) or not f["a"].startswith(base) \
+                or numbers(f["a"][len(base):]) and f.get("k") != "t":
+            errors.append(f"Câu trả lời «{clip(f['a'])}» không lấy đúng từ lời đã duyệt.")
+        elif f.get("k") == "t":
+            from present import story
+            tail = f["a"][len(base):]
+            if tail != f" Em tính từ các số trên báo cáo: {story.formula_text(f.get('tok', ''), f.get('cong_thuc', ''), en)}.":
+                errors.append(f"Câu trả lời «{clip(f['a'])}» ghi công thức khác với biên bản.")
+            else:
+                at = next((g.at for g in figures(base) if g.tok == f["tok"]), None)
+                why = story.check_computed(f["tok"], f["cong_thuc"], base[:at] if at is not None else "", en, on_page)
+                if why:
+                    errors.append(f"Số {f['tok']} em tính trong câu trả lời: {why}.")
+    count["hoi_dap"] = len(book)
+    for d in data.get("quyet", []):            # the decision card: the owner's approved asks, word for word
+        if not any(d.rstrip(".").lower() in x.lower() for x in said):
+            errors.append(f"Thẻ quyết định «{clip(d)}» không có trong lời đã duyệt.")
     if not errors and count["so"] == 0:
         errors.append("Bài trình bày không nói con số nào, nên không có gì để đối chiếu với báo cáo.")
     return {"ok": not errors, "errors": errors, "tong": count, "ma_bam": record.get("ma_bam", ""),
