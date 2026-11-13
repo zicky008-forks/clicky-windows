@@ -7,7 +7,8 @@ so Clicky can be tested on the real structure without real numbers leaving the c
 Writes "<report>_CHE.html" next to the source; the source is never changed. Nothing is sent anywhere.
 What is kept: years (1990-2040), periods (tháng 10, T10, Q3, FY2627, H1), dates, section numbers ("2. ...").
 The same figure always gets the same replacement, so a number repeated in a card and a table still matches.
-Chart data written as number arrays inside <script> is masked too; other script content is left as is and counted.
+Chart data inside <script> is masked too: number arrays, key: number pairs and JSON blocks. Bundled libraries are
+left as is; any other script that still has numbers is counted.
 """
 from __future__ import annotations
 
@@ -27,6 +28,8 @@ NUM = re.compile(r"(?<![\w#&;])(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)
 KEEP_BEFORE = re.compile(r"(?:\b(?:tháng|thang|quý|quy|ngày|ngay|kỳ|lần|phần|mục|bước)\s+|(?<!\w)(?:T|Q|H|FY)\s?)$", re.I)
 TEXT_ATTRS = re.compile(r"""(\b(?:title|aria-label|alt|data-value|data-label|value)\s*=\s*)(["'])(.*?)\2""", re.I | re.S)
 NUM_ARRAY = re.compile(r"\[\s*-?\d[\d.,\s\-eE+]*\]")
+KEY_NUMBER = re.compile(r"""((?:["'][^"'\n]{1,60}["']|\b[A-Za-z_À-ỹ][\wÀ-ỹ]*)\s*:\s*-?)(\d+(?:\.\d+)?)(?![\w.])""")
+LIBRARY = re.compile(r"/\*!|@license|Chart\.js|echarts|plotly|Highcharts|jQuery|d3\.js", re.I)
 ENC = re.compile(rb"""<meta[^>]+charset=["']?([\w-]+)""", re.I)
 
 
@@ -81,7 +84,15 @@ class Masker:
         return NUM.sub(sub, t)
 
     def script(self, js: str) -> str:
-        return NUM_ARRAY.sub(lambda m: re.sub(r"\d+(?:\.\d+)?", lambda n: self.figure(n.group(0)), m.group(0)), js)
+        fig = lambda n: self.figure(n.group(0))
+        out = NUM_ARRAY.sub(lambda m: re.sub(r"\d+(?:\.\d+)?", fig, m.group(0)), js)
+        head = out[:out.find(">") + 1]
+        if re.search(r"""type\s*=\s*["']?application/(?:ld\+)?json""", head, re.I):
+            return head + re.sub(r"(?<![\w.])\d+(?:\.\d+)?(?![\w])", fig, out[len(head):])   # data only: every number
+        if LIBRARY.search(out[:400]) or len(out) > 200_000:
+            return out                                            # a bundled chart library: code, no report data
+        # data written as objects: {value: 186.4}, "doanh_thu": 412580 (a key, then a number)
+        return KEY_NUMBER.sub(lambda m: m.group(1) + self.figure(m.group(2)), out)
 
 
 def mask(html: str, swaps: dict, seed=None) -> tuple:
@@ -93,7 +104,7 @@ def mask(html: str, swaps: dict, seed=None) -> tuple:
         low = seg[:8].lower()
         if low.startswith("<script"):
             new = mk.script(seg)
-            if new == seg and re.search(r"\d{2,}", re.sub(r"<[^>]+>", "", seg)):
+            if new == seg and re.search(r"\d{2,}", re.sub(r"<[^>]+>", "", seg)) and not LIBRARY.search(seg[:400]):
                 untouched += 1
             parts.append(new)
         elif low.startswith("<style") or seg.startswith("<!--"):

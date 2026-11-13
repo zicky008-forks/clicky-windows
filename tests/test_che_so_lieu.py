@@ -35,3 +35,14 @@ def test_masked_copy_is_written_next_to_the_source(tmp_path):
     assert che_so_lieu.main([str(src)]) == 0
     assert src.read_bytes() == raw
     assert "Khối Bán hàng" in (tmp_path / "bc_CHE.html").read_text(encoding="utf-8")
+
+
+def test_chart_data_as_objects_and_json_is_masked_but_libraries_are_not():
+    # real report 2026-11-13: 6 script blocks kept their numbers (data written as objects, not arrays)
+    page = ("<p>x</p><script>var rows=[{name:'Khối A', \"doanh_thu\": 412580.5, ty_le:12.6}];</script>"
+            "<script type=\"application/json\">{\"a\": [1, 2], \"b\": {\"c\": 98765}}</script>"
+            "<script>/*! Chart.js v4.4.1 */ var t={duration:1000};</script>")
+    out, _, untouched = che_so_lieu.mask(page, {}, seed=3)
+    for real in ("412580.5", "12.6", "98765"):
+        assert real not in out, real
+    assert "duration:1000" in out and "Khối A" in out and untouched == 0   # the library is code: kept, not a doubt
