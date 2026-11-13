@@ -341,9 +341,18 @@ function pinned(e) {   // fixed or sticky, itself or through a parent: only thos
     if (/^(fixed|sticky)$/.test(getComputedStyle(x).position)) return true;
   return false;
 }
-function hiddenBy(t) {   // a fixed header or sticky row of the page itself sitting on the place
+function figPoints(t, r) {   // in a big place (a title, a paragraph): where its figures are written
+  if (r.right - r.left < 200 && r.bottom - r.top < 60) return null;
+  const out = [], w = document.createTreeWalker(t, NodeFilter.SHOW_TEXT); let n;
+  while ((n = w.nextNode()) && out.length < 12) { const re = /\d[\d.,]*/g; let m;
+    while ((m = re.exec(n.data)) && out.length < 12) { const rg = document.createRange(); rg.setStart(n, m.index); rg.setEnd(n, m.index + m[0].length);
+      for (const q of rg.getClientRects()) if (q.width && q.right > r.left && q.left < r.right && q.bottom > r.top && q.top < r.bottom)
+        out.push([(q.left + q.right) / 2, (q.top + q.bottom) / 2]); } }
+  return out.length ? out : null;
+}
+function hiddenBy(t) {   // a fixed header or sticky row of the page itself sitting on the place, or on its figures in a big place
   const r = seen(t); if (!r) return null;
-  const v = vp(), pts = [[(r.left + r.right) / 2, (r.top + r.bottom) / 2], [r.left + 3, r.top + 3], [r.right - 3, r.top + 3]];
+  const v = vp(), pts = figPoints(t, r) || [[(r.left + r.right) / 2, (r.top + r.bottom) / 2], [r.left + 3, r.top + 3], [r.right - 3, r.top + 3]];
   const tb = t.closest && t.closest("table,[role=table],[role=grid]");
   for (const [x, y] of pts) {
     if (x < v.x || y < v.y || x > v.x + v.w || y > v.y + v.h) continue;
@@ -490,15 +499,50 @@ function topCover() {   // the bottom edge of the page's own fixed or sticky hea
   }
   return y;
 }
+let stickyCache = null;
+addEventListener("resize", () => { stickyCache = null; });
+function stickyTops() {   // where the page's own sticky header will sit once the page scrolls under it (before that it sits lower)
+  if (!stickyCache) { stickyCache = []; const H = (document.scrollingElement || document.documentElement).scrollHeight;
+    let level = [document.body], seenN = 0;
+    for (let d = 0; d < 6 && level.length && seenN < 600; d++) {   // page headers sit near the top of the page's tree
+      const next = [];
+      for (const p of level) for (const e of p.children) { if (mine(e) || /^(SCRIPT|STYLE|SVG|svg)$/.test(e.tagName)) continue; seenN++;
+        const s = getComputedStyle(e);
+        if (s.position === "sticky" && s.top !== "auto" && e.parentElement.getBoundingClientRect().height >= H * 0.8) stickyCache.push(e);
+        else next.push(e); }
+      level = next; } }
+  const v = vp(); let y = v.y;
+  for (const e of stickyCache) { if (!e.isConnected) continue; const q = e.getBoundingClientRect();
+    if (!q.height || q.height >= v.h * 0.4 || q.width <= v.w * 0.3) continue;
+    y = Math.max(y, v.y + (parseFloat(getComputedStyle(e).top) || 0) + q.height); }
+  return y;
+}
 function stuckHead(c) {   // a header cell that stays at the top of its table while the rows scroll under it
   for (let x = c; x && !/^(TABLE|BODY)$/.test(x.tagName); x = x.parentElement)
     if (/^(sticky|fixed)$/.test(getComputedStyle(x).position)) return true;
   return false;
 }
+function room(sc, on) {   // blank room after the last rows of a scroll box, so its last rows can come up too
+  const sp = sc.querySelector(":scope > [data-clicky-room]");
+  if (!on) { if (sp) { sp.remove(); LIVE.delete(sp); } return; }
+  if (sp) return;
+  const d = document.createElement("div"); d.setAttribute("aria-hidden", "true"); d.setAttribute("data-clicky-layer", "1"); d.setAttribute("data-clicky-room", "1");
+  d.style.cssText = "height:" + Math.round(Math.max(sc.clientHeight, innerHeight * 0.55)) + "px"; LIVE.add(d); sc.appendChild(d);   // even the last row can reach the top
+}
+function vScroller(t) {   // the box that scrolls this place up and down; a box that only scrolls sideways, or grows with its rows, is not one
+  for (let e = t.parentElement; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+    if (!/(auto|scroll|overlay)/.test(getComputedStyle(e).overflowY)) continue;
+    if (e.scrollHeight > e.clientHeight + 1) { room(e, true); return e; }
+    room(e, true);   // a box whose rows fit today: with room after them it may scroll; one with no height limit just grows
+    if (e.scrollHeight > e.clientHeight + 1 && e.clientHeight < innerHeight * 1.2) return e;
+    room(e, false);
+  }
+  return null;
+}
 function keepVisible(t) {   // the framed place is never under the bar, the panel or the page's own fixed header
   const p = $("panel"), v = vp(), small = v.w <= 700;
   p._cap = 0; p.classList.remove("left", "top"); placePanel(); sheetRoom = 0;
-  let r = rect(t), floor = rect($("bar")).top, ceil = Math.max(v.y, topCover()), under = false;
+  let r = rect(t), floor = rect($("bar")).top, ceil = Math.max(v.y, topCover(), stickyTops()), under = false;
   const G = guards(t), heads = G.els.filter(stuckHead);
   const barTop = floor, gd = G.strong.filter((q, i) => !(G.els[i] && stuckHead(G.els[i])));   // a stuck header shows by itself
   if (isOpen(p) && !small) {   // the side that leaves the place, its row label and its header free and hides fewest figures
@@ -508,7 +552,8 @@ function keepVisible(t) {   // the framed place is never under the bar, the pane
     const Rt = side(false), Lf = side(true);
     p.classList.toggle("left", Lf.free && (!Rt.free || Lf.hides < Rt.hides)); placePanel();
     if (!Rt.free && !Lf.free) {   // a wide table: the panel gets shorter and the place sits above it
-      p._cap = Math.max(150, Math.min(rect(p).height, floor - 48 - r.height - 40)); placePanel();
+      const stuck = heads.reduce((a, h) => Math.max(a, rect(h).height), 0);   // under the page's own header and the table's
+      p._cap = Math.max(150, Math.min(rect(p).height, floor - Math.max(ceil, v.y + 48) - 16 - stuck - r.height - 40)); placePanel();
       floor = rect(p).top; under = true;
     }
   } else if (isOpen(p)) ceil = Math.max(ceil, rect(p).bottom);
@@ -523,15 +568,15 @@ function keepVisible(t) {   // the framed place is never under the bar, the pane
     if (need > room && room >= 96) need = room;                // a tight screen: a shorter sheet, the place above it
     if (r.height + need < floor - ceil - 16) { floor -= need; sheetRoom = need - 16; }
   }
-  const sc = scrollerOf(t) || scrollerOf(t, true);
+  const sc = vScroller(t);
   let moved = false;
   if (sc) { let c = rect(sc);
     if (Math.min(floor, c.bottom) - Math.max(ceil, c.top) < Math.min(r.height + 60, floor - ceil - 40)) {   // too little of the box shows: the page brings it up first
-      (scrollerOf(sc) || window).scrollBy({top: c.top - ceil - Math.min(64, (floor - ceil) * 0.1), behavior: "auto"}); c = rect(sc); r = rect(t); moved = true; }   // the page, or the app frame that scrolls in its place; a short screen keeps its room
+      (scrollerOf(sc) || window).scrollBy({top: c.top - ceil - Math.min(64, (floor - ceil) * 0.1), behavior: "auto"}); c = rect(sc); r = rect(t); moved = true; ceil = Math.max(ceil, topCover()); }   // the page, or the app frame that scrolls in its place; a short screen keeps its room
+    if (heads.some(h => sc.contains(h)) && c.top < ceil - 1 && c.bottom > ceil) {   // the box's own stuck header is under the page's: the box comes down to show it
+      const top0 = c.top; (scrollerOf(sc) || window).scrollBy({top: c.top - ceil, behavior: "auto"}); c = rect(sc); r = rect(t); moved = moved || Math.abs(c.top - top0) > 1; }
     ceil = Math.max(ceil, c.top + heads.filter(h => sc.contains(h)).reduce((a, h) => Math.max(a, rect(h).bottom - c.top), 0));
-    floor = Math.min(floor, c.bottom);
-    if (!sc.querySelector(":scope > [data-clicky-layer]")) {   // room after the last rows of a scroll box too
-      const sp = document.createElement("div"); sp.setAttribute("aria-hidden", "true"); sp.setAttribute("data-clicky-layer", "1"); sp.style.cssText = "height:55vh"; LIVE.add(sp); sc.appendChild(sp); } }
+    floor = Math.min(floor, c.bottom); }
   const ex = pad(r) + 6;   // the frame's padding and ring are part of what must show
   if (r.width + 2 * ex <= v.w - 16 && (r.right + ex > v.x + v.w || r.left - ex < v.x)) {   // sideways only for a place that fits the screen
     const hs = scrollerOf(t) && scrollerOf(t).scrollWidth > scrollerOf(t).clientWidth + 1 ? scrollerOf(t) : window;
@@ -557,8 +602,9 @@ function keepVisible(t) {   // the framed place is never under the bar, the pane
       dy = got; }
   }
   if (Math.abs(dy) > 1) { (sc || window).scrollBy({top: dy, behavior: calm() ? "auto" : "smooth"}); moved = true; }
-  const unhide = () => { const e = hiddenBy(t); if (!e) return; const c = rect(e), q = rect(t), box = scrollerOf(t);
-    (box && box.contains(e) ? box : window).scrollBy({top: c.top < q.top ? -(c.bottom - q.top + 12) : (q.bottom - c.top + 12), behavior: "auto"}); schedule(); };
+  const unhide = () => { const e = hiddenBy(t); if (!e) return; const c = rect(e), q = rect(t), box = vScroller(t), w = vp();
+    const fromTop = (c.top + c.bottom) / 2 < w.y + w.h / 2;   // a header that stuck once the page moved: the place goes below it
+    (box && box.contains(e) ? box : window).scrollBy({top: fromTop ? -(c.bottom - q.top + 12) : (q.bottom - c.top + 12), behavior: "auto"}); schedule(); };
   const settle = () => { unhide(); panelClear(t); };
   if (calm() || !moved) settle(); else setTimeout(settle, 450);
   return moved;
@@ -1721,7 +1767,9 @@ function segCross(a, b, q) {   // does the segment a→b pass through the box q 
 function leaderCrosses(path, r, skip) {   // the words and figures a leader path runs over, other than its own place
   const z = path.reduce((a, [x, y]) => ({left: Math.min(a.left, x - 2), top: Math.min(a.top, y - 2), right: Math.max(a.right, x + 2), bottom: Math.max(a.bottom, y + 2)}), {left: 1e9, top: 1e9, right: -1e9, bottom: -1e9});
   const own = {left: r.left - 2, top: r.top - 2, right: r.right + 2, bottom: r.bottom + 2}, inOwn = q => q.left >= own.left && q.right <= own.right && q.top >= own.top && q.bottom <= own.bottom;
-  return textRects(z, skip).filter(q => !inOwn(q) && path.slice(1).some((p, i) => segCross(path[i], p, q)));
+  const b = isOpen($("bub")) ? rect($("bub")) : null;   // words the answer itself sits on are hidden: the line does not cross them
+  const under = q => b && Math.max(0, Math.min(q.right, b.right) - Math.max(q.left, b.left)) * Math.max(0, Math.min(q.bottom, b.bottom) - Math.max(q.top, b.top)) >= 0.5 * (q.right - q.left) * (q.bottom - q.top);
+  return textRects(z, skip).filter(q => !inOwn(q) && !under(q) && path.slice(1).some((p, i) => segCross(path[i], p, q)));
 }
 function leaderPath(r, q, v) {   // straight, else with one bend; it ends in the blank side of the place's own cell, never on a digit
   const a = anchor && anchor.nodeType === 1 ? anchor : null, mid = (r.top + r.bottom) / 2;

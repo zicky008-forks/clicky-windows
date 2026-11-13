@@ -1539,3 +1539,54 @@ def test_frames_clear_a_sticky_title_a_sticky_table_header_and_open_a_closed_tab
         assert shown == {"cls": "tab on", "inline": ""}
         assert not errors
         browser.close()
+
+
+def _app_dashboard():
+    """The owner's real dashboard as a shape only (2026-11-13, from its masked copy): a title with a figure under a
+    small fixed theme switch, a tab bar that sticks only once the page scrolls, figure tiles, a table in a box that
+    is overflow:auto but grows with its rows, a wide-row table in a box with its own sticky header near the end of
+    the page, a paragraph with figures, and a second tab that is closed."""
+    def vn(i):
+        return f"{(i * 7919) % 99999 / 100:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    labels = "".join(f"<th>Nhãn {k}</th>" for k in range(10))
+    wide_head = f"<tr>{labels}<th>Chênh lệch</th></tr>"
+    wide_rows = "".join("<tr>" + "".join(f"<td>Mục {r}-{k}</td>" for k in range(10)) + f"<td class='num'>+{vn(r)}</td></tr>"
+                        for r in range(14))
+    long_rows = "".join(f"<tr><td>Kênh {r}</td><td class='num'>{vn(r + 50)}</td><td class='num'>−{vn(r + 90)}</td></tr>"
+                        for r in range(40))
+    tiles = "".join(f"<div class='tile'><p>Chỉ tiêu {k}</p><b>{vn(k + 7)} tỷ</b><p>so với AOPR {vn(k + 3)}%</p></div>"
+                    for k in range(4))
+    return f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AOPR FY2627 dashboard</title><style>
+body{{margin:0;font-family:Arial}} .theme{{position:fixed;top:12px;right:12px;width:178px;height:31px;background:#ddd;z-index:60}}
+.intro{{padding:20px 83px}} h1{{margin:0;font-size:28px}} .ar{{padding:0 16px}}
+.tabs{{position:sticky;top:0;height:81px;background:#fff;z-index:40;border-bottom:1px solid #ccc}}
+.tiles{{display:flex;gap:12px;flex-wrap:wrap}} .tile{{width:260px;height:131px;border:1px solid #ccc}}
+.box{{overflow:auto;border:1px solid #ccc}} .box.short{{max-height:520px}} table{{border-collapse:collapse}}
+td,th{{border:1px solid #ddd;padding:6px 10px;white-space:nowrap}} thead th{{position:sticky;top:0;background:#fff}}
+.tab{{display:none}} .tab.on{{display:block}} .pad{{height:900px}}</style></head><body>
+<div class="theme">Giao diện</div>
+<div class="intro"><p>Báo cáo quản trị</p><h1>AOPR FY2627: doanh thu thuần đạt 672,7 tỷ, vượt kế hoạch</h1>
+<p>Bản cập nhật 29.10 cho Ban Giám đốc.</p></div>
+<div class="ar"><nav class="tabs"><a href="#t1">Tổng quan</a> <a href="#t2">Kênh</a></nav>
+<section class="tab on" id="t1"><div class="tiles">{tiles}</div>
+<h2>Theo kênh</h2><div class="box"><table><thead><tr><th>Kênh</th><th>Thực hiện</th><th>Chênh lệch</th></tr></thead>
+<tbody>{long_rows}</tbody></table></div>
+<p>Thông điệp chính: chi phí giảm 3,04 tỷ, biên lợi nhuận tăng 0,88 điểm so với AOPR, phần còn lại giữ nguyên như kỳ trước.</p>
+<div class="pad"></div>
+<h2>Chênh lệch theo khoản mục</h2><div class="box short"><table><thead>{wide_head}</thead><tbody>{wide_rows}</tbody></table></div>
+</section>
+<section class="tab" id="t2"><h2>Kênh khác</h2><div class="box short"><table><thead>{wide_head}</thead><tbody>{wide_rows}</tbody></table></div></section>
+</div></body></html>"""
+
+
+def test_frames_on_an_app_dashboard_clear_its_sticky_tabs_its_boxes_and_its_theme_switch(tmp_path):
+    # real-report run 2026-11-13 (masked copy): 24 problems; a box that grows with its rows was scrolled instead of
+    # the page, a tab bar that sticks only after the page moves covered tiles, the table's own sticky header sat under
+    # the page's, the last rows of a box could not come up, and a theme switch over a title's blank end counted as
+    # covering its figure
+    out = _build_html(tmp_path, _app_dashboard(), "app")
+    res = kiem_hinh.check(str(out))
+    if res["skipped"]:
+        pytest.skip(res["reason"])
+    assert res["ok"], kiem_hinh.kinds(res["problems"], top=10)
