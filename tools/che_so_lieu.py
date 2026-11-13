@@ -36,6 +36,8 @@ CODE_FIGURE = re.compile(r"(?<![\w.#$\\])(?:\d+\.\d+|\d{4,})(?![\w])")
 DATA_NUM = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?!\d)")     # in CSV a comma separates fields
 SVG_SHAPE = re.compile(r"<\s*(?:rect|line|circle|ellipse|path|polyline|polygon|text|tspan|use|image)\b", re.I)
 GEOMETRY = re.compile(r"""(\s(?:x|y|x1|y1|x2|y2|cx|cy|r|rx|ry|dx|dy|width|height|d|points)\s*=\s*)(["'])(.*?)\2""", re.I | re.S)
+SHOWN_TEXT = re.compile(r"""(["'`])(?=[^"'`\n]*[A-Za-zÀ-ỹ]{2,}\s+[^"'`\n]*\d)[^"'`\\\n]{3,199}\1""")
+CODE_TEXT = re.compile(r"\s*(?:translate|rotate|scale|matrix|rgba?|hsla?|calc|url|[Mm]\s*-?\d|#)", re.I)
 STYLE = re.compile(r"""(\sstyle\s*=\s*)(["'])(.*?)\2""", re.I | re.S)
 ENC = re.compile(rb"""<meta[^>]+charset=["']?([\w-]+)""", re.I)
 
@@ -128,8 +130,8 @@ class Masker:
         """Every figure of a script is found on the original text by each rule below, then masked once."""
         spans: dict = {}
 
-        def add(a, b):
-            spans.setdefault(a, b)
+        def add(a, b, how=None):
+            spans.setdefault(a, (b, how or self.figure))
 
         kind = script_kind(js)
         if kind == "thư viện":                                # code only: never touched, or the charts break
@@ -161,6 +163,10 @@ class Masker:
                 add(m.start(2), m.end(2))
             # figures typed into chart code (a target line at 672.7, a total of 41258): decimals and 4+ digits.
             # Small whole numbers are sizes, margins and indexes: kept, so the charts keep their layout.
+            # words shown on screen ('Tỷ lệ 12,5', 'Ngưỡng 150'): masked like the page's text, periods kept
+            for m in SHOWN_TEXT.finditer(js):
+                if re.search(r"\d", m.group(0)) and not CODE_TEXT.match(m.group(0)[1:]):
+                    add(m.start() + 1, m.end() - 1, self.text)
             for m in CODE_FIGURE.finditer(js):
                 if not YEAR.fullmatch(m.group(0)):
                     add(m.start(), m.end())
@@ -168,8 +174,9 @@ class Masker:
         for a in sorted(spans):
             if a < pos:
                 continue
-            out += [js[pos:a], self.figure(js[a:spans[a]])]
-            pos = spans[a]
+            b, how = spans[a]
+            out += [js[pos:a], how(js[a:b])]
+            pos = b
         return "".join(out) + js[pos:]
 
 
@@ -240,6 +247,7 @@ def audit(real: str, masked: str):
         for m, n in zip(ta, tb):
             v = m.group()
             if v == n.group() and len(re.sub(r"\D", "", v).lstrip("0")) >= 3 and not YEAR.fullmatch(v) and not (
+                    "dữ liệu" in place and YEAR.fullmatch(v.split(",")[0])) and not (
                     re.fullmatch(r"[1-9]\d?00", v) and place != "chữ" and "dữ liệu" not in place):
                 where = place
                 if place.startswith("thẻ"):

@@ -136,3 +136,19 @@ def test_the_audit_does_not_count_round_constants_in_code():
     page = "<script>const pct = (v) => fmt(v * 100) + '%'; const w = 960;</script>"
     out, _, _ = che_so_lieu.mask(page, {}, seed=16)
     assert [w for w, _ in che_so_lieu.audit(page, out)] == ["script 1 (mã)"]
+
+
+def test_words_shown_from_chart_code_are_masked_like_text():
+    page = ("<script>g.text('Tỷ lệ 12,5'); h.text('Ngưỡng tối thiểu 150'); k.text('Tháng 10/2026');"
+            " e.attr('transform', 'translate(0, 120)'); f.attr('fill', '#1f77b4'); const w = 960;</script>")
+    out, _, _ = che_so_lieu.mask(page, {}, seed=17)
+    assert "12,5" not in out and "150" not in out
+    for kept in ("Tháng 10/2026", "translate(0, 120)", "#1f77b4", "w = 960"):
+        assert kept in out, kept
+
+
+def test_the_audit_reads_a_year_then_a_csv_field_as_a_year():
+    rows = ",".join(f'"r{i}": "T10/2026,{i % 9 + 1},{1000 + i}.5"' for i in range(1500))
+    page = f"<script>window.__x={{{rows}}};</script>"
+    out, _, _ = che_so_lieu.mask(page, {}, seed=18)
+    assert "T10/2026," in out and che_so_lieu.leftovers(page, out) <= 3
