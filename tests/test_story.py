@@ -186,8 +186,13 @@ def test_next_months_report_works_the_computed_figure_out_again(report):
     path.write_text(path.read_text(encoding="utf-8").replace("da_duyet: 'chưa'", "da_duyet: 'có'"), encoding="utf-8")
     # approved without looking at the pre-flight checks: still a draft, and the checks are named
     held = build(report)
-    assert held["trang_thai"] == "SƠ BỘ: còn mục cần soát" and "chưa đánh dấu da_xem" in held["canh_bao"][0]
+    assert held["trang_thai"] == "SƠ BỘ: còn mục cần soát" and "da_xem: 'có'" in held["canh_bao"][0]
     path.write_text(path.read_text(encoding="utf-8").replace("da_xem: 'chưa'", "da_xem: 'có'"), encoding="utf-8")
+    # looked at is not decided: an item with proposed lines or a doubted sentence needs a line on or a reason
+    held = build(report)
+    assert held["trang_thai"] == "SƠ BỘ: còn mục cần soát" and "ly_do_bo" in held["canh_bao"][0]
+    path.write_text(path.read_text(encoding="utf-8").replace("ly_do_bo: ''", "ly_do_bo: 'Đã xem, giữ nguyên'"),
+                    encoding="utf-8")
     assert build(report)["trang_thai"].startswith("CHÍNH THỨC")
     src = report.read_text(encoding="utf-8")
     for a, b in (("<td>92,3</td><td>14,1</td><td>18,0%</td>", "<td>96,7</td><td>18,5</td><td>23,7%</td>"),
@@ -225,11 +230,14 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     rep = build(drawn_report)
     said = lines(rep)
     # the decisions come from the part headed "BOD cần quyết định": the bold title of each item, the first one first
-    assert said[1]["noi"] == ("Anh Tuấn xin anh chị quyết bốn việc; việc đầu tiên là duyệt trần chi phí vận hành "
-                              "120,0 tỷ.")
-    assert [c["noi"] for c in said if c["noi"].startswith(("Một là", "Hai là", "Ba là", "Bốn là"))] == [
-        "Một là, duyệt trần chi phí vận hành 120,0 tỷ.", "Hai là, logistics phải giải trình trước khi duyệt.",
-        "Ba là, giữ quỹ lương bằng AOP gốc.", "Bốn là, hoãn dự án kho mới."]
+    # four asks are all said up front, each keeping its object ("… trước khi duyệt phần tăng thuê kho"), and again
+    # at the close
+    asks = ["Một, duyệt trần chi phí vận hành 120,0 tỷ cho cả năm.",
+            "Hai, logistics phải giải trình trước khi duyệt phần tăng thuê kho.",
+            "Ba, giữ quỹ lương bằng AOP gốc cho cả năm.", "Bốn, hoãn dự án kho mới sang năm sau."]
+    assert said[1]["noi"] == "Anh Tuấn xin anh chị quyết bốn việc." and [c["noi"] for c in said[2:6]] == asks
+    close = [c["noi"] for c in said if c.get("vai") == "chot"]
+    assert close == ["Em xin nhắc lại bốn việc anh Tuấn xin anh chị quyết.", *asks]
     # the table has no variance column: code works it out from the drawn rows; a group row ("Khối vận hành" adds up
     # Logistics and Mua hàng) is never the driver; the unit comes from the table's heading "(tỷ đồng)"
     driver = next(c for c in said if c.get("vai") == "dong_luc")
@@ -244,7 +252,15 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     assert cut["so_tinh"] == ["9,0 = 129,0 - 120,0"]
     assert any("9,0" in f and "129,0 - 120,0" in f for f in rep["phan_bien"])
     # 18,0 / 8,0 = 2,25, said "khoảng 2,3 lần"; the owner's own "Nếu …" sentence says what happens if nothing changes
-    assert any(c["noi"] == "Tức là chi phí tăng nhanh gấp khoảng 2,3 lần doanh thu." for c in said)
+    # ... but 18,0% disagrees with the table (17,3%): until the owner rules, the talk says only what holds under both,
+    # frames the total, and keeps the printed rate and the 2,3 built on it as his to switch on
+    assert any(c["noi"] == "Vì sao cần quyết? Vì chi phí đang tăng nhanh hơn doanh thu." and c["chi"] == next(x for x in said if x.get("vai") == "quy_mo")["chi"]
+               for c in said)
+    ratio = next(c for c in said if c["noi"] == "Tức là chi phí tăng nhanh gấp khoảng 2,3 lần doanh thu.")
+    assert ratio["bat"] == "chưa"
+    assert not any("18,0" in c["noi"] for c in said if c.get("bat") != "chưa")
+    item = next(k for k in clicky_html.load_script(rep["kich_ban"])["kiem_tra"] if k.get("ma_cau"))
+    assert item["cau"] == ["Chi phí tăng 18,0%, trong khi doanh thu chỉ tăng 8,0%.", ratio["noi"]]
     assert any(c["noi"].startswith("Nếu doanh thu chỉ đạt 90% kế hoạch") for c in said)
     # the page finds the drawn rows again by their words; the record re-check opens the page and finds them too
     page = Path(rep["out"]).read_text(encoding="utf-8")
@@ -256,7 +272,7 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     # is told the two disagree
     assert not any("khoảng 17%" in c["noi"] for c in said)
     assert any("18,0%" in f and "17,3%" in f for f in rep["phan_bien"])
-    assert res["tong"]["em_tinh"] == 4
+    assert res["tong"]["em_tinh"] == 3
 
 
 def test_the_screen_check_finds_drawn_places_and_keeps_a_tall_item_clear_of_a_sticky_header(drawn_report):
@@ -277,6 +293,9 @@ def test_the_talk_breathes_after_the_greeting_and_the_asks_and_rests_on_the_cap(
     contrast = [c for c in said if c.get("vai") == "mau_thuan"]
     assert contrast[-1]["dung"] == 0.8
     assert said[-1]["vai"] == "moi_hoi" and said[-1]["dung"] == 2.0
+    # the stakes in money: holding the cost means going over the cap by the printed cut, confirmed at draft time
+    stakes = next(c for c in said if c.get("vai") == "neu_giu")
+    assert stakes["noi"].endswith("thay vì 2,40% như kế hoạch gốc, tức vượt trần 8,9 tỷ.") and stakes["xac_nhan"] == ["8,9"]
 
 
 def test_words_of_degree_and_names_inside_a_sentence():
@@ -309,8 +328,12 @@ def test_questions_after_the_talk_are_answered_from_the_lines_the_owner_approved
     assert ask("Số 18 tính thế nào?") is None and ask("1,8 tỷ là bao nhiêu?") is None    # never inside another figure
     # the beats, when the page itself has nothing better
     assert ask("Em là ai?") == "ai" and "số nào em tính đều kèm công thức" in story.answer_fact(book, "Em là ai?")["a"]
-    assert ask("Nếu không cắt thì sao?") == "neu_giu" and ask("Vì sao phải quyết việc này?") == "vi_sao"
+    assert ask("Nếu không cắt thì sao?") == "neu_giu" and ask("Vì sao phải quyết việc này?") == "can_quyet"
     assert ask("Phần tăng chủ yếu do đâu?") == "dong_luc"
+    # 2026-11-13 round 3: decision questions go to the beat that answers them, whatever is pointed at
+    assert ask("Vì sao phải quyết ngay?", scoped=True) == "can_quyet" and ask("Vì sao cần quyết?") == "can_quyet"
+    assert ask("Nếu không duyệt trần thì sao?") == "neu_giu"
+    assert ask("Em đề xuất chọn phương án nào?") == "hoi" and ask("Nhắc lại hai việc là gì?") == "hoi"
     # a question that names another row goes to that row on the page, never to the talk's driver
     assert ask("Vì sao Marketing tăng?") is None and ask("Vì sao khối CNTT tăng?") is None
     # pointing at a place: only the decisions and the formulas, the rest is about that place
@@ -383,3 +406,25 @@ def test_the_pre_flight_checks_head_the_script_and_hold_the_approval(report):
                     encoding="utf-8")
     again = build(report)                       # a ticked check is the owner's edit: the draft is not written over
     assert clicky_html.load_script(again["kich_ban"])["kiem_tra"][0]["da_xem"] == "có"
+
+
+def test_switching_on_a_proposed_line_settles_its_check_and_never_breaks_the_build(report):
+    rep = build(report)
+    path = Path(rep["kich_ban"])
+    script = clicky_html.load_script(path)
+    gap = next(k for k in script["kiem_tra"] if k.get("cau"))
+    assert gap["ly_do_bo"] == "" and any("3,9" in c for c in gap["cau"])
+    # the bound names 8,9, printed on another card: confirmed at draft time, so switching it on just works
+    bound = next(c for s in script["canh"] for c in s["cau"] if c.get("vai") == "uoc_tiet_kiem")
+    assert bound["xac_nhan"] == ["8,9"]
+    text = path.read_text(encoding="utf-8").replace("da_xem: 'chưa'", "da_xem: 'có'").replace("bat: 'chưa'", "bat: 'có'")
+    text = text.replace("da_duyet: 'chưa'", "da_duyet: 'có'")
+    path.write_text(text, encoding="utf-8")
+    held = build(report)                        # every line on: the gap item is settled by its lines
+    assert not any("3,9" in n and "ly_do_bo" in n for n in held["canh_bao"])
+    path.write_text(path.read_text(encoding="utf-8").replace("ly_do_bo: ''", "ly_do_bo: 'Đã sửa câu trong báo cáo'"),
+                    encoding="utf-8")
+    done = build(report)
+    assert done["trang_thai"].startswith("CHÍNH THỨC"), done["canh_bao"]
+    said = " ".join(c["noi"] for c in lines(done))
+    assert "3,9 tỷ" in said and "Có một điểm báo cáo chưa có số" in said

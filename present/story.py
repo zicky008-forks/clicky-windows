@@ -198,6 +198,7 @@ class Line:
     chi: str
     so_tinh: list = field(default_factory=list)     # ["7,8 = (20,9 - 14,1) / (165,5 - 78,2) × 100"]
     dung: float = 0.0                                # seconds of silence after the line (a question to the room)
+    xac_nhan: list = field(default_factory=list)     # printed figures this line names from another place
     bat: bool = True                                 # False: proposed, said only once the owner switches it on
     vai: str = ""                                    # the beat ("hoi", "dong_luc"…): how the page answers questions
 
@@ -398,7 +399,12 @@ def _title(n) -> str:
     """A note's own bold title ("<li><strong>Giữ quỹ nhân sự…</strong> …"), or its first sentence."""
     first = next((c for c in n.node.children if c.tag in ("strong", "b", "h4", "h5")), None)
     if first is not None and len(first.text()) >= 8 and n.text.startswith(first.text()[:8]):
-        return first.text().rstrip(".:")
+        head = first.text().rstrip(".:")
+        # "<strong>Logistics phải giải trình trước khi duyệt</strong> phần tăng thuê kho.": the object belongs to it
+        tail = re.split(r"[.,;:(]", n.text[len(first.text()):], maxsplit=1)[0].strip()
+        if tail and tail[:1].islower() and len(tail.split()) <= 6 and not re.search(r"\d", tail):
+            head = f"{head} {tail}"
+        return head
     return re.split(r"(?<=[.;])\s+", n.text, maxsplit=1)[0].rstrip(".;")
 
 
@@ -502,7 +508,7 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
     # B0: who speaks, then the decision first, one short sentence each, money before ratios
     count_w = {1: "một việc", 2: "hai việc", 3: "ba việc", 4: "bốn việc", 5: "năm việc", 6: "sáu việc"}
     nth = ["Một", "Hai", "Ba", "Bốn", "Năm", "Sáu"]
-    many = len(ask_list) > 3                       # at most three things in one breath; the rest at the end
+    many = len(ask_list) > 4                       # up to four asks are each said up front; more go to the end
     who = owner[:1].upper() + owner[1:]
     first = ask_pairs[0][0] if ask_pairs else None
     lines.append(("Mở đầu", Line(f"Thưa anh chị, em là trợ lý AI của {owner}.", cid(first) if first else "", vai="chao")))
@@ -520,8 +526,15 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         lines.append(("Mở đầu", Line(f"{who} xin anh chị quyết {count_w.get(len(ask_list), 'nhiều việc')}; việc đầu tiên "
                                      f"là {said(ask_list[0])}.", cid(first), vai="hoi")))
 
-    # B2 + B3: how big the change is, then the contrast that makes it matter
+    # pre-flight first: a sentence the owner must check is never the talk's own evidence until he rules on it
+    flags += preflight(items, places, t, en, note, cut, owner)
     con = contrast(items, en)
+    con_doubt = None
+    if con is not None:
+        con_doubt = next((fl for fl in flags if fl.get("sai") and con[1].tok in fl["sai"]
+                          and fl["sai"] in con[0].text), None)
+
+    # B2 + B3: how big the change is, then the contrast that makes it matter
     if tdelta:
         pct = tpct[0] if tpct else None
         pct_expr = "" if tpct else f"({a_tok} - {p_tok}) / {p_tok} × 100"
@@ -530,16 +543,27 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         size = (f"Theo {t.actual_name}, tổng là {a_tok} {unit}, {'cao' if up else 'thấp'} hơn {t.plan_name} "
                 f"{tdelta[0]} {unit}").replace("  ", " ")
         # the note's own cost growth is said next: never a second rate for the same change
-        size += (f", tức khoảng {pct}%." if pct_expr else f", tức {pct}%.") if pct and con is None else "."
+        size += (f", tức khoảng {pct}%." if pct_expr else f", tức {pct}%.") if pct and con is None and not con_doubt else "."
         lines.append(("Mâu thuẫn", Line(size.replace(" ,", ","), t.total.id, vai="quy_mo",
                                         so_tinh=[x for x in (f"{tdelta[0]} = {tdelta[2]}" if tdelta[2] else "",
                                                              f"{pct} = {pct_expr}" if pct_expr and pct else "") if x])))
     if con is not None:
         it, cost, rev = con
         faster = C.value(cost.tok, en) > C.value(rev.tok, en)
-        lines.append(("Mâu thuẫn", Line(f"Vì sao cần quyết? Chi phí tăng {cost.tok}%, trong khi doanh thu chỉ tăng "
-                                        f"{rev.tok}%." if faster else f"Chi phí tăng {cost.tok}%, doanh thu tăng {rev.tok}%.",
-                                        cid(it), vai="mau_thuan")))
+        printed = (f"Vì sao cần quyết? Chi phí tăng {cost.tok}%, trong khi doanh thu chỉ tăng {rev.tok}%." if faster
+                   else f"Chi phí tăng {cost.tok}%, doanh thu tăng {rev.tok}%.")
+        table_says = None
+        if con_doubt and tdelta:                    # the table's own rate: does "faster" hold under both figures?
+            got = robust_token(f"({a_tok} - {p_tok}) / {p_tok} × 100", en)
+            table_says = got and C.value(got[0], en) > C.value(rev.tok, en)
+        if con_doubt and faster and table_says:
+            # the printed rate disagrees with the table: say only what holds under both, the owner picks the rate
+            lines.append(("Mâu thuẫn", Line("Vì sao cần quyết? Vì chi phí đang tăng nhanh hơn doanh thu.", t.total.id,
+                                            vai="mau_thuan")))
+            lines.append(("Mâu thuẫn", Line(printed.replace("Vì sao cần quyết? ", ""), cid(it), bat=False, vai="mau_thuan")))
+            con_doubt["cau"] = [lines[-1][1].noi]
+        else:
+            lines.append(("Mâu thuẫn", Line(printed, cid(it), vai="mau_thuan")))
         if faster:
             expr = f"{cost.tok} / {rev.tok}"
             ratio = evaluate(expr, en)
@@ -547,7 +571,10 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                 tok = say(ratio, 1, en)
                 tail = ", gần gấp đôi" if Decimal("1.85") <= ratio < Decimal("1.95") else ""
                 lines.append(("Mâu thuẫn", Line(f"Tức là chi phí tăng nhanh gấp khoảng {tok} lần doanh thu{tail}.", cid(it),
-                                                so_tinh=[f"{tok} = {expr}"], vai="mau_thuan")))
+                                                so_tinh=[f"{tok} = {expr}"], vai="mau_thuan",
+                                                bat=lines[-1][1].bat)))
+                if not lines[-1][1].bat and con_doubt:
+                    con_doubt["cau"].append(lines[-1][1].noi)
 
     # B4 + B5: a question to the room, then the main driver and what the rest did without it
     groups = group_rows(t, en)
@@ -597,8 +624,10 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
     rc = ratio_card(places, en)
     if rc is not None:
         p, a, b = rc
+        over = next((g for g in cut.figs if g.sign == "-"), None) if cut is not None and cap is not None else None
+        money = f", tức vượt trần {over.tok} {over.unit or unit}".replace("  ", " ") if over else ""   # the stakes in money
         lines.append(("Nếu giữ nguyên", Line(f"Nếu giữ nguyên, {_lc(p.label)} là {a.tok}%, thay vì {b.tok}% như kế hoạch "
-                                             "gốc.", p.id, vai="neu_giu")))
+                                             f"gốc{money}.", p.id, vai="neu_giu", xac_nhan=[over.tok] if over else [])))
     else:
         cond = if_note(items)
         if cond is not None:
@@ -630,17 +659,18 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             text = f"Tức là phải giảm {got} {unit} so với {t.actual_name}.".replace("  ", " ")
             lines.append(("Đề nghị", Line(text, cid(n), so_tinh=[f"{got} = {expr}"], dung=1.0, bat=False, vai="tran")))
             flags.append({"xem": f"Câu «{text}» do em tính ({expr} = {got}); báo cáo chưa ghi số này. Anh xem, đúng ý "
-                                 "thì bật để em nói."})
+                                 "thì bật để em nói.", "cau": [text]})
             break
 
-    # pre-flight (owner only) and B9: say plainly what the report does not give a figure for
-    flags += preflight(items, places, t, en, note, cut, owner)
+    # B9: say plainly what the report does not give a figure for; the owner switches on one, both, or says why not
     for fl in flags:
         if fl.get("noi_thang") and note is not None:
             lines.append(("Đề nghị", Line(fl["noi_thang"], cid(note), bat=False, vai="thang")))
+            fl.setdefault("cau", []).append(fl["noi_thang"])
         if fl.get("de_xuat") and note is not None:       # a bound worked out from printed figures: the owner decides
             lines.append(("Đề nghị", Line(fl["de_xuat"][0], cid(note), so_tinh=fl["de_xuat"][1], bat=False,
                                           vai="uoc_tiet_kiem")))
+            fl.setdefault("cau", []).append(fl["de_xuat"][0])
 
     # B10: close on every decision asked at the start, then stop for questions
     if ask_list and many:                          # just listed one by one: the card after the talk holds them
@@ -684,13 +714,23 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             c["so_tinh"] = ln.so_tinh
         if ln.dung:
             c["dung"] = ln.dung
+        if ln.xac_nhan:
+            c["xac_nhan"] = ln.xac_nhan
         if not ln.bat:
             c["bat"] = "chưa"
         if ln.vai:
             c["vai"] = ln.vai
         scenes[-1]["cau"].append(c)
+    checks = []
+    for fl in flags:                               # each finding names the lines it governs and the sentence it doubts
+        k = {"muc": fl["xem"]}
+        if fl.get("cau"):
+            k["cau"] = list(fl["cau"])
+        if fl.get("sai"):
+            k["ma_cau"] = fingerprint(fl["sai"])
+        checks.append(k)
     return {"canh": scenes, "bo_qua": [], "chua_ro": [], "phan_bien": [fl["xem"] for fl in flags], "kieu": "ke_chuyen",
-            "cho_kiem": [fingerprint(fl["sai"]) for fl in flags if fl.get("sai")]}
+            "kiem_tra": checks, "cho_kiem": [fingerprint(fl["sai"]) for fl in flags if fl.get("sai")]}
 
 
 def headcount_card(places: dict):
@@ -838,7 +878,9 @@ INTENT = {
     "hoi": [r"\b(tom lai|chot lai|noi gon|tom tat)\b", r"\bquyet (gi|nhung gi|viec gi|dieu gi|cai gi|may viec)\b",
             r"\b(can|xin|muon|de nghi)( anh chi| chung toi| bod| hdqt| ban giam doc| ban tong giam doc)? (quyet|duyet|phe duyet)\b",
             r"\b(de nghi|de xuat|xin) (gi|nhung gi|cu the|cai gi)\b",
-            r"\b(noi ngan|ngan gon|mot cau|giai thich don gian|(toi|chung toi|bod|minh) can (lam|quyet) gi)\b"],
+            r"\b(noi ngan|ngan gon|mot cau|giai thich don gian|(toi|chung toi|bod|minh) can (lam|quyet) gi)\b",
+            r"\b(nhac lai|phuong an nao|lam gi tiep|(hai|ba|bon|nam) viec (do |nay )?(la )?gi|don gian hon|chua hieu)\b"],
+    "can_quyet": [r"\b(vi sao|tai sao|sao) (lai )?(phai|can)? ?quyet\b", r"\bquyet ngay\b", r"\bgap (the|vay)\b"],
     "tran": [r"\b(muc )?tran\b", r"\b(giam|cat) (bao nhieu|may|bot bao nhieu|di bao nhieu)\b", r"\b(can|phai) (giam|cat)\b"],
     "tiet_kiem": [r"\btiet kiem\b", r"\b(du|bu) (bu|du|duoc|lai|giam)\b"],
     "cau_noi": [r"\b(them nguoi|tuyen them|headcount|so nguoi|don gia|moi nguoi|binh quan|tang nguoi)\b"],
@@ -852,13 +894,13 @@ INTENT = {
 # Words that send a question elsewhere even when a pattern above meets it: "tăng ít nhất" is the table's minimum,
 # "giãn tuyển thì doanh thu có giảm không" is a question the report does not answer, never the savings line.
 NOT = {"dong_luc": r"\b(it|thap|nho) nhat\b|\bgiam\b", "tiet_kiem": r"\bdoanh (thu|so)\b|\bban duoc\b|\bkhach hang\b",
-       "neu_giu": r"\bdoanh (thu|so)\b"}
+       "neu_giu": r"\bdoanh (thu|so)\b", "tran": r"\bneu (khong|giu|de)\b"}
 HOW = (r"\b(o dau ra|dau ra|tu dau|lay (o|tu) dau|tinh (the nao|sao|ra sao|bang cach nao|ra|lai)|cong thuc|"
        r"co (dung|chac|chinh xac) khong|kiem (lai|tra)|la sao|nghia la gi|lam sao ra|sao ra)\b")
-BEATS = {"ai": ("chao",), "hoi": ("hoi",), "tran": ("tran",), "tiet_kiem": ("thang", "uoc_tiet_kiem"),
+BEATS = {"ai": ("chao",), "can_quyet": ("quy_mo", "mau_thuan"), "hoi": ("hoi",), "tran": ("tran",), "tiet_kiem": ("thang", "uoc_tiet_kiem"),
          "cau_noi": ("cau_noi",), "neu_giu": ("neu_giu",), "dong_luc": ("dong_luc", "phan_con_lai"),
          "vi_sao": ("quy_mo", "mau_thuan"), "neu_hut": ("neu_hut",)}
-ANY_SCOPE = ("t", "ai", "hoi")          # asked while pointing at a place, the rest are about that place instead
+ANY_SCOPE = ("t", "ai", "hoi", "can_quyet")          # asked while pointing at a place, the rest are about that place instead
 
 
 def fingerprint(sentence: str) -> str:

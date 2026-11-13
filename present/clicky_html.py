@@ -1997,7 +1997,9 @@ SCRIPT_HEAD = """# Kịch bản Clicky cho «{report}».
 # dung: 1.5 là số giây em dừng lại sau câu đó (sau một câu hỏi để người nghe kịp nghĩ).
 # vai: cho biết câu đó trả lời loại câu hỏi nào khi người nghe hỏi lại (anh không cần sửa).
 # kiem_tra: những điểm em thấy cần anh xem trước khi gửi (Ban Giám đốc không thấy). Xem xong mục nào, đổi da_xem: 'có'.
-#   Còn mục nào da_xem: 'chưa' thì bản trình bày vẫn là SƠ BỘ, kể cả khi đã ghi da_duyet: 'có'.
+#   Mục có dòng "cau" là các câu em đề xuất cho điểm đó: anh bật một câu (bat: 'có'), hoặc ghi vào ly_do_bo vì sao
+#   không nói (ví dụ ly_do_bo: 'Số báo cáo đúng, giữ nguyên câu'). Còn mục nào chưa xong thì bản trình bày vẫn là
+#   SƠ BỘ, kể cả khi đã ghi da_duyet: 'có'.
 # Đọc và sửa xong: đổi da_duyet: 'chưa' thành da_duyet: 'có', rồi kéo thả báo cáo vào Clicky lần nữa.
 # Khi đó bản trình bày hết chữ SƠ BỘ.
 """
@@ -2042,9 +2044,7 @@ def dump_script(script: dict, report: str, snap: Optional[dict] = None, draft: b
             "ma_nhap": script_hash(json.loads(json.dumps(out))) if draft else ""}
     checks = script.get("kiem_tra") or [{"muc": x} for x in script.get("phan_bien") or []]
     if checks:                                 # what the owner must look at before the Board sees it
-        body["kiem_tra"] = [{"muc": _Q(str(k.get("muc", ""))), "da_xem": _Q("có" if tri_nho.fold(str(k.get("da_xem", ""))) in YES
-                                                                         or k.get("da_xem") is True else "chưa")}
-                            for k in checks if isinstance(k, dict)]
+        body["kiem_tra"] = [_check_row(k) for k in checks if isinstance(k, dict)]
     body["canh"] = out
     return SCRIPT_HEAD.format(report=report) + yaml.dump(body, Dumper=_Dumper, allow_unicode=True, sort_keys=False,
                                                          width=4096) + dump_snap(snap)
@@ -2242,10 +2242,82 @@ def approved(script: dict) -> bool:
     return v is True or tri_nho.fold(str(v or "")) in YES
 
 
+def _seen(k: dict) -> bool:
+    return k.get("da_xem") is True or tri_nho.fold(str(k.get("da_xem", ""))) in YES
+
+
+def _check_row(k: dict) -> dict:
+    """One kiem_tra item as written in the script: the finding, its lines, and the owner's two answers."""
+    row = {"muc": _Q(str(k.get("muc", "")))}
+    if k.get("cau"):
+        row["cau"] = [_Q(str(x)) for x in k["cau"]]
+    if k.get("ma_cau"):
+        row["ma_cau"] = str(k["ma_cau"])
+    row["da_xem"] = _Q("có" if _seen(k) else "chưa")
+    if k.get("cau") or k.get("ma_cau"):
+        row["ly_do_bo"] = _Q(str(k.get("ly_do_bo") or ""))
+    return row
+
+
+def _lines_on(script: dict) -> set:
+    return {str(c.get("noi") or "").strip() for s in script.get("canh") or [] for c in s.get("cau") or [] if on(c)}
+
+
+def ruled(k: dict, said: set) -> bool:
+    """An item that governs lines or doubts a sentence is settled only by an act: one of its lines switched on, or
+    the owner's reason in ly_do_bo. Ticking da_xem alone is looking, not deciding."""
+    if not (k.get("cau") or k.get("ma_cau")):
+        return True
+    return bool(str(k.get("ly_do_bo") or "").strip()) or any(str(x).strip() in said for x in k.get("cau") or [])
+
+
 def open_checks(script: dict) -> list:
-    """The kiem_tra items the owner has not marked as looked at (da_xem: 'có')."""
-    return [str(k.get("muc", "")) for k in script.get("kiem_tra") or []
-            if isinstance(k, dict) and not (k.get("da_xem") is True or tri_nho.fold(str(k.get("da_xem", ""))) in YES)]
+    """The kiem_tra items not yet done: not looked at (da_xem: 'có'), or looked at but not decided."""
+    said, out = _lines_on(script), []
+    for k in script.get("kiem_tra") or []:
+        if not isinstance(k, dict):
+            continue
+        if not _seen(k):
+            out.append(str(k.get("muc", "")))
+        elif not ruled(k, said):
+            first = (k.get("cau") or [""])[0]
+            out.append(str(k.get("muc", "")) + (f" (bật câu «{clip(str(first), 50)}» hoặc ghi ly_do_bo)" if first
+                                                  else " (ghi ly_do_bo: giữ câu hay đã sửa báo cáo)"))
+    return out
+
+
+def doubted_open(script: dict) -> list:
+    """Fingerprints of report sentences still in doubt: the page holds questions on them until the owner rules."""
+    said = _lines_on(script)
+    return [str(k["ma_cau"]) for k in script.get("kiem_tra") or []
+            if isinstance(k, dict) and k.get("ma_cau") and not ruled(k, said)]
+
+
+def confirm_elsewhere(script: dict, places: dict, page_text: str, en: bool, declared: Optional[str]) -> None:
+    """A proposed line (bat: 'chưa') that names a figure printed at another place gets that figure in xac_nhan now,
+    so switching it on never stops the build ("8,9 is not where Clicky circled")."""
+    on_page = _vals(page_text, en)
+    for s in script.get("canh") or []:
+        for c in s.get("cau") or []:
+            if on(c) or not c.get("noi"):
+                continue
+            calc = {value(str(e).partition("=")[0].strip(), en) for e in c.get("so_tinh") or []}
+            extra = [f.tok for f in figures(c["noi"]) if value(f.tok, en) not in calc and value(f.tok, en) in on_page
+                     and check_at(f, places.get(c.get("chi")), en, declared) == "missing"]
+            if extra:
+                c["xac_nhan"] = list(dict.fromkeys(list(c.get("xac_nhan") or []) + extra))
+
+
+def refresh_checks(kept: list, fresh: list) -> list:
+    """Next period: this period's findings. An item the owner settled last period keeps his answers only when its
+    words are the same now; anything that changed is his to look at again."""
+    was = {str(k.get("muc", "")): k for k in kept or [] if isinstance(k, dict)}
+    out = []
+    for k in fresh or []:
+        old = was.get(str(k.get("muc", "")))
+        out.append(dict(k, da_xem=old.get("da_xem", "chưa"), ly_do_bo=old.get("ly_do_bo", "")) if old
+                   else dict(k, da_xem="chưa"))
+    return out
 
 
 def unedited(script: dict) -> bool:
@@ -2883,6 +2955,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     if not any(figures(c["noi"]) for s in draft["canh"] for c in s["cau"]
                if c.get("chi") not in places or places[c["chi"]].kind not in ("title", "section")):
         raise _nothing_to_say(source, items, "nhưng chưa có câu nào có số để trình bày")
+    confirm_elsewhere(draft, places, page_text, en, declared)
     fresh = dump_script(draft, src_path.name, snapshot(draft, places))
     main_yaml = src_path.with_name(src_path.stem + "_kich_ban_Clicky.yaml")
     nhap = src_path.with_name(src_path.stem + "_kich_ban_nhap.yaml")
@@ -2952,6 +3025,8 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
             script, flipped = next_period(script, old, places, en)
         else:
             script, flipped = json.loads(json.dumps(draft)), []
+        script["kiem_tra"] = refresh_checks(script.get("kiem_tra"), draft.get("kiem_tra")
+                                            or [{"muc": x} for x in draft.get("phan_bien") or []])
         # last period's answers belong to last period: this period's open answers from CAU_TREO replace them
         script["canh"] = [sc for sc in script["canh"] if not sc.get("tri_nho")]
         if memo:
@@ -2974,6 +3049,9 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
             c.pop("so_tinh", None)
             if d and d.get("so_tinh"):
                 c["so_tinh"] = list(d["so_tinh"])
+            c.pop("xac_nhan", None)             # last period's confirmation does not cover this period's figure
+            if d and d.get("xac_nhan"):
+                c["xac_nhan"] = list(d["xac_nhan"])
         script["canh"] = [dict(s, cau=[c for c in s["cau"] if str(c.get("noi") or "").strip()])
                           for s in script["canh"]]
         for s in script["canh"]:
@@ -3010,8 +3088,9 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     unchecked = open_checks(script)
     if ok and unchecked:                       # approved without looking at what the pre-flight found: still a draft
         ok = False
-        notes.insert(0, f"Anh đã ghi duyệt nhưng còn {len(unchecked)} mục cần soát chưa đánh dấu da_xem: 'có' (đầu file "
-                        f"kịch bản): " + "; ".join(f"«{clip(x, 70)}»" for x in unchecked[:3]) + ". Em giữ bản trình bày ở SƠ BỘ.")
+        notes.insert(0, f"Anh đã ghi duyệt nhưng còn {len(unchecked)} mục cần soát chưa xong (đầu file kịch bản: đánh dấu "
+                        "da_xem: 'có'; mục có câu đề xuất thì bật một câu hoặc ghi ly_do_bo): "
+                        + "; ".join(f"«{clip(x, 110)}»" for x in unchecked[:3]) + ". Em giữ bản trình bày ở SƠ BỘ.")
     reset = ok and bool(changed) and kind == "chu"
     rank_first = [n for n in notes if n.startswith("Sửa câu «")]
     notes = rank_first + [n for n in notes if n not in rank_first]
@@ -3135,7 +3214,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
             "ve": drawn_locators(script, drawn),
             "facts": [dict(audio(f["noi"]), k=f["k"], y=f["y"], n=f.get("n", ""), x=f["x"], a=f["a"], chi=f["chi"]) for f in book],
             "quyet": story.decisions(script),
-            "cho_kiem": draft.get("cho_kiem") or [],     # report sentences the pre-flight doubts: never quoted as an answer
+            "cho_kiem": doubted_open(script) if script.get("kiem_tra") else draft.get("cho_kiem") or [],   # never quoted while in doubt
             "fallback": fallback, "fallback_clip": audio(fallback), "aliases": doc_tai_chinh.aliases(),
             "bank": [dict(audio(f"{who} đã trả lời" + (f" kỳ {b['ky']}" if b["cu"] and b["ky"] else "")
                                 + f": {_sentence(b['tra_loi'])}"),
