@@ -87,3 +87,28 @@ def test_a_figure_after_a_non_breaking_space_entity_is_masked():
 def test_a_figure_glued_to_its_unit_is_masked_but_codes_stay():
     out, _, _ = che_so_lieu.mask("<td>5,2tr</td><td>120M</td><td>FY2627 T10 v1111</td>", {}, seed=9)
     assert "5,2tr" not in out and "120M" not in out and "FY2627 T10 v1111" in out
+
+
+def test_a_library_with_its_banner_after_a_small_shim_is_left_whole():
+    lib = "<script>var g=window;" + "x" * 500 + "/*! d3js.org v7.9.0 Copyright 2010-2023 */" + \
+        "function f(t){return t*0.5+1e3}" * 260 + "var s='1f77b4ff7f0e2ca02c';var k={duration:250,max:86400000};</script>"
+    out, _, untouched = che_so_lieu.mask(lib + "<p>672,7</p>", {}, seed=1)
+    assert out.startswith(lib) and "672,7" not in out and untouched == 0
+
+
+def test_chart_geometry_is_moved_but_the_frame_and_small_offsets_stay():
+    page = ('<svg viewBox="0 0 960 320"><rect x="12" y="123.4" width="40" height="196.6"/>'
+            '<polyline points="10,250.5 120,180.25"/><text x="345" y="40">672,7</text></svg>')
+    out, _, _ = che_so_lieu.mask(page, {}, seed=11)
+    for real in ("123.4", "196.6", "250.5", "180.25", 'x="345"', "672,7"):
+        assert real not in out, real
+    for kept in ('viewBox="0 0 960 320"', 'x="12"', 'width="40"', 'y="40"'):
+        assert kept in out, kept
+
+
+def test_the_audit_says_where_each_leftover_sits_without_showing_it():
+    page = '<p>Doanh thu 672,7</p><script>const w = 960; plot(41258);</script><div data-k="FY2627">x</div>'
+    out, _, _ = che_so_lieu.mask(page, {}, seed=12)
+    found = che_so_lieu.audit(page, out)
+    assert found == [("script 1 (mã)", "<aaaaaa>aaaaa a = [999]; aaaa(999")]
+    assert che_so_lieu.leftovers(page, out) == 1
