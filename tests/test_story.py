@@ -406,6 +406,11 @@ def test_a_script_drawn_table_answers_questions_and_a_rows_own_explanation_is_th
         assert ask("110,0 có đúng không?").startswith("Tổng, AOP gốc: 110,0 tỷ. Em cộng 4 dòng cột AOP gốc (không tính dòng gộp) ra 110,0 tỷ, khớp")
         a = ask("Chi phí tăng nhanh gấp mấy lần?")                               # built on the doubted rate: held with both figures
         assert "17,3%" in a and "đang kiểm lại" in a
+        assert ask("Nói ngắn trong 1 câu").startswith("Anh Tuấn xin anh chị duyệt trần chi phí vận hành 120,0 tỷ (giảm 9,0 tỷ), Logistics phải giải trình,")
+        a = ask("Logistics bị ảnh hưởng thế nào?")
+        assert a.startswith("Logistics: AOP gốc 40,0 tỷ; AOPR 52,0 tỷ. Tăng 12,0 tỷ (30,0%) từ AOP gốc lên AOPR (em tính: 52,0 − 40,0).")
+        assert "«Thuê kho»" in a and "Báo cáo chưa nói ảnh hưởng" in a
+        assert ask("Tại sao trần 120,0?").startswith("Báo cáo viết: «Duyệt trần chi phí vận hành 120,0 tỷ cho cả năm, bằng tỷ lệ")
         # no variance column: the change is worked out per row, and the subtotal "Khối vận hành" is never ranked
         assert ask("Phòng nào tăng ít nhất?").startswith(
             "Hành chính thấp nhất về mức tăng từ AOP gốc lên AOPR (em tính: AOPR 16,5 − AOP gốc 15,0): 1,5 tỷ.")
