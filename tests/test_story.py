@@ -1163,6 +1163,7 @@ def test_round_fourteen_doubted_cap_bare_words_on_the_card_and_next_turn_correct
 
 
 def test_round_fourteen_frames_hold_the_figure_said_and_the_end_card_shows_every_ask(report, drawn_report):
+    pytest.importorskip("playwright")              # B's table is drawn by its script: read from the page as drawn
     # "vượt trần 8,9 tỷ" on a tile "Cần giảm so với AOPR 8,9 tỷ" is one fact; "tăng 8,9 tỷ" on it is still refused
     tile = clicky_html.figures("Cần giảm so với AOPR 8,9 tỷ")
     over = next(f for f in clicky_html.figures("Nếu giữ nguyên, chi phí vượt trần đề xuất 8,9 tỷ.") if f.tok == "8,9")
