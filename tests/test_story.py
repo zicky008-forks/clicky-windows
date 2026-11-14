@@ -825,7 +825,9 @@ def test_round_eleven_decisions_by_clause_a_tapped_row_and_who_or_when(report, d
             "Em đã ghi việc một «Cần bàn thêm»; việc hai «Đồng ý»; việc ba «Đồng ý»; việc bốn «Đồng ý».")
         assert ask("Không, việc bốn chưa được").startswith("Em đã ghi «Không đồng ý» cho việc: «Hoãn dự án kho mới")
         x = ask("Cứ làm như anh Tuấn đề xuất đi")   # round 13: asks 1 and 4, chosen on their own, are asked before they change
-        assert x.startswith("Em đã ghi việc hai «Đồng ý»; việc ba «Đồng ý». Việc một đang ghi «Cần bàn thêm», việc bốn đang ghi «Không đồng ý»; anh chị đổi thành «Đồng ý» ạ?"), x
+        assert x.startswith("Em đã ghi việc hai «Đồng ý»; việc ba «Đồng ý». Việc bốn đang ghi «Không đồng ý»; anh chị đổi thành «Đồng ý» ạ?"), x
+        # round 15: the doubted cap is never one [Đổi] from a plain yes; it gets the two-button step
+        assert "Việc một: mức 120,0 anh Tuấn đang kiểm lại; anh chị đồng ý thế nào ạ?" in x and "Đồng ý mức 120,0" not in x, x
         assert ask("Đồng ý ba việc đầu; không đồng ý hoãn kho mới, đội bán hàng cần kho").startswith(
             "Em đã ghi việc hai «Đồng ý»; việc ba «Đồng ý»; việc bốn «Không đồng ý». Việc một: mức 120,0 anh Tuấn đang kiểm lại")   # round 14
         assert "chờ mức chốt" in ask("Không phản đối việc một")
@@ -1044,7 +1046,8 @@ def test_round_thirteen_record_guards_tap_scope_places_with_two_asks_and_no_sile
         ghi(B, "Để bàn thêm", "[data-clicky=c8]")
         hoi(B, "Không", "[data-clicky=c9]")
         a = hoi(B, "Đồng ý hết")
-        assert "Việc một đang ghi «Cần bàn thêm», việc hai đang ghi «Không đồng ý»; anh chị đổi thành «Đồng ý» ạ?" in a and "Giữ như cũ" in a, a
+        assert "Việc hai đang ghi «Không đồng ý»; anh chị đổi thành «Đồng ý» ạ?" in a and "Giữ như cũ" in a, a
+        assert "Việc một: mức 120,0 anh Tuấn đang kiểm lại; anh chị đồng ý thế nào ạ?" in a, a   # the doubted cap: the two-button step (round 15)
         a = hoi(B, "Việc hai để bàn thêm")
         assert "Việc hai em đổi từ «Không đồng ý»" in a, a
         # «Không có ý kiến gì, cứ làm» records; «…, kho mới để anh Tuấn quyết» says kho mới is not recorded
@@ -1202,3 +1205,67 @@ def test_round_fourteen_frames_hold_the_figure_said_and_the_end_card_shows_every
                 pg.close()
         finally:
             browser.close()
+
+
+def test_round_fifteen_typed_answers_press_the_prompt_undo_asks_back_and_a_question_is_split_from_its_decision(report, drawn_report):
+    # round-15 panel: «Ghi nguyên văn» typed in the box was read as a new decision; «À không» after a record was lost;
+    # «Ừ» with the card open said only «Dạ»; a sentence with a question and a decision dropped one of them;
+    # «Bỏ Logistics ra» framed the driver's row, and a sentence that points at nothing kept the frame before it
+    for rep in (build(report), build(drawn_report)):
+        said = lines(rep)
+        rest = next(c for c in said if c.get("vai") == "phan_con_lai")
+        assert rest["chi"] == next(c for c in said if c.get("vai") == "quy_mo")["chi"], rest   # the rest is the total, not the row taken out
+    pw, browser, pages = _ghi_pages(report, drawn_report)
+    try:
+        A, B = pages["A"], pages["B"]
+        hoi = lambda pg, q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        ghi = lambda pg, q: pg.evaluate("q => window.__clickyGhi(q, null)", q)   # noqa: E731
+        rec = lambda pg: pg.evaluate("() => window.__clickyDaGhi()")   # noqa: E731
+        fresh = lambda pg: (pg.reload(), pg.wait_for_timeout(700))   # noqa: E731
+        COND = "Đồng ý có điều kiện"
+        # a figure of their own waits; typing the button's words (or a plain «Ừ») presses it
+        for typed in ("Ghi nguyên văn", "Ừ"):
+            fresh(A)
+            assert rec(A) == {} and "Ghi nguyên văn" in ghi(A, "Đồng ý 170 cho trần")["a"]
+            assert rec(A)["0"][2] is True   # pending until the reader chooses
+            assert hoi(A, typed).startswith("Em đã ghi «" + COND + "» kèm nguyên văn")
+            assert rec(A)["0"] == [COND, "Đồng ý 170 cho trần", False]
+        # «À không» after a record asks it back; the answer typed then is the button pressed
+        fresh(A)
+        ghi(A, "Đồng ý trần")
+        assert rec(A)["0"] == ["Đồng ý", "", False]
+        assert hoi(A, "À không").startswith("Em bỏ «Đồng ý» việc một ạ?")
+        assert rec(A)["0"][0] == "Đồng ý"   # nothing changes until the reader picks
+        hoi(A, "Không đồng ý")
+        assert rec(A)["0"][0] == "Không đồng ý"
+        # «À không» while a prompt waits drops the prompt and records nothing more
+        fresh(A)
+        ghi(A, "Đồng ý 170 cho trần")
+        hoi(A, "Ghi nguyên văn")
+        assert hoi(A, "À không").startswith("Em bỏ «" + COND + "» việc một ạ?")
+        # with the card open, «Ừ» and «Không» on two asks ask which one; never a bare «Dạ», never a guess
+        for word, verb in (("Ừ", "đồng ý"), ("Không", "không đồng ý")):
+            fresh(A)
+            A.evaluate("() => window.__clickyHetBai(false)")
+            assert hoi(A, word).startswith("Anh chị " + verb + " việc nào ạ?") and rec(A) == {}
+        # a question and a decision in one sentence: the decision first, then the question, quoted
+        r = ghi(B, "Hoãn kho mới thì đội bán hàng giao hàng có chậm không? Mấy việc kia đồng ý")
+        assert r["a"].startswith("Em đã ghi việc hai «Đồng ý»; việc ba «Đồng ý».") and "3" not in r["rec"] and "0" not in r["rec"]
+        assert "Còn câu «Hoãn kho mới thì đội bán hàng giao hàng có chậm không?»: " in r["a"]
+        # «Nếu X thì Y»: X is a plain yes, Y waits on it
+        r = ghi(B, "Nếu Logistics giải trình xong thì duyệt trần")
+        assert r["rec"]["1"][0] == "Đồng ý" and r["rec"]["0"][0] == COND, r["rec"]
+        # a condition on the doubted cap is never one tap from «Đồng ý như đề nghị»
+        r = ghi(B, "Duyệt trần 120 nhưng phải có kế hoạch cắt giảm chi tiết")
+        assert r["rec"]["0"][0] == COND and "như đề nghị" not in r["a"], r
+        # a sentence that points at nothing lets the page go: the frame before it is gone 0,15 s before it starts
+        fresh(A)
+        k = next(i for i in range(40) if A.evaluate("i => window.__clickyLuc(i, 0)", i)["bare"])
+        s = A.evaluate("i => window.__clickyLuc(i, 0)", k)
+        b0 = s["starts"][s["bare"][0]]
+        last = max(t for j, t in s["points"] if t < b0)
+        assert A.evaluate("([i, t]) => window.__clickyLuc(i, t)", [k, last + 0.1])["frames"] >= 1
+        assert A.evaluate("([i, t]) => window.__clickyLuc(i, t)", [k, b0 - 0.1])["frames"] == 0
+    finally:
+        browser.close()
+        pw.stop()

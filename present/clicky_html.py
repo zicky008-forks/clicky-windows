@@ -1040,8 +1040,9 @@ def other_row(noi: str, chi: str, places: dict) -> Optional[str]:
     for q in places.values():
         lab = tri_nho.fold(q.label)
         if q.kind == "row" and q.id != chi and q.id.startswith(table) and re.fullmatch(r"\d+", q.id[len(table):]) \
-                and len(lab) >= 4 and lab not in own and re.search(rf"(?<!\w){re.escape(lab)}(?!\w)", text):
-            return q.label
+                and len(lab) >= 4 and lab not in own and re.search(rf"(?<!\w){re.escape(lab)}(?!\w)", text) \
+                and not re.search(rf"(?<!\w)(bo|ngoai|tru|khong ke)\s+{re.escape(lab)}(?!\w)", text):
+            return q.label                         # «Bỏ khối Bán hàng ra, các khối còn lại …» on the total leaves that row out
     return None
 
 

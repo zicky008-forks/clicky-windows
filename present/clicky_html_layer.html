@@ -154,6 +154,12 @@ button.on{background:var(--warnsoft);border-color:var(--warn)}
 :host(:not([data-small])) .dec .decrow{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;align-items:center}
 :host(:not([data-small])) .dec .decrow>div:last-child{max-width:390px}
 :host(:not([data-small])) .dec .decrow>div:last-child>.chips{margin-top:0}
+/* round 15: the desktop end card fits under the printed asks; the recorded list and the record wait below it */
+:host(:not([data-small])) .panel:has(.ans.dec) #tb, :host(:not([data-small])) .panel:has(.ans.dec) .bb{display:none}
+:host(:not([data-small])) .dec .decrow>div:last-child:has(>.src){display:flex;align-items:center;gap:8px;justify-content:flex-end}
+:host(:not([data-small])) .dec .decrow>div:last-child:has(>.src)>.chips{flex:none}
+:host(:not([data-small])) .dec .decsend{display:flex;align-items:center;gap:10px;justify-content:space-between}
+:host(:not([data-small])) .dec .decsend>.chips{margin-top:0;flex:none}
 .decsend{position:sticky;bottom:0;background:var(--bg);padding-bottom:2px}
 .cap.tight>span{font-size:13px;line-height:1.25}.cap.tighter>span{font-size:12px;line-height:1.2}
 :host([data-mid]) .cap.x3>span:not(.lg):not(.ev),:host([data-small]) .cap.x3>span:not(.lg):not(.ev){-webkit-line-clamp:3}
@@ -560,21 +566,52 @@ function placePanel() {   // above the bar, on the side chosen for the framed pl
   if (!small && $("a").classList.contains("dec")) dockCard(p, v, bar, w);
   panelMore();
 }
-function dockCard(p, v, bar, w) {   // the end card: the corner where it covers no figure of the report (round 9: it hid the 2,52% tile)
-  const h = p.offsetHeight, figs = [];
-  const look = e => { if (!e || mine(e)) return; const r = e.getBoundingClientRect();
-    if (r.width && r.bottom > v.y && r.top < v.y + v.h && r.right > v.x && r.left < v.x + v.w) figs.push(r); };
-  document.querySelectorAll("td,th").forEach(c => { if (/\d/.test(c.textContent)) look(c); });
-  allCards().forEach(c => look(c.el));
-  blocks().forEach(b => { if (/\d/.test(b.text)) look(b.el); });
-  const asks = [];   // the asks printed on the page weigh most: the card never sits on them (round 14: it hid ask 1)
-  blocks().forEach(b => { const x = fold(b.text); if (QUYET.some(q => x.includes(fold(q).slice(0, 24)))) { const n = figs.length; look(b.el); if (figs.length > n) asks.push(figs[n]); } });
-  const spots = [];   // bottom right first (where the reader looks for it), then up the screen, then the left side
-  for (const x of [v.x + v.w - w - 12, v.x + 12]) for (let y = bar.top - 12 - h; y >= v.y + 8 - 39; y -= 40) spots.push([x, Math.max(v.y + 8, y)]);
-  const area = ([x, y], r) => Math.max(0, Math.min(x + w, r.right) - Math.max(x, r.left)) * Math.max(0, Math.min(y + h, r.bottom) - Math.max(y, r.top));
-  const cover = s => figs.reduce((n, r) => n + area(s, r), 0) + asks.reduce((n, r) => n + 4 * area(s, r), 0);
-  const best = spots.map(s => [s, cover(s)]).sort((a, b) => a[1] - b[1])[0][0];
-  p.style.left = best[0] + "px"; p.style.top = Math.max(v.y + 8, best[1]) + "px"; p._dock = cover(best); }
+function dockCard(p, v, bar, w) {   // the end card covers no figure and no ask printed on the page (round 9: the 2,52% tile; round 15: ask 1, the 8,9 tile)
+  const ceil = Math.max(v.y, topCover(), stickyTops()) + 8, maxH = Math.max(160, bar.top - 8 - ceil);
+  p.style.maxHeight = maxH + "px";
+  const h = Math.min(p.scrollHeight, maxH);
+  const askEls = [];   // the printed asks, whole: a list item, or the list that holds them
+  blocks().forEach(b => { const x = fold(b.text); if (QUYET.some(q => x.includes(fold(q).slice(0, 24)))) askEls.push(b.el); });
+  const measure = () => {
+    const figs = [], asks = [];
+    const look = (e, into) => { if (!e || mine(e)) return; const r = e.getBoundingClientRect();
+      if (r.width && r.bottom > v.y && r.top < v.y + v.h && r.right > v.x && r.left < v.x + v.w) into.push(r); };
+    document.querySelectorAll("td,th").forEach(c => { if (/\d/.test(c.textContent)) look(c, figs); });
+    allCards().forEach(c => look(c.el, figs));
+    blocks().forEach(b => { if (/\d/.test(b.text) && !askEls.includes(b.el)) look(b.el, figs); });
+    askEls.forEach(e => look(e, asks));
+    const spots = [];   // bottom right first (where the reader looks for it), then up the screen, then the left side
+    for (const x of [v.x + v.w - w - 12, v.x + 12]) for (let y = bar.top - 8 - h; y >= ceil - 39; y -= 40) spots.push([x, Math.max(ceil, y)]);
+    if (!spots.length) spots.push([v.x + v.w - w - 12, ceil]);   // a bar over the whole screen leaves no room: the check reports it
+    const area = ([x, y], r) => Math.max(0, Math.min(x + w, r.right) - Math.max(x, r.left)) * Math.max(0, Math.min(y + h, r.bottom) - Math.max(y, r.top));
+    const cover = s => figs.reduce((n, r) => n + 4 * area(s, r), 0) + asks.reduce((n, r) => n + area(s, r), 0);   // a figure weighs most (rule: no card on a number)
+    return spots.map(s => [s, cover(s)]).sort((a, b) => a[1] - b[1])[0];
+  };
+  let [best, c] = measure();
+  if (c > 0 && !p._docked) {   // the page moves once per card: the printed asks to the top, else past its end to blank room
+    const top0 = scrollY, se = document.scrollingElement || document.documentElement;
+    const scrollTop = want => { let sp = document.querySelector("[data-clicky-room=end]"); const can = se.scrollHeight - innerHeight - scrollY;
+      if (want > can) { if (!sp) { sp = document.createElement("div"); sp.setAttribute("aria-hidden", "true"); sp.setAttribute("data-clicky-layer", "1");
+        sp.setAttribute("data-clicky-room", "end"); sp.style.height = "0px"; LIVE.add(sp); document.body.appendChild(sp); }
+        sp.style.height = Math.ceil(parseFloat(sp.style.height) + want - can + 8) + "px"; }
+      scrollBy({top: want, behavior: "auto"}); };
+    const tries = [];
+    if (askEls.length) tries.push(() => askEls.map(rect).sort((x, y) => x.top - y.top)[0].top - ceil);
+    tries.push(() => { const end = [...document.body.children].filter(e => !mine(e) && e !== host && !e.hasAttribute("data-clicky-room")).map(rect).reduce((m, q) => Math.max(m, q.bottom), 0);
+      return end - (bar.top - 8 - h); });   // the last of the page just above the card
+    let at = top0;
+    for (const t of tries) { scrollTo({left: scrollX, top: top0, behavior: "auto"}); scrollTop(t());
+      const [b2, c2] = measure(); if (c2 < c) { best = b2; c = c2; at = scrollY; } if (!c) break; }
+    scrollTo({left: scrollX, top: at, behavior: "auto"});
+  }
+  p._docked = true;
+  p.style.left = best[0] + "px"; p.style.top = best[1] + "px"; p.style.maxHeight = Math.max(160, bar.top - 8 - best[1]) + "px"; p._dock = c; }
+function redock() {   // a record changes the card's height: placed again, and «Gửi» brought into view inside it (round 15: it slid under the bar)
+  const p = $("panel"); if (!isOpen(p) || !$("a").classList.contains("dec")) return;
+  placePanel();
+  const sb = $("a").querySelector(".decsend");
+  if (sb) { const q = rect(sb), r = rect(p); if (q.bottom > r.bottom - 2 || q.top < r.top) sb.scrollIntoView({block: "nearest"}); }
+}
 function panelMore() { const p = $("panel"); p.classList.toggle("more", p.scrollHeight - p.clientHeight - p.scrollTop > 6); }   // more below: a soft fade says so
 $("panel").addEventListener("scroll", panelMore, {passive: true});
 let hsave = null;   // where the reader had scrolled sideways before Clicky moved the page; given back when the answer closes
@@ -862,6 +899,9 @@ function onTime() {
   if (aside || !S[idx]) return;
   const s = S[idx], t = audio.currentTime; caption(t);
   s.points.forEach((p, k) => { if (!shown.has(k) && t >= p.t) { shown.add(k); frame(pointEl(s, k, p)); } });
+  // a sentence that points at nothing («Phần này anh chị có thể hỏi…») lets the page go: no frame left from the line before (round 15)
+  if (!s._bare) { const has = new Set(s.points.map((p, k) => p.k ?? k)); s._bare = (s.starts || []).map((_, k) => k).filter(k => !has.has(k)); }
+  s._bare.forEach(k => { if (!shown.has("b" + k) && t >= s.starts[k] - 0.15) { shown.add("b" + k); if (frames.length) clearFrames(); } });
 }
 function pointEl(s, k, p) {   // a sentence that lists several asks ("một là …; hai là …") frames the whole list, never its first item (round 10)
   const e = el(p.id), x = fold((s.sentences || [])[p.k ?? k] || "");   // p.k: its sentence, when a line before it frames nothing
@@ -1334,6 +1374,7 @@ function decide(k, v, said, note) {   // one line per ask in the mail: a changed
 }
 function decisionCard() {   // the asks, word for word as approved; a choice reaches the owner only when the reader sends it
   if (!QUYET.length) return;
+  $("panel")._docked = false;   // a new card may bring the printed asks up once
   const a = $("a"); a.className = "ans dec"; a.innerHTML = "";
   const head = document.createElement("div"); head.textContent = OWNER.charAt(0).toUpperCase() + OWNER.slice(1) + " xin anh chị quyết:"; a.appendChild(head);
   const cut = cutTag(), rows = [];
@@ -1348,10 +1389,10 @@ function decisionCard() {   // the asks, word for word as approved; a choice rea
     const draw = () => {   // buttons, or what was chosen with «Đổi» to choose again
       tail.replaceChildren();
       const d = DECIDED[k];
-      const pick = v => { if (v === "Đồng ý" && askDoubt(t)) { tail.replaceChildren(capBox([k], "", () => { draw(); sendRow(); })); return; } decide(k, v); draw(); sendRow(); };   // round 14
+      const pick = v => { if (v === "Đồng ý" && askDoubt(t)) { tail.replaceChildren(capBox([k], "", () => { draw(); sendRow(); redock(); })); redock(); return; } decide(k, v); draw(); sendRow(); redock(); };   // round 14
       if (!d) { tail.appendChild(chips(VERDICTS.map(v => [v, () => pick(v)]))); return; }
       tail.appendChild(quiet("Em đã ghi «" + d.v + "»" + (d.words ? ": «" + d.words + "»" : "") + (d.pending ? " (chưa xác nhận)" : "") + "."));
-      tail.appendChild(chips([["Đổi", () => { tail.replaceChildren(chips(VERDICTS.map(v => [v, () => pick(v)]))); }]]));
+      tail.appendChild(chips([["Đổi", () => { tail.replaceChildren(chips(VERDICTS.map(v => [v, () => pick(v)]))); redock(); }]]));
     };
     rows.push(draw);
     a.appendChild(row);
@@ -1371,7 +1412,7 @@ function oddFor(q, t, others) {   // what the reader said about an ask that the 
   const ft = fold(t), out = [], fo = (others || []).map(fold);   // others: the other asks picked in the same sentence
   let figs = 0;
   const printed = (t.match(/\d[\d.,]*/g) || []).map(x => x.replace(/[.,]$/, ""));
-  const q0 = q.replace(/(?<![\p{L}\p{M}])(?:việc|ý|mục)\s+(?:thứ\s+)?\d+(?:\s*(?:,|và|với)\s*(?:việc\s+)?\d+)*/giu, " ")
+  const q0 = q.replace(/(?<![\p{L}\p{M}])(?<!(?:đồng|Đồng|lưu|chú)\s)(?:việc|ý|mục)\s+(?:thứ\s+)?\d+(?:\s*(?:,|và|với)\s*(?:việc\s+)?\d+)*/giu, " ")
     .replace(/(?<![\p{L}\p{M}])cả\s+\d+(?![\d,.]*\s*(?:tỷ|triệu|%|vị trí|người))|(?<![\d,.])\d+\s+việc(?![\p{L}\p{M}])/giu, " ");   // «ok cả 4», «4 việc» count asks   // «việc 1 và 4» names asks, not figures
   for (const m of q0.matchAll(/(việc|quý|tháng|năm|lần|ngày)?\s*(\d[\d.,]*\d|\d)\s*(tỷ|triệu|vị trí|người|tháng|năm|quý|tuần|ngày|%)?/gi)) {
     if (m[1] && /^việc$/i.test(m[1])) continue;
@@ -1410,9 +1451,9 @@ function chooser(v, text, only, words) {   // which ask(s): each press records o
 // đồng thuê kho hết hạn» never names an ask or a verdict. A verdict may sit before or after the ask («trần thì không»). A clause that
 // names asks with no verdict of its own takes the bare verdict said before it («Đồng ý, …») or the verdict-only clause after it
 // («Việc một đổi ý, không đồng ý»); otherwise it is asked back, never recorded blank
-const DEFER = /\b(de (tuan|thang|quy|ky|nam|lan|buoi) (sau|toi)|de sang (tuan|thang|quy|nam) (sau|toi)|(tuan|thang|quy|ky|nam) sau (tinh|ban|hop|xem)|(tuan|thang|quy) sau hop( lai)?|hop lai|xem lai|de xem|de lai|tinh sau|de sau|tam treo|treo lai|treo|tam hoan|can ban them|de ban( them)?|ban them|ban lai|chua (quyet|chot|chac)|khong chac|((de|cho) )?(anh |chi |toi |em )?(suy nghi|can nhac|xem xet|nghi) them|can (them )?thoi gian|(roi|sau do|xong( roi)?) (tinh|ban|xem|quyet|duyet)|(tam )?cho (phuong an|anh|chi|kiem|tinh|xem|them|ket qua|bao cao|giai trinh|so)|doi (phuong an|kiem|ket qua|bao cao|giai trinh|them))\b/;
+const DEFER = /\b(de (tuan|thang|quy|ky|nam|lan|buoi) (sau|toi)|de sang (tuan|thang|quy|nam) (sau|toi)|(tuan|thang|quy|ky|nam) sau (tinh|ban|hop|xem)|(tuan|thang|quy) sau hop( lai)?|hop lai|xem lai|de xem|de lai|tinh sau|de sau|tam treo|treo lai|treo|tam hoan|can ban them|de ban( them)?|ban them|ban lai|chua (quyet|chot|chac)|khong chac|((de|cho) )?(anh |chi |toi |em )?(suy nghi|can nhac|xem xet|nghi) them|can (them )?thoi gian|(roi|sau do|xong( roi)?) (tinh|ban|xem|quyet|duyet)|(tam )?cho (phuong an|anh|chi|kiem|tinh|xem|them|ket qua|bao cao|giai trinh|so)|doi (phuong an|kiem|ket qua|bao cao|giai trinh|them|anh|chi)|de (toi |anh |chi |em )?(xem|tinh|can nhac|nghi)( lai| them| sau| ky)?( da)?$|de (toi |anh |chi |em )(xem|tinh|can nhac|nghi))\b/;
 const NEG_OK = "(?! (qua|vuot|hon|duoi|it|nhieu|phai|de|co y))";
-const NOPE = new RegExp("\\b(khong dong y|khong duyet|khong duoc|khong chap thuan|khong dong tinh|chua dong y|chua duyet|chua duoc|tu choi|bac|phan doi)\\b|(^| )(viec|y|de nghi) (thu )?\\S+ (thi |cung )*khong( |$)|^khong(?! (qua|vuot|hon|duoi|it|nhieu|can|phai|de|co))( |$)| (thi|cung|deu) khong" + NEG_OK + "( |$)|@ (thi |cung |deu |doi y |doi lai (la )?)*khong" + NEG_OK + "( duoc| can| dong y| duyet| lam| nen)?( |$)|\\bkhong (hoan|gian|giu|lam|nen)\\b|@ khong can\\b");
+const NOPE = new RegExp("\\b(khong dong y|khong duyet|khong duoc|khong chap thuan|khong dong tinh|chua dong y|chua duyet|chua duoc|tu choi|bac|phan doi)\\b|(^| )(viec|y|de nghi) (thu )?\\S+ (thi |cung )*khong( |$)|^khong(?! (qua|vuot|hon|duoi|it|nhieu|can|phai|de|co))( |$)| (thi|cung|deu) khong" + NEG_OK + "( |$)|@ (thi |cung |deu |doi y |doi lai (la )?)*khong" + NEG_OK + "( duoc| can| dong y| duyet| lam| nen)?( |$)|\\bkhong (hoan|gian|giu|lam|nen)\\b|@ khong can\\b|\\b(kia|con lai|khac) (thi |cung |deu )*khong" + NEG_OK + "( dong y| duyet)?( |$)");
 const CHUA = /(@|\b(thi|cung|deu)) (thi |cung |deu )*chua( |$)(?!(duoc|dong y|duyet))/;   // «việc hai chưa»: put off or no? asked back (round 13)
 const YES = /\b(dong y|duyet|chap thuan|thong qua|thong nhat|nhat tri|khong phan doi|ok|oke|okay|lam di|trien khai|tien hanh|cu lam|lam luon|cho lam|chot|duoc|hop ly|nhu de xuat|nhu de nghi|theo de xuat|theo de nghi|thay on|cu the (ma )?lam|cu vay( di)?)\b|@ (thi |cung |deu )*(co|on|chiu|lam)( |$)/;
 const NOALL = /\b(khong|chua) (dong y|duyet|ok|chap thuan|thong qua) (het|tat ca|toan bo|ca (hai|ba|bon|nam|\d)|viec nao)\b|\b(bac|tu choi) (het|tat ca)\b|\bca (hai|ba|bon|nam|\d) (deu )?(khong|bac)\b|\b(het|tat ca) (deu )?khong (dong y|duyet|duoc)\b/;   // «Không đồng ý hết», «Cả 4 không» (round 14)
@@ -1492,6 +1533,7 @@ function markerSplit(Q, a0, b0) {   // «Trần ok giãn tuyển chưa»: a new 
   for (let i = 0; i < ws.length; i++) {
     const w = ws[i];
     if (/^(vì|bởi|tại|do|nếu|miễn|trừ|ngoại|để)$/.test(w.r.replace(/[,.;!?]+$/, "")) && i > s0 && !/^để$/.test(w.r)) stop = true;
+    if (i === s0 && (w.r === "nếu" || (w.r === "khi" && ws[i + 1] && ws[i + 1].r === "nào"))) stop = true;   // «Khi nào X xong thì duyệt trần»: one clause (round 15)
     if (i > s0 && ((w.r === "mới" && /^(rồi|trước|xong)$/.test(ws[i - 1].r)) || (w.r === "khi" && /^sau$/.test(ws[i - 1].r)))) stop = true;   // «… rồi mới duyệt trần»: one clause (round 14)   // a reason or a condition: one clause to the end
     if (i > s0 && /^(à|ờ|ơ|ồ)$/.test(ws[i].r) && ws[i + 1] && /^(không|nhầm)/.test(ws[i + 1].r)) { out.push([ws[s0].a, ws[i - 1].b]); s0 = i; continue; }
     if (i > s0 + 1 && /^(à|ờ|ơ|ồ)$/.test(ws[i - 2] ? ws[i - 2].r : "") && /^(không|nhầm)/.test(ws[i - 1].r) && i - 2 === s0) { out.push([ws[s0].a, ws[i - 1].b]); s0 = i; }
@@ -1505,12 +1547,13 @@ function markerSplit(Q, a0, b0) {   // «Trần ok giãn tuyển chưa»: a new 
   out.push([ws[s0].a, ws[ws.length - 1].b]);
   return out;
 }
+let QNAMED = null;   // asks named in a question said with the decision («Hoãn kho mới thì … có chậm không? Mấy việc kia đồng ý»)
 function decisionPicks(q) {   // → {picks: [[ask, verdict, own words, broadcast, chưa]], skip, v, whole, noView} or null when no clause holds a verdict; "" verdict = ask back
   // «việc 1, 2», «việc ba, bốn»: an ask list, not two clauses (the comma becomes «¸», which fold() drops)
-  const Q = q.replace(/((?<![\p{L}\p{M}])(?:việc|ý|mục)\s+(?:thứ\s+)?(?:\d+|một|hai|ba|bốn|tư))((?:\s*,\s*(?:và\s+)?(?:\d+|một|hai|ba|bốn|tư)(?![\p{L}\p{M}]))+)/giu, (m, a, b) => a + b.replace(/,/g, "¸"));
+  const Q = q.replace(/((?<![\p{L}\p{M}])(?:việc|ý|mục|còn)\s+(?:thứ\s+)?(?:\d+|một|hai|ba|bốn|tư))((?:\s*,\s*(?:và\s+)?(?:\d+|một|hai|ba|bốn|tư)(?![\p{L}\p{M}]))+)/giu, (m, a, b) => a + b.replace(/,/g, "¸"));
   const parts = []; { const re = /(?<!\d)[.;!]+|[.;!]+(?!\d)|,(?!\d)|\s+(?=(?:nhưng|còn(?! lại)|riêng)\s)/gi; let at = 0, m;
     while ((m = re.exec(Q))) { parts.push(...markerSplit(Q, at, m.index)); at = m.index + m[0].length; if (!m[0].length) re.lastIndex++; } parts.push(...markerSplit(Q, at, Q.length)); }
-  const cl = [], skip = new Set(), noView = new Set(), seq = new Set(); let usedViec = false;
+  const cl = [], skip = new Set(), noView = new Set(), seq = new Set(), seqX = new Set(); let usedViec = false;
   for (const [a0, b0] of parts) {
     let a = a0, b = b0; while (a < b && /[\s,]/.test(Q[a])) a++; while (b > a && /\s/.test(Q[b - 1])) b--; if (a >= b) continue;
     const raw = Q.slice(a, b), lc = raw.toLowerCase(), f0 = fold(raw);
@@ -1520,14 +1563,14 @@ function decisionPicks(q) {   // → {picks: [[ask, verdict, own words, broadcas
     const tail = lc.search(/\s(vì|bởi vì|bởi|tại vì|do|nếu|với điều kiện|miễn là|trừ khi)\s/), iff = tail >= 0 && /^\s(nếu|với|miễn|trừ)/.test(lc.slice(tail));
     let c = fold(tail >= 0 ? raw.slice(0, tail) : raw).replace(/(?<!\d)[.,]+|[.,]+(?!\d)|[!?;]+/g, " ").replace(/\s+/g, " ").trim();   // «177,5» stays a figure (round 14)
     c = c.replace(/^(?:(?:nhung|con(?! lai)|rieng|thoi|toi|anh|chi|em|chung toi|vay|u|a|o|toi thay|anh thay)\s+)+/, "");
-    if (usedViec && new RegExp("^" + SMALL_NTH + "( (va|voi) " + SMALL_NTH + ")*\\b").test(c)) c = "viec " + c;   // «việc ba và bốn được, một và hai để bàn»
+    if (usedViec && new RegExp("^(" + SMALL_NTH + "|\\d)( (va |voi )?(" + SMALL_NTH + "|\\d))*\\b(?! (viec|cai|y|de nghi)\\b)").test(c)) c = "viec " + c;   // never «hai việc kia» (round 15)   // «việc ba và bốn được, một và hai để bàn»
     if (/\bviec\b/.test(c)) usedViec = true;
     { const sq = c.match(/^(.+?) (?:(?:truoc|xong)(?: roi)?|roi) moi ((?:duyet|chot|dong y|lam|trien khai|ok|thong qua)\b.*)$/) || c.match(/^xong (.+?) (?:roi )?moi ((?:duyet|chot|dong y|lam|trien khai|ok|thong qua)\b.*)$/),
-        sq2 = !sq && (c.match(/^(.+?) sau khi (.+)$/) || []).slice(1).reverse(), sq3 = !sq && c.match(/^khi nao (.+?) (?:xong )?thi (.+)$/);
+        sq2 = !sq && (c.match(/^(.+?) sau khi (.+)$/) || []).slice(1).reverse(), sq3 = !sq && (c.match(/^khi nao (.+?) (?:xong )?thi (.+)$/) || c.match(/^neu (.+?) (?:xong )?thi (.+)$/));
       const xy = sq ? [sq[1], sq[2]] : sq2 && sq2.length ? sq2 : sq3 ? [sq3[1], sq3[2]] : null;   // [first X, then Y]
       if (xy) { const RX = clauseRefs(xy[0]), RY = clauseRefs(xy[1]);   // «Logistics giải trình trước rồi mới duyệt trần»: Y waits on X (round 14)
         if (RY.asks.length && verdictIn(xy[1], RY.asks, RY.s) === "Đồng ý") {
-          RY.asks.forEach(k => seq.add(k));
+          RY.asks.forEach(k => seq.add(k)); RX.asks.filter(k => !RY.asks.includes(k)).forEach(k => seqX.add(k));   // X is a plain yes: «Nếu Logistics giải trình xong thì …» (round 15)
           cl.push({a, b, asks: [...new Set(RX.asks.concat(RY.asks))], v: "Đồng ý", weak: false, chua: false, all: false, rest: false, cond: false, condTail: "", pure: false, money: false, cnt: 0, ex: null, restN: 0});
           continue; } } }
     if (NO_VIEW.test(c) && !/\b(cu lam|lam di|duyet het|dong y het)\b/.test(c)) { clauseRefs(c).asks.forEach(k => { noView.add(k); skip.add(k); }); cl.push({a, b, aside: true}); continue; }   // never set by «còn lại» (round 14)   // «kho mới để anh Tuấn quyết»
@@ -1544,10 +1587,10 @@ function decisionPicks(q) {   // → {picks: [[ask, verdict, own words, broadcas
     const v = v0 || (ISCHUA && tail >= 0 && !iff ? "Cần bàn thêm" : ""), chua = ISCHUA && !v;   // «chưa vì còn hụt 5 tỷ»: put off, with its reason
     const n = (R.s.match(/\bca (hai|ba|bon|nam|\d)\b/) || R.s.match(/\b(hai|ba|bon|nam|\d) viec\b(?! (dau|sau|cuoi|kia))/) || [])[1], cnt = n ? COUNT_DEC[n] || Number(n) : 0;
     const all = WHOLE.test(R.s) || NOALL.test(R.s) || /\b(tat ca|toan bo|moi viec|ca (hai|ba|bon|nam|\d))\b/.test(R.s) || (cnt && !/\bca\b/.test(R.s) && !!v) ||
-      (/\b(dong y|duyet|ok|oke|chot|nhat tri|thong nhat|chap thuan|thong qua) het\b|^het\b/.test(R.s) && !NOTALL.test(R.s)) || (!!ex && !asks.length && !!v && !exV) || (!!v && !asks.length && / het$/.test(R.s));
+      (/\b(dong y|duyet|ok|oke|chot|nhat tri|thong nhat|chap thuan|thong qua) het\b|^het\b/.test(R.s) && !NOTALL.test(R.s)) || (!!ex && !asks.length && !!v && !exV) || (!!v && !asks.length && / het$/.test(R.s)) || (!!v && !asks.length && /\b(dong y|duyet|ok|oke|chot|thong qua) ca( (nhe|nha|di))?$/.test(R.s));
     // «còn lại» is the other asks only when no figure or «phần / bù» is next to it: «còn lại 5 tỷ», «phần còn lại» are money (round 13)
-    const rm = R.s.match(/(\S+ )?(con lai|cac viec khac|nhung viec khac|(mot|hai|ba|bon|nam|may|cac|nhung) (viec|cai) kia)( \S+)?( \S+)?/);
-    const restN = rm && rm[3] ? (rm[3] === "mot" ? 1 : COUNT_DEC[rm[3]] || 0) : 0;   // «hai việc kia» says how many: checked against the asks left (round 14)
+    const rm = R.s.match(/(\S+ )?(con lai|cac viec khac|nhung viec khac|(mot|hai|ba|bon|nam|may|cac|nhung) (viec|cai) kia|(?<!(?:mot|hai|ba|bon|nam|may|cac|nhung) )(?:viec|cai) kia)( \S+)?( \S+)?/);
+    const restN = rm && rm[3] ? (rm[3] === "mot" ? 1 : COUNT_DEC[rm[3]] || 0) : rm && /kia$/.test(rm[2]) && !rm[3] ? 1 : 0;   // «việc kia»: the one other ask (round 15)   // «hai việc kia» says how many: checked against the asks left (round 14)
     const rest = !!rm && !(rm[2] === "con lai" && (/(phan|so|khoan|bu|thieu|ty|trieu|\d)/.test(rm[1] || "") || /\d|ty|trieu/.test((rm[5] || "") + (rm[6] || ""))));
     const pure = asks.length && !R.s.replace(/@|\b(va|voi|ca|thi|cung|con|rieng|nua)\b/g, " ").trim();
     cl.push({a, b: ex ? a + Math.max(0, raw.search(/\s*(ngoại trừ|trừ|không kể)\s/i)) : b, asks, v, weak, chua, all, rest, cond: cond || iff, condTail: iff ? fold(raw.slice(tail)) : "", pure,
@@ -1555,7 +1598,7 @@ function decisionPicks(q) {   // → {picks: [[ask, verdict, own words, broadcas
       ex: ex && (exV || exAsk) ? {asks: ex, v: exV, a, b} : null, restN});
   }
   const own = (a, b) => q.slice(a, b).replace(/¸/g, ",").replace(/[\s,;]+$/, "").trim();
-  const namedAnywhere = new Set(cl.flatMap(x => (x.asks || []).concat(x.ex ? x.ex.asks : [])));
+  const namedAnywhere = new Set(cl.flatMap(x => (x.asks || []).concat(x.ex ? x.ex.asks : [])).concat(QNAMED ? [...QNAMED] : []));
   const picks = []; let any = false, whole = false, last = "", lead = null, prev = null, condAfterLead = false, fixNext = false, contrast = null;
   const push = (k, v, a, b, wide, chua) => { const p = [k, v, "", wide, a, b, !!chua]; picks.push(p); return p; };
   for (let i = 0; i < cl.length; i++) {
@@ -1599,7 +1642,8 @@ function decisionPicks(q) {   // → {picks: [[ask, verdict, own words, broadcas
       const v = x.v || (lead && lead.v) || last, a = lead ? lead.a : x.a; if (lead) lead.used = true; lead = null;
       if (WHOLE.test(fold(q.slice(x.a, x.b)))) whole = true;
       if (!v) { prev = null; continue; }
-      if (x.cnt && x.cnt !== QUYET.length - skip.size && x.cnt !== QUYET.length) return {chooser: v, n: x.cnt};   // «Ok cả 4 trừ kho mới» is «hết trừ»
+      const leftN = QUYET.length - skip.size - (x.rest ? [...namedAnywhere].filter(k => !skip.has(k)).length : 0);   // «Đồng ý 118,8 cho trần, ba việc còn lại đồng ý» (round 15)
+      if (x.cnt && x.cnt !== leftN && x.cnt !== QUYET.length - skip.size && x.cnt !== QUYET.length) return {chooser: v, n: x.cnt};   // «Ok cả 4 trừ kho mới» is «hết trừ»
       last = v;
       const to = QUYET.map((_, k) => k).filter(k => !skip.has(k) && !(x.rest && namedAnywhere.has(k)));
       prev = to.map(k => push(k, x.restN && x.restN !== to.length ? "" : v, a, x.b, true));   // «hai việc kia» when three are left: each asked back
@@ -1617,7 +1661,7 @@ function decisionPicks(q) {   // → {picks: [[ask, verdict, own words, broadcas
     QUYET.forEach((_, k) => { if (!skip.has(k) && !noView.has(k) && (!only.length || only.includes(k))) push(k, lead.v, 0, q.length, true); });   // «Đồng ý nhưng giãn 50 vị trí»: the ask it is about
   }
   picks.forEach(p => { p[2] = own(p[4], p[5]); p.splice(4, 2); });
-  return {picks, skip, v: last, whole, noView: [...noView].filter(k => !picks.some(p => p[0] === k)), seq: [...seq]};
+  return {picks, skip, v: last, whole, noView: [...noView].filter(k => !picks.some(p => p[0] === k)), seq: [...seq], seqX: [...seqX]};
 }
 const NUMW = ["một", "hai", "ba", "bốn", "năm", "sáu"];
 const FIRM_DOUBTED = false;   // a firm «Đồng ý mức 120,0» while the owner still checks that figure: the owner's ruling (pending)
@@ -1639,17 +1683,24 @@ function typedDecision(q, scope) {   // "Tôi đồng ý trần 177,5 tỷ", "Đ
   if (!QUYET.length) return false;
   const corr = /^\s*(?:(?:à|ờ|ơ|ồ)\s+(?:không|nhầm)|à nhầm|nhầm|xin lỗi|thôi|không phải)\s*[,.!]\s*(?=\S)/i.test(q);
   q = q.replace(/^\s*(?:(?:à|ờ|ơ|ồ)\s+(?:không|nhầm)|à nhầm|nhầm|xin lỗi)\s*[,.!]\s*(?=\S)/i, "");   // «À không, …»: a self-correction marker, not a verdict
+  // round 15: «Không ai phản đối thì coi như thông qua» is a yes on all (the «không» is about «ai»); «Không đồng ý việc nào ngoài
+  // việc hai» is a yes on việc hai and a no on the rest
+  q = q.replace(/không\s+ai\s+(?:phản\s+đối|có\s+ý\s+kiến(?:\s+gì)?(?:\s+khác)?)(?:\s+(?:thì|nữa))?(?:\s+coi\s+như)?(?:\s+(?:thông\s+qua|đồng\s+ý|duyệt|nhất\s+trí))?/i, "Đồng ý hết")
+    .replace(/^\s*không\s+(đồng\s+ý|duyệt)\s+(?:việc|cái|mục)\s+nào\s+(?:ngoài|trừ)\s+(.+?)(?:\s+ra)?\s*[.!]?\s*$/i, (m, verb, x) => "Đồng ý " + x + ", còn lại không đồng ý");
   const plainQ = fold(q).replace(/[.!?…]+/g, " ").replace(/\s+/g, " ").trim();
   const flat = " " + plainQ.replace(/[,;]/g, " ").replace(/\s+/g, " ") + " ";
   const m = flat.match(/^ (?:(?:toi|anh|chi|em|chung toi|ok|vay|thoi|a|u|rieng|con|khong) )*/);
   const lead = flat.slice(m ? m[0].length : 1);
-  if (/\b(cam on|ok roi|chot lai)\b/.test(lead) || (/\bduoc roi\b/.test(lead) && !/\b(trien khai|lam|duyet|dong y|cu the|cu vay)\b/.test(lead)) || /^ ?neu\b/.test(flat.trim())) return false;   // «Được rồi, triển khai đi» decides (round 14)
+  if (/\b(cam on|ok roi|chot lai)\b/.test(lead) || (/\bduoc roi\b/.test(lead) && !/\b(trien khai|lam|duyet|dong y|cu the|cu vay)\b/.test(lead))) return false;   // «Nếu X thì duyệt Y» is sequencing now (round 15)   // «Được rồi, triển khai đi» decides (round 14)
   const tapK = tapAsk(scope), tapSet = tapAsks(scope);
   if (NO_VIEW.test(plainQ)) {   // «Không có ý kiến», «Để anh Tuấn quyết»: said, never mailed as a question (round 12); «…, cứ làm» still records (round 13)
     const P0 = decisionPicks(q);
     if (!P0 || P0.chooser || !P0.picks.length) { const nv = P0 && P0.noView && P0.noView.length ? P0.noView : tapK >= 0 ? [tapK] : [];
       answer("Dạ, em ghi anh chị chưa cho ý kiến" + (nv.length ? " về " + nv.map(k => "«" + QUYET[k].replace(/\.$/, "") + "»").join(", ") : "") + "; " + OWNER + " sẽ hỏi lại anh chị sau.", null, {src: ""}); return true; } }
-  const bare = plainQ.replace(/[,;]/g, " ").replace(/\s+/g, " ").trim();
+  let bare = plainQ.replace(/[,;]/g, " ").replace(/\s+/g, " ").trim();
+  if (cardOpen() && tapK < 0 && /^(u|uh|um|o|vang|u thi lam|u thi lam (vay|the) di|u lam di|cu vay di|cu the di|u duoc|thoi duoc|u thi duoc)$/.test(bare)) { q = "Đồng ý"; bare = "dong y"; }   // «Ừ» with the card open is a yes (round 15)
+  if ((cardOpen() || tapSet.length > 1) && tapK < 0 && /^(khong|khong a|khong nhe)$/.test(bare)) {   // a bare «Không»: on which asks, all or one by one (round 15)
+    chooser("Không đồng ý", tapSet.length > 1 ? "Chỗ này nói về " + tapSet.length + " việc; anh chị không đồng ý việc nào ạ?" : undefined, tapSet.length > 1 ? tapSet : undefined); return true; }
   if ((cardOpen() || corr && LAST_REC.length) && tapK < 0 && /^(chua|chua dau|chua duoc|chua nhe)$/.test(bare)) {   // «Chưa» with the card open, or «à không, chưa»: which, and put off or no
     const box = document.createElement("div"), ks = corr && LAST_REC.length ? LAST_REC.slice() : null;
     box.appendChild(chips(["Cần bàn thêm", "Không đồng ý"].map(vv => [vv, () => { if (ks) { ks.forEach(k => decide(k, vv, q.trim())); answer("Em đã đổi " + ks.map(k => "việc " + NUMW[k]).join(", ") + " thành «" + vv + "».", null, {src: "", extra: sendBox()}); } else chooser(vv); }])));
@@ -1669,7 +1720,7 @@ function typedDecision(q, scope) {   // "Tôi đồng ý trần 177,5 tỷ", "Đ
       answer("Em đã ghi «" + v + "» cho việc: «" + QUYET[tapK].replace(/\.$/, "") + "».", null, {src: "", extra: sendBox()}); return true; }
   }   // "vì sao không duyệt trần" asks   // a nod, or a "nếu …" what-if
   if (/\?\s*$/.test(q) || /\b(khong|chua|sao|the nao|bao nhieu|gi|nao|chu|duoc khong|phai khong|dung khong)\s*$/.test(plainQ.replace(/^(khong dong y|khong duyet|chua dong y|chua duyet|chua quyet)\s*/, "")) && !/(^| )(viec|y) (thu )?\S+ (thi |cung )*khong$/.test(plainQ) &&
-    !NOALL.test(plainQ) && !/\b(a|o|u) (khong|nham) (chua|khong)$/.test(plainQ.replace(/[,;]/g, " ").replace(/\s+/g, " ")) && !/@ (thi |cung |deu |doi y |doi lai (la )?)*(khong|chua)( duoc| can)?$|\b(ca (hai|ba|bon|nam|\d)|tat ca|het) (deu )?(khong|chua)( duoc)?$/.test(clauseRefs(plainQ.replace(/[,;]/g, " ").replace(/\s+/g, " ")).s)) return false;   // «trần thì không», «việc hai chưa» answer   // "đồng ý không?" is a question
+    !NOALL.test(plainQ) && !(!/\?\s*$/.test(q) && /\b(con lai|kia|khac|thi|cung|deu) (khong|chua)$/.test(plainQ.replace(/[,;]/g, " ").replace(/\s+/g, " "))) && !/\b(a|o|u) (khong|nham) (chua|khong)$/.test(plainQ.replace(/[,;]/g, " ").replace(/\s+/g, " ")) && !/@ (thi |cung |deu |doi y |doi lai (la )?)*(khong|chua)( duoc| can)?$|\b(ca (hai|ba|bon|nam|\d)|tat ca|het) (deu )?(khong|chua)( duoc)?$/.test(clauseRefs(plainQ.replace(/[,;]/g, " ").replace(/\s+/g, " ")).s)) return false;   // «trần thì không», «việc hai chưa» answer   // "đồng ý không?" is a question
   const P = decisionPicks(q, plainQ); if (!P) return false;
   if (corr && LAST_REC.length && !P.chooser && !P.picks.length && P.v && tapK < 0) {   // «À không, để bàn thêm» right after «Đồng ý hết»: the asks just recorded
     const ks = LAST_REC.slice(), box = document.createElement("div");
@@ -1702,7 +1753,7 @@ function typedDecision(q, scope) {   // "Tôi đồng ý trần 177,5 tỷ", "Đ
     return (ch.length ? " " + ch.map(k => "Việc " + NUM[k] + " em đổi từ «" + before[k] + "»").join("; ") + "." : "") +
       (nv.length ? " Việc " + nv.sort((a, b) => a - b).map(k => NUM[k]).join(", ") + " anh chị chưa cho ý kiến; " + OWNER + " sẽ hỏi lại sau." : ""); };
   // a «hết» never silently replaces what the reader chose ask by ask: asked first (round 13, CFO)
-  const over = picks.filter(p => p[3] && before[p[0]] !== undefined && before[p[0]] !== p[1]); over.forEach(p => picks.splice(picks.indexOf(p), 1));
+  const over = picks.filter(p => p[3] && before[p[0]] !== undefined && before[p[0]] !== p[1] && !(p[1] === "Đồng ý" && askDoubt(QUYET[p[0]]))); over.forEach(p => picks.splice(picks.indexOf(p), 1));
   const overBox = () => { const box = document.createElement("div"); if (!over.length) return box;
     box.appendChild(quiet(over.map((p, i) => (i ? "việc " : "Việc ") + NUM[p[0]] + " đang ghi «" + before[p[0]] + "»").join(", ") + "; anh chị đổi thành «" + over[0][1] + "» ạ?"));
     const done = (e, t) => { box.querySelectorAll("button").forEach(x => { x.disabled = true; }); const b = e && e.currentTarget; if (b) b.textContent = "✓ " + t; };
@@ -1713,10 +1764,13 @@ function typedDecision(q, scope) {   // "Tôi đồng ý trần 177,5 tỷ", "Đ
     if (tapK >= 0) picks.push([tapK, v, q]);
     else if (QUYET.length === 1) picks.push([0, v, q]);
   }
-  if (!picks.length && !unsure.length && !over.length) { chooser(v); return true; }
+  if (!picks.length && !unsure.length && !over.length) { const open = QUYET.map((_, k) => k).filter(k => !DECIDED[k]);
+    if (open.length && open.length < QUYET.length) chooser(v, "Còn " + open.length + " việc; anh chị " + v.toLowerCase() + " những việc nào ạ?", open); else chooser(v); return true; }
   const askBack = () => { const box = document.createElement("div"); if (!unsure.length) return box;   // «Trần thì để anh …»: never recorded blank (round 12)
     unsure.forEach(([k, , o, , ch]) => { box.appendChild(quiet("Việc " + NUM[k] + " anh chị nói «" + o + "»; " + (ch ? "ý anh chị là để bàn thêm, hay không đồng ý ạ?" : "anh chị đồng ý, không đồng ý hay cần bàn thêm ạ?")));
-      box.appendChild(chips((ch ? ["Cần bàn thêm", "Không đồng ý"] : VERDICTS).map(vv => [vv, e => { const b = e && e.currentTarget; decide(k, vv, vv === "Đồng ý" ? "" : o); if (b) { b.disabled = true; b.textContent = "✓ " + vv; } }]))); });
+      const row = chips((ch ? ["Cần bàn thêm", "Không đồng ý"] : VERDICTS).map(vv => [vv, e => { const b = e && e.currentTarget;
+        if (vv === "Đồng ý" && askDoubt(QUYET[k])) { row.replaceWith(capBox([k], o)); return; }
+        decide(k, vv, vv === "Đồng ý" ? "" : o); if (b) { b.disabled = true; b.textContent = "✓ " + vv; } }])); box.appendChild(row); });
     return box; };
   const withBack = x => { const b = askBack(); if (over.length) b.appendChild(overBox()); if (!unsure.length && !over.length) return x; b.appendChild(x); return b; };
   if (!picks.length) { answer(over.length && !unsure.length ? "Em chưa đổi gì." : "Em chưa ghi được ý của anh chị.", null, {src: "", extra: withBack(sendBox())}); return true; }
@@ -1727,7 +1781,8 @@ function typedDecision(q, scope) {   // "Tôi đồng ý trần 177,5 tỷ", "Đ
   const own = k => { const p = picks.find(x => x[0] === k); return (p && p[2]) || q; };   // the clause that names the ask, never the whole sentence (round 11)
   const why = k => { const o = own(k), r = fold(o).replace(/\b(can ban them|de ban them|ban them|tam treo|treo lai|treo|tam hoan|chua quyet|khong phan doi)\b/g, " ").replace(NOPE, " ").replace(YES, " ").replace(/\b(viec|y|de nghi|muc) (thu )?\S+/g, " ");
     return words(r).filter(w => w.length > 1 && !ECHO_NOT.has(w) && !FILLER.has(w) && !askAliases()[k].includes(w)).length >= 2 ? o.trim() : ""; };
-  const oddOf = k => { const o = oddFor(own(k), QUYET[k], picks.filter(p => p[0] !== k).map(p => QUYET[p[0]])); return (P.seq || []).includes(k) && !o.includes("điều kiện") ? o.concat("điều kiện") : o; };   // «… rồi mới duyệt trần»: a condition
+  const xPart = s => { const m = s.match(/^(.*?)\s+sau khi\s+(.+)$/i); return m ? m[2] : s.replace(/\s+(?:(?:xong|trước)\s+)?(?:thì|rồi mới|xong mới|mới)\s+.*$/i, "").replace(/^\s*(?:nếu|khi nào|xong)\s+/i, ""); };   // the X of «nếu X thì Y»: never a condition on X itself
+  const oddOf = k => { const o = oddFor((P.seqX || []).includes(k) ? xPart(own(k)) : own(k), QUYET[k], picks.filter(p => p[0] !== k).map(p => QUYET[p[0]])); return (P.seq || []).includes(k) && !o.includes("điều kiện") ? o.concat("điều kiện") : o; };   // «… rồi mới duyệt trần»: a condition
   // a plain yes on a figure the owner is still checking waits for one more press (round 14)
   const held = picks.filter(([k, vv]) => vv === "Đồng ý" && askDoubt(QUYET[k]) && !oddOf(k).length).map(p => [p[0], why(p[0])]);
   held.forEach(([k]) => picks.splice(picks.findIndex(p => p[0] === k), 1));
@@ -1742,7 +1797,7 @@ function typedDecision(q, scope) {   // "Tôi đồng ý trần 177,5 tỷ", "Đ
     odd.forEach(([k]) => decide(k, COND, own(k).trim(), "chưa xác nhận"));
     const names = odd.map(([k]) => "«" + QUYET[k].replace(/\.$/, "") + "»").join(", ");
     // «Duyệt trần nhưng ở mức 118,8 thôi»: a figure of their own is never one tap from the figure they just refused (round 13)
-    const ownFig = what.some(x => x !== "điều kiện") || /\b(neu|voi dieu kien|sau khi|roi moi|xong moi|mien la)\b/.test(fold(q)) || odd.some(([k]) => (P.seq || []).includes(k));   // a figure, a date or a «nếu»: never one tap from dropping it (round 14)
+    const ownFig = what.some(x => x !== "điều kiện") || /\b(neu|voi dieu kien|sau khi|roi moi|xong moi|mien la|nhung( phai)?|kem|phai co|voi yeu cau)\b/.test(fold(q)) || odd.some(([k]) => (P.seq || []).includes(k) || askDoubt(QUYET[k]));   // a figure, a date or a «nếu»: never one tap from dropping it (round 14)
     const settle = vv => { odd.forEach(([k]) => decide(k, vv, vv === "Đồng ý" ? "" : own(k).trim())); answer(vv === "Đồng ý" ? "Em đã ghi «Đồng ý» như đề nghị cho: " + names + "." : vv === "Cần bàn thêm" ? "Em đã ghi «Cần bàn thêm» kèm nguyên văn ý kiến của anh chị cho: " + names + "." : "Em đã ghi «" + COND + "» kèm nguyên văn ý kiến của anh chị cho: " + names + ".", null, {src: "", extra: sendBox()}); };
     answer(done + (clean.length ? "Còn đề nghị " : "Đề nghị là ") + names + "; anh chị " + (what.filter(x => x !== "điều kiện").length ? "nói " + what.filter(x => x !== "điều kiện").join(", ") + (what.includes("điều kiện") ? " và có thêm điều kiện" : "") : "có thêm điều kiện") +
       "." + afterNote() + " Em ghi ý kiến của anh chị nguyên văn để " + OWNER + " xử lý nhé?", null,
@@ -2922,10 +2977,54 @@ function scopedRow(scope) {   // the table row a tapped place sits in, unless it
 }
 function ask2(q) { const t = TYPED; ask(q, null); TYPED = t; }   // the same question with its row named, as if typed
 let TYPED = "";   // the reader's own words: the owner reads these, never the column names the page matched with
+function pendingPick(q) {   // round 15: typing a button's words, or a plain yes on a one-question prompt, is pressing that button
+  const a = isOpen($("bub")) ? $("ba") : $("a"); if (!QUYET.length || (!isOpen($("panel")) && !isOpen($("bub")))) return false;
+  const bs = [...a.querySelectorAll("button")].filter(b => !b.disabled && !b.closest(".decrow") && !b.closest(".decsend") && b.getClientRects().length &&
+    b.textContent !== SEND && !/^✓/.test(b.textContent));
+  if (!bs.length) return false;
+  const f = fold(q).replace(/[,.!?;…]+/g, " ").replace(/\s+/g, " ").trim(), lab = b => fold(b.textContent.replace(/[›…]/g, " ")).replace(/\s+/g, " ").trim();
+  let hit = bs.filter(b => lab(b) === f);
+  if (!hit.length && f.split(" ").length >= 3) hit = bs.filter(b => lab(b).split(" ").slice(0, 3).join(" ") === f.split(" ").slice(0, 3).join(" "));
+  if (!hit.length && /^(u|uh|um|vang|ok|oke|duoc|dung roi|dung|dong y)$/.test(f) && /^(doi|ghi nguyen van|dong y ve nguyen tac)/.test(lab(bs[0]))) hit = [bs[0]];
+  if (hit.length !== 1) return false;
+  hit[0].click(); return true;
+}
+function undoLast(q) {   // round 15: a bare «À không» / «Thôi» after a record: a prompt waiting is dropped, else the last record is asked back
+  const a = isOpen($("bub")) ? $("ba") : $("a");
+  const bs = [...a.querySelectorAll("button")].filter(b => !b.disabled && !b.closest(".decrow") && !b.closest(".decsend") && b.textContent !== SEND && !/^✓/.test(b.textContent));
+  if (bs.length && /ạ\?/.test(a.textContent)) { bs.forEach(b => { b.disabled = true; }); answer("Dạ, em chưa ghi gì thêm.", null, {src: "", extra: sendBox()}); return true; }
+  const ks = LAST_REC.filter(k => DECIDED[k]); if (!ks.length) return false;
+  const box = document.createElement("div");
+  box.appendChild(chips(["Cần bàn thêm", "Không đồng ý", "Giữ như cũ"].map(vv => [vv, e => { if (vv !== "Giữ như cũ") ks.forEach(k => decide(k, vv, q.trim()));
+    box.querySelectorAll("button").forEach(x => { x.disabled = true; }); const b = e && e.currentTarget; if (b) b.textContent = "✓ " + vv; }])));
+  box.appendChild(sendBox());
+  answer("Em bỏ " + ks.map(k => "«" + DECIDED[k].v + "» việc " + NUMW[k]).join(", ") + " ạ? Anh chị chọn giúp em.", null, {src: "", extra: box}); return true;
+}
+function splitAsk(q) {   // round 15: «Hoãn kho mới thì … có chậm không? Mấy việc kia đồng ý»: the question is answered, the decision recorded
+  const isQ = x => /\?\s*$/.test(x) || /\b(co|co the) .+ khong$|\b(bao nhieu|o dau|the nao|vi sao|tai sao|ra sao|lam sao)$/.test(fold(x).replace(/[.!…]+$/, "").trim());
+  let parts = q.split(/(?<=[?!.])\s+(?=\S)/).filter(x => x.trim());
+  const out = [];
+  for (const x of parts) {   // «Trần ok, còn lại 9 tỷ thì cắt ở đâu?»: the last comma part is the question
+    if (isQ(x) && /,(?!\d)/.test(x)) { const i = x.search(/,(?!\d)[^,]*$/); out.push(x.slice(0, i).trim(), x.slice(i + 1).trim()); } else out.push(x.trim()); }
+  const qs = out.filter(isQ), ds = out.filter(x => !isQ(x));
+  if (!qs.length || !ds.length) return null;
+  const dec = ds.join(". "), P = decisionPicks(dec);
+  if (!P || !(P.picks.some(p => p[1]) || P.v)) return null;
+  return {dec, qs: qs.join(" "), named: new Set(qs.flatMap(x => clauseRefs(fold(x).replace(/[?.!,;]+/g, " ").replace(/\s+/g, " ")).asks))};
+}
 function ask(q, scope) {
-  TYPED = q; q = planWords(q);
+  TYPED = q;
+  if (pendingPick(q)) return;
+  if (/^(a|o|u|ơ) (khong|nham)$|^(thoi|khong phai|nham|a nham)$/.test(fold(q).replace(/[,.!?;…]+/g, " ").replace(/\s+/g, " ").trim()) && (LAST_REC.length || isOpen($("panel")))) { if (undoLast(q)) return; }
+  { const sp = !scope && splitAsk(q);
+    if (sp) { QNAMED = sp.named; const did = typedDecision(sp.dec, scope); QNAMED = null;
+      if (did) { const a = isOpen($("bub")) ? $("ba") : $("a"), keep = [...a.childNodes];
+        ask(sp.qs, null); const b = isOpen($("bub")) ? $("ba") : $("a"), first = b.firstElementChild;
+        if (first) first.textContent = "Còn câu «" + sp.qs.replace(/\s+$/, "") + "»: " + first.textContent;
+        const box = document.createElement("div"); box.className = "qdec"; keep.forEach(n => box.appendChild(n)); b.insertBefore(box, b.firstChild); return; } } }
+  q = planWords(q);
   const tapK = tapAsk(scope);   // a tapped ask: «Ok» is its verdict, and «Ai theo dõi?» is asked of the whole report (round 12)
-  if (tapK < 0 && tapAsks(scope).length < 2 && !(cardOpen() && /^\s*(ok|oke|okay|u|uh|duoc|thoi duoc|u duoc|u thi duoc|vang|duyet|dong y|chot)\s*$/.test(fold(q).replace(/[,.!?;…]+/g, " ").replace(/\s+/g, " "))) && /^\s*(ok|oke|okay|u|uh|um|hm+|vang|da|cam on|thanks|duoc roi|hieu roi|ro roi|tot|thoi|dung|dung roi|chuan|chuan roi|vay thoi|the thoi|duoc|hieu|xong)( (ok|oke|vang|da|cam on|thanks|em|nhe|nha|a|nhieu|roi|lam|duoc roi|duoc|thoi|vay|the|tiep di|tiep|tiep tuc|vay thoi|hm+|um))*\s*$/.test(fold(q).replace(/[,.!?;…]+/g, " ").replace(/\s+/g, " "))) {
+  if (tapK < 0 && tapAsks(scope).length < 2 && !(cardOpen() && /^\s*(ok|oke|okay|u|uh|um|o|duoc|thoi duoc|u duoc|u thi duoc|vang|duyet|dong y|chot|khong|khong a|khong nhe)\s*$/.test(fold(q).replace(/[,.!?;…]+/g, " ").replace(/\s+/g, " "))) && /^\s*(ok|oke|okay|u|uh|um|hm+|vang|da|cam on|thanks|duoc roi|hieu roi|ro roi|tot|thoi|dung|dung roi|chuan|chuan roi|vay thoi|the thoi|duoc|hieu|xong)( (ok|oke|vang|da|cam on|thanks|em|nhe|nha|a|nhieu|roi|lam|duoc roi|duoc|thoi|vay|the|tiep di|tiep|tiep tuc|vay thoi|hm+|um))*\s*$/.test(fold(q).replace(/[,.!?;…]+/g, " ").replace(/\s+/g, " "))) {
     answer("Dạ.", null, {src: ""}); return; }   // a nod is not a question: nothing goes to the owner
   if (typedDecision(q, scope)) return;
   if (tapK >= 0 && !/\d/.test(q)) {
@@ -3135,7 +3234,7 @@ $("f").onsubmit = e => { e.preventDefault(); const q = $("q").value.trim(); if (
 // --- click or Enter anywhere in the report: the answer opens right there, in a small bubble beside the place ---
 let anchor = null, scope = null, lastFocus = null;
 function openPanel() { closeBubble(); $("panel").classList.remove("hidden"); placePanel(); if (!TOUCH) $("q").focus({preventScroll: true}); }
-function closePanel() { const was = isOpen($("panel")); $("panel").classList.add("hidden"); if (was) idleLine(); }
+function closePanel() { const sp = document.querySelector("[data-clicky-room=end]"); if (sp) { sp.remove(); LIVE.delete(sp); }   /* the blank room the end card made */ const was = isOpen($("panel")); $("panel").classList.add("hidden"); if (was) idleLine(); }
 function openBubble(target, sc, hint) {
   closePanel(); anchor = target; scope = sc || null;
   if (!isOpen($("bub"))) lastFocus = document.activeElement;
@@ -3667,6 +3766,11 @@ window.__clickyGhi = function (q, sel) {   // tests: a fresh card, then a typed 
   Object.keys(DECIDED).forEach(k => { rec[k] = [DECIDED[k].v, DECIDED[k].words, DECIDED[k].pending]; });
   return {a, rec, asks: QUYET, aliases: askAliases()};
 };
+window.__clickyLuc = function (i, t) {   // tests: sentence i of the talk at second t, as the voice would reach it; returns the frames shown and the sentence's parts
+  if (i !== idx) go(i, false);
+  Object.defineProperty(audio, "currentTime", {value: t, configurable: true, writable: true}); try { onTime(); } finally { delete audio.currentTime; }
+  const s = S[idx]; return {frames: frames.length, bare: s._bare || [], starts: s.starts || [], points: s.points.map((p, k) => [p.k ?? k, p.t])};
+};
 window.__clickyDaGhi = function () {   // tests: what is recorded now, per ask, without starting a fresh card
   const rec = {}; Object.keys(DECIDED).forEach(k => { rec[k] = [DECIDED[k].v, DECIDED[k].words, DECIDED[k].pending]; }); return rec;
 };
@@ -3748,6 +3852,26 @@ window.__clickyKiemHinh = async function () {
     if (m && !m.headCells.some(sticks)) { const r = rect(tf), hd = m.headCells.map(rect).filter(q => q.height), top = Math.max(v.y, topCover(), stickyTops());
       if (hd.length && r.bottom - Math.min(...hd.map(q => q.top)) < (rect($("bar")).top - top) * 0.8 && hd.some(q => q.top < top - 1 || q.bottom > v.y + v.h))
         problems.push(say + ": tiêu đề bảng của dòng đang khoanh bị che hoặc ra ngoài màn hình"); }
+  }
+  // the end card as the talk leaves it (round 15): after each choice it stays above the bar, «Gửi» can be pressed,
+  // and no figure of the report is under it
+  if (QUYET.length && S.length) {
+    closePanel(); closeBubble(); clearFrames();
+    const last = S[S.length - 1], lp = last.points[last.points.length - 1], le = lp && pointEl(last, last.points.length - 1, lp);
+    if (le) { frame(le); await wait(); clearFrames(); }
+    const keepD = JSON.stringify(DECIDED), keepP = JSON.stringify(load());
+    Object.keys(DECIDED).forEach(k => { delete DECIDED[k]; });
+    decisionCard(); await wait(); await wait();
+    for (let k = 0; k < QUYET.length; k++) {
+      const p = rect($("panel")), bar = rect($("bar")), where = "thẻ quyết định" + (k ? " sau " + k + " lựa chọn" : "");
+      if (p.bottom > bar.top + 1) problems.push(where + ": thẻ tràn xuống dưới thanh Clicky");
+      if (numberRects(p, 0).some(q => hit(q, p))) problems.push(where + ": thẻ che số của báo cáo");
+      const sb = [...$("a").querySelectorAll(".decsend button")].find(b => b.textContent === SEND);
+      if (sb) { const q = rect(sb), e = root.elementFromPoint((q.left + q.right) / 2, (q.top + q.bottom) / 2); if (!e || !sb.contains(e)) problems.push(where + ": nút «" + SEND + "» bị che"); }
+      const row = $("a").querySelectorAll(".decrow")[k], bt = row && [...row.querySelectorAll("button")].find(b => b.textContent === "Không đồng ý");
+      if (bt && k < QUYET.length - 1) { bt.click(); await wait(); } else break;
+    }
+    Object.keys(DECIDED).forEach(k => { delete DECIDED[k]; }); Object.assign(DECIDED, JSON.parse(keepD)); save(JSON.parse(keepP)); draw(); closePanel(); n++;
   }
   // a lassoed region: after the page scrolls, its frame still goes round the cells it listed
   closePanel(); closeBubble(); clearFrames();

@@ -731,8 +731,9 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                     how = "chỉ tăng" if rest_v < whole else "tăng"
                     if rev_v is not None:
                         tail = ", không nhanh hơn doanh thu"
+                # framed on the total the rest is worked out from, never on the row it leaves out (round 15)
                 lines.append(("Phần tăng nằm ở đâu", Line(f"Bỏ {_short(top.label)} ra, {others} {how} khoảng {rest_tok}%{tail}.",
-                                                     top.id, so_tinh=[f"{rest_tok} = {expr}"], vai="phan_con_lai",
+                                                     t.total.id, so_tinh=[f"{rest_tok} = {expr}"], vai="phan_con_lai",
                                                      xac_nhan=[con[2].tok] if con is not None and con[2].tok in tail else [])))
     bridge = headcount_bridge(places, t, en)
     if bridge is not None:                         # proposed: it may contradict the report's own words
