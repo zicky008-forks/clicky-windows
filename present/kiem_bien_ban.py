@@ -144,7 +144,8 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
                 errors.append(f"Câu trả lời «{clip(f['a'])}» ghi công thức khác với biên bản.")
             else:
                 at = next((g.at for g in figures(base) if g.tok == f["tok"]), None)
-                why = story.check_computed(f["tok"], f["cong_thuc"], base[:at] if at is not None else "", en, on_page)
+                # a figure the line does not say ("gần hai phần ba" → 63) is only in the formula, said "nói tròn là"
+                why = story.check_computed(f["tok"], f["cong_thuc"], base[:at] if at is not None else "nói tròn là", en, on_page)
                 if why:
                     errors.append(f"Số {f['tok']} em tính trong câu trả lời: {why}.")
     count["hoi_dap"] = len(book)

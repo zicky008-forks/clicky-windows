@@ -268,7 +268,10 @@ def test_after_the_talk_the_decisions_wait_on_screen_and_a_choice_goes_to_the_ow
     after = _answer(pg, "a")
     assert "Em đã ghi «Đồng ý»" in after and "Gửi anh Tuấn" in after
     assert pg.evaluate(f"[...{SR}.querySelectorAll('#a button')].filter(b => b.textContent === 'Gửi anh Tuấn').length") == 1
-    assert "Quyết định «Giữ tỷ lệ chi phí nhân sự trên doanh thu thuần ở 2,40%, tức trần 177,5 tỷ»: Đồng ý" in _parked(pg)
+    assert "«Giữ tỷ lệ chi phí nhân sự trên doanh thu thuần ở 2,40%, tức trần 177,5 tỷ»: Đồng ý" in _parked(pg)
+    # round 9: decisions under their own heading, and one Send on screen (the card's)
+    assert pg.evaluate(f"{SR}.getElementById('tbh').textContent") == "Quyết định anh chị đã ghi"
+    assert pg.evaluate(f"[...{SR}.querySelectorAll('button')].filter(b => b.textContent === 'Gửi anh Tuấn' && b.getClientRects().length && !b.closest('.hidden')).length") == 1
     # the mail puts the decision first, the questions after it, and says the talk is still a draft
     _ask(pg, "Lương bình quân khối bán hàng?")
     _ask(pg, "Vì sao tăng?", "table[data-clicky] tbody tr:nth-child(2) td:nth-child(4)")     # asked at a cell: the mail says where
@@ -294,7 +297,7 @@ def test_the_decision_record_never_misstates_the_board(page):
     assert a.startswith("Đề nghị là «Giãn tuyển 30 vị trí") and "anh chị nói 50" in a and "Ghi nguyên văn" in a
     assert _r3(pg, "Đồng ý việc năm").startswith("Báo cáo có 2 việc;")          # out of range: nothing recorded, asked which
     card = " ".join(pg.evaluate("window.__clickyHetBai()").split())
-    assert card.count("Không đồng ý") == 1 and "mỗi người Em đã ghi «Đồng ý». Đổi" in card, card
+    assert card.count("Không đồng ý") == 1 and "mỗi người Em đã ghi «Cần bàn thêm»: «Tôi đồng ý nhưng giãn 50 vị trí (chưa xác nhận)». Đổi" in card, card
     pg.evaluate(f"""() => {{ const r = {sr}.querySelector('[data-quyet="1"]');
                             [...r.querySelectorAll('button')].find(b => b.textContent === 'Đổi').click();
                             [...r.querySelectorAll('button')].find(b => b.textContent === 'Cần bàn thêm').click(); }}""")
@@ -305,6 +308,25 @@ def test_the_decision_record_never_misstates_the_board(page):
     assert body.count("Giãn tuyển 30 vị trí") == 1, body                       # one line per ask, the last choice
     assert "2. «Giãn tuyển 30 vị trí bán hàng sang quý 3 và gắn với doanh thu trên mỗi người»: Cần bàn thêm (đã đổi từ Đồng ý)" in body, body
     assert "1. «Giữ tỷ lệ chi phí nhân sự trên doanh thu thuần ở 2,40%, tức trần 177,5 tỷ»: chưa cho ý kiến" in body, body
+    assert not errors
+
+
+def test_a_condition_a_time_or_an_exclusion_is_never_recorded_as_plain_agreement(page):
+    pg, errors = page
+    # round-9 panel: "duyệt cả hai nhưng phải báo cáo lại tháng sau" was mailed as two plain «Đồng ý»; "trừ việc hai"
+    # and "việc hai để bàn thêm" after a pause were parked as questions
+    a = _r3(pg, "Duyệt cả hai nhưng phải báo cáo lại tháng sau")
+    assert a.startswith("Đề nghị là «Giữ tỷ lệ") and "tháng sau và có thêm điều kiện" in a, a
+    card = " ".join(pg.evaluate("window.__clickyHetBai()").split())
+    assert card.count("(chưa xác nhận)") == 2 and "Em đã ghi «Đồng ý»" not in card, card
+    a = _r3(pg, "Đồng ý cả hai, nhưng trần 170 tỷ")                               # the figure is about the ceiling only
+    assert a.startswith("Em đã ghi việc hai «Đồng ý». Còn đề nghị «Giữ tỷ lệ") and "nói 170 tỷ." in a, a
+    assert "năm sau" in _r3(pg, "Đồng ý giãn tuyển 30 vị trí sang năm sau")        # the ask says quý 3
+    assert "anh chị nói 20 vị trí" in _r3(pg, "Tôi chỉ duyệt 20 vị trí thôi")
+    a = _r3(pg, "Đồng ý hết trừ việc hai")
+    assert a.startswith("Em đã ghi «Đồng ý» cho việc: «Giữ tỷ lệ") and "Việc hai em chưa ghi." in a, a
+    assert _r3(pg, "Thôi, việc hai để bàn thêm").startswith("Em đã ghi «Cần bàn thêm» cho việc: «Giãn tuyển")
+    assert _r3(pg, "Tôi đồng ý trần 177,5 tỷ").startswith("Em đã ghi «Đồng ý» cho việc: «Giữ tỷ lệ")   # the ask's own figure
     assert not errors
 
 
@@ -320,7 +342,14 @@ def test_short_follow_ups_and_figures_said_this_session_are_answered_with_their_
     assert _r3(pg, "67% à?").startswith("Khối Bán hàng chiếm khoảng 67% phần tăng: 14,1 tỷ.")
     assert _r3(pg, "12,6% à?").startswith("Tổng, % tăng: 12,6%.") and "khớp" in _r3(pg, "12,6% à?")   # a printed figure: checked
     a = _r3(pg, "Có số nào sai không?")                                          # every open doubt, in one answer
-    assert a.startswith("Có 2 chỗ anh Tuấn đang kiểm lại: một câu trong báo cáo (đoạn đang làm mờ); số 6,7 (") and "≈ 6,85%" in a, a
+    assert a.startswith("Có 2 chỗ anh Tuấn đang kiểm lại: câu «Hai phần ba phần tăng đến từ tuyển mới ở khối bán hàng»; "
+                        "số 6,7% (") and "≈ 6,85%" in a and "43%" not in a, a      # the owner's own finding on a sentence stays his
+    # round-9 panel: the working in that answer is a figure said too; any wording, any place tapped
+    assert _r3(pg, "6,85% ở đâu ra?").startswith("6,85% là số em tính để anh Tuấn kiểm lại số 6,7: tính từ tổng chi phí và số người")
+    assert _ask(pg, "Em có chắc số liệu không?", ".insight-box").startswith("Có 2 chỗ anh Tuấn đang kiểm lại: câu «Hai phần ba")
+    a = _r3(pg, "Hai phần ba à?")                                                # the claim words of a doubted sentence: held
+    assert a.startswith("Câu «Hai phần ba phần tăng đến từ tuyển mới ở khối bán hàng» anh Tuấn đang kiểm lại, em chưa trả lời thay") and "43%" not in a, a
+    assert "đang kiểm lại" in _r3(pg, "Chủ yếu do tuyển mới đúng không?")
     queued = pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('tl').innerText")
     assert "ở đâu ra" not in queued and "số báo cáo hay em tính" not in queued, queued   # "đủ không" parks only how to cover the rest
     assert not errors
@@ -611,7 +640,8 @@ def test_phone_bar_stays_on_screen_with_a_wide_table(tmp_path):
         assert pg.evaluate("window.__clickyChuCat()") == []               # no caption line hides a word, a figure least of all
         # round-5 Chair: the phone's first screen says what is to be decided, with its money, before anyone presses ▶
         cap_text = pg.evaluate("document.querySelector('#clicky-host').shadowRoot.getElementById('cap').innerText")
-        assert cap_text.startswith("Trợ lý AI. Anh Tuấn xin quyết: duyệt trần 177,5 tỷ (giảm 8,9 tỷ); giãn tuyển 30 vị trí bán hàng."), cap_text
+        # round 9: in two lines at 16 px, and «anh chị» kept
+        assert cap_text.startswith("Trợ lý AI. Anh Tuấn xin anh chị quyết: trần 177,5 tỷ · giãn tuyển 30 vị trí. Bấm ▶."), cap_text
         assert not errors
         browser.close()
 

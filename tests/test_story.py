@@ -271,7 +271,7 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     # the table has no variance column: code works it out from the drawn rows; a group row ("Khối vận hành" adds up
     # Logistics and Mua hàng) is never the driver; the unit comes from the table's heading "(tỷ đồng)"
     driver = next(c for c in said if c.get("vai") == "dong_luc")
-    assert driver["noi"] == "Logistics chiếm gần hai phần ba phần tăng: 12,0 tỷ; giải trình ghi: thuê kho." and driver["so_tinh"] == ["12,0 = 52,0 - 40,0"]
+    assert driver["noi"] == "Logistics chiếm gần hai phần ba phần tăng: 12,0 tỷ; giải trình ghi: thuê kho." and driver["so_tinh"] == ["12,0 = 52,0 - 40,0", "63 = (52,0 - 40,0) / (129,0 - 110,0) × 100"]   # the share behind "gần hai phần ba"
     assert driver["chi"].startswith("v")
     rest = next(c for c in said if c["noi"].startswith("Bỏ Logistics ra"))
     # 10% is still faster than revenue's 8,0%: never "chỉ"
@@ -608,6 +608,13 @@ def test_a_doubted_card_or_cap_figure_is_held_with_both_figures_and_a_worked_out
         x = ask("Đồng ý việc một, việc ba cần bàn thêm")
         assert x.startswith("Em đã ghi việc một «Đồng ý»; việc ba «Cần bàn thêm».") and "mức 120,0 anh Tuấn đang kiểm lại" in x, x
         assert ask("Tôi chỉ duyệt trần 118,8 thôi").startswith("Đề nghị là «Duyệt trần chi phí vận hành 120,0 tỷ cho cả năm»; anh chị nói 118,8.")
+        # round-9 panel: "hai phần ba à?" was parked; the doubted 18,0 and its table working 17 were confirmed bare
+        x = ask("Hai phần ba à?")
+        assert x.startswith("Logistics chiếm gần hai phần ba") and "(52,0 − 40,0) ÷ (129,0 − 110,0) × 100" in x, x
+        assert "Lưu ý: số 18,0 anh Tuấn đang kiểm lại (tính từ bảng" in ask("18,0% à?")
+        assert "Lưu ý: số 18,0 anh Tuấn đang kiểm lại (tính từ bảng" in ask("17% à?")
+        x = ask("Có số nào sai không?")
+        assert x.startswith("Có 2 chỗ anh Tuấn đang kiểm lại: số 18,0% (tính từ bảng") and "số 120,0 (giữ đúng tỷ lệ" in x, x
         assert ask("Lo nhất là gì?").startswith("Nếu doanh thu chỉ đạt 90% kế hoạch")   # the report redraws: the place is found again
         assert pg.evaluate("q => window.__clickyHoi(q, \"[data-clicky='c6']\")", "nghĩa là gì?").startswith("Đoạn này ghi: «Nếu doanh thu chỉ đạt 90%")
         x = ask("Đồng ý trần 120")                                                # a typed decision on a doubted cap says so

@@ -34,7 +34,7 @@ HUNDRED = Decimal(100)
 TOTAL = re.compile(r"^\W*(tổng|total|cộng|grand)\b", re.I)
 REVENUE = re.compile(r"doanh thu|revenue|\bdtt\b|net sales|sales", re.I)
 PLAN_WORD = re.compile(r"aop|kế hoạch|\bkh\b|budget|ngân sách|plan", re.I)
-APPROX = re.compile(r"(khoảng|gần|hơn|chừng|xấp xỉ|độ)\s*$", re.I)
+APPROX = re.compile(r"(khoảng|gần|hơn|chừng|xấp xỉ|độ|nói tròn là)\s*$", re.I)   # "= 63,16, nói tròn là 63": the exact figure is beside it
 CLAIM = re.compile(r"\b(hai phần ba|một phần ba|ba phần tư|một phần tư|một nửa|phần lớn)\b", re.I)
 CLAIMS = {"hai phần ba": Decimal("0.667"), "một phần ba": Decimal("0.333"), "ba phần tư": Decimal("0.75"),
           "một phần tư": Decimal("0.25"), "một nửa": Decimal("0.5"), "phần lớn": None}
@@ -640,6 +640,10 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         st = [f"{top_tok} = {top_f}"] if top_f else []
         if sw and sw.endswith("%"):                # the share said as a figure: its own formula, checked like any other
             st.append(f"{sw.split()[1].rstrip('%')} = {top_tok} / {tdelta[0]} × 100")
+        elif sw and CLAIM.search(sw):              # "gần hai phần ba": the share behind the words, for "hai phần ba à?"
+            num = f"({top_f})" if top_f else top_tok          # a worked-out change is shown from the printed figures
+            den = f"({tdelta[2]})" if tdelta[2] else tdelta[0]
+            st.append(f"{say(abs(share) * HUNDRED, 0, en)} = {num} / {den} × 100")
         lines.append(("Phần tăng nằm ở đâu", Line(text, top.id, so_tinh=st, vai="dong_luc")))
         tp, ta = _num(top, t.plan, en), _num(top, t.actual, en)
         if tp and ta and abs(share) >= Decimal("0.4") and len(same) + len([m for m in moves if m[1]]) > 2:
@@ -1069,7 +1073,12 @@ def facts(script: dict, places: dict, en: bool, owner: str) -> list:
                 continue
             seen.add(tok)
             said = str(c["noi"]).strip()
-            out.append({"k": "t", "y": [tok_pattern(tok) + r".*" + HOW, HOW + r".*" + tok_pattern(tok)], "x": [],
+            y = [tok_pattern(tok) + r".*" + HOW, HOW + r".*" + tok_pattern(tok)]
+            claim = CLAIM.search(said)
+            if claim and claim.group(1).lower() != "phần lớn" and "× 100" in expr:   # "hai phần ba à?": the words, then the share
+                cf = jfold(claim.group(1))
+                y += [cf + r".*" + HOW, HOW + r".*" + cf, cf + r" (a|ha|that a|that khong|dung khong|la bao nhieu( phan tram)?)\s*$"]
+            out.append({"k": "t", "y": y, "x": [],
                         "a": f"{said} Em tính từ các số trên báo cáo: {formula_text(tok, expr, en)}.",
                         "noi": f"{said} Công thức em hiện trên màn hình ạ.", "chi": c.get("chi") or "", "tu": [i],
                         "tok": tok, "cong_thuc": expr, "vai": c.get("vai") or ""})
