@@ -2846,7 +2846,7 @@ def scenes_from_script(script: dict, known: set) -> list:
                 raise PackError(f"Kịch bản trỏ tới '{c['chi']}' nhưng báo cáo không còn chỗ đó. Hãy soạn lại kịch bản.")
         text = " ".join(str(c["noi"]).strip() for c in lines)
         scenes.append({"title": str(s.get("muc", "")), "line": text, "chi": [c.get("chi") or "" for c in lines],
-                       "sentences": [str(c["noi"]).strip() for c in lines],
+                       "sentences": [str(c["noi"]).strip() for c in lines], "vai": [str(c.get("vai") or "") for c in lines],
                        "dung": [_pause(c.get("dung")) for c in lines]})
     if not scenes:
         raise PackError("Kịch bản không có câu nào để nói.")

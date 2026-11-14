@@ -663,7 +663,7 @@ def test_board_questions_in_the_talks_own_words_get_the_asks_the_columns_and_hon
         x = ask("Em khuyên anh nên chọn gì?")
         assert x.startswith("Em không khuyên thay anh chị. Đề xuất của anh Tuấn là: «Giữ tỷ lệ") and "2,52%" in x
         assert ask("Cắt 8,9 tỷ ở đâu?").startswith("Báo cáo chỉ nêu cách: «Giãn tuyển 30 vị trí")
-        assert ask("Có gì đáng lo nhất?").startswith("Với kế hoạch điều chỉnh này, tỷ lệ chi phí nhân sự trên doanh thu thuần là 2,52%")
+        assert ask("Có gì đáng lo nhất?").startswith("Nếu giữ nguyên, chi phí vượt trần đề xuất 8,9 tỷ.")   # the talk's own risk line (round 16)
         pg.goto(Path(b["out"]).as_uri())
         pg.wait_for_timeout(800)
         assert ask("Ai phải giải trình?").startswith("Anh Tuấn đề nghị: «Logistics phải giải trình")
@@ -1268,6 +1268,92 @@ def test_round_fifteen_typed_answers_press_the_prompt_undo_asks_back_and_a_quest
         last = max(t for j, t in s["points"] if t < b0)
         assert A.evaluate("([i, t]) => window.__clickyLuc(i, t)", [k, last + 0.1])["frames"] >= 1
         assert A.evaluate("([i, t]) => window.__clickyLuc(i, t)", [k, b0 - 0.1])["frames"] == 0
+    finally:
+        browser.close()
+        pw.stop()
+
+
+def test_round_sixteen_scope_wait_words_kept_words_and_the_end_card_bar(report, drawn_report):
+    # round-16 panel: «Ngoài việc hai ra thì không» recorded ask 2 Không; «đồng ý cho anh Tuấn» read «cho» as «chờ» (and
+    # «đội tôi» as «đợi tôi»); «những việc khác thì được» was read as «nhưng …»; a held yes on the doubted cap and a
+    # counter-figure lost the reader's words; «Duyệt trần thì chưa» opened the yes step; the bar kept its buttons and the
+    # talk's last half-sentence while the end card was open
+    pw, browser, pages = _ghi_pages(report, drawn_report)
+    try:
+        A, B = pages["A"], pages["B"]
+        SR = "document.getElementById('clicky-host').shadowRoot"
+        ghi = lambda pg, q: pg.evaluate("q => window.__clickyGhi(q, null)", q)   # noqa: E731
+        hoi = lambda pg, q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        thu = lambda pg: pg.evaluate("() => window.__clickyThu()")   # noqa: E731
+        fresh = lambda pg: (pg.evaluate("() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} }"), pg.reload(), pg.wait_for_timeout(700))   # noqa: E731
+        # metamorphic: the excepted ask never takes the verdict said about the rest, in any word order
+        for k in range(4):
+            n = ["một", "hai", "ba", "bốn"][k]
+            for q, v in ((f"Ngoài việc {n} ra thì không đồng ý", "Không đồng ý"), (f"Trừ việc {n} ra thì không", "Không đồng ý"),
+                         (f"Ngoài việc {n} ra thì đồng ý", "Đồng ý"), (f"Không đồng ý việc nào ngoài việc {n}", "Không đồng ý")):
+                r = ghi(B, q)
+                assert r["rec"].get(str(k), ["?"])[0] != v and all(r["rec"][str(j)][0] == v for j in range(4) if j != k and (j or v != "Đồng ý")), (q, r["rec"])
+        # «cho» (for), «đội» (team) are never a wait; «chờ / đợi» still are
+        for q in ("Đồng ý cho anh Tuấn làm cả bốn việc", "Còn lại em cứ ghi đồng ý cho anh"):
+            assert all(x[0] == "Đồng ý" for x in ghi(B, q)["rec"].values()), q
+        assert ghi(B, "Hoãn kho mới thì đội tôi chết, còn lại ok")["rec"]["3"][0] == "Không đồng ý"
+        assert ghi(A, "Trần ok, giãn tuyển thì đợi tôi họp với đội bán hàng đã")["rec"] == {"0": ["Đồng ý", "", False], "1": ["Cần bàn thêm", "giãn tuyển thì đợi tôi họp với đội bán hàng đã", False]}
+        assert ghi(B, "Kho mới để chờ anh Tuấn kiểm lại")["rec"]["3"][0] == "Cần bàn thêm"
+        # «chưa» on the doubted cap asks «bàn thêm hay không đồng ý», never the yes step
+        r = ghi(B, "Duyệt trần thì chưa")
+        assert r["rec"] == {} and "ý anh chị là để bàn thêm, hay không đồng ý ạ?" in r["a"] and "chờ mức chốt" not in r["a"], r
+        # the reader's own words reach the mail: a held yes (unconfirmed), a counter-figure, a condition said before the step
+        fresh(B)
+        hoi(B, "Duyệt trần 120 tỷ luôn, tôi chịu trách nhiệm")
+        assert "1. «Duyệt trần chi phí vận hành 120,0 tỷ cho cả năm»: chưa cho ý kiến — anh chị nói: «Duyệt trần 120 tỷ luôn, tôi chịu trách nhiệm» (chưa xác nhận)" in thu(B)
+        fresh(B)
+        hoi(B, "Không đồng ý trần, đề nghị 118,8")
+        assert "Không đồng ý — anh chị ghi: «Không đồng ý trần, đề nghị 118,8»" in thu(B)
+        fresh(B)
+        hoi(B, "Đồng ý trần kèm điều kiện báo cáo hàng quý")
+        hoi(B, "Đồng ý hết")
+        assert B.evaluate("([SR, t]) => { const b = [...eval(SR).querySelectorAll('#a button')].filter(b => b.textContent === t && !b.disabled).pop(); if (b) b.click(); return !!b; }",
+                          [SR, "Đồng ý về nguyên tắc, chờ mức chốt"])
+        assert "kèm điều kiện báo cáo hàng quý; đồng ý về nguyên tắc" in thu(B)
+        # a nod after a partial record asks about the asks left, never «Dạ.»
+        fresh(B)
+        hoi(B, "Đồng ý việc hai")
+        assert hoi(B, "Ok").startswith("Còn 3 việc; anh chị đồng ý những việc nào ạ?")
+        # the end card: the bar keeps only ▶ and «Hỏi em», and its caption says what is asked
+        fresh(B)
+        B.evaluate("() => window.__clickyHetBai(false)")
+        bar = B.evaluate(f"""(() => {{ const r = {SR}; return {{shown: [...r.querySelectorAll('#bar button')].filter(b => b.getClientRects().length).map(b => b.id),
+            cap: r.getElementById('cap').textContent}}; }})()""")
+        assert bar["shown"] == ["play", "askb"] and bar["cap"] == "Anh Tuấn xin anh chị quyết bốn việc.", bar
+    finally:
+        browser.close()
+        pw.stop()
+
+
+def test_round_sixteen_board_questions_are_answered_from_the_talk_and_worked_caps(report, drawn_report):
+    # round-16 panel: «Rủi ro lớn nhất là gì?», «Vậy tôi duyệt hay không?», «sơ bộ hay chính thức?» were queued or quoted the
+    # wrong line; «Nói lại đoạn 8,9 tỷ» replayed the greeting; «Duyệt trần 118,8 thì phải giảm bao nhiêu?» answered 9,0;
+    # a worked 6,4 drew the note of the doubted 6,85%
+    pw, browser, pages = _ghi_pages(report, drawn_report)
+    try:
+        A, B = pages["A"], pages["B"]
+        hoi = lambda pg, q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        for q in ("Rủi ro lớn nhất là gì?", "Điều quan trọng nhất là gì?"):
+            assert hoi(A, q).startswith("Nếu giữ nguyên, chi phí vượt trần đề xuất 8,9 tỷ. Còn lại khoảng 5,0 tỷ, báo cáo chưa nêu cách bù."), q
+        assert hoi(B, "Rủi ro lớn nhất là gì?").startswith("Nếu doanh thu chỉ đạt 90% kế hoạch, tỷ lệ chi phí trên doanh thu lên 6,4%.")
+        x = hoi(A, "Vậy tôi duyệt hay không?")
+        assert x.startswith("Anh Tuấn đề nghị: ") and "Em không quyết thay anh chị" in x
+        assert hoi(A, "Bản này sơ bộ hay chính thức?").startswith("Bản này SƠ BỘ: kịch bản anh Tuấn chưa duyệt.")
+        x = hoi(A, "Em nói lại đoạn 8,9 tỷ được không?")
+        assert "8,9 tỷ" in x and "trợ lý AI" not in x, x
+        assert hoi(A, "Nói lại đoạn 5 tỷ").startswith("Còn lại khoảng 5,0 tỷ, báo cáo chưa nêu cách bù.")
+        x = hoi(B, "Em nói lại đoạn Logistics được không?")
+        assert "12,0 tỷ" in x and "trợ lý AI" not in x, x
+        x = hoi(B, "Duyệt trần 118,8 thì phải giảm bao nhiêu?")
+        assert x.startswith("Em tính: với trần 118,8 tỷ, phải giảm 10,2 tỷ so với kế hoạch điều chỉnh (129,0 − 118,8 = 10,2).") and "giảm 9,0" not in x, x
+        x = hoi(A, "Trần 180 thì phải giảm bao nhiêu?")
+        assert x.startswith("Em tính: với trần 180,0 tỷ, phải giảm 6,4 tỷ") and "6,7" not in x, x
+        assert "Có 2 chỗ anh Tuấn đang kiểm lại" in hoi(B, "Có số nào đang nghi ngờ không?")
     finally:
         browser.close()
         pw.stop()
