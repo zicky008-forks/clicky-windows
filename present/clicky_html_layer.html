@@ -1453,10 +1453,16 @@ function chooser(v, text, only, words) {   // which ask(s): each press records o
 // đồng thuê kho hết hạn» never names an ask or a verdict. A verdict may sit before or after the ask («trần thì không»). A clause that
 // names asks with no verdict of its own takes the bare verdict said before it («Đồng ý, …») or the verdict-only clause after it
 // («Việc một đổi ý, không đồng ý»); otherwise it is asked back, never recorded blank
-const DEFER = /\b(de (tuan|thang|quy|ky|nam|lan|buoi) (sau|toi)|de sang (tuan|thang|quy|nam) (sau|toi)|(tuan|thang|quy|ky|nam) sau (tinh|ban|hop|xem)|(tuan|thang|quy) sau hop( lai)?|hop lai|xem lai|de xem|de lai|tinh sau|de sau|tam treo|treo lai|treo|tam hoan|can ban them|de ban( them)?|ban them|ban lai|chua (quyet|chot|chac)|khong chac|((de|cho) )?(anh |chi |toi |em )?(suy nghi|can nhac|xem xet|nghi) them|can (them )?thoi gian|(roi|sau do|xong( roi)?) (tinh|ban|xem|quyet|duyet)|(tam )?doi (phuong an|kiem|ket qua|bao cao|giai trinh|them)|(tam )?doiw (phuong an|kiem|tinh|xem|ket qua|bao cao|giai trinh|them|anh|chi|toi|em|so|hop|muc)|de (toi |anh |chi |em )?(hop|ban|hoi)( voi| lai| them| \S+)?|ban voi|hoi lai|de do( da)?$|can nhac lai|(de|doiw) (anh |chi |em )?\S+ kiem (lai|tra)|kiem lai (\S+ ){0,3}da$|de (toi |anh |chi |em )?(xem|tinh|can nhac|nghi)( lai| them| sau| ky)?( da)?$|de (toi |anh |chi |em )(xem|tinh|can nhac|nghi))\b/;
+const DEFER = /\b(de (tuan|thang|quy|ky|nam|lan|buoi) (sau|toi)|de sang (tuan|thang|quy|nam) (sau|toi)|(tuan|thang|quy|ky|nam) sau (tinh|ban|hop|xem)|(tuan|thang|quy) sau hop( lai)?|hop lai|xem lai|de xem|de lai|tinh sau|de sau|tam treo|treo lai|treo|tam hoan|can ban( them| lai)?|de ban( them)?|ban them|ban lai|chua (quyet|chot|chac)|khong chac|((de|cho) )?(anh |chi |toi |em )?(suy nghi|can nhac|xem xet|nghi) them|can (them )?thoi gian|(roi|sau do|xong( roi)?) (tinh|ban|xem|quyet|duyet)|(roi|sau do|xong( roi)?) moi (tinh|ban|xem|xet|quyet|can nhac)|de (toi |anh |chi |em )\S+ (tinh|xem|xet|can nhac|nghi)( lai| them| ky| sau)?|tinh (them|tiep|lai)|xem sau|trinh lai|can them (so lieu|thong tin|du lieu|phan tich)|(tam )?doi (phuong an|kiem|ket qua|bao cao|giai trinh|them)|(tam )?doiw (phuong an|kiem|tinh|xem|ket qua|bao cao|giai trinh|them|anh|chi|toi|em|so|hop|muc)|de (toi |anh |chi |em )?(hop|ban|hoi)( voi| lai| them| \S+)?|ban voi|hoi lai|de do( da)?$|can nhac lai|(de|doiw) (anh |chi |em )?\S+ kiem (lai|tra)|kiem lai (\S+ ){0,3}da$|de (toi |anh |chi |em )?(xem|tinh|can nhac|nghi)( lai| them| sau| ky)?( da)?$|de (toi |anh |chi |em )(xem|tinh|can nhac|nghi))\b/;
 const NEG_OK = "(?! (qua|vuot|hon|duoi|it|nhieu|phai|de|co y))";
 const NOPE = new RegExp("\\b(khong dong y|khong duyet|khong duoc|khong chap thuan|khong dong tinh|chua dong y|chua duyet|chua duoc|tu choi|bac|phan doi)\\b|(^| )(viec|y|de nghi) (thu )?\\S+ (thi |cung )*khong( |$)|^khong(?! (qua|vuot|hon|duoi|it|nhieu|can|phai|de|co))( |$)| (thi|cung|deu) khong" + NEG_OK + "( |$)|@ (thi |cung |deu |doi y |doi lai (la )?)*khong" + NEG_OK + "( duoc| can| dong y| duyet| lam| nen)?( |$)|\\bkhong (hoan|gian|giu|lam|nen)\\b|@ khong can\\b|\\bdung (hoan|gian|giu|duyet|lam|cat)\\b|@ (thi )?(\\S+ ){0,5}chet\\b|@ thi (thoi|bo)( khoi| di| nhe)?$|@ bo( di)?$|\\bthoi khoi\\b|\\b(kia|con lai|khac) (thi |cung |deu )*khong" + NEG_OK + "( dong y| duyet)?( |$)");
-const CHUA = /(@|\b(thi|cung|deu)) (thi |cung |deu )*chua( |$)(?!(duoc|dong y|duyet))/;   // «việc hai chưa»: put off or no? asked back (round 13)
+// round 17: an ask's own verb said the other way. «khỏi / đừng / chưa cần / không phải» + the verb or the ask's name, «X thì khó»
+// («khó» is folded to «khow», never «kho»), «không chịu được»; and for a stop or hold ask («hoãn / giãn / giữ / cắt»), «cứ làm tiếp /
+// làm luôn / triển khai ngay» is its opposite
+const NEGV = /\b(dung|khoi|thoi khoi|chua can|khong phai) (@|(hoan|gian|giu|duyet|lam|cat|dung)\b)|@ (thi |cung |deu )*(rat |hoi |that )?khow( lam| qua| day| that)?( |$)|\bkhong chiu (duoc|noi)\b|\bkhong (on|duoc) dau\b/;
+const STOPV = /^(hoan|gian|giu|cat|dung|tam dung|tam hoan)\b/;
+const ANTI = /\b(cu lam|lam tiep|lam luon|lam ngay|lam (trong |ngay )?nam nay|(cu )?trien khai (ngay|luon|tiep|nam nay)|cu trien khai|cu tuyen|tuyen tiep|tuyen (du|luon|ngay)|tang them|noi them)\b/;
+const CHUA = /(@|\b(thi|cung|deu|kia|con lai|khac)) (thi |cung |deu )*chua( |$)(?!(duoc|dong y|duyet))/;   // «việc hai chưa»: put off or no? asked back (round 13)
 const YES = /\b(dong y|duyet|chap thuan|thong qua|thong nhat|nhat tri|khong phan doi|ok|oke|okay|lam di|trien khai|tien hanh|cu lam|lam luon|cho lam|chot|duoc|hop ly|nhu de xuat|nhu de nghi|theo de xuat|theo de nghi|thay on|cu the (ma )?lam|cu vay( di)?)\b|@ (thi |cung |deu )*(co|on|chiu|lam)( |$)/;
 const NOALL = /\b(khong|chua) (dong y|duyet|ok|chap thuan|thong qua) (het|tat ca|toan bo|ca (hai|ba|bon|nam|\d)|viec nao)\b|\b(bac|tu choi) (het|tat ca)\b|\bca (hai|ba|bon|nam|\d) (deu )?(khong|bac)\b|\b(het|tat ca) (deu )?khong (dong y|duyet|duoc)\b/;   // «Không đồng ý hết», «Cả 4 không» (round 14)
 const NOTALL = /\bkhong phai (la )?(dong y|duyet|ok) (het|tat ca)\b/;   // «không phải đồng ý hết đâu»: never a blanket either way
@@ -1513,9 +1519,11 @@ function verdictIn(c, asks, s) {   // put off > no > yes; "hoãn kho mới sang 
   s = (s || c).replace(/\bkhong phan doi\b/g, "dong y").replace(/\bkhong can (ban them|ban|xem lai|hop lai)\b/g, "dong y");   // "không cần bàn thêm" is a yes
   if (NOTALL.test(s)) { s = s.replace(NOTALL, " "); if (!/\S/.test(s.replace(/@/g, ""))) return ""; }
   if (NOALL.test(s)) return "Không đồng ý";
+  if (NEGV.test(s + " ")) return "Không đồng ý";   // «Đừng giãn tuyển», «kho mới khỏi hoãn», «giãn tuyển thì khó» (round 17)
+  if (asks.length && asks.every(k => STOPV.test(fold(QUYET[k])) && !(" " + c + " ").includes(" " + fold(QUYET[k]).split(" ")[0] + " ")) && !/\b(viec|de nghi|de xuat|muc|y)\b/.test(c) && ANTI.test(s) && !/\b(nhu|theo) (anh \S+ |chi \S+ )?de (xuat|nghi)\b/.test(s)) return "Không đồng ý";   // «kho mới cứ làm tiếp» is a no on «Hoãn kho mới»; «giãn tuyển cứ làm», «việc hai cứ làm» stay a yes (round 17)
   if (WHOLE.test(s)) return "Đồng ý";
   if (DEFER.test(s)) return "Cần bàn thêm";
-  if (/\bchua (chiu|(hoan|gian|giu|duyet|dong y|lam|chot|quyet|cat|giam|tuyen) (duoc|ngay|luon))\b|\bchua duyet @/.test(s)) { ISCHUA = true; return ""; }   // round 16: never the «được» of a yes
+  if (/\bchua (chiu|(hoan|gian|giu|duyet|dong y|lam|chot|quyet|cat|giam|tuyen) (duoc|ngay|luon))\b|\bchua duyet @|\bchua duoc\b|\b(kia|con lai|khac) (thi |cung |deu )*chua (duyet|dong y|ok|quyet|chot)\b/.test(s)) { ISCHUA = true; return ""; }   // «chưa được», «ba việc kia chưa duyệt»: asked back, never a no (round 17)   // round 16: never the «được» of a yes
   if (CHUA.test(" " + s + " ") && !/\bchua (duoc|dong y|duyet)\b/.test(s)) { ISCHUA = true; return ""; }
   if (NOPE.test(s)) return "Không đồng ý";
   if (ownVerb(c, asks) && !YES.test(s)) { WEAK = true; return asks.length && asks.every(k => /^(hoan|gian|giu)\b/.test(fold(QUYET[k]))) ? "Đồng ý" : "Cần bàn thêm"; }
@@ -1557,7 +1565,7 @@ let QNAMED = null;   // asks named in a question said with the decision («Hoãn
 function decisionPicks(q) {   // → {picks: [[ask, verdict, own words, broadcast, chưa]], skip, v, whole, noView} or null when no clause holds a verdict; "" verdict = ask back
   // «việc 1, 2», «việc ba, bốn»: an ask list, not two clauses (the comma becomes «¸», which fold() drops)
   const Q = q.replace(/((?<![\p{L}\p{M}])(?:việc|ý|mục|còn)\s+(?:thứ\s+)?(?:\d+|một|hai|ba|bốn|tư))((?:\s*,\s*(?:và\s+)?(?:\d+|một|hai|ba|bốn|tư)(?![\p{L}\p{M}]))+)/giu, (m, a, b) => a + b.replace(/,/g, "¸"));
-  const parts = []; { const re = /(?<!\d)[.;!]+|[.;!]+(?!\d)|,(?!\d)|\s+(?=(?:nhưng|còn(?! lại)|riêng)\s)/gi; let at = 0, m;
+  const parts = []; { const re = /(?<!\d)[.;!]+|[.;!]+(?!\d)|,(?!\d)|\s+(?=(?:nhưng|còn(?! lại)|riêng)\s)|\s+(?=(?:rồi|sau đó|xong(?:\s+rồi)?)\s+mới\s+(?:tính|bàn|xem|xét|cân nhắc|quyết)\s)/gi; let at = 0, m;
     while ((m = re.exec(Q))) { parts.push(...markerSplit(Q, at, m.index)); at = m.index + m[0].length; if (!m[0].length) re.lastIndex++; } parts.push(...markerSplit(Q, at, Q.length)); }
   const cl = [], skip = new Set(), noView = new Set(), seq = new Set(), seqX = new Set(); let usedViec = false;
   for (const [a0, b0] of parts) {
@@ -1567,7 +1575,7 @@ function decisionPicks(q) {   // → {picks: [[ask, verdict, own words, broadcas
     if (/^(vì|bởi|tại vì|do)\s/.test(lc)) { cl.push({a, b, why: true}); continue; }   // «, vì kho cũ hết chỗ»: words for the asks just named
     const cond = /^(nhưng|với điều kiện|miễn là|trừ khi|nếu)(\s|$)/.test(lc);   // «những việc khác» is never «nhưng» (round 16)
     const tail = lc.search(/\s(vì|bởi vì|bởi|tại vì|do|nếu|với điều kiện|miễn là|trừ khi)\s/), iff = tail >= 0 && /^\s(nếu|với|miễn|trừ)/.test(lc.slice(tail));
-    let c = fold((tail >= 0 ? raw.slice(0, tail) : raw).replace(/chờ|đợi/gi, "doiw"))   // «chờ / đợi» (wait) is never «cho» (for) or «đội» (team) (round 16)
+    let c = fold((tail >= 0 ? raw.slice(0, tail) : raw).replace(/chờ|đợi/gi, "doiw").replace(/(?<![\p{L}\p{M}])khó(?![\p{L}\p{M}])/giu, "khow"))   // «chờ / đợi» (wait) is never «cho» (for) or «đội» (team) (round 16)
       .replace(/(?<!\d)[.,]+|[.,]+(?!\d)|[!?;]+/g, " ").replace(/\s+/g, " ").trim();   // «177,5» stays a figure (round 14)
     c = c.replace(/^(?:(?:nhung|con(?! lai)|rieng|thoi|toi|anh|chi|em|chung toi|vay|u|a|o|toi thay|anh thay)\s+)+/, "");
     if (usedViec && new RegExp("^(" + SMALL_NTH + "|\\d)( (va |voi )?(" + SMALL_NTH + "|\\d))*\\b(?! (viec|cai|y|de nghi)\\b)").test(c)) c = "viec " + c;   // never «hai việc kia» (round 15)   // «việc ba và bốn được, một và hai để bàn»
@@ -1634,9 +1642,10 @@ function decisionPicks(q) {   // → {picks: [[ask, verdict, own words, broadcas
       if (!v && !x.chua && x.cond && prev) { const hit = prev.filter(p => x.asks.includes(p[0]));   // «Đồng ý cả hai, nhưng trần 170 tỷ»: a limit on one of them
         if (hit.length) { hit.forEach(p => { p[5] = x.b; }); continue; } }
       if (!v && !x.chua && x.pure && prev && prev[0][1]) v = prev[0][1];   // «Đồng ý việc một, giãn tuyển»: a list goes on
-      if (lead && !x.chua && (!v || v === lead.v || x.weak)) { v = lead.v; a = lead.a; lead.used = true; }   // «Không, giãn tuyển ảnh hưởng doanh thu»: the lead is the verdict
+      const noLead = lead && x.chua && !v && lead.v === "Không đồng ý";   // «Không, việc bốn chưa được»: the said «Không» is the verdict (round 17)
+      if (lead && (!x.chua || noLead) && (!v || v === lead.v || x.weak)) { v = lead.v; a = lead.a; lead.used = true; }   // «Không, giãn tuyển ảnh hưởng doanh thu»: the lead is the verdict
       else if (lead && v && v !== lead.v && !lead.used) contrast = lead;   // «Được, nhưng trần thì không»: the rest keep «Được»
-      let chua = x.chua;
+      let chua = x.chua && !noLead;
       for (let j = i + 1; j < cl.length; j++) {   // «việc hai thì chưa, để quý sau»: a verdict-only clause after says more, and wins when it ranks higher
         const y = cl[j]; if (y.why) { b = y.b; y.used = true; continue; }
         if (y.money) { b = y.b; y.used = true; break; }
@@ -1648,8 +1657,9 @@ function decisionPicks(q) {   // → {picks: [[ask, verdict, own words, broadcas
       continue;
     }
     if (x.all || x.rest) {
-      const v = x.v || (lead && lead.v) || last, a = lead ? lead.a : x.a; if (lead) lead.used = true; lead = null;
+      const v = x.v || (x.chua && x.rest && !x.all ? "" : (lead && lead.v) || last), a = lead ? lead.a : x.a; if (lead) lead.used = true; lead = null;
       if (WHOLE.test(fold(q.slice(x.a, x.b)))) whole = true;
+      if (!v && x.chua && x.rest) { any = true; prev = QUYET.map((_, k) => k).filter(k => !skip.has(k) && !namedAnywhere.has(k)).map(k => push(k, "", a, x.b, true, true)); continue; }   // «Logistics được, mấy việc kia chưa»: the rest asked back, never the sibling's yes (round 17)
       if (!v) { prev = null; continue; }
       const leftN = QUYET.length - skip.size - (x.rest ? [...namedAnywhere].filter(k => !skip.has(k)).length : 0);   // «Đồng ý 118,8 cho trần, ba việc còn lại đồng ý» (round 15)
       if (x.cnt && x.cnt !== leftN && x.cnt !== QUYET.length - skip.size && x.cnt !== QUYET.length) return {chooser: v, n: x.cnt};   // «Ok cả 4 trừ kho mới» is «hết trừ»
@@ -1694,6 +1704,7 @@ function cardOpen() { return $("a").classList.contains("dec") && isOpen($("panel
 function decPending() { return cardOpen() || (QUYET.length > 0 && Object.keys(DECIDED).length > 0 && QUYET.some((_, k) => !DECIDED[k])); }   // the card, or some asks recorded and some still open (round 16)
 function typedDecision(q, scope) {   // "Tôi đồng ý trần 177,5 tỷ", "Đồng ý việc hai, việc ba cần bàn thêm", "Bác việc hai": recorded like the card, never queued
   if (!QUYET.length) return false;
+  const q0 = q.trim().replace(/[.!]+$/, "");   // what the reader typed: the only words ever quoted as theirs (round 17)
   const corr = /^\s*(?:(?:à|ờ|ơ|ồ)\s+(?:không|nhầm)|à nhầm|nhầm|xin lỗi|thôi|không phải)\s*[,.!]\s*(?=\S)/i.test(q);
   q = q.replace(/^\s*(?:(?:à|ờ|ơ|ồ)\s+(?:không|nhầm)|à nhầm|nhầm|xin lỗi)\s*[,.!]\s*(?=\S)/i, "");   // «À không, …»: a self-correction marker, not a verdict
   // round 15: «Không ai phản đối thì coi như thông qua» is a yes on all (the «không» is about «ai»); «Không đồng ý việc nào ngoài
@@ -1734,7 +1745,15 @@ function typedDecision(q, scope) {   // "Tôi đồng ý trần 177,5 tỷ", "Đ
   }   // "vì sao không duyệt trần" asks   // a nod, or a "nếu …" what-if
   if (/\?\s*$/.test(q) || /\b(khong|chua|sao|the nao|bao nhieu|gi|nao|chu|duoc khong|phai khong|dung khong)\s*$/.test(plainQ.replace(/^(khong dong y|khong duyet|chua dong y|chua duyet|chua quyet)\s*/, "")) && !/(^| )(viec|y) (thu )?\S+ (thi |cung )*khong$/.test(plainQ) &&
     !NOALL.test(plainQ) && !(!/\?\s*$/.test(q) && /\b(con lai|kia|khac|thi|cung|deu) (khong|chua)$/.test(plainQ.replace(/[,;]/g, " ").replace(/\s+/g, " "))) && !/\b(a|o|u) (khong|nham) (chua|khong)$/.test(plainQ.replace(/[,;]/g, " ").replace(/\s+/g, " ")) && !/@ (thi |cung |deu |doi y |doi lai (la )?)*(khong|chua)( duoc| can)?$|\b(ca (hai|ba|bon|nam|\d)|tat ca|het) (deu )?(khong|chua)( duoc)?$/.test(clauseRefs(plainQ.replace(/[,;]/g, " ").replace(/\s+/g, " ")).s)) return false;   // «trần thì không», «việc hai chưa» answer   // "đồng ý không?" is a question
-  const P = decisionPicks(q, plainQ); if (!P) return false;
+  const P = decisionPicks(q, plainQ);
+  if (!P) { const R = clauseRefs(plainQ.replace(/[,;]/g, " ").replace(/\s+/g, " ")), k = R.asks[0];   // «Trần 180 thôi», «118,8 thôi»: a counter-figure with no verdict is kept with its words and asked back (round 17)
+    if (R.asks.length !== 1 || tapK >= 0 || DECIDED[k] || !/\d/.test(q) || !/\bthoi( nhe| nha| a)?$/.test(plainQ)) return false;
+    const box = document.createElement("div"), row = chips(VERDICTS.map(vv => [vv, e => { const b = e && e.currentTarget;
+      if (vv === "Đồng ý" && askDoubt(QUYET[k])) { row.replaceWith(capBox([k], q0)); return; }
+      decide(k, vv === "Đồng ý" ? COND : vv, q0); if (b) { b.disabled = true; b.textContent = "✓ " + vv; } }]));
+    park("Quyết định «" + QUYET[k] + "»: chưa cho ý kiến — anh chị nói: «" + q0 + "» (chưa xác nhận)", k);
+    box.appendChild(row); box.appendChild(sendBox());
+    answer("Việc " + NUMW[k] + " anh chị nói «" + q0 + "»; em ghi nguyên lời này cho " + OWNER + ". Anh chị đồng ý, không đồng ý hay cần bàn thêm ạ?", null, {src: "", extra: box}); return true; }
   if (corr && LAST_REC.length && !P.chooser && !P.picks.length && P.v && tapK < 0) {   // «À không, để bàn thêm» right after «Đồng ý hết»: the asks just recorded
     const ks = LAST_REC.slice(), box = document.createElement("div");
     box.appendChild(chips([["Đổi", e => { ks.forEach(k => decide(k, P.v, q.trim())); const b = e && e.currentTarget; if (b) b.textContent = "✓ Đổi"; box.querySelectorAll("button").forEach(x => { x.disabled = true; }); }], ["Giữ như cũ", () => box.querySelectorAll("button").forEach(x => { x.disabled = true; })]]));
@@ -1780,10 +1799,13 @@ function typedDecision(q, scope) {   // "Tôi đồng ý trần 177,5 tỷ", "Đ
   if (!picks.length && !unsure.length && !over.length) { const open = QUYET.map((_, k) => k).filter(k => !DECIDED[k]);
     if (open.length && open.length < QUYET.length) chooser(v, "Còn " + open.length + " việc; anh chị " + v.toLowerCase() + " những việc nào ạ?", open); else chooser(v); return true; }
   const askBack = () => { const box = document.createElement("div"); if (!unsure.length) return box;   // «Trần thì để anh …»: never recorded blank (round 12)
-    unsure.forEach(([k, , o, , ch]) => { box.appendChild(quiet("Việc " + NUM[k] + " anh chị nói «" + o + "»; " + (ch ? "ý anh chị là để bàn thêm, hay không đồng ý ạ?" : "anh chị đồng ý, không đồng ý hay cần bàn thêm ạ?")));
+    // round 17: the reader's words reach the owner even when no button is pressed; one line for asks that share the same «chưa» words
+    unsure.forEach(([k, , o]) => { if (!DECIDED[k]) park("Quyết định «" + QUYET[k] + "»: chưa cho ý kiến — anh chị nói: «" + String(o).trim().replace(/[.!]+$/, "") + "» (chưa xác nhận)", k); });
+    const groups = []; unsure.forEach(([k, , o, , ch]) => { const g = ch && groups.find(x => x.ch && x.o === o); if (g) g.ks.push(k); else groups.push({ks: [k], o, ch}); });
+    groups.forEach(({ks, o, ch}) => { const k = ks[0]; box.appendChild(quiet("Việc " + ks.map(j => NUM[j]).join(", ") + " anh chị nói «" + o + "»; " + (ch ? "ý anh chị là để bàn thêm, hay không đồng ý ạ?" : "anh chị đồng ý, không đồng ý hay cần bàn thêm ạ?")));
       const row = chips((ch ? ["Cần bàn thêm", "Không đồng ý"] : VERDICTS).map(vv => [vv, e => { const b = e && e.currentTarget;
         if (vv === "Đồng ý" && askDoubt(QUYET[k])) { row.replaceWith(capBox([k], o)); return; }
-        decide(k, vv, vv === "Đồng ý" ? "" : o); if (b) { b.disabled = true; b.textContent = "✓ " + vv; } }])); box.appendChild(row); });
+        ks.forEach(j => decide(j, vv, vv === "Đồng ý" ? "" : o)); if (b) { b.disabled = true; b.textContent = "✓ " + vv; } }])); box.appendChild(row); });
     return box; };
   const withBack = x => { const b = askBack(); if (over.length) b.appendChild(overBox()); if (!unsure.length && !over.length) return x; b.appendChild(x); return b; };
   if (!picks.length) { answer(over.length && !unsure.length ? "Em chưa đổi gì." : "Em chưa ghi được ý của anh chị.", null, {src: "", extra: withBack(sendBox())}); return true; }
@@ -1800,7 +1822,7 @@ function typedDecision(q, scope) {   // "Tôi đồng ý trần 177,5 tỷ", "Đ
   const held = picks.filter(([k, vv]) => vv === "Đồng ý" && askDoubt(QUYET[k]) && !oddOf(k).length).map(p => [p[0], why(p[0])]);
   held.forEach(([k]) => picks.splice(picks.findIndex(p => p[0] === k), 1));
   // round 16: the reader's words on a held yes reach the mail, unconfirmed, until a button is pressed («Duyệt trần 120 tỷ luôn, tôi chịu trách nhiệm»)
-  held.forEach(([k]) => { if (!DECIDED[k]) park("Quyết định «" + QUYET[k] + "»: chưa cho ý kiến — anh chị nói: «" + own(k).trim().replace(/[.!]+$/, "") + "» (chưa xác nhận)", k); });
+  held.forEach(([k]) => { if (!DECIDED[k]) { const w = own(k).trim().replace(/[.!]+$/, ""); park("Quyết định «" + QUYET[k] + "»: chưa cho ý kiến — " + (q0.includes(w) ? "anh chị nói: «" + w + "»" : "anh chị đồng ý chung (câu: «" + q0 + "»)") + " (chưa xác nhận)", k); } });   // never a rewritten «Đồng ý hết» as their words (round 17)
   LAST_REC = picks.map(p => p[0]).sort((a, b) => a - b);
   const withCap = x => { if (!held.length) return x; const b = document.createElement("div"); b.appendChild(capBox(held.map(h => h[0]), held[0][1])); b.appendChild(x); return b; };
   if (!picks.length && held.length) { answer("Em chưa ghi; anh chị chọn giúp em một bước nữa.", null, {src: "", extra: withBack(withCap(sendBox()))}); return true; }

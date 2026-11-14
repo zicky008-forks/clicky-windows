@@ -1357,3 +1357,54 @@ def test_round_sixteen_board_questions_are_answered_from_the_talk_and_worked_cap
     finally:
         browser.close()
         pw.stop()
+
+
+def test_round_seventeen_an_asks_own_verb_said_the_other_way_is_never_a_yes_and_the_mail_quotes_only_typed_words(report, drawn_report):
+    # round-17 panel: «Kho mới cứ làm tiếp», «khỏi hoãn», «làm luôn năm nay» were recorded as a yes on «Hoãn dự án kho mới»;
+    # «Đừng giãn tuyển» was a yes; «rồi mới tính kho mới» inherited the yes; «mấy việc kia chưa» took the sibling's yes; the mail
+    # quoted «Đồng ý hết» (a rewrite) as the reader's words; «Trần 180 thôi» reached the owner with no words at all
+    pw, browser, pages = _ghi_pages(report, drawn_report)
+    try:
+        A, B = pages["A"], pages["B"]
+        ghi = lambda pg, q: pg.evaluate("q => window.__clickyGhi(q, null)", q)   # noqa: E731
+        hoi = lambda pg, q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        thu = lambda pg: pg.evaluate("() => window.__clickyThu()")   # noqa: E731
+        fresh = lambda pg: (pg.evaluate("() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} }"), pg.reload(), pg.wait_for_timeout(700))   # noqa: E731
+        # metamorphic: the stop ask «Hoãn dự án kho mới» said the other way is never a yes, alone or beside a blanket yes
+        for neg in ("Kho mới cứ làm tiếp", "Kho mới khỏi hoãn", "Kho mới thì khỏi hoãn", "Kho mới thì làm luôn năm nay",
+                    "Kho mới cứ triển khai ngay", "Đừng hoãn kho mới", "Kho mới thì khó lắm", "Riêng kho mới thì đội tôi không chịu được"):
+            for q in (neg, neg + ", mấy việc kia duyệt", neg + ", còn lại ok", "Đồng ý hết, " + neg[0].lower() + neg[1:]):
+                r = ghi(B, q)
+                assert r["rec"].get("3", ["?"])[0] != "Đồng ý", (q, r["rec"])
+        for q in ("Đừng giãn tuyển", "Giãn tuyển thì khó"):
+            assert ghi(A, q)["rec"]["1"][0] == "Không đồng ý", q
+        # the ask's own verb, or naming it by number, is still a yes
+        for q in ("Hoãn kho mới thì được", "Việc bốn thì cứ làm"):
+            assert ghi(B, q)["rec"]["3"][0] == "Đồng ý", q
+        assert ghi(A, "Giãn tuyển cứ làm")["rec"]["1"][0] == "Đồng ý"
+        # «rồi mới tính», «để anh Tuấn tính thêm», «cần thêm số liệu», «xem sau»: put off, never the sibling's yes
+        assert {k: v[0] for k, v in ghi(B, "Đồng ý Logistics rồi mới tính kho mới")["rec"].items()} == {"1": "Đồng ý", "3": "Cần bàn thêm"}
+        for q in ("Trần đồng ý, giãn tuyển để anh Tuấn tính thêm đã", "Giãn tuyển cần thêm số liệu, trần thì được", "Giãn tuyển xem sau, trần ok"):
+            assert {k: v[0] for k, v in ghi(A, q)["rec"].items()} == {"0": "Đồng ý", "1": "Cần bàn thêm"}, q
+        # «S được, C chưa»: the rest are asked back in one line, never the sibling's yes and never a no
+        r = ghi(B, "Logistics được, mấy việc kia chưa")
+        assert {k: v[0] for k, v in r["rec"].items()} == {"1": "Đồng ý"} and "Việc một, ba, bốn anh chị nói «mấy việc kia chưa»" in r["a"], r
+        r = ghi(B, "Kho mới chưa được")
+        assert r["rec"] == {} and "ý anh chị là để bàn thêm, hay không đồng ý ạ?" in r["a"], r
+        # the mail quotes only what the reader typed: never the rewritten «Đồng ý hết»
+        fresh(B)
+        hoi(B, "Nếu không ai có ý kiến gì thì coi như thông qua")
+        mail = thu(B)
+        assert "anh chị nói: «Đồng ý hết»" not in mail and "anh chị đồng ý chung (câu: «Nếu không ai có ý kiến gì thì coi như thông qua»)" in mail, mail
+        # an ask-back keeps the reader's words until a button replaces them
+        fresh(B)
+        hoi(B, "Logistics được, mấy việc kia chưa")
+        mail = thu(B)
+        assert mail.count("chưa cho ý kiến — anh chị nói: «mấy việc kia chưa» (chưa xác nhận)") == 3, mail
+        fresh(A)
+        r = hoi(A, "Trần 180 thôi")
+        assert r.startswith("Việc một anh chị nói «Trần 180 thôi»"), r
+        assert "chưa cho ý kiến — anh chị nói: «Trần 180 thôi» (chưa xác nhận)" in thu(A)
+    finally:
+        browser.close()
+        pw.stop()
