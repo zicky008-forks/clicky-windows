@@ -1276,12 +1276,12 @@ function askDoubt(t) {   // an ask that names a figure the owner is still checki
   return it.quyet === "báo cáo sai" ? "mức " + tok + " " + OWNER + " đã xác nhận cần sửa" : "mức " + tok + " " + OWNER + " đang kiểm lại";
 }
 const DECIDED = {};   // ask index → {v, words, prev}: what the reader chose, by button or typed; the card and the mail read it
-const VERDICTS = ["Đồng ý", "Không đồng ý", "Cần bàn thêm"];
-function decide(k, v, said) {   // one line per ask in the mail: a changed mind replaces the line and says what it was
-  const was = DECIDED[k], prev = was && was.v !== v ? was.v : was && was.prev;
-  DECIDED[k] = {v, words: said || "", prev: prev || ""};
+const VERDICTS = ["Đồng ý", "Không đồng ý", "Cần bàn thêm"], COND = "Đồng ý có điều kiện";
+function decide(k, v, said, note) {   // one line per ask in the mail: a changed mind replaces the line and says what it was
+  const was = DECIDED[k], prev = was && !was.pending && was.v !== v ? was.v : was && was.prev;   // an unconfirmed record is never "đã đổi từ"
+  DECIDED[k] = {v, words: said || "", prev: prev || "", pending: !!note};
   save(load().filter(x => x.sent || x.k !== k));
-  park("Quyết định «" + QUYET[k] + "»: " + v + (said ? " — anh chị ghi: «" + said + "»" : "") + (prev ? " (đã đổi từ " + prev + ")" : ""), k);
+  park("Quyết định «" + QUYET[k] + "»: " + v + (said ? " — anh chị ghi: «" + said + "»" : "") + (note ? " (" + note + ")" : "") + (prev ? " (đã đổi từ " + prev + ")" : ""), k);
 }
 function decisionCard() {   // the asks, word for word as approved; a choice reaches the owner only when the reader sends it
   if (!QUYET.length) return;
@@ -1300,7 +1300,7 @@ function decisionCard() {   // the asks, word for word as approved; a choice rea
       tail.replaceChildren();
       const d = DECIDED[k];
       if (!d) { tail.appendChild(chips(VERDICTS.map(v => [v, () => { decide(k, v); draw(); sendRow(); }]))); return; }
-      tail.appendChild(quiet("Em đã ghi «" + d.v + "»" + (d.words ? ": «" + d.words + "»" : "") + "."));
+      tail.appendChild(quiet("Em đã ghi «" + d.v + "»" + (d.words ? ": «" + d.words + "»" : "") + (d.pending ? " (chưa xác nhận)" : "") + "."));
       tail.appendChild(chips([["Đổi", () => { tail.replaceChildren(chips(VERDICTS.map(v => [v, () => { decide(k, v); draw(); sendRow(); }]))); }]]));
     };
     rows.push(draw);
@@ -1314,8 +1314,8 @@ function decisionCard() {   // the asks, word for word as approved; a choice rea
 }
 const NTH_DEC = {mot: 0, "1": 0, nhat: 0, dau: 0, "dau tien": 0, hai: 1, "2": 1, ba: 2, "3": 2, bon: 3, tu: 3, "4": 3, nam: 4, "5": 4, sau: 5, "6": 5, bay: 6, "7": 6, tam: 7, "8": 7};
 const COUNT_DEC = {hai: 2, ba: 3, bon: 4, nam: 5};
-const DEC_VERB = /\b(khong dong y|khong duyet|chua dong y|tu choi|bac|can ban them|de ban them|ban them|de sau|tinh sau|treo lai|chua quyet|chua duyet|ok duyet|ok dong y|dong y|duyet|chap thuan|thong qua)\b/;
-function verdictOf(w) { return /^(khong dong y|khong duyet|tu choi|bac)/.test(w) ? "Không đồng ý" : /^(chua|can ban|de ban|ban them|de sau|tinh sau|treo lai)/.test(w) ? "Cần bàn thêm" : "Đồng ý"; }
+const DEC_VERB = /\b(khong dong y|khong duyet|khong duoc|khong chap thuan|chua dong y|tu choi|bac|can ban them|de ban them|ban them|de sau|tinh sau|treo lai|tam treo|tam hoan|chua quyet|chua duyet|ok duyet|ok dong y|ok het|ok|dong y|duyet|chap thuan|thong qua|thong nhat|nhat tri|khong phan doi|cu lam nhu de xuat|lam theo de xuat|theo de xuat|chot|trien khai|lam di|duoc)\b/;
+function verdictOf(w) { return /^(khong dong y|khong duyet|khong duoc|khong chap thuan|tu choi|bac)/.test(w) ? "Không đồng ý" : /^(chua|can ban|de ban|ban them|de sau|tinh sau|treo lai|tam treo|tam hoan)/.test(w) ? "Cần bàn thêm" : "Đồng ý"; }
 const NTH_WORD = "(mot|hai|ba|bon|tu|nam|sau|bay|tam|nhat|dau tien|dau|\\d)";
 function oddFor(q, t, others) {   // what the reader said about an ask that the ask does not print: a figure, a time, a condition (with its unit, as said)
   const ft = fold(t), out = [], fo = (others || []).map(fold);   // others: the other asks picked in the same sentence
@@ -1338,31 +1338,44 @@ function oddFor(q, t, others) {   // what the reader said about an ask that the 
   if ((but && !butFig) || (only && !onlyFig) || (/ phai /.test(fq) && !/ phai /.test(" " + ft + " "))) out.push("điều kiện");
   return [...new Set(out)];
 }
-function chooser(v, text) {   // which ask(s): buttons, nothing recorded until one is pressed
-  answer(text || "Anh chị " + (v === "Đồng ý" ? "đồng ý" : v === "Không đồng ý" ? "không đồng ý" : "muốn bàn thêm") + " việc nào ạ?", null, {src: "", extra: chips(QUYET.map((t, k) => [shortAsk(t), () => {
-    decide(k, v); answer("Em đã ghi «" + v + "» cho việc: «" + t.replace(/\.$/, "") + "».", null, {src: "", extra: sendBox()}); }]))});
+function chooser(v, text) {   // which ask(s): each press records one, the buttons stay for the next (round 10: "cả hai" took one pick)
+  const box = document.createElement("div"), got = document.createElement("div"); let sent = false;
+  box.appendChild(chips(QUYET.map((t, k) => [shortAsk(t), e => { const b = e && e.currentTarget;
+    decide(k, v); if (b) { b.disabled = true; b.textContent = "✓ " + shortAsk(t); }
+    got.textContent = "Em đã ghi «" + v + "» cho: " + QUYET.map((x, i) => DECIDED[i] && DECIDED[i].v === v && !DECIDED[i].pending ? "việc " + ["một", "hai", "ba", "bốn", "năm", "sáu"][i] : "").filter(Boolean).join(", ") + ".";
+    if (!sent) { sent = true; box.appendChild(got); box.appendChild(sendBox()); } }])));
+  answer(text || "Anh chị " + (v === "Đồng ý" ? "đồng ý" : v === "Không đồng ý" ? "không đồng ý" : "muốn bàn thêm") + " việc nào ạ? Bấm từng việc.", null, {src: "", extra: box});
 }
 function typedDecision(q, scope) {   // "Tôi đồng ý trần 177,5 tỷ", "Đồng ý việc hai, việc ba cần bàn thêm", "Bác việc hai": recorded like the card, never queued
   if (!QUYET.length) return false;
-  const plainQ = fold(q).replace(/[.!?…]+/g, " ").replace(/\s+/g, " ").trim();
+  const plainQ = fold(q).replace(/[.!?…]+/g, " ").replace(/\s+/g, " ").trim()   // "…, việc hai thì không": a verdict, not a question
+    .replace(new RegExp("\\b(viec|y) (thu )?" + NTH_WORD + " (thi |cung |thi cung )?khong$"), (a, b, c, n) => b + " " + n + " khong dong y");
   const m = (" " + plainQ.replace(/[,;]/g, " ").replace(/\s+/g, " ") + " ").match(/^ (?:(?:toi|anh|chi|em|chung toi|ok|vay|thoi|a|u) )*/);
   const lead = (" " + plainQ.replace(/[,;]/g, " ").replace(/\s+/g, " ") + " ").slice(m ? m[0].length : 1);
   const named = new RegExp("^(viec|y|de nghi) (thu )?" + NTH_WORD + "\\b").test(lead) && DEC_VERB.test(lead);   // "việc hai để sau", "việc bốn để bàn thêm"
   if (!named && (!DEC_VERB.test(lead.slice(0, 18)) || lead.search(DEC_VERB) !== 0)) return false;
+  if (/\b(cam on|duoc roi|ok roi|chot lai)\b/.test(lead)) return false;   // "thôi được rồi, cảm ơn em" is a nod, not a decision
   if (/\?\s*$/.test(q) || /\b(khong|chua|sao|the nao|bao nhieu|gi|nao|chu|duoc khong)\s*$/.test(plainQ.replace(/^(khong dong y|khong duyet|chua dong y|chua duyet|chua quyet)\s*/, ""))) return false;   // "đồng ý không?" is a question
   // clauses: "đồng ý việc một, việc hai cần bàn thêm": each its own verdict, a clause with none takes the one before
   let last = verdictOf((lead.match(DEC_VERB) || [""])[0]);
   const picks = [], skip = new Set();
   // "đồng ý hết trừ việc bốn": that ask is left out, never picked
-  const pickQ = plainQ.replace(new RegExp("\\b(?:tru|ngoai tru|khong ke|rieng) (?:viec )?(?:thu )?" + NTH_WORD + "\\b", "g"), (all, n) => { skip.add(NTH_DEC[n]); return " "; });
-  for (const c of pickQ.split(/[,;]| nhung /)) {
+  // "trừ việc một và việc bốn": every ask listed is left out; "hết, riêng việc một để bàn thêm": those asks take that verdict (round-10 CFO blocker)
+  let pickQ = plainQ; const extra = [];
+  { const ex = plainQ.match(/\b(tru|ngoai tru|khong ke|rieng)\b/);
+    if (ex) { const tail = plainQ.slice(ex.index + ex[0].length), vm = tail.match(DEC_VERB), list = vm ? tail.slice(0, vm.index) : tail;
+      const ns = [...list.matchAll(new RegExp("\\b" + NTH_WORD + "\\b", "g"))].map(x => NTH_DEC[x[1]]).filter(n => n !== undefined);
+      if (ns.length) { pickQ = plainQ.slice(0, ex.index); ns.forEach(n => vm ? extra.push([n, verdictOf(vm[0])]) : skip.add(n)); } } }
+  const cls = pickQ.split(/[,;]| nhung /), raw = q.split(/[,;]|\s+nhưng\s+/i), rawOf = i => raw.length === cls.length ? raw[i] : cls[i];
+  for (const [ci, c] of cls.entries()) {
     const vm = c.match(DEC_VERB); if (vm) last = verdictOf(vm[0]);
     const ns = [...c.matchAll(/\b(?:viec|y|de nghi|muc) (?:thu )?(mot|hai|ba|bon|tu|nam|sau|bay|tam|nhat|dau tien|dau|\d)\b/g)].map(x => NTH_DEC[x[1]]);
     const also = [...c.matchAll(/\b(?:va|voi) (?:thu )?(mot|hai|ba|bon|tu|nam|sau|bay|tam|\d)\b/g)].map(x => NTH_DEC[x[1]]);   // "việc hai và bốn"
     for (const n of [...new Set(ns.concat(ns.length ? also : []))]) {
       if (n === undefined || n >= QUYET.length) { chooser(last, "Báo cáo có " + QUYET.length + " việc; anh chị " + last.toLowerCase() + " việc nào ạ?"); return true; }
-      picks.push([n, last]);
+      picks.push([n, last, rawOf(ci)]);
     }
+    if (!ns.length && picks.length) { const pc = picks[picks.length - 1][2]; picks.filter(x => x[2] === pc).forEach(x => { x[2] = pc + " nhưng " + rawOf(ci).trim(); }); }   // "việc một nhưng không quá 180 tỷ"
   }
   { const seen = new Set(); for (let i = picks.length - 1; i >= 0; i--) { if (seen.has(picks[i][0])) picks.splice(i, 1); else seen.add(picks[i][0]); } }
   const v = picks.length ? picks[0][1] : last;
@@ -1372,8 +1385,9 @@ function typedDecision(q, scope) {   // "Tôi đồng ý trần 177,5 tỷ", "Đ
       QUYET.forEach((_, k) => { if (!skip.has(k)) picks.push([k, v]); }); }
     else if (all) QUYET.forEach((_, k) => { if (!skip.has(k)) picks.push([k, v]); });
     else {
-      const at = scope && anchor && anchor.closest && anchor.closest("[data-quyet]");
+      const at = scope && anchor && anchor.closest && anchor.closest("[data-quyet]"), tk = !at && scope ? tappedAsk(scope) : -1;
       if (at) picks.push([Number(at.getAttribute("data-quyet")), v]);
+      else if (tk >= 0) picks.push([tk, v]);
       else {
         const rest = lead.replace(DEC_VERB, " ");
         const qw = new Set(words(rest).filter(w => w.length > 1 && !ECHO_NOT.has(w)));
@@ -1383,21 +1397,24 @@ function typedDecision(q, scope) {   // "Tôi đồng ý trần 177,5 tỷ", "Đ
       }
     }
   }
+  if (extra.length) { const ex = new Set(extra.map(e => e[0])); for (let i = picks.length - 1; i >= 0; i--) if (ex.has(picks[i][0])) picks.splice(i, 1); picks.push(...extra); }
   if (!picks.length) { chooser(v); return true; }
   // a figure, a time or a condition the ask does not have ("đồng ý trần 118,8", "duyệt cả hai nhưng phải báo cáo lại tháng sau"):
   // never recorded as agreeing; until the reader chooses, the mail says what was said, unconfirmed (round-9 panel)
-  const oddOf = k => oddFor(q, QUYET[k], picks.filter(p => p[0] !== k).map(p => QUYET[p[0]]));
+  // "duyệt việc một, việc hai để quý sau tính": the clause that names an ask is what is said about it (round 10)
+  const own = k => { const p = picks.find(x => x[0] === k); return p && p[2] && picks.filter(x => x[2]).length > 1 && new Set(picks.map(x => x[2])).size > 1 ? p[2] : q; };
+  const oddOf = k => oddFor(own(k), QUYET[k], picks.filter(p => p[0] !== k).map(p => QUYET[p[0]]));
   const odd = picks.filter(([k, vv]) => vv === "Đồng ý" && oddOf(k).length);
   if (odd.length) {
     const said = TYPED || q, what = [...new Set(odd.flatMap(([k]) => oddOf(k)))];
     const clean = picks.filter(p => !odd.includes(p)); clean.forEach(([k, vv]) => decide(k, vv));
     const done = clean.length ? "Em đã ghi " + clean.map(([k, vv]) => "việc " + ["một", "hai", "ba", "bốn", "năm"][k] + " «" + vv + "»").join("; ") + ". " : "";
-    odd.forEach(([k]) => decide(k, "Cần bàn thêm", said + " (chưa xác nhận)"));
+    odd.forEach(([k]) => decide(k, COND, said, "chưa xác nhận"));
     const names = odd.map(([k]) => "«" + QUYET[k].replace(/\.$/, "") + "»").join(", ");
-    const settle = vv => { odd.forEach(([k]) => decide(k, vv, vv === "Đồng ý" ? "" : said)); answer(vv === "Đồng ý" ? "Em đã ghi «Đồng ý» như đề nghị cho: " + names + "." : "Em đã ghi nguyên văn ý kiến của anh chị cho: " + names + ".", null, {src: "", extra: sendBox()}); };
+    const settle = vv => { odd.forEach(([k]) => decide(k, vv, vv === "Đồng ý" ? "" : said)); answer(vv === "Đồng ý" ? "Em đã ghi «Đồng ý» như đề nghị cho: " + names + "." : "Em đã ghi «" + COND + "» kèm nguyên văn ý kiến của anh chị cho: " + names + ".", null, {src: "", extra: sendBox()}); };
     answer(done + (clean.length ? "Còn đề nghị " : "Đề nghị là ") + names + "; anh chị " + (what.filter(x => x !== "điều kiện").length ? "nói " + what.filter(x => x !== "điều kiện").join(", ") + (what.includes("điều kiện") ? " và có thêm điều kiện" : "") : "có thêm điều kiện") +
       ". Em ghi ý kiến của anh chị nguyên văn để " + OWNER + " xử lý nhé?", null,
-      {src: "", extra: chips([["Ghi nguyên văn", () => settle("Cần bàn thêm")], ["Đồng ý như đề nghị", () => settle("Đồng ý")]])});
+      {src: "", extra: chips([["Ghi nguyên văn", () => settle(COND)], ["Đồng ý như đề nghị", () => settle("Đồng ý")]])});
     return true;
   }
   const left = [...skip].filter(k => k < QUYET.length);
@@ -1411,6 +1428,11 @@ function typedDecision(q, scope) {   // "Tôi đồng ý trần 177,5 tỷ", "Đ
     (notes.length ? " Lưu ý: " + notes.join("; ") + "." : ""), null, {src: "", extra: sendBox()});
   return true;
 }
+function tappedAsk(sc) {   // the ask a tapped place states ("Logistics phải giải trình…" in the report's own list), else -1 (round 10)
+  const t = sc.card ? sc.card.text : sc.el ? cellText(sc.el) : ""; if (!t) return -1;
+  const tw = new Set(words(t)), hit = QUYET.map((x, k) => { const w = words(x).filter(y => y.length > 1 && !ECHO_NOT.has(y)); return {k, r: w.length ? w.filter(y => tw.has(y)).length / w.length : 0}; }).filter(o => o.r >= 0.7);
+  return hit.length === 1 ? hit[0].k : -1;
+}
 function shortAsk(t) { const s = t.replace(/\.$/, ""); return s.length > 48 ? s.slice(0, 46).replace(/\s+\S*$/, "") + "…" : s; }
 function sendBox() { const sb = document.createElement("div");
   sb.appendChild(quiet("Bấm «" + SEND + "» để báo " + OWNER_HE + "."));
@@ -1421,7 +1443,7 @@ function factMatch(q, scope, weak) {   // weak: the page found nothing better, s
 }
 function answerFact(f) {
   answer(String(f.a).replace(/^Tức là\s+(.)/, (m, c) => c.toUpperCase()), f.chi ? el(f.chi) : null, {clip: f.audio ? f : null,
-    src: f.k === "t" ? "Em tính từ các số trên báo cáo «" + TITLE + "»; biên bản kiểm lại công thức này" : (DRAFT ? "Theo kịch bản nháp của " + OWNER + " (chưa duyệt)" : "Theo lời " + OWNER + " đã duyệt cho bài trình bày")});
+    src: f.k === "t" ? "Em tính từ các số trên báo cáo «" + TITLE + "»" : (DRAFT ? "Theo kịch bản nháp của " + OWNER + " (chưa duyệt)" : "Theo lời " + OWNER + " đã duyệt cho bài trình bày")});
 }
 function bankMatch(Q, scope) {
   if (!Q.w0.length && !scope) return null; const sw = scope ? scope.words : [], have = new Set(Q.w0.concat(sw));
@@ -1467,7 +1489,15 @@ function diffCols(Q, m) {   // [plan, actual] when the table has exactly two mon
   const v = valueCol(Q, m); if (v < 0) return null;
   const u = colUnit(m, v), num = i => m.rows.some(r => !r.total && r.cells[i] && isNum(cellText(r.cells[i])));
   const others = m.head.map((h, i) => i).filter(i => i >= m.lc && i !== v && num(i) && colUnit(m, i) !== "%" && colUnit(m, i) === u);
-  return others.length === 1 ? [others[0], v] : null;
+  if (others.length !== 1) return null;
+  // "tăng bao nhiêu so với AOP gốc": the column after "so với" is the base, never the target (round-10 Owner blocker)
+  const f = " " + fold(Q.q || "") + " ", at = f.indexOf(" so voi ");
+  if (at >= 0) {
+    const after = f.slice(at + 7), names = c => [colName(m, c), ...((D.ten_ke_hoach || {})[colName(m, c)] || [])].map(x => " " + fold(x) + " ").filter(x => x.trim());
+    const hit = c => names(c).some(x => after.includes(x));
+    if (hit(v) && !hit(others[0])) return [v, others[0]];
+  }
+  return [others[0], v];
 }
 function diffOf(m, row, df, pct) {   // actual − plan of one row (or its % change), as a scaled integer, from the figures as written
   const p = row.cells[df[0]], a = row.cells[df[1]]; if (!p || !a || !isNum(cellText(p)) || !isNum(cellText(a))) return null;
@@ -1858,7 +1888,7 @@ function sessionFig(q, late) {   // "5,0 tỷ ở đâu ra?", "3,9 tỷ à?", "3
   const t = !late && FACTS.find(x => x.k === "t" && x.tok && same(x.tok));   // a figure the talk worked out, never one it is worked out from
   if (t && (prov || !/ (la gi|la sao) *$/.test(f))) {
     answer((prov ? tok + " là số em tính, báo cáo chưa ghi số này. " : "") + String(t.a).replace(/^Tức là\s+(.)/, (m, c) => c.toUpperCase()), t.chi ? el(t.chi) : null,
-      {src: "Em tính từ các số trên báo cáo «" + TITLE + "»; biên bản kiểm lại công thức này"}); return true; }
+      {src: "Em tính từ các số trên báo cáo «" + TITLE + "»"}); return true; }
   if (!late) return false;   // a figure worked out in an answer: only once no route of the page answers it
   const s = [...SAID].reverse().find(x => same(x.tok));
   if (!s) return false;
@@ -1914,7 +1944,7 @@ function answer(text, target, o) {
   { const n = doubtNote(text); if (n) text = text + (o.html ? esc(n) : n); }
   { const t = String(text).replace(/<[^>]*>/g, ""); LAST_ANS = t;
     for (const m of t.matchAll(/(\d[\d.,]*\d|\d)\s*(tỷ|triệu|%)?\s*\(em tính: ([^)]+)\)/g))
-      SAID.push({tok: m[1], u: m[2] || "", how: m[3], line: (t.split(/(?<=[.;])\s+/).find(x => x.includes(m[0])) || t).trim()});
+      SAID.push({tok: m[1], u: m[2] || "", how: m[3], line: ((t.split(/(?<=[.;])\s+|(?<=[:,])\s+(?![^(]*\))/).find(x => x.includes(m[0])) || t).trim().replace(/^./, c => c.toUpperCase()))});   // the clause that says it
     for (const it of (D.nghi || [])) { const w = it.tinh && t.includes(it.tinh) && tinhFig(it.tinh);
       if (w) SAID.push({tok: w.tok, u: w.u, how: w.how, line: w.tok + (w.u === "%" ? "%" : w.u ? " " + w.u : "") + " là số em tính để " + OWNER + " kiểm lại " +
         ((it.so || [])[0] ? "số " + it.so[0] : "câu đang làm mờ") + ": " + it.tinh.charAt(0).toLowerCase() + it.tinh.slice(1) + ".", full: true}); } }
@@ -2172,8 +2202,8 @@ function saveAsk(q, scope) {   // "giãn 30 vị trí có đủ bù 8,9 tỷ kh�
   if (scope && !here) return false;   // a click elsewhere: that place answers
   const f = " " + fold(q) + " ";
   const near = !!est && (LAST_ANS.includes(est.tok + " tỷ") || lastSaid.includes(est.tok + " tỷ") || LAST_ANS.includes(est.tok + " triệu") || lastSaid.includes(est.tok + " triệu"));
-  const short = !!est && (/ (con thieu|thieu bao nhieu|con lai bao nhieu|phan con lai) /.test(f) || (near && /^ *(vay )?(co )?du (bu )?(khong|chua)( a| em)? *$/.test(f.replace(/[?!.]/g, " "))));   // "còn thiếu bao nhiêu?", "đủ không?" right after the bound
-  if (!short && !/ (du bu|bu du|bu duoc|tiet kiem|giam duoc|bot duoc|du de|du (giam|cat)|du khong) /.test(f)) return false;
+  const short = !!est && (/ (con thieu|thieu bao nhieu|con lai bao nhieu|phan con lai|con lai (lay o dau|lay dau|thi sao|ai lo|bu the nao|bu sao|o dau ra|tinh sao)) /.test(f) || (near && /^ *(vay )?(co )?du (bu )?(khong|chua)( a| em)? *$/.test(f.replace(/[?!.]/g, " "))));   // "còn thiếu bao nhiêu?", "đủ không?" right after the bound
+  if (!short && !/ (du bu|bu du|bu duoc|tiet kiem|giam duoc|bot duoc|du de|du (giam|cat)|du khong|la du|du ve|du roi) /.test(f)) return false;
   const qw = new Set(words(q).filter(w => w.length > 1 && !ECHO_NOT.has(w)));
   const ask = QUYET.map(t => ({t, n: words(t).filter(w => qw.has(w)).length})).filter(x => x.n >= 2 && !/\d[\d.,]*\s*(tỷ|triệu|tr|đồng)/i.test(x.t)).sort((a, b) => b.n - a.n)[0];
   // the talk said a bound worked out with its formula (the owner's line, on): answer from it, never "không nói được"
@@ -2188,8 +2218,26 @@ function saveAsk(q, scope) {   // "giãn 30 vị trí có đủ bù 8,9 tỷ kh�
     }
     const part = / (nua nam|quy \d|thang|tu quy) /.test(f) ? " Em chỉ tính trọn năm; báo cáo chưa ghi số tháng giãn." : "";
     const open = rest.startsWith(" Phần còn thiếu");
+    // the verdict first ("Chưa đủ"), then the working; never a 500-letter paragraph (round-10 panel, all five)
+    const how = (String(est.a).match(/báo cáo: (.+?) = /) || [])[1];
+    if (need && got && how && / (du|bu|thieu|con lai|con) /.test(f)) {
+      const D2 = Math.max(need.d, got.d), x = need.n * 10 ** (D2 - need.d) - got.n * 10 ** (D2 - got.d);
+      const gap = "khoảng " + withUnit(vn(x, D2), cf.u) + " (em tính: " + cf.v + " − " + est.tok + ")";
+      const t = x > 0 && !/ du /.test(f) && / (con lai|con thieu) /.test(f) ? "Phần còn thiếu " + gap + " so với " + withUnit(cf.v, cf.u) + " cần giảm; giãn tuyển trọn năm chỉ khoảng " + withUnit(est.tok, cf.u) + ". Báo cáo chưa nêu cách bù phần này."
+        : x > 0 ? "Chưa đủ: giãn trọn năm cũng chỉ tiết kiệm khoảng " + withUnit(est.tok, cf.u) + " (em tính: " + how + "), còn thiếu " + gap +
+          " so với " + withUnit(cf.v, cf.u) + " cần giảm. Báo cáo chưa ghi số tiết kiệm này và chưa nêu cách bù phần còn thiếu."
+        : "Đủ: giãn trọn năm tiết kiệm khoảng " + withUnit(est.tok, cf.u) + " (em tính: " + how + "), bằng hoặc hơn " + withUnit(cf.v, cf.u) + " cần giảm.";
+      answer(t + part, est.chi ? el(est.chi) : null, x > 0 ? {cls: "park", extra: parkNote(q, "Em ghi lại cách bù phần còn thiếu để " + OWNER + " trả lời."), src: "Em tính từ các số trên báo cáo «" + TITLE + "»"}
+        : {src: "Em tính từ các số trên báo cáo «" + TITLE + "»"});
+      return true;
+    }
+    if (how && / (tiet kiem|giam duoc|bot duoc) /.test(f)) {
+      answer("Khoảng " + withUnit(est.tok, cf ? cf.u : "tỷ") + " nếu giãn trọn năm (em tính: " + how + "); báo cáo chưa ghi số này." + (cf ? " Mức đó " + (need && got && got.n * 10 ** (Math.max(need.d, got.d) - got.d) * 2 < need.n * 10 ** (Math.max(need.d, got.d) - need.d) ? "chưa bằng một nửa" : "chưa bằng") + " " + withUnit(cf.v, cf.u) + " cần giảm." : "") + part,
+        est.chi ? el(est.chi) : null, {src: "Em tính từ các số trên báo cáo «" + TITLE + "»"});
+      return true;
+    }
     answer("Báo cáo chưa ghi số này. " + est.a + part + rest, null,
-      open ? {cls: "park", extra: parkNote(q, "Cách bù phần còn lại là việc của " + OWNER_HE + "."), src: "Em tính từ các số trên báo cáo «" + TITLE + "»"}
+      open ? {cls: "park", extra: parkNote(q, "Báo cáo chưa nêu cách bù phần còn lại; em ghi lại để " + OWNER + " trả lời."), src: "Em tính từ các số trên báo cáo «" + TITLE + "»"}
            : {src: "Em tính từ các số trên báo cáo «" + TITLE + "»"});
     return true;
   }
@@ -2631,7 +2679,7 @@ function ask(q, scope) {
   if (r.kind === "rowchange") {
     const A = colName(r.m, r.df[1]), P = colName(r.m, r.df[0]), a = cellText(r.d.a), p = cellText(r.d.p), u = uOf(r.m, r.row, r.df[1]);
     const neg = r.d.k < 0, val = r.d.s.replace(/^-/, "");
-    answer(rowName(r.row) + (neg ? " giảm " : " tăng ") + (r.pct ? val + "%" : withUnit(val, u)) + " từ " + P + " lên " + A + " (em tính: " +
+    answer(rowName(r.row) + (neg ? " giảm " : " tăng ") + (r.pct ? val + "%" : withUnit(val, u)) + " từ " + P + (neg ? " xuống " : " lên ") + A + " (em tính: " +
       (r.pct ? "(" + a + " − " + p + ") ÷ " + p + " × 100" : a + " − " + p) + "); báo cáo không ghi sẵn số này.", r.d.a,
       {src: "Em tính từ hai số trên báo cáo «" + TITLE + "»"});
     return;

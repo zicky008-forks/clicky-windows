@@ -597,8 +597,10 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         if con_doubt and faster and table_says:
             # the printed rate disagrees with the table: say only what holds under both, the owner picks the rate
             # revenue's half of the sentence is not in doubt: keep its figure, frame the table's total
-            lines.append(("Vì sao cần quyết", Line(f"Vì doanh thu chỉ tăng {rev.tok}%, chậm hơn chi phí.",
-                                            t.total.id, vai="mau_thuan", xac_nhan=[rev.tok])))
+            money = f"Vì chi phí tăng thêm {tdelta[0]} {t.unit or ''}".rstrip()
+            lines.append(("Vì sao cần quyết", Line(f"{money}, trong khi doanh thu chỉ tăng {rev.tok}%.",
+                                            t.total.id, so_tinh=[f"{tdelta[0]} = {tdelta[2]}"] if tdelta[2] else [],
+                                            vai="mau_thuan", xac_nhan=[rev.tok])))
             lines.append(("Vì sao cần quyết", Line(printed, cid(it), bat=False, vai="mau_thuan")))
             con_doubt["cau"] = [lines[-1][1].noi]
         else:
@@ -733,6 +735,10 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             lines.append(("Đề nghị", Line(fl["de_xuat"][0], cid(note), so_tinh=fl["de_xuat"][1],
                                           xac_nhan=fl["de_xuat"][2], vai="uoc_tiet_kiem")))
             fl.setdefault("cau", []).append(fl["de_xuat"][0])
+            if len(fl["de_xuat"]) > 3 and fl["de_xuat"][3]:
+                lines.append(("Đề nghị", Line(fl["de_xuat"][3][0], cid(note), so_tinh=[fl["de_xuat"][3][1]],
+                                              xac_nhan=fl["de_xuat"][2], vai="con_thieu")))
+                fl["cau"].append(fl["de_xuat"][3][0])
 
     # B10: close on every decision asked at the start, then stop for questions
     if ask_list and many:                          # just listed one by one: the card after the talk holds them
@@ -959,7 +965,12 @@ def preflight(items: list, places: dict, t: Table, en: bool, note, cut, owner: s
                                            f"{m.group(1)} {m.group(2)} cũng chỉ tiết kiệm "
                                            f"khoảng {got[0]} {t.unit or ''}, {enough} mức {cut.figs[0].tok} "
                                            f"{cut.figs[0].unit or ''} cần giảm.".replace("  ", " ").replace(" ,", ","),
-                                           [f"{got[0]} = {expr}"], [cut.figs[0].tok])   # the cut is printed at its own place
+                                           [f"{got[0]} = {expr}"], [cut.figs[0].tok], None)   # the cut is printed at its own place
+                        if ratio < 1:                    # what is left of the cut: from the printed figures, never from 3,9
+                            rest = f"{cut.figs[0].tok} - {expr}"
+                            left = say(evaluate(rest, en), 1, en)
+                            flag["de_xuat"] = flag["de_xuat"][:3] + ((f"Còn lại khoảng {left} {t.unit or ''}, báo cáo chưa nêu "
+                                                                      "cách bù.".replace("  ", " "), f"{left} = {rest}"),)
                     flags.append(flag)
                 except ValueError:
                     pass

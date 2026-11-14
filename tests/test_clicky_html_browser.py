@@ -234,7 +234,7 @@ def test_questions_the_talk_answers_come_from_the_approved_lines_and_the_page_st
     pg, errors = page
     assert _ask(pg, "Tóm lại anh Tuấn cần quyết gì?").startswith("Anh Tuấn xin anh chị quyết hai việc. Một là giữ tỷ lệ")
     a = _ask(pg, "Con số 1,8 lần em lấy ở đâu ra?")
-    assert "12,6 ÷ 7,2 = 1,75, nói tròn là 1,8" in a and "biên bản kiểm lại công thức" in a
+    assert "12,6 ÷ 7,2 = 1,75, nói tròn là 1,8" in a and "biên bản kiểm lại công thức" not in a   # round 10: no log wording
     assert _ask(pg, "Nếu không cắt thì sao?").startswith("Nếu giữ nguyên, tỷ lệ chi phí nhân sự trên doanh thu thuần là 2,52%")
     a = _ask(pg, "Em là ai?")
     assert "kèm công thức" in a and "Theo kịch bản nháp của anh Tuấn (chưa duyệt)" in a       # never "đã duyệt" on a draft
@@ -297,7 +297,7 @@ def test_the_decision_record_never_misstates_the_board(page):
     assert a.startswith("Đề nghị là «Giãn tuyển 30 vị trí") and "anh chị nói 50" in a and "Ghi nguyên văn" in a
     assert _r3(pg, "Đồng ý việc năm").startswith("Báo cáo có 2 việc;")          # out of range: nothing recorded, asked which
     card = " ".join(pg.evaluate("window.__clickyHetBai()").split())
-    assert card.count("Không đồng ý") == 1 and "mỗi người Em đã ghi «Cần bàn thêm»: «Tôi đồng ý nhưng giãn 50 vị trí (chưa xác nhận)». Đổi" in card, card
+    assert card.count("Không đồng ý") == 1 and "mỗi người Em đã ghi «Đồng ý có điều kiện»: «Tôi đồng ý nhưng giãn 50 vị trí» (chưa xác nhận). Đổi" in card, card
     pg.evaluate(f"""() => {{ const r = {sr}.querySelector('[data-quyet="1"]');
                             [...r.querySelectorAll('button')].find(b => b.textContent === 'Đổi').click();
                             [...r.querySelectorAll('button')].find(b => b.textContent === 'Cần bàn thêm').click(); }}""")
@@ -327,6 +327,16 @@ def test_a_condition_a_time_or_an_exclusion_is_never_recorded_as_plain_agreement
     assert a.startswith("Em đã ghi «Đồng ý» cho việc: «Giữ tỷ lệ") and "Việc hai em chưa ghi." in a, a
     assert _r3(pg, "Thôi, việc hai để bàn thêm").startswith("Em đã ghi «Cần bàn thêm» cho việc: «Giãn tuyển")
     assert _r3(pg, "Tôi đồng ý trần 177,5 tỷ").startswith("Em đã ghi «Đồng ý» cho việc: «Giữ tỷ lệ")   # the ask's own figure
+    # round-10 panel: a clause keeps its own verdict and condition; a trailing "thì không" is a verdict; natural words count
+    a = _r3(pg, "Duyệt việc một, việc hai để quý sau tính")
+    assert a.startswith("Em đã ghi việc một «Đồng ý». Còn đề nghị «Giãn tuyển") and "quý sau" in a, a
+    a = _r3(pg, "Đồng ý việc một nhưng không quá 180 tỷ, việc hai thì không")
+    assert a.startswith("Em đã ghi việc hai «Không đồng ý». Còn đề nghị «Giữ tỷ lệ") and "180 tỷ" in a, a
+    pg.evaluate(f"[...{SR}.querySelectorAll('#a button, #ba button')].find(b => b.textContent === 'Ghi nguyên văn').click()")
+    assert "«Giữ tỷ lệ chi phí nhân sự trên doanh thu thuần ở 2,40%, tức trần 177,5 tỷ»: Đồng ý có điều kiện — anh chị ghi: «Đồng ý việc một nhưng không quá 180 tỷ, việc hai thì không»" in _parked(pg)
+    assert "đã đổi từ Đồng ý có điều kiện" not in _parked(pg)                       # an unconfirmed record is never history
+    assert _r3(pg, "Được, làm đi").startswith("Anh chị đồng ý việc nào ạ? Bấm từng việc.")
+    assert _r3(pg, "Thôi được rồi, cảm ơn em") == "Dạ."
     assert not errors
 
 
@@ -335,8 +345,12 @@ def test_short_follow_ups_and_figures_said_this_session_are_answered_with_their_
     # round-8 panel: "đủ không?", "3,9 tỷ à?", "5,0 tỷ ở đâu ra?" were parked as "not in the report" a second after saying them
     assert "3,9 tỷ" in _r3(pg, "Giãn 30 vị trí tiết kiệm được bao nhiêu?")
     a = _r3(pg, "Đủ không?")
-    assert "3,9 tỷ" in a and "Phần còn thiếu khoảng 5,0 tỷ (em tính: 8,9 − 3,9)" in a, a
-    assert _r3(pg, "5,0 tỷ ở đâu ra?").startswith("Phần còn thiếu khoảng 5,0 tỷ (em tính: 8,9 − 3,9).")
+    assert a.startswith("Chưa đủ: giãn trọn năm cũng chỉ tiết kiệm khoảng 3,9 tỷ (em tính: 30 × 92,3 ÷ 712), còn thiếu khoảng 5,0 tỷ (em tính: 8,9 − 3,9)"), a
+    a = _r3(pg, "5,0 tỷ ở đâu ra?")                                              # round 10: the talk says the rest now
+    assert a.startswith("Còn lại khoảng 5,0 tỷ, báo cáo chưa nêu cách bù.") and "8,9 − 30 × 92,3 ÷ 712" in a, a
+    # round 10: the verdict first, for the trap and for "còn lại" too
+    assert _r3(pg, "Giãn 30 vị trí là đủ về trần rồi đúng không?").startswith("Chưa đủ:")
+    assert _r3(pg, "5 tỷ còn lại lấy ở đâu?").startswith("Phần còn thiếu khoảng 5,0 tỷ (em tính: 8,9 − 3,9)")
     assert "30 × 92,3 ÷ 712" in _r3(pg, "3,9 tỷ à?")
     assert _r3(pg, "3,9 là số báo cáo hay em tính?").startswith("3,9 là số em tính, báo cáo chưa ghi số này.")
     assert _r3(pg, "67% à?").startswith("Khối Bán hàng chiếm khoảng 67% phần tăng: 14,1 tỷ.")
@@ -1443,9 +1457,8 @@ def test_a_board_members_plain_questions_get_the_rows_facts_the_sentences_and_on
     # an ask with no money: never a guess, but the bound the talk said with its formula answers it (round-7 panel:
     # the talk said 3,9 tỷ, then Q&A said "không nói được")
     a = _r3(pg, "Giãn 30 vị trí có đủ bù 8,9 tỷ không?")
-    assert a.startswith("Báo cáo chưa ghi số này. Em tính theo chi phí bình quân một người ở khối Bán hàng: kể cả giãn "
-                        "trọn năm, 30 vị trí cũng chỉ tiết kiệm khoảng 3,9 tỷ")
-    assert "30 × 92,3 ÷ 712" in a and "Phần còn thiếu khoảng 5,0 tỷ (em tính: 8,9 − 3,9)" in a
+    assert a.startswith("Chưa đủ: giãn trọn năm cũng chỉ tiết kiệm khoảng 3,9 tỷ (em tính: 30 × 92,3 ÷ 712), "
+                        "còn thiếu khoảng 5,0 tỷ (em tính: 8,9 − 3,9)"), a                  # round 10: the verdict first
     for q in ("Giãn 30 vị trí tiết kiệm được bao nhiêu?", "Giãn 30 vị trí đủ không?", "Còn thiếu bao nhiêu?",
               "Giãn từ quý 3 thì tiết kiệm bao nhiêu?"):
         a = _r3(pg, q)

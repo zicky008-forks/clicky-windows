@@ -62,7 +62,10 @@ def test_the_story_asks_first_then_tells_one_driver_and_never_reads_the_page_in_
     driver = next(c for c in said if c.get("vai") == "dong_luc")
     assert driver["noi"] == "Khối Bán hàng chiếm khoảng 67% phần tăng: 14,1 tỷ." and "hai phần ba" not in text.lower()
     assert driver["so_tinh"] == ["67 = 14,1 / 20,9 × 100"]
-    assert rep["record"]["em_tinh"] == 4
+    assert rep["record"]["em_tinh"] == 5
+    # round 10: the talk names what is still missing after the cut, with its working, instead of leaving it to a question
+    rest_line = next(c for c in said if c.get("vai") == "con_thieu")
+    assert rest_line["noi"] == "Còn lại khoảng 5,0 tỷ, báo cáo chưa nêu cách bù." and rest_line["so_tinh"] == ["5,0 = 8,9 - 30 × 92,3 / 712"]
     # how much faster is said as a figure the Board can check: 12,6 / 7,2 = 1,75, said "khoảng 1,8"
     fast = next(c for c in said if "nhanh gấp khoảng 1,8 lần doanh thu" in c["noi"])
     assert fast["so_tinh"] == ["1,8 = 12,6 / 7,2"]
@@ -79,12 +82,13 @@ def test_a_computed_figure_is_rechecked_from_the_output_file(report):
     rep = build(report)
     res = kiem_bien_ban.verify(rep["out"], str(report))
     assert res["ok"], res["errors"]
-    assert res["tong"]["em_tinh"] == 4
+    assert res["tong"]["em_tinh"] == 5
     page = Path(rep["out"]).read_text(encoding="utf-8")
     data = json.loads(re.search(r'<script id="clicky-data" type="application/json">(.*?)</script>', page, re.S).group(1))
     chips = [e for s in data["scenes"] for ev in s["ev"] for e in ev if e[1] == "t"]
     assert chips == [["1,8", "t", "12,6 / 7,2"], ["67", "t", "14,1 / 20,9 × 100"],
-                     ["8", "t", "(20,9 - 14,1) / (165,5 - 78,2) × 100"], ["3,9", "t", "30 × 92,3 / 712"]]
+                     ["8", "t", "(20,9 - 14,1) / (165,5 - 78,2) × 100"], ["3,9", "t", "30 × 92,3 / 712"],
+                     ["5,0", "t", "8,9 - 30 × 92,3 / 712"]]
 
 
 def test_the_owner_pre_flight_is_in_the_result_and_never_on_the_page(report):
@@ -286,7 +290,8 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     # frames the total, and keeps the printed rate and the 2,3 built on it as his to switch on
     why = next(k for k, c in enumerate(said) if c["noi"] == "Vì sao cần quyết?")   # the question alone, a breath
     assert said[why]["vai"] == "cau_hoi" and said[why]["dung"] == 0.8
-    assert any(c["noi"] == "Vì doanh thu chỉ tăng 8,0%, chậm hơn chi phí." and c["xac_nhan"] == ["8,0"] and c["chi"] == next(x for x in said if x.get("vai") == "quy_mo")["chi"]
+    assert any(c["noi"] == "Vì chi phí tăng thêm 19,0 tỷ, trong khi doanh thu chỉ tăng 8,0%."
+               and c["so_tinh"] == ["19,0 = 129,0 - 110,0"] and c["xac_nhan"] == ["8,0"] and c["chi"] == next(x for x in said if x.get("vai") == "quy_mo")["chi"]
                for c in said)
     ratio = next(c for c in said if c["noi"] == "Tức là chi phí tăng nhanh gấp khoảng 2,3 lần doanh thu.")
     assert ratio["bat"] == "chưa"
@@ -304,7 +309,7 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     # is told the two disagree
     assert not any("khoảng 17%" in c["noi"] for c in said)
     assert any("18,0%" in f and "17,3%" in f for f in rep["phan_bien"])
-    assert res["tong"]["em_tinh"] == 3
+    assert res["tong"]["em_tinh"] == 4
 
 
 def test_the_screen_check_finds_drawn_places_and_keeps_a_tall_item_clear_of_a_sticky_header(drawn_report):
@@ -604,6 +609,12 @@ def test_a_doubted_card_or_cap_figure_is_held_with_both_figures_and_a_worked_out
             "110,0 × (1 + 8,0 ÷ 100) = 118,8 tỷ)." in x, x
         assert "Lưu ý: số 120,0 anh Tuấn đang kiểm lại" in ask("Anh Tuấn xin quyết gì?")
         assert ask("Đồng ý cả hai").startswith("Báo cáo có 4 việc; anh chị đồng ý những việc nào ạ?")   # never all four
+        # round-10 blockers: the column after "so với" is the base; an exclusion list and a "riêng" verdict are kept
+        assert ask("Tổng tăng bao nhiêu phần trăm so với AOP gốc?").startswith("Tổng tăng 17,3% từ AOP gốc lên AOPR")
+        assert ask("Logistics tăng bao nhiêu phần trăm so với AOP gốc?").startswith("Logistics tăng 30,0% từ AOP gốc lên AOPR")
+        assert ask("Đồng ý hết trừ việc một và việc bốn").startswith("Em đã ghi việc hai «Đồng ý»; việc ba «Đồng ý». Việc một, bốn em chưa ghi.")
+        assert ask("Đồng ý hết, riêng việc một để bàn thêm").startswith("Em đã ghi việc hai «Đồng ý»; việc ba «Đồng ý»; việc bốn «Đồng ý»; việc một «Cần bàn thêm».")
+        assert pg.evaluate("q => window.__clickyHoi(q, \"[data-clicky='c9']\")", "Đồng ý").startswith("Em đã ghi «Đồng ý» cho việc: «Logistics phải giải trình")   # a tapped ask
         assert ask("Đồng ý việc hai và việc bốn").startswith("Em đã ghi việc hai «Đồng ý»; việc bốn «Đồng ý».")
         x = ask("Đồng ý việc một, việc ba cần bàn thêm")
         assert x.startswith("Em đã ghi việc một «Đồng ý»; việc ba «Cần bàn thêm».") and "mức 120,0 anh Tuấn đang kiểm lại" in x, x
