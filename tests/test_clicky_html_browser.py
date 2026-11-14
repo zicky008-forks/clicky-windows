@@ -1395,6 +1395,27 @@ def test_a_board_members_plain_questions_get_the_rows_facts_the_sentences_and_on
     assert not errors
 
 
+def test_nods_junk_and_say_again_never_reach_the_owner_and_plan_names_explain_themselves(page):
+    pg, errors = page
+    # round-7 panel: these were queued and mailed under CÂU HỎI, or lost the real question
+    for q in ("asdf qwe", "asdfgh"):
+        assert _r3(pg, q) == "Em chưa hiểu câu hỏi, anh chị nói lại giúp em ạ."
+    for q in ("hmm ???", "Đúng.", "Chuẩn rồi.", "Cảm ơn em, vậy thôi.", "Được, tiếp đi.", "hmm, ok.."):
+        assert _r3(pg, q) == "Dạ.", q
+    assert _r3(pg, "Em vừa nói gì?").startswith("Thưa anh chị, em là trợ lý AI của anh Tuấn.")   # nothing played yet: the first line
+    assert _r3(pg, "Em nói lại phần đề nghị").startswith("Vì vậy anh Tuấn đề xuất mức trần 177,5 tỷ.")
+    assert _r3(pg, "Ý chính là gì?").startswith("Anh Tuấn xin anh chị duyệt trần 177,5 tỷ (giảm 8,9 tỷ)")
+    assert _r3(pg, "Theo em có nên duyệt không?").startswith("Em không khuyên thay anh chị.")
+    assert "48 nhân viên" in _r3(pg, "vì sao bán hàng tăng? nói đơn giản thôi")
+    assert _r3(pg, "Kế hoạch gốc là gì?").startswith("«Kế hoạch gốc» là cột «AOP gốc» trên báo cáo")
+    queued = pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('tl').innerText")
+    assert not queued.strip(), queued
+    _r3(pg, "Kế hoạch gốc của khối Pháp chế bao nhiêu?")         # parked: the owner reads the reader's own words
+    queued = pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('tl').innerText")
+    assert "Kế hoạch gốc của khối Pháp chế" in queued and "AOP gốc của" not in queued, queued
+    assert not errors
+
+
 DEMO_QUESTIONS = (
     "Tổng chi phí AOP gốc là bao nhiêu?", "Chi phí nhân sự AOP gốc?", "AOP gốc bao nhiêu?", "AOPR khối Marketing?",
     "Headcount bán hàng bao nhiêu?", "Headcount IT?", "Headcount HR?", "Chi phí Sales?", "Marketing", "Khối CNTT AOPR?",

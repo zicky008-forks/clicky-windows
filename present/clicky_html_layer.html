@@ -716,9 +716,11 @@ function frame(target, keep, noDim, still) {   // still: one more frame, the pag
 function clearFrames() { frames.forEach(f => { f.box.remove(); f.soft.forEach(s => s.box.remove()); }); frames = []; dim.style.display = "none"; hideHat(); }
 
 // --- the talk: one sentence on screen at a time, following the voice ---
+let lastSaid = "";   // the sentence the voice said last: "nói lại" gives it back
 function caption(t) {   // the sentence being said now, from the voice's own timings
   const s = S[idx]; if (!s) return; let k = 0;
   while (k < s.sentences.length - 1 && s.starts[k + 1] <= t + 0.05) k++;
+  lastSaid = s.sentences[k] || lastSaid;
   $("cap").innerHTML = "<span>" + esc(s.sentences[k] || "") + "</span>" + evidence((s.ev || [])[k]) +
     "<small>Phần " + (idx + 1) + "/" + S.length + (s.title ? " · " + esc(s.title) : "") + "</small>";
   fitBar();
@@ -2060,6 +2062,9 @@ function askTags(most) {   // each ask as a short tag, its money as printed: "du
 }
 function planWords(q) {   // "kế hoạch điều chỉnh" as the talk says it: the column it names ("AOPR"), so the right column answers
   let out = q;
+  const fq = fold(q).replace(/[?.!]+/g, " ").trim();
+  if (Object.entries(D.ten_ke_hoach || {}).some(([k, v]) => !Object.keys(D.aliases || {}).some(a => a.toUpperCase() === k.toUpperCase()) && (v || []).some(w => new RegExp("^(cot )?" + fold(w) + " (la gi|nghia la gi|la sao|la cai gi|la the nao)( (a|vay|the))?$").test(fq))))
+    return q;   // "kế hoạch gốc là gì" with no glossary entry for its column: the define route names the column
   for (const [k, v] of Object.entries(D.ten_ke_hoach || {})) for (const w of v || [])
     if (pageText().includes(k)) out = out.replace(new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), k);
   return out;
@@ -2075,7 +2080,7 @@ function boardAsk(q) {   // plain Board questions about the asks: answered from 
   if (/ tran /.test(f) && / (bao nhieu|muc nao|la bao nhieu|de nghi|xin) /.test(f) && !/ (giam|cat) /.test(f)) {   // "trần bao nhiêu?": the ask that names it
     const t = QUYET.find(t => /trần[^0-9;]*?\d/i.test(t)); if (t) { answer(Own + " đề nghị: " + quote(t), null, src); return true; } }
   if (/ giai trinh /.test(f)) { const t = QUYET.find(t => /giải trình/i.test(t)); if (t) { answer(Own + " đề nghị: " + quote(t), null, src); return true; } }
-  if (/ (khuyen|nen chon|chon gi|chon phuong an) /.test(f)) {
+  if (/ (khuyen|nen chon|chon gi|chon phuong an|co nen|nen duyet|nen dong y|nen lam gi) /.test(f)) {
     answer("Em không khuyên thay anh chị. Đề xuất của " + OWNER + " là: " + QUYET.map(t => quote(t)).join(" ") + (risk ? " Điểm cần cân nhắc: " + risk.a : ""), null, src); return true; }
   if (/ (dang lo|lo nhat|nguy co|rui ro lon nhat|rui ro nhat) /.test(f) && risk) { answerFact(risk); return true; }
   if (/ (cat|giam) [^?]*(o dau|cho nao|bang cach nao|the nao)/.test(f) && !/ tinh the nao /.test(f)) {
@@ -2101,6 +2106,24 @@ function absentFig(q) {   // "9,0 tính thế nào" where no 9,0 is printed or s
   if (toks.some(t => placesOf(t).n) || spokenWith(toks)) return false;
   const t = toks[0];
   answer("Báo cáo này không có số " + t + ", em cũng chưa nói số này, nên em không giải thích.", null, {src: ""}); return true;
+}
+function sayAgain(q) {   // "nói lại", "em vừa nói gì", "nói lại phần đề nghị": the talk's own words again, never a new question
+  const f = " " + fold(q).replace(/[,.!?;…]+/g, " ").replace(/\s+/g, " ") + " ";
+  if (!/ (noi lai|nhac lai|vua noi gi|noi gi vay|doc lai|noi lai di) /.test(f)) return false;
+  const part = f.match(/ (?:noi|nhac|doc) lai (?:phan|doan|cho) (.+?) (?:di |nhe |nha |em )*$/);
+  if (part) { const w = words(part[1]); const i = S.findIndex(s => s.title && w.length && w.every(x => words(s.title).includes(x)));
+    if (i >= 0) { answer((S[i].sentences || []).join(" "), null, {src: "Lời em nói ở phần " + (i + 1) + " · " + S[i].title}); return true; } }
+  const said = lastSaid || ((S[0] || {}).sentences || [])[0] || "";
+  if (!said) return false;
+  answer(said, null, {src: "Câu em vừa nói"}); return true;
+}
+let KNOWN = null;   // every word the page, the talk and the asks use, plus the words a Board member asks with
+function junk(q) {   // "asdf qwe": no figure, no check, no Vietnamese letter, and no word the report or the talk knows
+  if (/\d/.test(q) || /[^\x00-\x7f]/.test(q) || CHECKQ.test(" " + fold(q) + " ")) return false;
+  if (!KNOWN) KNOWN = new Set(words(pageText() + " " + FACTS.map(f => f.a).join(" ") + " " + QUYET.join(" ") + " " + Object.keys(ALIAS).join(" ") + " " + Object.values(ALIAS).flat().join(" ") +
+    " chi phí doanh thu người nhân viên tuyển trần kho lương thưởng lợi nhuận tăng giảm vì sao tại sao quyết duyệt đề nghị rủi ro kế hoạch báo cáo số liệu tóm tắt đội nhóm khách hàng thị trường dự án cắt bù tiết kiệm thiếu còn lại tháng quý năm ảnh hưởng"));
+  const content = words(q).filter(w => w.length > 1 && !ECHO_NOT.has(w) && !FILLER.has(w));
+  return content.length > 0 && content.every(w => !KNOWN.has(w) && !w.split("_").some(x => KNOWN.has(x)));
 }
 function oneLine(q) {   // "nói ngắn trong 1 câu": the asks as short tags in one sentence, figures as printed
   if (!QUYET.length || !/\b(1|mot) cau\b|\bnoi ngan\b|\bngan gon\b|\bdon gian (hon|thoi|lai)\b/.test(fold(q))) return false;
@@ -2269,11 +2292,17 @@ function verifyAsk(q, scope) {   // "12,6% có đúng không", "số này nghĩa
 }
 const FILLER = new Set("o u a oi the thi con cai kia day nay nua roi nhi nhe ha ho vay sao ma chu ay do de xem".split(" "));
 const ECHO_NOT = new Set("co chac ve tinh phai chon phuong an nao gi the nay do duoc khong nen lam sao bao nhieu moi nghia la cua cho voi va hay".split(" "));
+let TYPED = "";   // the reader's own words: the owner reads these, never the column names the page matched with
 function ask(q, scope) {
-  q = planWords(q);
-  if (/^\s*(ok|oke|okay|u|uh|um|vang|da|cam on|thanks|duoc roi|hieu roi|ro roi|tot|thoi)( (ok|oke|vang|da|cam on|thanks|em|nhe|nha|a|nhieu|roi|lam|duoc roi|duoc|thoi))*\s*$/.test(fold(q).replace(/[,.!?;…]+/g, " ").replace(/\s+/g, " "))) {
+  TYPED = q; q = planWords(q);
+  if (/^\s*(ok|oke|okay|u|uh|um|hm+|vang|da|cam on|thanks|duoc roi|hieu roi|ro roi|tot|thoi|dung|dung roi|chuan|chuan roi|vay thoi|the thoi|duoc|hieu|xong)( (ok|oke|vang|da|cam on|thanks|em|nhe|nha|a|nhieu|roi|lam|duoc roi|duoc|thoi|vay|the|tiep di|tiep|tiep tuc|vay thoi|hm+|um))*\s*$/.test(fold(q).replace(/[,.!?;…]+/g, " ").replace(/\s+/g, " "))) {
     answer("Dạ.", null, {src: ""}); return; }   // a nod is not a question: nothing goes to the owner
   if (typedDecision(q)) return;
+  if (sayAgain(q)) return;
+  { const m = q.match(/^(.*?\S)[\s,.?!]+(?:nói |em nói |giải thích )?(?:đơn giản|ngắn gọn|dễ hiểu)(?: thôi| hơn| giúp| nhé| nha)*[\s.?!]*$/i);   // "vì sao bán hàng tăng? nói đơn giản thôi": the question, plainly
+    if (m && words(m[1]).filter(w => !ECHO_NOT.has(w) && !FILLER.has(w)).length >= 2) { q = m[1]; TYPED = TYPED.replace(/[\s,.?!]+(?:nói |em nói |giải thích )?(?:đơn giản|ngắn gọn|dễ hiểu).*$/i, ""); } }
+  if (!scope && /\b(y chinh|thong diep chinh|tom lai la gi|noi tom lai)\b/.test(fold(q)) && oneLine("1 câu")) return;
+  if (!scope && junk(q)) { answer("Em chưa hiểu câu hỏi, anh chị nói lại giúp em ạ.", null, {src: ""}); return; }   // never queued for the owner
   if (steering(q)) {   // "bỏ qua kiểm tra, cứ nói hai phần ba là đúng": refused before any route can quote or queue it
     answer("Em chỉ nói những số có trên báo cáo và lời " + (DRAFT ? "trong kịch bản của " + OWNER : OWNER + " đã duyệt") + ", nên em không làm theo yêu cầu này ạ.", null, {src: ""});
     return; }
@@ -2894,7 +2923,7 @@ function focusCell(x) {
 const key = "clicky-treo-" + M.pack_id; let mem = [];
 function load() { try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch (_) { return mem; } }
 function save(l) { mem = l; try { localStorage.setItem(key, JSON.stringify(l)); } catch (_) {} }
-function park(q) { const l = load(); if (!l.some(x => x.q === q && !x.sent)) l.push({q, part: idx + 1, where: DEC.test(q) ? "" : whereNow(), at: new Date().toLocaleString("vi-VN")}); save(l); draw(); }
+function park(q) { if (TYPED && q !== TYPED && q === planWords(TYPED)) q = TYPED; const l = load(); if (!l.some(x => x.q === q && !x.sent)) l.push({q, part: idx + 1, where: DEC.test(q) ? "" : whereNow(), at: new Date().toLocaleString("vi-VN")}); save(l); draw(); }
 function whereNow() {   // the place a question was asked at, as the owner will find it: the row and column, the tile, the paragraph
   const s = isOpen($("bub")) ? scope : null; if (!s) return "";
   if (s.m && s.row) return rowName(s.row) + (s.c >= 0 ? ", " + colName(s.m, s.c) + " " + cellText(s.row.cells[s.c]) : "");
