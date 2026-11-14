@@ -2298,6 +2298,12 @@ def _discloses(line: str) -> bool:
     return "đang kiểm lại" in str(line)
 
 
+def _rulings(script: dict) -> set:
+    """The lines switched on that can settle a doubt: never a disclosure, by its tag (vai: 'nghi') or, untagged, by its words (round 20)."""
+    return {str(c.get("noi") or "").strip() for s in script.get("canh") or [] for c in s.get("cau") or []
+            if on(c) and c.get("vai") != "nghi" and not (not c.get("vai") and _discloses(c.get("noi")))}
+
+
 def verdict(k: dict) -> str:
     """The owner's ruling on a doubted sentence: 'giữ câu', 'báo cáo sai', or '' (accents and case forgiven)."""
     q = "".join(c for c in unicodedata.normalize("NFD", str(k.get("quyet") or "").replace("đ", "d"))
@@ -2326,10 +2332,10 @@ def open_checks(script: dict) -> list:
 def doubts(script: dict) -> list:
     """Every doubted report sentence, for the page: its fingerprint, the doubted figures, the table's own working,
     and, once the owner has ruled, his reason. Never the sentence or the owner's finding in words."""
-    said = _lines_on(script)
+    said = _rulings(script)
     return [{"ma": str(k.get("ma_cau") or ""), "so": [str(x) for x in k.get("ma_so") or []], "tinh": str(k.get("tinh") or ""),
              # the page keeps a doubt open while the only line switched on says «đang kiểm lại» (round 19)
-             "xong": ruled(k, {x for x in said if not _discloses(x)}) or verdict(k) == "báo cáo sai", "quyet": verdict(k),
+             "xong": ruled(k, said) or verdict(k) == "báo cáo sai", "quyet": verdict(k),
              "noi": str(k.get("noi_voi_BOD") or "").strip()}   # ly_do_bo is the owner's own note: never on the page
             for k in script.get("kiem_tra") or [] if isinstance(k, dict) and (k.get("ma_cau") or k.get("ma_so"))]
 
@@ -2364,7 +2370,7 @@ def bod_figures_unlocked(script: dict, page_text: str, en: bool) -> list:
 
 def doubted_open(script: dict) -> list:
     """Fingerprints of report sentences still in doubt: the page holds questions on them until the owner rules."""
-    said = {x for x in _lines_on(script) if not _discloses(x)}   # a disclosure keeps the doubt open (round 19)
+    said = _rulings(script)   # a disclosure keeps the doubt open (rounds 19–20)
     return [str(k["ma_cau"]) for k in script.get("kiem_tra") or []
             if isinstance(k, dict) and k.get("ma_cau") and not ruled(k, said)]
 

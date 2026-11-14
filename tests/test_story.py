@@ -1558,3 +1558,75 @@ def test_round_nineteen_row_claims_judge_the_named_or_tapped_row_and_every_figur
         assert "Anh Tuấn đang kiểm lại hai số này" in hoi(B, "Tổng tăng 18% đúng không?")   # a doubted figure keeps its own answer
     finally:
         browser.close()
+        pw.stop()
+
+
+def test_round_twenty_approximate_share_unit_claims_and_short_row_names(report, drawn_report):
+    # round-20 panel: «Logistics tăng gần 12 tỷ» was «Không ạ … không dưới 12 tỷ»; «chiếm 2/3 phần tăng» read 2 and 3 as two
+    # figures and said «Không ạ» to the talk's own line; «Tài chính tăng bao nhiêu?» answered 8,9; B had no «no such row» reply
+    pw, browser, pages = _ghi_pages(report, drawn_report)
+    try:
+        A, B = pages["A"], pages["B"]
+        hoi = lambda pg, q, s=None: pg.evaluate("([q, s]) => window.__clickyHoi(q, s)", [q, s])   # noqa: E731
+        for pg, q, scope, start in (
+                (B, "Logistics tăng gần 12 tỷ đúng không?", None, "Đúng ạ, khoảng 12 tỷ: Logistics tăng 12,0 tỷ"),
+                (B, "Tăng gần 12 tỷ à?", "#t tbody tr:nth-of-type(2) td:nth-of-type(3)", "Đúng ạ, khoảng 12 tỷ: Logistics tăng 12,0 tỷ"),
+                (B, "Logistics tăng khoảng 15 tỷ đúng không?", None, "Không hẳn ạ: Logistics tăng 12,0 tỷ"),
+                (B, "Logistics chiếm 2/3 phần tăng đúng không?", None, "Đúng ạ, khoảng 2/3: Logistics chiếm 63,2% phần tăng (em tính: 12,0 ÷ 19,0 × 100)"),
+                (B, "Logistics chiếm gần hai phần ba phần tăng đúng không?", None, "Đúng ạ, khoảng hai phần ba: Logistics chiếm 63,2% phần tăng"),
+                (B, "Logistics chiếm 90% phần tăng đúng không?", None, "Không ạ, Logistics chiếm 63,2% phần tăng"),
+                (B, "Logistics tăng 12.000 triệu đúng không?", None, "Đúng ạ: Logistics tăng 12,0 tỷ"),
+                (B, "Logistics tăng 12 nghìn tỷ đúng không?", None, "Không ạ, dòng Logistics không có số 12 nghìn tỷ."),
+                (B, "Tổng tăng 19.0 tỷ đúng không?", None, "Đúng ạ: Tổng tăng 19,0 tỷ"),
+                (B, "Tài chính tăng bao nhiêu?", None, "Báo cáo này không có dòng hay mục «Tài chính»"),
+                (B, "Bán hàng tăng 14 tỷ đúng không?", None, "Báo cáo này không có dòng hay mục «Bán hàng»"),
+                (A, "Bán hàng tăng gần 14 tỷ phải không?", None, "Đúng ạ, khoảng 14 tỷ: Khối Bán hàng 14,1 tỷ"),
+                (A, "Bán hàng chiếm 67% phần tăng đúng không?", None, "Đúng ạ, khoảng 67%: Khối Bán hàng chiếm 67,5% phần tăng (em tính: 14,1 ÷ 20,9 × 100)"),
+                (A, "Marketing tăng gần 2 tỷ đúng không?", None, "Không hẳn ạ: Khối Marketing 1,5 tỷ"),
+                (A, "Chi phí tăng 13% đúng không?", None, "Đúng ạ, khoảng 13%: Tổng 12,6%"),
+                (A, "Tài chính tăng bao nhiêu?", None, "Khối Tài chính - Kế toán: Chênh lệch 0,6 tỷ"),
+                (A, "Khối Tài chính tăng bao nhiêu?", None, "Khối Tài chính - Kế toán: Chênh lệch 0,6 tỷ"),
+                (A, "Nhân sự tăng bao nhiêu?", None, "Khối Nhân sự - Hành chính: Chênh lệch 0,7 tỷ"),
+                (A, "Logistics tăng 12 tỷ đúng không?", None, "Báo cáo này không có dòng hay mục «Logistics»")):
+            x = hoi(pg, q, scope)
+            assert x.startswith(start), (q, x)
+            assert "không dưới" not in x and x.count("Theo bảng") <= 1, x
+        assert hoi(A, "Chi phí tăng bao nhiêu?").startswith("Tổng")   # the report's subject is the total, never «no such row»
+    finally:
+        browser.close()
+        pw.stop()
+
+
+def test_round_twenty_a_reworded_disclosure_keeps_its_tag_and_the_doubt_open():
+    # round-20 panel: the round-19 fix tested the words «đang kiểm lại»; an owner who rewords the line («Mức này còn chờ
+    # anh Tuấn chốt») would settle the doubt again. A line tagged vai: 'nghi' is a disclosure whatever its words
+    tell = "Mức 120,0 còn chờ anh Tuấn chốt; giữ đúng tỷ lệ thì trần là khoảng 118,8 tỷ."
+    item = {"ma_cau": "abc123", "ma_so": ["120,0"], "cau": [tell]}
+    script = {"canh": [{"cau": [{"noi": tell, "bat": "có", "vai": "nghi"}]}], "kiem_tra": [item]}
+    assert clicky_html.doubts(script)[0]["xong"] is False and clicky_html.doubted_open(script) == ["abc123"]
+    script["canh"][0]["cau"][0]["vai"] = "hoi"      # the owner made it a line of the talk: that is his ruling
+    assert clicky_html.doubts(script)[0]["xong"] is True and clicky_html.doubted_open(script) == []
+
+
+def test_round_twenty_consent_questions_out_of_range_exceptions_and_quoted_noes(report, drawn_report):
+    # round-20 panel: «Không ai phản đối chứ? Vậy thông qua» stacked a chooser; «Đồng ý hết trừ việc 5» was silently all yes;
+    # a «không» clause after «về nguyên tắc» was a conditional yes; a derived no carried no words
+    pw, browser, pages = _ghi_pages(report, drawn_report)
+    try:
+        B = pages["B"]
+        fresh = lambda: (B.evaluate("() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} }"), B.reload(), B.wait_for_timeout(700))   # noqa: E731
+        ghi = lambda q: B.evaluate("q => window.__clickyGhi(q)", q)   # noqa: E731
+        for q in ("Không ai phản đối chứ? Vậy thông qua", "Tôi không thấy lý do gì để phản đối"):
+            fresh()
+            r = ghi(q)
+            assert {k: v[0] for k, v in r["rec"].items()} == {"1": "Đồng ý", "2": "Đồng ý", "3": "Đồng ý"} and "chờ mức chốt" in r["a"], (q, r)
+            assert "việc nào ạ" not in r["a"], r
+        fresh()
+        r = ghi("Đồng ý hết trừ việc 5")
+        assert r["rec"] == {} and r["a"].startswith("Báo cáo chỉ có 4 việc; anh chị muốn trừ việc nào ạ?"), r
+        fresh()
+        r = ghi("Đồng ý về nguyên tắc, nhưng không hoãn kho mới")
+        assert r["rec"]["3"] == ["Không đồng ý", "nhưng không hoãn kho mới", False] and r["rec"]["1"][0] == "Đồng ý có điều kiện", r
+    finally:
+        browser.close()
+        pw.stop()

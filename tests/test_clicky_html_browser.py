@@ -1435,7 +1435,8 @@ def test_a_figure_checked_says_where_it_is_printed_and_the_sum_behind_it(page):
     assert "chưa có giọng" not in _r3(pg, "12,6% có đúng không?")                        # the device notice is never inside an answer
     # round-5 panel: every figure said can be asked back; share of the increase; people from the report's sentences
     assert _r3(pg, "Chi phí tăng nhanh gấp mấy lần doanh thu?").startswith("Chi phí tăng nhanh gấp khoảng 1,8 lần doanh thu. Em tính")
-    assert _r3(pg, "Khối Bán hàng chiếm hai phần ba à?").startswith("Khối Bán hàng chiếm 67,5% tổng Chênh lệch (em tính: 14,1 tỷ ÷ 20,9 tỷ)")
+    assert _r3(pg, "Khối Bán hàng chiếm hai phần ba à?").startswith(   # round 20: a share claim gets a verdict, then the working
+        "Đúng ạ, khoảng hai phần ba: Khối Bán hàng chiếm 67,5% phần tăng (em tính: 14,1 ÷ 20,9 × 100)")
     assert _r3(pg, "12,6% là so với cái gì?").startswith("Tổng chi phí nhân sự AOPR: 186,4 tỷ, tăng 12,6% so với AOP gốc.")
     assert "48 nhân viên" in _r3(pg, "Đội bán hàng tăng bao nhiêu người?")
     assert "Em cộng 6 dòng cột Headcount AOPR ra 1.248 người, khớp" in _r3(pg, "1.248 có đúng không?")

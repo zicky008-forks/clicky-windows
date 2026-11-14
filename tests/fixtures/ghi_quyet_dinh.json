@@ -244,5 +244,10 @@
  ["A", "Việc hai ok, mấy việc kia anh Tuấn làm rõ rồi báo lại", {"1": "Y", "0": "D"}],
  ["B", "Logistics ok, mấy việc kia anh Tuấn làm rõ rồi báo lại", {"1": "Y", "0": "D", "2": "D", "3": "D"}],
  ["B", "Không cần hoãn kho mới", {"3": "N"}],
- ["B", "Hoãn kho mới là sai lầm", {"3": "N"}]
+ ["B", "Hoãn kho mới là sai lầm", {"3": "N"}],
+ ["A", "Giãn tuyển thì khỏi", {"1": "N"}],
+ ["A", "Giãn tuyển thì cứ tuyển đi", {"1": "N"}],
+ ["A", "Giãn tuyển thì cứ làm", {"1": "Y"}],
+ ["B", "Đồng ý về nguyên tắc, nhưng không hoãn kho mới", {"0": "C", "1": "C", "2": "C", "3": "N"}],
+ ["B", "Đồng ý hết nhưng không hoãn kho mới", {"1": "Y", "2": "Y", "3": "N"}]
 ]
