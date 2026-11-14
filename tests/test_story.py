@@ -44,17 +44,25 @@ def test_the_story_asks_first_then_tells_one_driver_and_never_reads_the_page_in_
     # the AI says it is an AI, then the decisions come first, one short sentence each, in the owner's own words
     assert [c["noi"] for c in said[:4]] == [
         "Thưa anh chị, em là trợ lý AI của anh Tuấn.", "Anh Tuấn xin anh chị quyết hai việc.",
-        "Một, giữ tỷ lệ chi phí nhân sự/DTT ở 2,40%, tức trần 177,5 tỷ.",
-        "Hai, giãn tuyển 30 vị trí bán hàng sang quý 3 và gắn với doanh thu trên mỗi người."]
+        "Một là giữ tỷ lệ chi phí nhân sự trên doanh thu thuần ở 2,40%, tức trần 177,5 tỷ.",
+        "Hai là giãn tuyển 30 vị trí bán hàng sang quý 3 và gắn với doanh thu trên mỗi người."]
     text = " ".join(c["noi"] for c in said)
     assert "Tiếp theo là phần" not in text and "Thứ nhất" not in text
     # a question to the room, then a silence before the answer
-    q = next(c for c in said if c["noi"].endswith("?"))
-    assert q["noi"] == "Vậy phần tăng thêm nằm ở đâu?" and q.get("dung") == 1.5
+    qs = [c for c in said if c["noi"].endswith("?")]
+    assert [(c["noi"], c.get("dung")) for c in qs] == [("Vì sao cần quyết?", 0.8), ("Vậy phần tăng thêm nằm ở đâu?", 1.5)]
+    # said as it is, never spun: 7,8% is a little faster than revenue's 7,2%, not "sát nhịp"; one plain name per plan
+    assert "Bỏ khối Bán hàng ra, các khối còn lại vẫn tăng khoảng 8%, nhanh hơn doanh thu 7,2% một chút." in text
+    assert "Theo kế hoạch điều chỉnh, tổng là 186,4 tỷ, cao hơn kế hoạch gốc 20,9 tỷ." in text
+    assert not re.search(r"AOPR|AOP gốc|bản điều chỉnh|/DTT|sát nhịp|^Một,", text)
     # one driver; the rest computed by code with its formula and checked by the number lock
     rest = next(c for c in said if "khoảng 8%" in c["noi"])
     assert rest["so_tinh"] == ["8 = (20,9 - 14,1) / (165,5 - 78,2) × 100"]
-    assert rep["record"]["em_tinh"] == 2
+    # the page's "hai phần ba" is a doubted sentence, so the driver says the figure instead of echoing its words
+    driver = next(c for c in said if c.get("vai") == "dong_luc")
+    assert driver["noi"] == "Khối Bán hàng chiếm khoảng 67% phần tăng: 14,1 tỷ." and "hai phần ba" not in text.lower()
+    assert driver["so_tinh"] == ["67 = 14,1 / 20,9 × 100"]
+    assert rep["record"]["em_tinh"] == 3
     # how much faster is said as a figure the Board can check: 12,6 / 7,2 = 1,75, said "khoảng 1,8"
     fast = next(c for c in said if "nhanh gấp khoảng 1,8 lần doanh thu" in c["noi"])
     assert fast["so_tinh"] == ["1,8 = 12,6 / 7,2"]
@@ -71,11 +79,12 @@ def test_a_computed_figure_is_rechecked_from_the_output_file(report):
     rep = build(report)
     res = kiem_bien_ban.verify(rep["out"], str(report))
     assert res["ok"], res["errors"]
-    assert res["tong"]["em_tinh"] == 2
+    assert res["tong"]["em_tinh"] == 3
     page = Path(rep["out"]).read_text(encoding="utf-8")
     data = json.loads(re.search(r'<script id="clicky-data" type="application/json">(.*?)</script>', page, re.S).group(1))
     chips = [e for s in data["scenes"] for ev in s["ev"] for e in ev if e[1] == "t"]
-    assert chips == [["1,8", "t", "12,6 / 7,2"], ["8", "t", "(20,9 - 14,1) / (165,5 - 78,2) × 100"]]
+    assert chips == [["1,8", "t", "12,6 / 7,2"], ["67", "t", "14,1 / 20,9 × 100"],
+                     ["8", "t", "(20,9 - 14,1) / (165,5 - 78,2) × 100"]]
 
 
 def test_the_owner_pre_flight_is_in_the_result_and_never_on_the_page(report):
@@ -87,9 +96,10 @@ def test_the_owner_pre_flight_is_in_the_result_and_never_on_the_page(report):
     # the ask to delay 30 hires has no savings figure: the talk says so plainly instead of making one up
     gap = next(f for f in flags if "30 vị trí" in f)
     assert "3,9 tỷ" in gap and "8,9 tỷ" in gap
-    # the gap is the owner's call: proposed in neutral words, not spoken until he switches it on
+    # the gap carries no figure, so it is said by default (round-5 Chair, three rounds running); the owner can switch
+    # it off; the bound he must check is still his to switch on
     gapline = next(c for c in lines(rep) if c["noi"].startswith("Có một điểm báo cáo chưa có số: giãn 30 vị trí"))
-    assert gapline["bat"] == "chưa"
+    assert "bat" not in gapline
     bound = next(c for c in lines(rep) if c.get("vai") == "uoc_tiet_kiem")
     assert "khoảng 3,9 tỷ" in bound["noi"] and "4 tỷ" not in bound["noi"]   # 30 × 92,3 / 712 = 3,89, never rounded up to 4
     page = Path(rep["out"]).read_text(encoding="utf-8")
@@ -246,9 +256,9 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     # the decisions come from the part headed "BOD cần quyết định": the bold title of each item, the first one first
     # four asks are all said up front, each keeping its object ("… trước khi duyệt phần tăng thuê kho"), and again
     # at the close
-    asks = ["Một, duyệt trần chi phí vận hành 120,0 tỷ cho cả năm.",
-            "Hai, Logistics phải giải trình trước khi duyệt phần tăng thuê kho.",
-            "Ba, giữ quỹ lương bằng AOP gốc cho cả năm.", "Bốn, hoãn dự án kho mới sang năm sau."]
+    asks = ["Một là duyệt trần chi phí vận hành 120,0 tỷ cho cả năm.",
+            "Hai là Logistics phải giải trình trước khi duyệt phần tăng thuê kho.",
+            "Ba là giữ quỹ lương bằng AOP gốc cho cả năm.", "Bốn là hoãn dự án kho mới sang năm sau."]
     assert said[1]["noi"] == "Anh Tuấn xin anh chị quyết bốn việc." and [c["noi"] for c in said[2:6]] == asks
     close = [c["noi"] for c in said if c.get("vai") == "chot"]
     assert close == ["Tóm lại, anh Tuấn xin anh chị quyết: một là duyệt trần chi phí vận hành 120,0 tỷ; hai là Logistics "
@@ -262,14 +272,16 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     # 10% is still faster than revenue's 8,0%: never "chỉ"
     assert rest["noi"].endswith("vẫn tăng khoảng 10%, nhanh hơn doanh thu.") and "chỉ tăng" not in rest["noi"]
     # the cap is only inside the first ask: the cut it means is worked out, proposed, and put to the owner first
-    cut = next(c for c in said if c["noi"].startswith("Tức là phải giảm"))
-    assert cut["noi"] == "Tức là phải giảm 9,0 tỷ so với AOPR." and cut["bat"] == "chưa"
+    cut = next(c for c in said if c["noi"].startswith("Trần 120,0 tỷ nghĩa là"))
+    assert cut["noi"] == "Trần 120,0 tỷ nghĩa là phải giảm 9,0 tỷ so với kế hoạch điều chỉnh." and cut["bat"] == "chưa"
     assert cut["so_tinh"] == ["9,0 = 129,0 - 120,0"]
     assert any("9,0" in f and "129,0 - 120,0" in f for f in rep["phan_bien"])
     # 18,0 / 8,0 = 2,25, said "khoảng 2,3 lần"; the owner's own "Nếu …" sentence says what happens if nothing changes
     # ... but 18,0% disagrees with the table (17,3%): until the owner rules, the talk says only what holds under both,
     # frames the total, and keeps the printed rate and the 2,3 built on it as his to switch on
-    assert any(c["noi"] == "Vì sao cần quyết? Vì doanh thu chỉ tăng 8,0%, chậm hơn chi phí." and c["xac_nhan"] == ["8,0"] and c["chi"] == next(x for x in said if x.get("vai") == "quy_mo")["chi"]
+    why = next(k for k, c in enumerate(said) if c["noi"] == "Vì sao cần quyết?")   # the question alone, a breath
+    assert said[why]["vai"] == "cau_hoi" and said[why]["dung"] == 0.8
+    assert any(c["noi"] == "Vì doanh thu chỉ tăng 8,0%, chậm hơn chi phí." and c["xac_nhan"] == ["8,0"] and c["chi"] == next(x for x in said if x.get("vai") == "quy_mo")["chi"]
                for c in said)
     ratio = next(c for c in said if c["noi"] == "Tức là chi phí tăng nhanh gấp khoảng 2,3 lần doanh thu.")
     assert ratio["bat"] == "chưa"
@@ -335,7 +347,7 @@ def test_questions_after_the_talk_are_answered_from_the_lines_the_owner_approved
     ask = lambda q, **k: (story.answer_fact(book, q, **k) or {}).get("k")       # noqa: E731
     # "tóm lại cần quyết gì": the decisions, exactly as said at the start
     hoi = story.answer_fact(book, "Tóm lại anh Tuấn cần BOD quyết gì?")
-    assert hoi["a"].startswith("Anh Tuấn xin anh chị quyết hai việc. Một, giữ tỷ lệ")
+    assert hoi["a"].startswith("Anh Tuấn xin anh chị quyết hai việc. Một là giữ tỷ lệ")
     # a figure Clicky worked out: the line, the formula, and the exact result beside the rounded one
     t = story.answer_fact(book, "Con số 1,8 lần em lấy ở đâu ra?")
     assert t["a"].endswith("Em tính từ các số trên báo cáo: 12,6 ÷ 7,2 = 1,75, nói tròn là 1,8.")
@@ -377,7 +389,7 @@ def test_the_decision_card_lists_the_approved_asks_and_the_record_check_holds_it
         ["Đề nghị duyệt trần 120,0 tỷ"]
     rep = build(report)
     page = Path(rep["out"]).read_text(encoding="utf-8")
-    assert _data(rep)["quyet"][0] == "Giữ tỷ lệ chi phí nhân sự/DTT ở 2,40%, tức trần 177,5 tỷ"
+    assert _data(rep)["quyet"][0] == "Giữ tỷ lệ chi phí nhân sự trên doanh thu thuần ở 2,40%, tức trần 177,5 tỷ"
     Path(rep["out"]).write_text(page.replace("tức trần 177,5 tỷ\"", "tức trần 199,0 tỷ\"", 1), encoding="utf-8")
     assert any("Thẻ quyết định" in e for e in kiem_bien_ban.verify(rep["out"], str(report))["errors"])
 
@@ -409,13 +421,32 @@ def test_a_script_drawn_table_answers_questions_and_a_rows_own_explanation_is_th
         assert "đang kiểm lại" not in ask("Doanh thu tăng 8% có đúng không?")
         assert ask("Phải cắt bao nhiêu tỷ?").startswith(
             "Theo đề nghị trần 120,0 tỷ, phải giảm 9,0 tỷ so với AOPR (em tính: 129,0 − 120,0)")
-        assert ask("Nếu không duyệt trần thì sao?").startswith("Nếu doanh thu chỉ đạt 90% kế hoạch")
+        a = ask("Nếu không duyệt trần thì sao?")                                  # money first, then the printed risk
+        assert a.startswith("Nếu không duyệt, chi phí theo AOPR là 129,0 tỷ, cao hơn trần đề nghị 9,0 tỷ (em tính: 129,0 − 120,0).")
+        assert a.index("9,0") < a.index("6,4%")
         assert ask("ok cảm ơn em").startswith("Dạ.")
+        # round-5 panel: cost never answered with the revenue clause; a scenario the report does not compute gets no
+        # figure; "bỏ X ra" is the other rows; a level the report does not print is said so; a child foots to its parent
+        assert ask("Chi phí tăng bao nhiêu tỷ?").startswith("Tổng tăng 19,0 tỷ từ AOP gốc lên AOPR (em tính: 129,0 − 110,0)")
+        a = ask("Nếu doanh thu chỉ đạt 90% thì chi phí phải cắt bao nhiêu?")
+        assert a.startswith("Báo cáo không tính kịch bản này, nên em không đưa số.") and "9,0" not in a
+        assert ask("Bỏ Logistics ra thì sao?").startswith(
+            "Bỏ Logistics ra, các dòng còn lại tăng 7,0 tỷ, khoảng 10,0% (em tính: 19,0 − 12,0 = 7,0; 7,0 ÷ (110,0 − 40,0) × 100)")
+        assert ask("Doanh thu AOPR là bao nhiêu?").startswith("Báo cáo không ghi mức này; chỉ ghi: «doanh thu chỉ tăng 8,0%»")
+        assert ask("9,0 tính thế nào?").startswith("Theo đề nghị trần 120,0 tỷ, phải giảm 9,0 tỷ so với AOPR (em tính: 129,0 − 120,0)")
+        assert "Logistics 52,0 + Mua hàng 33,0 = 85,0 tỷ, khớp dòng Khối vận hành" in ask("Mua hàng 33,0 có đúng không?")
+        assert "Em cộng các dòng con: Logistics 52,0 + Mua hàng 33,0 = 85,0 tỷ, khớp." in ask("Khối vận hành 85,0 có đúng không?")
+        # every figure Clicky has said can be asked back: its own 17,3, a row's 30,0%, the ratio on a doubted rate
+        a = ask("17,3% ở đâu ra?")
+        assert "(129,0 − 110,0) ÷ 110,0 × 100 ≈ 17,3%" in a and "18,0%" in a
+        assert ask("Logistics tăng 30% đúng không?").startswith("Đúng theo bảng: Logistics tăng 30,0% (em tính: (52,0 − 40,0) ÷ 40,0 × 100)")
+        a = ask("Gấp mấy lần?")
+        assert "17,3%" in a and "18,0%" in a and "chưa tìm thấy" not in a
         assert ask("6,4% là sao?").startswith("Báo cáo ghi: «Nếu doanh thu chỉ đạt 90% kế hoạch, tỷ lệ chi phí trên doanh thu lên 6,4%.»")
         assert ask("2,3 ở đâu ra?").startswith("Báo cáo không ghi 2,3 ở chỗ nào")      # the ratio line is off: never explained
         a = ask("Rủi ro lớn nhất là gì?")
         assert a.startswith("Nếu doanh thu chỉ đạt 90% kế hoạch") and "«Rủi ro»" not in a
-        assert ask("110,0 có đúng không?").startswith("Tổng, AOP gốc: 110,0 tỷ. Em cộng 4 dòng cột AOP gốc (không tính dòng gộp) ra 110,0 tỷ, khớp")
+        assert ask("110,0 có đúng không?").startswith("Tổng, AOP gốc: 110,0 tỷ. Em cộng 4 dòng cột AOP gốc (không tính dòng tổng của nhóm) ra 110,0 tỷ, khớp")
         a = ask("Chi phí tăng nhanh gấp mấy lần?")                               # built on the doubted rate: held with both figures
         assert "17,3%" in a and "đang kiểm lại" in a
         assert ask("Nói ngắn trong 1 câu").startswith("Anh Tuấn xin anh chị duyệt trần chi phí vận hành 120,0 tỷ (giảm 9,0 tỷ), Logistics phải giải trình,")
@@ -432,35 +463,54 @@ def test_a_script_drawn_table_answers_questions_and_a_rows_own_explanation_is_th
         assert ask("Logistics tăng bao nhiêu %?").startswith(
             "Logistics tăng 30,0% từ AOP gốc lên AOPR (em tính: (52,0 − 40,0) ÷ 40,0 × 100)")
         assert ask("Khối vận hành tăng bao nhiêu?").startswith("Khối vận hành tăng 15,0 tỷ từ AOP gốc lên AOPR")
+        # round-5 Director: "nghĩa là gì" on a figure says its row plainly with its printed reason, never a bare subtraction
+        a = ask("52,0 nghĩa là gì?")
+        assert a.startswith("Logistics: AOP gốc 40,0 tỷ; AOPR 52,0 tỷ. Tăng 12,0 tỷ (30,0%)") and "«Thuê kho»" in a, a
+        a = ask("85,0 nghĩa là gì?")
+        assert a.startswith("Khối vận hành: AOP gốc 70,0 tỷ; AOPR 85,0 tỷ.") and "Dòng này cộng từ: Logistics 52,0 + Mua hàng 33,0 = 85,0 tỷ" in a, a
         a = ask("Các phòng cộng lại có khớp tổng không?")
-        assert "(không tính dòng gộp)" in a and "cộng ra 129,0 tỷ, khớp dòng Tổng 129,0 tỷ" in a, a
+        assert "(không tính dòng tổng của nhóm)" in a and "cộng ra 129,0 tỷ, khớp dòng Tổng 129,0 tỷ" in a, a
         browser.close()
 
 
-def test_once_the_owner_rules_a_doubted_sentence_is_quoted_with_his_reason_never_not_found(drawn_report):
+def test_once_the_owner_rules_a_doubted_sentence_every_route_says_the_ruling_never_his_private_note(drawn_report):
+    # round-5 panel: after a ruling "bao nhiêu phần trăm" quoted 18,0% alone, and the owner's free-text note
+    # ("… em sẽ sửa báo cáo") was read out on the Board's screen
     pytest.importorskip("playwright")
     from playwright.sync_api import sync_playwright
     from present import kiem_hinh
     rep = build(drawn_report)
     path = Path(rep["kich_ban"])
-    path.write_text(path.read_text(encoding="utf-8").replace("ly_do_bo: ''", "ly_do_bo: 'Số báo cáo đúng, giữ nguyên câu'")
-                    .replace("da_xem: 'chưa'", "da_xem: 'có'").replace("da_duyet: 'chưa'", "da_duyet: 'có'"), encoding="utf-8")
+    path.write_text(path.read_text(encoding="utf-8").replace("ly_do_bo: ''", "ly_do_bo: 'Kế toán xác nhận, em sẽ sửa sau'")
+                    .replace("da_xem: 'chưa'", "da_xem: 'có'").replace("da_duyet: 'chưa'", "da_duyet: 'có'")
+                    .replace("quyet: ''", "quyet: 'giữ câu'"), encoding="utf-8")
     rep = build(drawn_report)
     assert rep["trang_thai"].startswith("CHÍNH THỨC"), rep["canh_bao"]
-    with sync_playwright() as pw:
-        try:
-            browser = kiem_hinh._launch(pw)
-        except RuntimeError as exc:
-            pytest.skip(str(exc))
-        pg = browser.new_page(viewport={"width": 1366, "height": 768})
-        pg.goto(Path(rep["out"]).as_uri())
-        pg.wait_for_timeout(800)
-        ask = lambda q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
-        for q in ("18% đúng không?", "Chi phí vận hành AOPR tăng 18,0% trong khi doanh thu chỉ tăng 8,0% có đúng không?"):
-            a = ask(q)
-            assert a.startswith("Báo cáo ghi: «Chi phí vận hành AOPR tăng 18,0%") and "chưa tìm thấy" not in a, a
-            assert "đã soát câu này: Số báo cáo đúng, giữ nguyên câu" in a and "17,3%" in a
-        browser.close()
+
+    def answers(out, qs):
+        with sync_playwright() as pw:
+            try:
+                browser = kiem_hinh._launch(pw)
+            except RuntimeError as exc:
+                pytest.skip(str(exc))
+            pg = browser.new_page(viewport={"width": 1366, "height": 768})
+            pg.goto(Path(out).as_uri())
+            pg.wait_for_timeout(800)
+            got = [pg.evaluate("q => window.__clickyHoi(q, null)", q) for q in qs]
+            browser.close()
+            return got
+
+    qs = ("18% đúng không?", "Chi phí vận hành AOPR tăng 18,0% trong khi doanh thu chỉ tăng 8,0% có đúng không?",
+          "Chi phí tăng bao nhiêu phần trăm?")
+    for a in answers(rep["out"], qs):
+        assert a.startswith("Báo cáo ghi: «Chi phí vận hành AOPR tăng 18,0%") and "chưa tìm thấy" not in a, a
+        assert "đã soát và giữ số này" in a and "17,3%" in a and "em sẽ sửa" not in a and "tính lại: tính" not in a
+    # "báo cáo sai": the table's figure leads, never 18,0 alone, and the pack stays a draft until the report is fixed
+    path.write_text(path.read_text(encoding="utf-8").replace("quyet: 'giữ câu'", "quyet: 'báo cáo sai'"), encoding="utf-8")
+    rep = build(drawn_report)
+    assert rep["trang_thai"].startswith("SƠ BỘ") and any("báo cáo sai" in n for n in rep["canh_bao"])
+    for a in answers(rep["out"], qs):
+        assert a.startswith("Theo bảng: (129,0 − 110,0) ÷ 110,0 × 100 ≈ 17,3%. Báo cáo đang ghi 18,0%"), a
 
 
 def test_the_pre_flight_checks_head_the_script_and_hold_the_approval(report):

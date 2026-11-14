@@ -232,10 +232,10 @@ def test_basic_questions_are_answered_with_units_and_no_false_notes(page):
 
 def test_questions_the_talk_answers_come_from_the_approved_lines_and_the_page_still_answers_first(page):
     pg, errors = page
-    assert _ask(pg, "Tóm lại anh Tuấn cần quyết gì?").startswith("Anh Tuấn xin anh chị quyết hai việc. Một, giữ tỷ lệ")
+    assert _ask(pg, "Tóm lại anh Tuấn cần quyết gì?").startswith("Anh Tuấn xin anh chị quyết hai việc. Một là giữ tỷ lệ")
     a = _ask(pg, "Con số 1,8 lần em lấy ở đâu ra?")
     assert "12,6 ÷ 7,2 = 1,75, nói tròn là 1,8" in a and "biên bản kiểm lại công thức" in a
-    assert _ask(pg, "Nếu không cắt thì sao?").startswith("Nếu giữ nguyên, tỷ lệ chi phí nhân sự/DTT là 2,52%")
+    assert _ask(pg, "Nếu không cắt thì sao?").startswith("Nếu giữ nguyên, tỷ lệ chi phí nhân sự trên doanh thu thuần là 2,52%")
     a = _ask(pg, "Em là ai?")
     assert "kèm công thức" in a and "Theo kịch bản nháp của anh Tuấn (chưa duyệt)" in a       # never "đã duyệt" on a draft
     # a question the page answers directly is never taken over by the talk
@@ -260,7 +260,7 @@ def test_after_the_talk_the_decisions_wait_on_screen_and_a_choice_goes_to_the_ow
     pg, errors = page
     card = pg.evaluate("window.__clickyHetBai()")
     assert card.startswith("Anh Tuấn xin anh chị quyết:")
-    assert "Giữ tỷ lệ chi phí nhân sự/DTT ở 2,40%, tức trần 177,5 tỷ" in card and "Giãn tuyển 30 vị trí" in card
+    assert "Giữ tỷ lệ chi phí nhân sự trên doanh thu thuần ở 2,40%, tức trần 177,5 tỷ" in card and "Giãn tuyển 30 vị trí" in card
     assert card.count("Đồng ý") == 2 and card.count("Cần bàn thêm") == 2
     assert "tức trần 177,5 tỷ (cần giảm 8,9 tỷ)" in card                    # the cut the ask means, from the printed tile
     pg.evaluate("""() => { const r = document.getElementById('clicky-host').shadowRoot.querySelector('[data-quyet="0"]');
@@ -268,7 +268,7 @@ def test_after_the_talk_the_decisions_wait_on_screen_and_a_choice_goes_to_the_ow
     after = _answer(pg, "a")
     assert "Em đã ghi «Đồng ý»" in after and "Gửi anh Tuấn" in after
     assert pg.evaluate(f"[...{SR}.querySelectorAll('#a button')].filter(b => b.textContent === 'Gửi anh Tuấn').length") == 1
-    assert "Quyết định «Giữ tỷ lệ chi phí nhân sự/DTT ở 2,40%, tức trần 177,5 tỷ»: Đồng ý" in _parked(pg)
+    assert "Quyết định «Giữ tỷ lệ chi phí nhân sự trên doanh thu thuần ở 2,40%, tức trần 177,5 tỷ»: Đồng ý" in _parked(pg)
     # the mail puts the decision first, the questions after it, and says the talk is still a draft
     _ask(pg, "Lương bình quân khối bán hàng?")
     _ask(pg, "Vì sao tăng?", "table[data-clicky] tbody tr:nth-child(2) td:nth-child(4)")     # asked at a cell: the mail says where
@@ -401,7 +401,7 @@ def test_the_clicked_place_narrows_the_answer(page):
     a = _ask(pg, "Vì sao chi phí nhân sự tăng?")
     # the report's own reason holds a sentence the pre-flight doubts ("Hai phần ba … tuyển mới"): the talk's approved
     # reason is given instead, never the doubted sentence (panel round 2)
-    assert a.startswith("Theo AOPR, tổng là 186,4 tỷ") and "đến từ tuyển mới" not in a
+    assert a.startswith("Theo kế hoạch điều chỉnh, tổng là 186,4 tỷ") and "đến từ tuyển mới" not in a
     assert not errors
 
 
@@ -566,6 +566,9 @@ def test_phone_bar_stays_on_screen_with_a_wide_table(tmp_path):
         assert pg.evaluate("document.querySelector('table').hasAttribute('data-clicky-cuon')")
         assert bar["height"] <= 84                                        # was 175 px, then 106: at most a tenth of the phone
         assert pg.evaluate("window.__clickyChuCat()") == []               # no caption line hides a word, a figure least of all
+        # round-5 Chair: the phone's first screen says what is to be decided, with its money, before anyone presses ▶
+        cap_text = pg.evaluate("document.querySelector('#clicky-host').shadowRoot.getElementById('cap').innerText")
+        assert cap_text.startswith("Trợ lý AI. Anh Tuấn xin quyết: duyệt trần 177,5 tỷ (giảm 8,9 tỷ); giãn tuyển 30 vị trí bán hàng."), cap_text
         assert not errors
         browser.close()
 
@@ -1335,6 +1338,17 @@ def test_a_figure_checked_says_where_it_is_printed_and_the_sum_behind_it(page):
     assert "Em cộng 6 dòng cột AOPR ra 186,4 tỷ, khớp dòng Tổng 186,4 tỷ." in _r3(pg, "Có chắc không?", "table tbody tr:last-child td:nth-child(3)")
     assert _r3(pg, "8,9 có đúng không?").startswith("Báo cáo ghi 8,9 ở 1 chỗ: «Cần giảm so với AOPR: 8,9 tỷ». Em tính lại: 8,9 tỷ = 186,4 − 177,5, khớp.")
     assert _r3(pg, "99,9 có đúng không?").startswith("Báo cáo không ghi 99,9 ở chỗ nào, nên em không xác nhận số này.")
+    assert _r3(pg, "Khối CNTT tăng 12,0% có đúng không?").startswith(                     # the row named, never Marketing's 12,0%
+        "Khối CNTT, % tăng: 12,0%. Em tính lại từ dòng này: (17,7 − 15,8) ÷ 15,8 × 100 ≈ 12,0%, khớp.")
+    assert "chưa có giọng" not in _r3(pg, "12,6% có đúng không?")                        # the device notice is never inside an answer
+    # round-5 panel: every figure said can be asked back; share of the increase; people from the report's sentences
+    assert _r3(pg, "Chi phí tăng nhanh gấp mấy lần doanh thu?").startswith("Chi phí tăng nhanh gấp khoảng 1,8 lần doanh thu. Em tính")
+    assert _r3(pg, "Khối Bán hàng chiếm hai phần ba à?").startswith("Khối Bán hàng chiếm 67,5% tổng Chênh lệch (em tính: 14,1 tỷ ÷ 20,9 tỷ)")
+    assert _r3(pg, "12,6% là so với cái gì?").startswith("Tổng chi phí nhân sự AOPR: 186,4 tỷ, tăng 12,6% so với AOP gốc.")
+    assert "48 nhân viên" in _r3(pg, "Đội bán hàng tăng bao nhiêu người?")
+    assert "Em cộng 6 dòng cột Headcount AOPR ra 1.248 người, khớp" in _r3(pg, "1.248 có đúng không?")
+    assert "186,4 tỷ ÷ 1.248 người × 1.000 ≈ 149,4, khớp." in _r3(pg, "149,4 đúng không?")
+    assert _r3(pg, "Nếu doanh thu chỉ đạt 90% thì sao?").startswith("Báo cáo không tính kịch bản này")
     assert _r3(pg, "Có chắc không?").startswith("Anh chị bấm vào con số hay câu muốn em kiểm")     # nothing pointed at: no queue
     for q in ("12,6% có đúng không?", "14,1 có đúng không?", "Có chắc không?"):
         assert "chưa tìm thấy" not in _r3(pg, q) and "«có đúng»" not in _r3(pg, q)

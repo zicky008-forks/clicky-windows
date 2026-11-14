@@ -2000,6 +2000,9 @@ SCRIPT_HEAD = """# Kịch bản Clicky cho «{report}».
 #   Mục có dòng "cau" là các câu em đề xuất cho điểm đó: anh bật một câu (bat: 'có'), hoặc ghi vào ly_do_bo vì sao
 #   không nói (ví dụ ly_do_bo: 'Số báo cáo đúng, giữ nguyên câu'). Còn mục nào chưa xong thì bản trình bày vẫn là
 #   SƠ BỘ, kể cả khi đã ghi da_duyet: 'có'.
+#   Mục nghi một câu trong báo cáo (có ma_cau): ghi quyet: 'giữ câu' nếu số báo cáo đúng, hoặc quyet: 'báo cáo sai'
+#   (khi đó anh sửa báo cáo rồi kéo thả lại). ly_do_bo là ghi chú riêng của anh, Ban Giám đốc không thấy; câu duy
+#   nhất Ban Giám đốc thấy về điểm này là noi_voi_BOD (để trống thì em dùng câu chuẩn).
 # Đọc và sửa xong: đổi da_duyet: 'chưa' thành da_duyet: 'có', rồi kéo thả báo cáo vào Clicky lần nữa.
 # Khi đó bản trình bày hết chữ SƠ BỘ.
 """
@@ -2261,6 +2264,9 @@ def _check_row(k: dict) -> dict:
     row["da_xem"] = _Q("có" if _seen(k) else "chưa")
     if k.get("cau") or k.get("ma_cau"):
         row["ly_do_bo"] = _Q(str(k.get("ly_do_bo") or ""))
+    if k.get("ma_cau"):                            # a doubted sentence: the owner's ruling, and the one line the Board may see
+        row["quyet"] = _Q(str(k.get("quyet") or ""))
+        row["noi_voi_BOD"] = _Q(str(k.get("noi_voi_BOD") or ""))
     return row
 
 
@@ -2273,7 +2279,17 @@ def ruled(k: dict, said: set) -> bool:
     the owner's reason in ly_do_bo. Ticking da_xem alone is looking, not deciding."""
     if not (k.get("cau") or k.get("ma_cau")):
         return True
-    return bool(str(k.get("ly_do_bo") or "").strip()) or any(str(x).strip() in said for x in k.get("cau") or [])
+    q = verdict(k)
+    if q == "báo cáo sai":                         # the report is to be fixed first: the pack stays a draft until then
+        return False
+    return bool(q) or bool(str(k.get("ly_do_bo") or "").strip()) or any(str(x).strip() in said for x in k.get("cau") or [])
+
+
+def verdict(k: dict) -> str:
+    """The owner's ruling on a doubted sentence: 'giữ câu', 'báo cáo sai', or '' (accents and case forgiven)."""
+    q = "".join(c for c in unicodedata.normalize("NFD", str(k.get("quyet") or "").replace("đ", "d"))
+                if unicodedata.category(c) != "Mn").lower().strip()
+    return "giữ câu" if q.startswith("giu") else "báo cáo sai" if q.startswith("bao cao sai") or q == "sai" else ""
 
 
 def open_checks(script: dict) -> list:
@@ -2286,8 +2302,11 @@ def open_checks(script: dict) -> list:
             out.append(str(k.get("muc", "")))
         elif not ruled(k, said):
             first = (k.get("cau") or [""])[0]
-            out.append(str(k.get("muc", "")) + (f" (bật câu «{clip(str(first), 50)}» hoặc ghi ly_do_bo)" if first
-                                                  else " (ghi ly_do_bo: giữ câu hay đã sửa báo cáo)"))
+            if verdict(k) == "báo cáo sai":
+                out.append("(anh đã ghi quyet: 'báo cáo sai': sửa câu trong báo cáo rồi kéo thả lại) " + str(k.get("muc", "")))
+            else:
+                out.append((f"(bật câu «{clip(str(first), 50)}» hoặc ghi ly_do_bo) " if first
+                            else "(ghi quyet: 'giữ câu' hoặc 'báo cáo sai') ") + str(k.get("muc", "")))
     return out
 
 
@@ -2296,7 +2315,8 @@ def doubts(script: dict) -> list:
     and, once the owner has ruled, his reason. Never the sentence or the owner's finding in words."""
     said = _lines_on(script)
     return [{"ma": str(k["ma_cau"]), "so": [str(x) for x in k.get("ma_so") or []], "tinh": str(k.get("tinh") or ""),
-             "xong": ruled(k, said), "ly_do": str(k.get("ly_do_bo") or "").strip() if ruled(k, said) else ""}
+             "xong": ruled(k, said) or verdict(k) == "báo cáo sai", "quyet": verdict(k),
+             "noi": str(k.get("noi_voi_BOD") or "").strip()}   # ly_do_bo is the owner's own note: never on the page
             for k in script.get("kiem_tra") or [] if isinstance(k, dict) and k.get("ma_cau")]
 
 
@@ -2329,7 +2349,8 @@ def refresh_checks(kept: list, fresh: list) -> list:
     out = []
     for k in fresh or []:
         old = was.get(str(k.get("muc", "")))
-        out.append(dict(k, da_xem=old.get("da_xem", "chưa"), ly_do_bo=old.get("ly_do_bo", "")) if old
+        out.append(dict(k, da_xem=old.get("da_xem", "chưa"), ly_do_bo=old.get("ly_do_bo", ""), quyet=old.get("quyet", ""),
+                        noi_voi_BOD=old.get("noi_voi_BOD", "")) if old
                    else dict(k, da_xem="chưa"))
     return out
 

@@ -178,8 +178,12 @@ button.on{background:var(--warnsoft);border-color:var(--warn)}
   <div class="cap" id="cap" aria-live="polite"></div><span class="brk"></span>
 </div>`;
 const $ = id => root.getElementById(id);
-const INTRO = "<span class=\"lg\">Em là Clicky, trợ lý AI của " + esc(OWNER) + ". Bấm ▶ để nghe trình bày. Bấm vào bất kỳ con số hay đoạn nào trên báo cáo, hoặc ⬚ Khoanh vùng, để hỏi ngay tại đó.</span>" +
-  "<span class=\"sh\">Trợ lý AI của " + esc(OWNER) + ": bấm ▶ để nghe, bấm vào số để hỏi.</span>";   // the short one on a narrow bar
+function INTRO() {   // the short one on a narrow bar leads with the asks: a phone's first screen says what is to be decided
+  const asks = askTags(6);
+  return "<span class=\"lg\">Em là Clicky, trợ lý AI của " + esc(OWNER) + ". Bấm ▶ để nghe trình bày. Bấm vào bất kỳ con số hay đoạn nào trên báo cáo, hoặc ⬚ Khoanh vùng, để hỏi ngay tại đó.</span>" +
+    "<span class=\"sh\">" + (asks.length ? "Trợ lý AI. " + esc(OWNER.charAt(0).toUpperCase() + OWNER.slice(1)) + " xin quyết: " + esc(asks.join("; ")) + ". Bấm ▶ để nghe."
+      : "Trợ lý AI của " + esc(OWNER) + ": bấm ▶ để nghe, bấm vào số để hỏi.") + "</span>";
+}
 const audio = new Audio();
 let idx = 0, playing = false, shown = new Set(), aside = false, started = false, ended = false, resumeAt = null, frames = [];
 function hit(a, b) { return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom; }
@@ -723,7 +727,7 @@ function talkLine() {   // while an answer is open the bar says one short line, 
 }
 function idleLine() {
   if (isOpen($("bub")) || isOpen($("panel")) || (playing && !aside)) return;
-  $("cap").innerHTML = aside && resumeAt ? "<span>Bấm ↩ để nghe tiếp phần " + (resumeAt.i + 1) + "/" + S.length + ".</span>" : started ? $("cap").innerHTML : INTRO;
+  $("cap").innerHTML = aside && resumeAt ? "<span>Bấm ↩ để nghe tiếp phần " + (resumeAt.i + 1) + "/" + S.length + ".</span>" : started ? $("cap").innerHTML : INTRO();
   fitBar();
 }
 // where each spoken figure comes from, from the sealed record: k = the framed place, b = elsewhere in the report, o = owner
@@ -1237,7 +1241,7 @@ function factMatch(q, scope, weak) {   // weak: the page found nothing better, s
   return FACTS.find(f => (ANY_SCOPE.has(f.k) || (weak && !scope)) && f.re.some(r => r.test(fq)) && !(f.no && f.no.test(fq)) && !(f.x || []).some(n => fq.includes(" " + n + " "))) || null;
 }
 function answerFact(f) {
-  answer(f.a, f.chi ? el(f.chi) : null, {clip: f.audio ? f : null,
+  answer(String(f.a).replace(/^Tức là\s+(.)/, (m, c) => c.toUpperCase()), f.chi ? el(f.chi) : null, {clip: f.audio ? f : null,
     src: f.k === "t" ? "Em tính từ các số trên báo cáo «" + TITLE + "»; biên bản kiểm lại công thức này" : (DRAFT ? "Theo kịch bản nháp của " + OWNER + " (chưa duyệt)" : "Theo lời " + OWNER + " đã duyệt cho bài trình bày")});
 }
 function bankMatch(Q, scope) {
@@ -1430,7 +1434,7 @@ function howSentence(Q) {   // a figure the reader quotes, or two things compare
   return {kind: "sentence", b: best.b, s: best.s, calc};
 }
 // one-step sums on printed figures, each answered with its formula and said to be Clicky's own working
-function footing(Q, scope) {   // "các khối cộng lại có ra 186,4 không": the leaf rows against the Tổng row
+function footing(Q, scope, all) {   // "các khối cộng lại có ra 186,4 không": the leaf rows against the Tổng row
   if (!/\b(cong (lai|ra|vao|don)|co khop|khop (khong|chua)|tong cac)\b/.test(Q.f)) return null;
   const ms = scope && scope.m ? [scope.m] : tables(), m = ms.find(x => x.rows.some(r => r.total)); if (!m) return null;
   const tot = m.rows.find(r => r.total), subs = subRows(m), leaves = m.rows.filter(r => !r.total && !subs.has(r)), out = [];
@@ -1440,7 +1444,7 @@ function footing(Q, scope) {   // "các khối cộng lại có ra 186,4 không"
     if (vals.length < 2 || !t) continue;
     const D = Math.max(t.d, ...vals.map(v => v.d)); let sum = 0; vals.forEach(v => { sum += v.n * 10 ** (D - v.d); });
     const tv = t.n * 10 ** (D - t.d); out.push({c, sum: vn(sum, D), tot: cellText(tot.cells[c]), ok: sum === tv, gap: vn(Math.abs(sum - tv), D), n: vals.length});
-    if (out.length === 3) break;
+    if (out.length === 3 && !all) break;
   }
   return out.length ? {kind: "foot", m, tot, out, subs: subs.size, Q} : null;
 }
@@ -1448,7 +1452,8 @@ function rowChange(Q, scope) {   // "Logistics tăng bao nhiêu (%)": a table wi
   if (!/\b(tang|giam|chenh)\b/.test(Q.f) || Q.sup || Q.share || Q.why || Q.how) return null;
   for (const m of scope && scope.m ? [scope.m] : tables()) {
     const df = diffCols(Q, m); if (!df) continue;
-    const row = (scope && scope.m === m && scope.row) || m.rows.map(r => ({r, s: rowMatch(Q, r)})).filter(x => x.s).sort((a, b) => b.s - a.s).map(x => x.r)[0];
+    let row = (scope && scope.m === m && scope.row) || m.rows.map(r => ({r, s: rowMatch(Q, r)})).filter(x => x.s).sort((a, b) => b.s - a.s).map(x => x.r)[0];
+    if (!row && /\b(tong|chi_phi)\b/.test(joined(Q.f)) && !/\bdoanh thu\b/.test(Q.f)) row = m.rows.find(r => r.total);   // "chi phí tăng bao nhiêu": the total
     if (!row) continue;
     const d = diffOf(m, row, df, !!Q.pct); if (!d) continue;
     return {kind: "rowchange", m, row, df, d, pct: !!Q.pct, Q};
@@ -1519,7 +1524,8 @@ function resolve(q, scope) {
   if (Q.share) {   // "chiếm bao nhiêu % tổng": computed here from two figures of the table, and said so
     const rc = cands.filter(c => c.row && !c.scoped && !c.colOnly && !c.row.total).sort((a, b) => b.score - a.score)[0];
     const m = rc ? rc.m : scope && scope.row ? scope.m : null, row = rc ? rc.row : scope && scope.row;
-    const chg = /\b(phan tang|muc tang|phan chenh|muc chenh|chenh lech|phan giam|muc giam)\b/.test(Q.f);   // "chiếm bao nhiêu % phần tăng": change ÷ total change
+    const chg = /\b(phan tang|muc tang|phan chenh|muc chenh|chenh lech|phan giam|muc giam)\b/.test(Q.f) ||
+      (/\b(hai phan ba|mot nua|phan lon|ba phan tu|mot phan ba|chu yeu)\b/.test(Q.f) && !/\btong\b/.test(Q.f) && tables().some(t => deltaCols(t).length || diffCols(Q, t)));   // the talk's "hai phần ba" is of the increase   // "chiếm bao nhiêu % phần tăng": change ÷ total change
     const tot = m && m.rows.find(r => r.total), c = !m ? -1 : chg ? (deltaCols(m).find(k => colUnit(m, k) !== "%") ?? -1) : valueCol(Q, m);
     const df = m && chg && c < 0 ? diffCols(Q, m) : null;
     if (df && row && tot) {
@@ -1670,7 +1676,8 @@ function answer(text, target, o) {
   ex.filter(figs).forEach(x => a.appendChild(x));   // the figures first, then where they come from
   if (src) a.appendChild(quiet(src));
   ex.filter(x => !figs(x)).forEach(x => a.appendChild(x));
-  if (!o.clip && !viVoice && !toldNoVoice && text !== D.fallback) { toldNoVoice = true; const n = quiet("Máy anh chị chưa có giọng tiếng Việt, em hiện chữ thôi ạ."); n.classList.add("quiet"); a.appendChild(n); }
+  if (!o.clip && !viVoice && !toldNoVoice && text !== D.fallback) { toldNoVoice = true;   // said once, under the panel's own hint: never inside an answer
+    const h = root.querySelector("#panel .hint"); if (h) { const n = document.createElement("span"); n.className = "novoice"; n.textContent = " Máy anh chị chưa có giọng tiếng Việt, em hiện chữ thôi ạ."; h.appendChild(n); } }
   if (!aside && started && !ended) resumeAt = {i: idx, t: audio.currentTime};
   aside = true; audio.pause(); stopVoice(); setPlaying(false); talkLine();
   if (target) frame(target); else { clearFrames(); placePanel(); }
@@ -1762,22 +1769,34 @@ function doubtHit(q, scope) {   // the reader asks about a doubted sentence: it 
   const content = x => x.f.split(" ").filter(w => w.length > 1 && !ECHO_NOT.has(w));   // three words in a row of it
   return list.find(x => { const w = content(x); for (let i = 0; i + 2 < w.length; i++) if (f.includes(" " + w.slice(i, i + 3).join(" ") + " ")) return true; return false; }) || null;
 }
-function answerDoubt(q, o) {
-  const it = o.it, t = it.tinh ? it.tinh.charAt(0).toUpperCase() + it.tinh.slice(1) : "";
-  if (!it.xong) { answer("Báo cáo có viết câu này" + (t ? "; " + it.tinh : "") + ". " + OWNER.charAt(0).toUpperCase() + OWNER.slice(1) + " đang kiểm lại, em chưa trả lời thay ạ.", null, {cls: "park", extra: parkNote(q), src: ""}); return; }
-  answer("Báo cáo ghi: «" + whole(o.s) + "» " + esc(OWNER.charAt(0).toUpperCase() + OWNER.slice(1) + " đã soát câu này" + (it.ly_do ? ": " + it.ly_do.replace(/\.$/, "") : "") + "." + (t ? " Em tính lại: " + it.tinh + "." : "")),
+function answerDoubt(q, o) {   // one wording per state of a doubted figure; the owner's own note (ly_do_bo) never reaches the page
+  const it = o.it, Own = OWNER.charAt(0).toUpperCase() + OWNER.slice(1), work = (it.tinh || "").replace(/^tính từ bảng\s*/, "");
+  const sh = (it.so || []).map(x => o.s.includes(x + "%") ? x + "%" : x).join(", ");
+  if (it.quyet === "báo cáo sai" && work) {
+    answer("Theo bảng: " + work + ". Báo cáo đang ghi " + sh + "; " + Own + " đã xác nhận đây là chỗ báo cáo cần sửa." + (it.noi ? " " + it.noi : ""), o.el,
+      {src: "Em tính từ các số trên báo cáo «" + TITLE + "»"}); return; }
+  if (!it.xong) { answer((sh ? "Báo cáo ghi " + sh : "Báo cáo có viết câu này") + (it.tinh ? "; " + it.tinh : "") + ". " + Own + " đang kiểm lại " + (sh && it.tinh ? "hai số này" : "câu này") + ", em chưa trả lời thay ạ.", null,
+      {cls: "park", extra: parkNote(q), src: ""}); return; }
+  answer("Báo cáo ghi: «" + whole(o.s) + "» " + esc(Own + " đã soát và giữ " + (sh ? "số này" : "câu này") + "." +
+    (work ? " Tính thẳng từ bảng: " + work + "; chỗ chênh em ghi lại để " + OWNER + " giải thích." : "") + (it.noi ? " " + it.noi : "")),
     o.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"});
 }
 function pctAsk(q) {   // "chi phí tăng bao nhiêu phần trăm" while the printed rate is in doubt: both figures, never one
   const f = " " + fold(q) + " "; if (!/ (bao nhieu|may) (phan tram|%)| (phan tram|%) (bao nhieu|may)|tang bao nhieu %| gap (bao nhieu|may) lan/.test(f.replace(/(\d)%/g, "$1 %"))) return null;
   if (/ (chiem|ty trong|phan tang|phan giam|co cau) /.test(f)) return null;   // a share of the change is another question
   const MOVE = /^(tang|giam|nhanh|cham|hon|bang)$/; const fj = " " + joined(fold(q)) + " ";   // the subject must match ("chi phi"), not the verb every rate shares
-  return nghiSents().find(x => !x.it.xong && (x.it.so || []).length && x.it.tinh && words(x.f).some(w => fj.includes(" " + w + " ") && w.length >= 3 && !ECHO_NOT.has(w) && !MOVE.test(w))) || null;
+  const bare = !words(q).some(w => w.length > 2 && !ECHO_NOT.has(w) && !MOVE.test(w) && !/^(gap|lan|phan|tram|nhanh)$/.test(w));   // "gấp mấy lần?" alone
+  if (bare) return nghiSents().find(x => (x.it.so || []).length && x.it.tinh) || null;
+  return nghiSents().find(x => (x.it.so || []).length && x.it.tinh && words(x.f).some(w => fj.includes(" " + w + " ") && w.length >= 3 && !ECHO_NOT.has(w) && !MOVE.test(w))) || null;
 }
 function clauseOf(q, o) {   // the undoubted half of a doubted sentence ("doanh thu chỉ tăng 8,0%"), when that is what is asked
   const parts = o.s.split(/,\s+|\s+(?=trong khi\s)|\s+(?=và\s)/), f = " " + fold(q) + " ";
   const doubted = (o.it.so || []).map(fold);
-  return parts.find(p => /\d/.test(p) && !doubted.some(t => fold(p).includes(t)) && words(fold(p)).some(w => w.length > 3 && !ECHO_NOT.has(w) && f.includes(" " + w + " "))) || null;
+  const subj = t => new Set((" " + joined(fold(t)) + " ").match(/ (chi_phi|doanh thu|loi nhuan|luong|nhan su|headcount|nguoi) /g) || []);
+  const qs = subj(q);   // "chi phí tăng bao nhiêu" is never answered with the revenue clause
+  return parts.find(p => { if (!/\d/.test(p) || doubted.some(t => fold(p).includes(t))) return false;
+    const ps = subj(p); if (qs.size && ps.size && ![...ps].some(x => qs.has(x))) return false;
+    return words(fold(p)).some(w => w.length > 3 && !ECHO_NOT.has(w) && f.includes(" " + w + " ")); }) || null;
 }
 function capCut(Q) {   // "phải cắt bao nhiêu" when the cap is only in an ask: the table's total minus it, worked out
   if (!/\b(cat|giam) (bao nhieu|may|di bao nhieu)\b|\b(phai|can) (cat|giam)\b/.test(Q.f)) return null;
@@ -1833,17 +1852,27 @@ function rowImpact(q, scope) {   // "Đội bán hàng bị ảnh hưởng thế
   else tables().forEach(m => m.rows.forEach(row => { if (row.total) return; const sc = rowMatch(Q, row); if (sc && (!best || sc > best.s)) best = {m, row, s: sc}; }));
   if (!best) return false;
   const {m, row} = best, key = core(row.label);
+  const parts = rowFacts(m, row, Q);
+  const asks = QUYET.filter(t => key.some(w => w.length > 2 && (" " + joined(fold(t)) + " ").includes(" " + w + " ")));
+  if (asks.length) parts.push(OWNER.charAt(0).toUpperCase() + OWNER.slice(1) + " đề nghị: «" + asks.map(t => t.replace(/\.$/, "")).join("»; «") + "».");
+  parts.push("Báo cáo chưa nói ảnh hưởng tới doanh thu hay con người của " + rowName(row) + ", nên em ghi lại để " + OWNER + " trả lời.");
+  answer(parts.join(" "), row.r, {cls: "park", extra: parkNote(q, null, true), src: "Lấy từ báo cáo «" + TITLE + "», đúng dòng " + rowName(row)});
+  return true;
+}
+function rowFacts(m, row, Q) {   // a row in plain words: its printed figures, its change worked out, its printed cause
   const parts = [cellAnswer(m, row, -1).text], df = !deltaCols(m).length && diffCols(Q, m), d = df && diffOf(m, row, df, false), dp = df && diffOf(m, row, df, true);
   if (d) { const u = uOf(m, row, df[1]), a = cellText(row.cells[df[1]]), p = cellText(row.cells[df[0]]);
     parts.push((d.k < 0 ? "Giảm " : "Tăng ") + withUnit(d.s.replace(/^-/, ""), u) + (dp ? " (" + dp.s.replace(/^-/, "") + "%)" : "") + " từ " + colName(m, df[0]) + " lên " + colName(m, df[1]) + " (em tính: " + a + " − " + p + ")."); }
   const cause = resolve("Vì sao " + row.label + " tăng?", null);
   if (cause.kind === "rowcause") parts.push("Báo cáo ghi " + colName(cause.m, cause.c).toLowerCase() + ": «" + cellText(cause.cell) + "».");
   else if (cause.kind === "why" && cause.w && cause.w.cause && !doubted(cause.w.text)) parts.push("Báo cáo ghi lý do: «" + cause.w.text.trim().replace(/\.?$/, ".") + "»");
-  const asks = QUYET.filter(t => key.some(w => w.length > 2 && (" " + joined(fold(t)) + " ").includes(" " + w + " ")));
-  if (asks.length) parts.push(OWNER.charAt(0).toUpperCase() + OWNER.slice(1) + " đề nghị: «" + asks.map(t => t.replace(/\.$/, "")).join("»; «") + "».");
-  parts.push("Báo cáo chưa nói ảnh hưởng tới doanh thu hay con người của " + rowName(row) + ", nên em ghi lại để " + OWNER + " trả lời.");
-  answer(parts.join(" "), row.r, {cls: "park", extra: parkNote(q, null, true), src: "Lấy từ báo cáo «" + TITLE + "», đúng dòng " + rowName(row)});
-  return true;
+  return parts;
+}
+function meanAnswer(q, m, row, c) {   // "số này nghĩa là gì" on a cell: the row said plainly, never a subtraction alone (round-5 Director)
+  const parts = rowFacts(m, row, qinfo(rowName(row) + " tăng bao nhiêu"));
+  const k = (subRows(m).has(row) || deltaCols(m).includes(c)) && cellCheck(m, row, c);   // a subtotal's make-up, a variance's sum
+  if (k && k.ok) parts.push(k.text.replace("Em cộng các dòng con: ", "Dòng này cộng từ: "));
+  answer(parts.join(" "), row.cells[c] || row.r, {src: "Lấy từ báo cáo «" + TITLE + "», đúng dòng " + rowName(row)});
 }
 function cutTag() {   // the cut the asks imply: a printed "giảm" tile, else the table's total minus the cap in the ask
   const c = allCards().find(c => /\b(giam|cat)\b/.test(fold(c.text.split(":")[0]))), f = c && cardFigs(c)[0];
@@ -1860,14 +1889,67 @@ function saveAsk(q) {   // "giãn 30 vị trí có đủ bù 8,9 tỷ không": a
     {cls: "park", extra: parkNote(q), src: "Theo báo cáo «" + TITLE + "»"});
   return true;
 }
-function oneLine(q) {   // "nói ngắn trong 1 câu": the asks as short tags in one sentence, figures as printed
-  if (!QUYET.length || !/\b(1|mot) cau\b|\bnoi ngan\b|\bngan gon\b/.test(fold(q))) return false;
-  const cut = cutTag();
-  const tags = QUYET.map(t => { const m = t.match(/trần[^0-9;]*?\d[\d.,]*\s*(tỷ|triệu)?/i);
+function capCutNow() { return capCut(qinfo("phải giảm bao nhiêu")); }
+function capCutText(r) { return "Theo đề nghị trần " + withUnit(r.cap, r.u) + ", phải giảm " + withUnit(r.x, r.u) + " so với " + colName(r.m, r.v) + " (em tính: " + cellText(r.tot.cells[r.v]) + " − " + r.cap + "); báo cáo không ghi sẵn số này."; }
+function rejectCap(q) {   // "nếu không duyệt trần thì sao": first what rejecting it means in money, then the printed risk
+  const f = " " + fold(q) + " "; if (!/ (khong duyet|bac|tu choi|khong dong y) /.test(f) || !/ tran /.test(f)) return false;
+  const r = capCutNow(); if (!r) return false;
+  const risk = FACTS.find(x => x.k === "neu_hut");
+  answer("Nếu không duyệt, chi phí theo " + colName(r.m, r.v) + " là " + withUnit(cellText(r.tot.cells[r.v]), r.u) + ", cao hơn trần đề nghị " + withUnit(r.x, r.u) +
+    " (em tính: " + cellText(r.tot.cells[r.v]) + " − " + r.cap + ")." + (risk ? " Rủi ro thêm nếu doanh thu hụt: " + risk.a.replace(/^./, c => c.toLowerCase()) : ""), r.tot.cells[r.v],
+    {src: "Em tính từ các số trên báo cáo «" + TITLE + "»" + (risk ? "; câu rủi ro theo kịch bản của " + OWNER : "")});
+  return true;
+}
+function condAsk(q) {   // "nếu doanh thu chỉ đạt 90% thì phải cắt bao nhiêu": a scenario the report computes, or none
+  const f = " " + fold(q) + " ", m = f.match(/ neu (.+?) (thi|,) (.+)$/); if (!m || !/(bao nhieu|may|the nao|sao)/.test(m[3])) return false;
+  const figs = m[1].match(/\d[\d.,]*%?/g) || []; if (!figs.length) return false;
+  const open = /^\s*(sao|the nao|ra sao)\b/.test(m[3]);   // "… thì sao": the report's own sentence with that condition
+  const ask = open ? [] : words(m[3]).filter(w => w.length > 2 && !ECHO_NOT.has(w) && !/^(thi|se|phai|can|chi_phi|doanh|thu|loi|nhuan|tong)$/.test(w));   // what is asked, not whose
+  if (!open && !ask.length) return false;
+  for (const b of blocks()) for (const x of splitSent(b.text)) { const fx = " " + joined(fold(x)) + " ";
+    if (figs.every(g => fx.includes(fold(g).replace(/%$/, ""))) && (open || ask.some(w => fx.includes(" " + w + " ")))) {
+      answer("Báo cáo ghi: «" + whole(x) + "»", b.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"}); return true; } }
+  answer("Báo cáo không tính kịch bản này, nên em không đưa số.", null, {cls: "park", extra: parkNote(q)});
+  return true;
+}
+function restOf(q) {   // "bỏ Logistics ra thì sao": the other rows' change, worked out, never the excluded row's own
+  const f = " " + fold(q) + " "; if (!/ (bo|tru|khong tinh|ngoai|loai) /.test(f)) return false;
+  const Q = qinfo(q);
+  for (const m of tables()) {
+    const tot = m.rows.find(r => r.total); if (!tot) continue;
+    const row = m.rows.filter(r => !r.total).map(r => ({r, s: rowMatch(Q, r)})).filter(x => x.s).sort((a, b) => b.s - a.s).map(x => x.r)[0]; if (!row) continue;
+    const dc = deltaCols(m), abs = dc.find(k => colUnit(m, k) !== "%"), df = abs === undefined ? diffCols(Q, m) : null;
+    const plan = df ? df[0] : m.head.map((h, i) => i).filter(i => i >= m.lc && !dc.includes(i) && colUnit(m, i) === colUnit(m, abs))[0];
+    const dv = r => abs !== undefined ? decimal(cellText(r.cells[abs]), m.en) : (x => x && {n: x.k, d: x.d})(diffOf(m, r, df, false));
+    const pv = r => plan !== undefined && r.cells[plan] ? decimal(cellText(r.cells[plan]), m.en) : null;
+    const a = dv(tot), b = dv(row), p = pv(tot), pr = pv(row); if (!a || !b || !p || !pr) continue;
+    const D = Math.max(a.d, b.d, p.d, pr.d), sc = x => x.n * 10 ** (D - x.d), rest = sc(a) - sc(b), base = sc(p) - sc(pr);
+    const u = colUnit(m, abs !== undefined ? abs : df[1]), show = x => vn(x, D), pct = base ? vn(Math.round(rest * 1000 / base), 1) : "";
+    const ta = show(sc(a)), tb = show(sc(b));
+    answer("Bỏ " + rowName(row) + " ra, các dòng còn lại " + (rest < 0 ? "giảm " : "tăng ") + withUnit(show(Math.abs(rest)), u) + (pct ? ", khoảng " + pct.replace(/^-/, "") + "%" : "") +
+      " (em tính: " + ta + " − " + tb + " = " + show(rest) + (pct ? "; " + show(rest) + " ÷ (" + show(sc(p)) + " − " + show(sc(pr)) + ") × 100" : "") + "); báo cáo không ghi sẵn số này.", tot.r,
+      {src: "Em tính từ các số trên báo cáo «" + TITLE + "»"});
+    return true;
+  }
+  return false;
+}
+function cutHow(q) {   // "9,0 tính thế nào" when 9,0 is the cut worked out from the cap in an ask
+  const f = " " + fold(q) + " "; if (!/ (tinh the nao|tinh sao|o dau ra|tu dau ra|lay o dau) /.test(f)) return false;
+  const r = capCutNow(), toks = q.match(/\d[\d.,]*\d|\d/g) || []; if (!r || !toks.some(t => t === r.x)) return false;
+  answer(capCutText(r), r.tot.cells[r.v], {src: "Em tính từ hai số trên báo cáo «" + TITLE + "»"}); return true;
+}
+function askTags(most) {   // each ask as a short tag, its money as printed: "duyệt trần 177,5 tỷ (giảm 8,9 tỷ)"
+  const cut = QUYET.length ? cutTag() : "";
+  return QUYET.map(t => { const m = t.match(/trần[^0-9;]*?\d[\d.,]*\s*(tỷ|triệu)?/i);
     if (m) return "duyệt " + m[0].trim() + (cut ? " (" + cut + ")" : "");
-    const w = t.split(/,\s|;\s|\s(?=và\s)|\s(?=trước khi\s)/)[0].replace(/\.$/, "").split(/\s+/);
+    let w = t.split(/,\s|;\s|\s(?=và\s)|\s(?=trước khi\s)/)[0].replace(/\.$/, "").split(/\s+/);
+    if (most && w.length > most) { const k = w.findIndex((x, i) => i >= 3 && /^(sang|cho|trong|từ|đến|vào|để)$/i.test(x)); if (k > 0 && k <= most + 2) w = w.slice(0, k); }
     const name = tables().some(m => m.rows.some(r => fold(r.label).split(" ")[0] === fold(w[0])));   // "Logistics" keeps its capital
     return (w.length > 12 ? w.slice(0, 12) : w).join(" ").replace(/^./, c => name ? c : c.toLowerCase()); });
+}
+function oneLine(q) {   // "nói ngắn trong 1 câu": the asks as short tags in one sentence, figures as printed
+  if (!QUYET.length || !/\b(1|mot) cau\b|\bnoi ngan\b|\bngan gon\b/.test(fold(q))) return false;
+  const tags = askTags();
   answer(OWNER.charAt(0).toUpperCase() + OWNER.slice(1) + " xin anh chị " + (tags.length > 1 ? tags.slice(0, -1).join(", ") + " và " + tags[tags.length - 1] : tags[0]) + ".", null,
     {src: DRAFT ? "Theo kịch bản nháp của " + OWNER + " (chưa duyệt)" : "Theo lời " + OWNER + " đã duyệt cho bài trình bày"});
   return true;
@@ -1885,22 +1967,66 @@ function figureWhy(q) {   // "tại sao trần 177,5?", "48 hay 30?": the report
   answer((or ? "Báo cáo ghi " : "Báo cáo viết: ") + uniq.map(g => (or ? g.t + " ở " : "") + "«" + whole(g.x.s.replace(/[;,:]\s*$/, ".")) + "»").join("; "), uniq[0].x.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"});
   return true;
 }
+function ratioAsk(q) {   // "gấp mấy lần": the talk's own worked-out ratio line, with its formula
+  if (!/ (gap (bao nhieu|may) lan|nhanh gap|gap (may|bao nhieu)) /.test(" " + fold(q) + " ")) return false;
+  const f = FACTS.find(x => x.k === "t" && /\blần\b/.test(x.a || "")); if (!f) return false;
+  answerFact(f); return true;
+}
+function workedOut(q, toks) {   // a figure Clicky worked out itself (17,3 from the table, a row's 30,0%): its formula, said as such
+  const has = t => s => (s || "").includes(t.replace(/%$/, ""));
+  for (const t of toks) {
+    const o = nghiSents().find(x => has(t)(x.it.tinh)); if (o) { answerDoubt(q, o); return true; }
+    const Q = qinfo(q), rc = rowChange(Q, null) || rowChange(qinfo(q + " tăng"), null);
+    if (rc) { const pr = diffOf(rc.m, rc.row, rc.df, true), ab = diffOf(rc.m, rc.row, rc.df, false), a = cellText(rc.d.a), p = cellText(rc.d.p);
+      const hitP = pr && pr.s.replace(/^-/, "") === (/[.,]/.test(t) ? t.replace(/%$/, "") : t.replace(/%$/, "") + ",0"), hitA = ab && ab.s.replace(/^-/, "") === t;
+      if (hitP || hitA) { answer("Đúng theo bảng: " + rowName(rc.row) + (rc.d.k < 0 ? " giảm " : " tăng ") + (hitP ? pr.s.replace(/^-/, "") + "%" : withUnit(ab.s.replace(/^-/, ""), uOf(rc.m, rc.row, rc.df[1]))) +
+        " (em tính: " + (hitP ? "(" + a + " − " + p + ") ÷ " + p + " × 100" : a + " − " + p) + "); báo cáo không in sẵn số này.", rc.d.a, {src: "Em tính từ hai số trên báo cáo «" + TITLE + "»"}); return true; } }
+  }
+  return false;
+}
+function cardPerHead(card) {   // "Chi phí bình quân mỗi người 149,4 triệu": the total over the headcount, worked out
+  if (!/\b(binh quan|moi nguoi|tren dau nguoi|per head)\b/.test(fold(card.text.split(":")[0]))) return null;
+  const f = cardFigs(card)[0]; if (!f) return null; const want = decimal(f.v); if (!want) return null;
+  for (const m of tables()) { const tot = m.rows.find(r => r.total); if (!tot) continue;
+    const v = valueCol(qinfo(""), m), h = numCols(m, tot).find(c => colUnit(m, c) === "người"); if (v < 0 || h === undefined) continue;
+    const a = toNum(cellText(tot.cells[v]), m.en), n = toNum(cellText(tot.cells[h]), m.en); if (!a || !n) continue;
+    const ua = colUnit(m, v), k = ua === "tỷ" && /triệu/.test(card.text) ? 1000 : 1, x = a / n * k, got = x.toFixed(want.d).replace(".", ",");
+    const ok = Math.abs(x - want.n / 10 ** want.d) < 0.5 / 10 ** want.d + 1e-9;
+    return {ok, text: "Em tính lại: " + cellText(tot.cells[v]) + " " + ua + " ÷ " + cellText(tot.cells[h]) + " người" + (k > 1 ? " × 1.000" : "") + " ≈ " + got + (ok ? ", khớp." : "; thẻ ghi " + f.v + ", lệch.")};
+  }
+  return null;
+}
+function peopleAsk(q) {   // "đội bán hàng tăng bao nhiêu người": no people column, so the report's own sentences that count people
+  const Q = qinfo(q.replace(/\b(đội|doi|team|nhóm)\b/gi, "khối")); if (Q.unit !== "người" || !/\b(tang|giam|them|bot)\b/.test(Q.f)) return false;
+  let best = null; tables().forEach(m => m.rows.forEach(row => { if (row.total) return; const sc = rowMatch(Q, row); if (sc && (!best || sc > best.s)) best = {row, s: sc}; }));
+  if (!best) return false;
+  const key = core(best.row.label).filter(w => w.length > 2);
+  const hits = []; blocks().forEach(b => splitSent(b.text).forEach(x => { const fx = " " + joined(fold(x)) + " ";
+    if (key.every(w => fx.includes(" " + w + " ")) && /\d+\s*(người|nhân viên|vị trí|nhân sự)/i.test(x) && !doubted(x)) hits.push({el: b.el, s: x}); }));
+  if (!hits.length) return false;
+  answer("Bảng không có cột số người tăng của " + rowName(best.row) + "; báo cáo ghi: " + hits.slice(0, 2).map(h => "«" + whole(h.s.replace(/[;,:]\s*$/, ".")) + "»").join("; "), hits[0].el,
+    {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"});
+  return true;
+}
 function spokenWith(toks) {   // an approved line of the talk that says this figure ("1,8 lần", worked out with its formula)
   const hit = f => toks.some(tok => { const t = tok.replace(/%$/, ""); return new RegExp("(^|[^\\d.,])" + t.replace(/[.,]/g, "\\$&") + "(?![\\d]|[.,]\\d)").test(f.a || ""); });
   return FACTS.find(f => f.k === "t" && hit(f)) || FACTS.find(hit) || null;
 }
 function figureAsk(q) {   // "6,7% nghĩa là gì?", "6,4% là sao?": the one tile, cell or sentence that prints that very figure
-  if (!/\b(nghia la gi|la gi|la so gi|noi len gi|y nghia|la sao|o dau ra|dau ra)\b/.test(fold(q))) return false;   // "tính thế nào" is the report's own sentence
+  if (!/\b(nghia la gi|la gi|la so gi|noi len gi|y nghia|la sao|o dau ra|dau ra|so voi (cai )?gi|so voi dau)\b/.test(fold(q))) return false;   // "tính thế nào" is the report's own sentence
   const toks = q.match(/\d[\d.,]*\d%?|\d%?/g) || []; if (!toks.length) return false;
   for (const tok of toks) {
     const pl = placesOf(tok);
+    if (/\bso voi\b/.test(fold(q)) && pl.cards.length) { answer(pl.cards[0].text.replace(/\.?$/, "."), pl.cards[0].el); return true; }   // the tile says against what
     if (pl.cards.length === 1 && !pl.cells.length) { answer(pl.cards[0].text.replace(/\.?$/, "."), pl.cards[0].el); return true; }
-    if (pl.cells.length === 1 && !pl.cards.length) { checkAnswer(q, pl.cells[0].m, pl.cells[0].row, pl.cells[0].c); return true; }
+    if (pl.cells.length === 1 && !pl.cards.length) { const x = pl.cells[0];
+      if (/\b(nghia la gi|la gi|la sao|y nghia)\b/.test(fold(q)) && !CHECKQ.test(" " + fold(q) + " ")) meanAnswer(q, x.m, x.row, x.c); else checkAnswer(q, x.m, x.row, x.c); return true; }
     if (!pl.cells.length && !pl.cards.length && pl.sents.length) { const x = pl.sents[0];
       answer("Báo cáo ghi: «" + whole(x.s) + "»", x.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"}); return true; }
   }
   if (toks.every(t => !placesOf(t).n)) {   // a figure the page never prints: the talk's own worked-out line, else said, never explained
     const sp = spokenWith(toks); if (sp) { answerFact(sp); return true; }
+    if (workedOut(q, toks)) return true;
     const t = toks[0], shown = t;
     answer("Báo cáo không ghi " + shown + " ở chỗ nào, nên em không giải thích số này.", null, {cls: "park", extra: parkNote(q)}); return true; }
   return false;
@@ -1921,9 +2047,17 @@ function cellCheck(m, row, c) {   // a printed figure worked out again from its 
     }
   }
   if (u === "%") return null;
-  const ft = footing({f: " cong lai "}, {m}), o = ft && ft.out.find(x => x.c === c); if (!o) return null;
+  const subs = subRows(m), fam = s => { const i = m.rows.indexOf(s), out = []; let sum = 0, want = decimal(cellText(s.cells[c]), m.en);
+    if (!want) return null; const D = 3, sc = x => x.n * 10 ** (D - x.d);
+    for (let k = i + 1; k < m.rows.length && !m.rows[k].total; k++) { const x = decimal(cellText(m.rows[k].cells[c]), m.en); if (!x) return null;
+      out.push(m.rows[k]); sum += sc(x); if (out.length >= 2 && sum === sc(want)) return out; if (Math.abs(sum) > Math.abs(sc(want))) return null; }
+    return null; };
+  const sumText = (kids, s) => kids.map(r => rowName(r) + " " + cellText(r.cells[c])).join(" + ") + " = " + withUnit(cellText(s.cells[c]), u);
+  if (subs.has(row)) { const kids = fam(row); if (kids) return {ok: true, text: "Em cộng các dòng con: " + sumText(kids, row) + ", khớp."}; }   // a subtotal: its own rows
+  for (const s of subs) { const kids = fam(s); if (kids && kids.includes(row)) return {ok: true, text: "Em cộng: " + sumText(kids, s) + ", khớp dòng " + rowName(s) + "."}; }   // a child: to its parent
+  const ft = footing({f: " cong lai "}, {m}, true), o = ft && ft.out.find(x => x.c === c); if (!o) return null;
   const un = u ? " " + u : "";
-  return {ok: o.ok, text: "Em cộng " + o.n + " dòng cột " + colName(m, c) + (ft.subs ? " (không tính dòng gộp)" : "") + " ra " + o.sum + un +
+  return {ok: o.ok, text: "Em cộng " + o.n + " dòng cột " + colName(m, c) + (ft.subs ? " (không tính dòng tổng của nhóm)" : "") + " ra " + o.sum + un +
     (o.ok ? ", khớp dòng " + ft.tot.label + " " + o.tot + un + "." : "; dòng " + ft.tot.label + " ghi " + o.tot + un + ", lệch " + o.gap + un + ".")};
 }
 function checkAnswer(q, m, row, c) {
@@ -1943,13 +2077,13 @@ function placesOf(tok) {   // every place the report prints one figure: cells, t
   return {cells, cards, sents, n: cells.length + cards.length + sents.length};
 }
 function verifyAsk(q, scope) {   // "12,6% có đúng không", "số này nghĩa là gì" on a cell: where it is printed, and the sum behind it
-  const f = " " + fold(q) + " ", check = CHECKQ.test(f), explain = scope && EXPLAINQ.test(f);
+  const f = " " + fold(q) + " ", check = CHECKQ.test(f) || (!scope && EXPLAINQ.test(f)), explain = scope && EXPLAINQ.test(f);
   if (!check && !explain) return false;
   const toks = q.match(/\d[\d.,]*\d%?|\d%?/g) || [];
   if (!toks.length) {
     if (!scope) { if (words(q).filter(w => !ECHO_NOT.has(w) && !/^(dung|chuan|chac|chinh|xac|sai|em|nay|that)$/.test(w)).length) return false;
       answer("Anh chị bấm vào con số hay câu muốn em kiểm, em chỉ chỗ báo cáo ghi và tính lại cho anh chị xem.", null, {src: ""}); return true; }
-    if (scope.m && scope.row && scope.c >= 0) { checkAnswer(q, scope.m, scope.row, scope.c); return true; }
+    if (scope.m && scope.row && scope.c >= 0) { if (explain && !CHECKQ.test(f)) meanAnswer(q, scope.m, scope.row, scope.c); else checkAnswer(q, scope.m, scope.row, scope.c); return true; }
     if (scope.card) { const cd = cardDiff({how: true, q: "", f: ""}, {card: scope.card});
       answer(scope.card.text.replace(/\.?$/, ".") + (cd ? " Em tính lại: " + withUnit(cd.f.v, cd.f.u) + " = " + cd.a.v + " − " + cd.b.v + " (" + cd.a.from + " trừ " + cd.b.from + "), khớp." : ""), scope.card.el,
         {src: cd ? "Em tính lại từ các số trên báo cáo «" + TITLE + "»" : "Lấy từ báo cáo «" + TITLE + "»"}); return true; }
@@ -1959,12 +2093,15 @@ function verifyAsk(q, scope) {   // "12,6% có đúng không", "số này nghĩa
     return false;
   }
   const tok = toks.find(x => placesOf(x).n) || toks[0], pl = placesOf(tok), shown = /%$/.test(tok) ? tok.replace(/%$/, "") + "%" : tok;
+  { const Q = qinfo(q), mine = pl.cells.filter(x => rowMatch(Q, x.row));   // "Khối CNTT 12,0% đúng không": CNTT's cell, never Marketing's
+    if (mine.length === 1 && pl.cells.length > 1) { checkAnswer(q, mine[0].m, mine[0].row, mine[0].c); return true; } }
   if (!pl.n) { const sp = spokenWith(toks); if (sp) { answerFact(sp); return true; }
+    if (workedOut(q, toks)) return true;
     answer("Báo cáo không ghi " + shown + " ở chỗ nào, nên em không xác nhận số này.", null, {cls: "park", extra: parkNote(q)}); return true; }
   if (pl.cells.length === 1) { checkAnswer(q, pl.cells[0].m, pl.cells[0].row, pl.cells[0].c); return true; }
   const where = pl.cards.map(c => "«" + c.text.replace(/\.$/, "") + "»").concat(pl.sents.map(x => "«" + x.s.replace(/\.$/, "") + "»"), pl.cells.map(x => rowName(x.row) + ", " + colName(x.m, x.c))).slice(0, 3);
-  const card = pl.cards[0], cd = card && cardDiff({how: true, q: tok, f: ""}, {card});
-  const ck = !cd && pl.cells.map(x => cellCheck(x.m, x.row, x.c)).find(Boolean);
+  const card = pl.cards[0], cd = card && cardDiff({how: true, q: tok, f: ""}, {card}), ph = card && !cd && cardPerHead(card);
+  const ck = !cd && (ph || pl.cells.map(x => cellCheck(x.m, x.row, x.c)).find(Boolean));
   answer("Báo cáo ghi " + shown + " ở " + pl.n + " chỗ: " + where.join("; ") + "." + (cd ? " Em tính lại: " + withUnit(cd.f.v, cd.f.u) + " = " + cd.a.v + " − " + cd.b.v + ", khớp." : ck ? " " + ck.text : ""),
     card ? card.el : pl.sents[0] ? pl.sents[0].el : pl.cells[0].row.cells[pl.cells[0].c], {src: "Lấy từ báo cáo «" + TITLE + "»"});
   return true;
@@ -1975,10 +2112,16 @@ function ask(q, scope) {
     answer("Dạ.", null, {src: ""}); return; }   // a nod is not a question: nothing goes to the owner
   { const o = doubtHit(q, scope); if (o) { answerDoubt(q, o); return; } }
   if (quotesDoubted(q)) { holdDoubted(q); return; }
-  { const o = pctAsk(q); if (o) { answer("Báo cáo ghi " + o.it.so.map(x => x + "%").join(", ") + "; " + o.it.tinh + ". " + OWNER.charAt(0).toUpperCase() + OWNER.slice(1) + " đang kiểm lại hai số này.", null, {cls: "park", extra: parkNote(q), src: ""}); return; } }
+  if (ratioAsk(q)) return;
+  { const o = pctAsk(q); if (o) { answerDoubt(q, o); return; } }   // the ruling reaches this route too
   if (verifyAsk(q, scope)) return;
   if (rowImpact(q, scope)) return;
+  if (!scope && peopleAsk(q)) return;
   if (!scope && oneLine(q)) return;
+  if (!scope && rejectCap(q)) return;
+  if (!scope && condAsk(q)) return;
+  if (!scope && restOf(q)) return;
+  if (!scope && cutHow(q)) return;
   if (!scope && saveAsk(q)) return;
   if (!scope && figureWhy(q)) return;
   if (!scope && figureAsk(q)) return;
@@ -2057,7 +2200,8 @@ function ask(q, scope) {
     const f = factMatch(q, scope, true); if (f) { answerFact(f); return; }   // the talk's own approved reason, never the doubted sentence
     if (r.kind === "why") r.w = null;   // the reader did not quote it: answer as if the report had no such sentence
     else { const o = nghiSents().find(x => fold(r.s).includes(x.f.slice(0, 40))), c = o && clauseOf(q, o);
-      if (c) { answer("Báo cáo ghi: «" + whole(c.replace(/^(trong khi|và)\s+/i, "").replace(/\.$/, "")) + "».", o.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"}); return; }
+      if (c) { const lvl = !/\b(tang|giam|chenh|phan tram|%)\b/.test(fold(q)) && /\b(tang|giam)\b/.test(fold(c));   // a level asked, only a growth printed
+        answer((lvl ? "Báo cáo không ghi mức này; chỉ ghi: «" : "Báo cáo ghi: «") + whole(c.replace(/^(trong khi|và)\s+/i, "").replace(/\.$/, "")) + "».", o.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"}); return; }
       answer(D.fallback, null, {cls: "park", extra: parkNote(q, null, true)}); return; }
   }
   if (r.kind === "why") {
@@ -2071,7 +2215,7 @@ function ask(q, scope) {
   if (r.kind === "foot") {
     const u = c => colUnit(r.m, c) ? " " + colUnit(r.m, c) : "";
     const parts = r.out.map(o => colName(r.m, o.c) + ": cộng ra " + o.sum + u(o.c) + (o.ok ? ", khớp dòng " + r.tot.label + " " + o.tot + u(o.c) : ", dòng " + r.tot.label + " ghi " + o.tot + u(o.c) + ", lệch " + o.gap + u(o.c)));
-    answer("Em cộng " + r.out[0].n + " dòng của bảng" + (r.subs ? " (không tính dòng gộp)" : "") + ". " + parts.join("; ") + ".", r.tot.r,
+    answer("Em cộng " + r.out[0].n + " dòng của bảng" + (r.subs ? " (không tính dòng tổng của nhóm)" : "") + ". " + parts.join("; ") + ".", r.tot.r,
       {src: "Em tính từ các số trên báo cáo «" + TITLE + "»"});
     return;
   }
@@ -2614,7 +2758,7 @@ function sendParked(where) {   // opens the reader's mail app; the questions sta
 }
 $("send").onclick = () => sendParked($("sent"));
 draw(); setPlaying(false);
-$("cap").innerHTML = INTRO;
+$("cap").innerHTML = INTRO();
 if (S.length) audio.src = sceneSrc(0); else $("play").disabled = true;
 fitBar();
 
