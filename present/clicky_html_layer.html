@@ -149,7 +149,11 @@ button.on{background:var(--warnsoft);border-color:var(--warn)}
 :host([data-small]) .dec .decrow .chips button::after{content:none}
 :host([data-small]) .dec .decrow{margin-top:6px;padding-top:4px}
 :host([data-small]) .decsend{position:static}
-:host([data-small]) .panel:has(.ans.dec) .hint{display:none}
+.panel:has(.ans.dec) .hint{display:none}
+.dec>.help{display:none}
+:host(:not([data-small])) .dec .decrow{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;align-items:center}
+:host(:not([data-small])) .dec .decrow>div:last-child{max-width:390px}
+:host(:not([data-small])) .dec .decrow>div:last-child>.chips{margin-top:0}
 .decsend{position:sticky;bottom:0;background:var(--bg);padding-bottom:2px}
 .cap.tight>span{font-size:13px;line-height:1.25}.cap.tighter>span{font-size:12px;line-height:1.2}
 :host([data-mid]) .cap.x3>span:not(.lg):not(.ev),:host([data-small]) .cap.x3>span:not(.lg):not(.ev){-webkit-line-clamp:3}
@@ -161,7 +165,7 @@ button.on{background:var(--warnsoft);border-color:var(--warn)}
 </style>
 <div class="panel hidden" id="panel" role="dialog" aria-label="Hỏi em về báo cáo">
   <div class="ph"><h3>Anh chị hỏi em</h3><button class="x" id="px" type="button" aria-label="Đóng" title="Đóng (Esc)">×</button></div>
-  <form class="ask" id="f"><input id="q" placeholder="Ví dụ: headcount khối bán hàng?" autocomplete="off" aria-label="Câu hỏi"><button class="p">Hỏi</button></form>
+  <form class="ask" id="f"><input id="q" placeholder="Ví dụ: vì sao chi phí tăng?" autocomplete="off" aria-label="Câu hỏi"><button class="p">Hỏi</button></form>
   <div class="hint">Em tìm câu trả lời trong chính báo cáo này và khoanh đúng chỗ. Câu chưa có trong báo cáo, em ghi lại để ${esc(OWNER)} trả lời.</div>
   <div id="a" class="hidden" aria-live="polite"></div>
   <div id="tb" class="hidden"><h3 id="tbh">Câu chờ ${esc(OWNER)} trả lời</h3><ol id="tl"></ol><button class="p" id="send">${esc(SEND)}</button><div class="hint" id="sent"></div></div>
@@ -522,8 +526,10 @@ function hideHat() { clearTimeout(hat._fade); hat.style.opacity = 0; hat._t = nu
 function placeHat(t) {   // first free spot next to the place that covers no figure, no label and no chart; none free = no hat
   if (isOpen($("bub"))) { hideHat(); return false; }
   const r = rect(t), s = 34, v = vp(), zone = {left: r.left - 80, top: r.top - 80, right: r.right + 80, bottom: r.bottom + 80};
-  const avoid = numberRects(r).concat(guards(t).soft, labelRects(zone), chartRects(zone)), cov = covers(true);
-  const spots = [[r.left, r.bottom + 6], [r.right + 6, r.top], [r.left - s - 6, r.top], [r.left, r.top - s - 6], [r.right - s, r.bottom + 6]];
+  const avoid = numberRects(r).concat(guards(t).soft, labelRects(zone), chartRects(zone), textRects(zone, t)), cov = covers(true);   // round 14: never on words either
+  const mid = (r.top + r.bottom) / 2 - s / 2;   // then the gutters beside the place, where pages leave white space
+  const spots = [[r.left, r.bottom + 6], [r.right + 6, r.top], [r.left - s - 6, r.top], [r.left, r.top - s - 6], [r.right - s, r.bottom + 6],
+                 [r.left - s - 6, mid], [r.right + 6, mid], [r.left - s - 6, r.bottom - s], [r.right + 6, r.bottom - s]];
   for (const [x, y] of spots) {
     const h = {left: x, top: y, right: x + s, bottom: y + s};
     if (x < v.x || y < v.y || h.right > v.x + v.w || h.bottom > v.y + v.h) continue;
@@ -544,7 +550,8 @@ if (window.visualViewport) { visualViewport.addEventListener("resize", () => { f
 
 function placePanel() {   // above the bar, on the side chosen for the framed place; across the top on a phone
   const p = $("panel"); if (!isOpen(p)) return;
-  const v = vp(), bar = rect($("bar")), small = v.w <= 700, w = small ? v.w - 16 : Math.min(360, v.w - 24);
+  const v = vp(), bar = rect($("bar")), small = v.w <= 700, dec = $("a").classList.contains("dec");
+  const w = small ? v.w - 16 : dec ? Math.min(660, v.w - 24) : Math.min(360, v.w - 24);   // round 14: the end card showed 2 of 4 asks
   p.style.width = w + "px"; p.style.right = "auto"; p.style.bottom = "auto";
   p.style.left = (small ? v.x + 8 : p.classList.contains("left") ? v.x + 12 : v.x + v.w - w - 12) + "px";
   const room = small ? ($("a").classList.contains("dec") ? bar.top - v.y - 16 : v.h * 0.55) : bar.top - v.y - 20, cap = p._cap || Infinity;
@@ -560,9 +567,12 @@ function dockCard(p, v, bar, w) {   // the end card: the corner where it covers 
   document.querySelectorAll("td,th").forEach(c => { if (/\d/.test(c.textContent)) look(c); });
   allCards().forEach(c => look(c.el));
   blocks().forEach(b => { if (/\d/.test(b.text)) look(b.el); });
+  const asks = [];   // the asks printed on the page weigh most: the card never sits on them (round 14: it hid ask 1)
+  blocks().forEach(b => { const x = fold(b.text); if (QUYET.some(q => x.includes(fold(q).slice(0, 24)))) { const n = figs.length; look(b.el); if (figs.length > n) asks.push(figs[n]); } });
   const spots = [];   // bottom right first (where the reader looks for it), then up the screen, then the left side
   for (const x of [v.x + v.w - w - 12, v.x + 12]) for (let y = bar.top - 12 - h; y >= v.y + 8 - 39; y -= 40) spots.push([x, Math.max(v.y + 8, y)]);
-  const cover = ([x, y]) => figs.reduce((n, r) => n + Math.max(0, Math.min(x + w, r.right) - Math.max(x, r.left)) * Math.max(0, Math.min(y + h, r.bottom) - Math.max(y, r.top)), 0);
+  const area = ([x, y], r) => Math.max(0, Math.min(x + w, r.right) - Math.max(x, r.left)) * Math.max(0, Math.min(y + h, r.bottom) - Math.max(y, r.top));
+  const cover = s => figs.reduce((n, r) => n + area(s, r), 0) + asks.reduce((n, r) => n + 4 * area(s, r), 0);
   const best = spots.map(s => [s, cover(s)]).sort((a, b) => a[1] - b[1])[0][0];
   p.style.left = best[0] + "px"; p.style.top = Math.max(v.y + 8, best[1]) + "px"; p._dock = cover(best); }
 function panelMore() { const p = $("panel"); p.classList.toggle("more", p.scrollHeight - p.clientHeight - p.scrollTop > 6); }   // more below: a soft fade says so
@@ -630,6 +640,12 @@ function stuckHead(c) {   // a header cell that stays at the top of its table wh
     if (/^(sticky|fixed)$/.test(getComputedStyle(x).position)) return true;
   return false;
 }
+function sticks(c) {   // a sticky header that really stays on screen: its scroll box moves up and down (or it sticks to the page)
+  if (!stuckHead(c)) return false;
+  for (let x = c.closest("table") && c.closest("table").parentElement; x && x !== document.body && x !== document.documentElement; x = x.parentElement) {
+    const o = getComputedStyle(x); if (/(auto|scroll|hidden|clip)/.test(o.overflowY + o.overflowX)) return x.scrollHeight > x.clientHeight + 1; }
+  return true;
+}
 function room(sc, on) {   // blank room after the last rows of a scroll box, so its last rows can come up too
   const sp = sc.querySelector(":scope > [data-clicky-room]");
   if (!on) { if (sp) { sp.remove(); LIVE.delete(sp); } return; }
@@ -695,6 +711,9 @@ function keepVisible(t) {   // the framed place is never under the bar, the pane
   }
   // the place and its column header together, when they fit: a figure is read with its header
   let u = {top: r.top, bottom: r.bottom};
+  const mt = t.matches && t.matches("tr,[role=row]") && modelOf(t);
+  const hd = mt ? mt.headCells.filter(c => !sticks(c)).map(rect).filter(q => q.height && q.bottom <= r.top + 1) : [];
+  if (hd.length) { const top = Math.min(...hd.map(q => q.top)); if (r.bottom - top < (floor - ceil) * 0.8) u = {top, bottom: r.bottom}; }
   gd.forEach(q => { const t2 = Math.min(u.top, q.top), b2 = Math.max(u.bottom, q.bottom); if (b2 - t2 < (floor - ceil) * 0.8) u = {top: t2, bottom: b2}; });
   const want = () => { const hgt = u.bottom - u.top, fits = hgt < (floor - ceil) * 0.8;
     return fits ? (u.top < ceil + 8 || u.bottom > floor - 8 ? u.top - (ceil + Math.max(8, (floor - ceil - hgt) / 2)) : 0)
@@ -845,7 +864,7 @@ function onTime() {
   s.points.forEach((p, k) => { if (!shown.has(k) && t >= p.t) { shown.add(k); frame(pointEl(s, k, p)); } });
 }
 function pointEl(s, k, p) {   // a sentence that lists several asks ("một là …; hai là …") frames the whole list, never its first item (round 10)
-  const e = el(p.id), x = fold((s.sentences || [])[k] || "");
+  const e = el(p.id), x = fold((s.sentences || [])[p.k ?? k] || "");   // p.k: its sentence, when a line before it frames nothing
   if (e && e.tagName === "LI" && /\bmot la\b/.test(x) && /\bhai la\b/.test(x) && e.parentElement && /^(OL|UL)$/.test(e.parentElement.tagName)) return e.parentElement;
   return e;
 }
@@ -1296,6 +1315,7 @@ const BANK = (D.bank || []).map(b => ({...b, w: words(b.q), why: qinfo(b.q).why}
 const FACTS = (D.facts || []).map(f => ({...f, re: (f.y || []).map(p => new RegExp(p)), no: f.n ? new RegExp(f.n) : null}));
 const ANY_SCOPE = new Set(["t", "ai", "hoi", "can_quyet"]);   // also asked while pointing at a place; before the page is searched
 const QUYET = D.quyet || [];
+if (D.vi_du) $("q").placeholder = "Ví dụ: " + D.vi_du + " tăng vì sao?";
 let cardTimer = 0; const CARD_WAIT = 2000;
 function askDoubt(t) {   // an ask that names a figure the owner is still checking (B's cap 120,0): said beside the ask
   const it = (D.nghi || []).find(x => !x.ma && (!x.xong || x.quyet === "báo cáo sai") && (x.so || []).some(tok => new RegExp("(^|[^\\d.,])" + String(tok).replace(/[.,]/g, "\\$&") + "(?![\\d]|[.,]\\d)").test(t)));
@@ -3710,6 +3730,24 @@ window.__clickyKiemHinh = async function () {
         if (hit(h, r) || numberRects(r).some(q => hit(h, q))) problems.push(where + ": nón lá đè lên số");
         if (guards(t).soft.some(q => hit(h, q))) problems.push(where + ": nón lá đè lên tên dòng hoặc tiêu đề cột"); }
     }
+  }
+  // every line of the talk, as it is played: the frame holds the figure said, the hat sits on no words, a row shows its header
+  closePanel(); closeBubble(); clearFrames();
+  const pageWords = document.body.innerText || "";
+  const has = (txt, tok) => new RegExp("(^|[^\\d.,])" + tok.replace(/[.,]/g, "\\$&") + "(?![\\d]|[.,]\\d)").test(txt);
+  for (const [i, s] of S.entries()) for (const [k, p] of s.points.entries()) {
+    const t0 = pointEl(s, k, p); if (!t0) continue;
+    clearFrames(); frame(t0); await wait(); redraw(); await wait(); n++;
+    const x = (s.sentences || [])[p.k ?? k] || "", tf = frames[0] ? frames[0].target : t0, say = "câu «" + x.slice(0, 60) + "»";
+    const evs = (s.ev || [])[p.k ?? k] || [], worked = evs.some(e => e[1] === "t");   // a worked-out line: its key figure is printed nowhere
+    const away = new Set(evs.filter(e => e[1] === "b" || e[1] === "o").map(e => e[0]));   // the chip says «có trong báo cáo»: framed elsewhere on purpose
+    const toks = worked ? [] : [...x.matchAll(/(\d+(?:,\d+)?)\s*(?:tỷ|triệu|%)/g)].map(m => m[1]).filter(tok => has(pageWords, tok) && !away.has(tok));
+    if (toks.length && !toks.some(tok => has(tf.innerText || tf.textContent || "", tok))) problems.push(say + ": khung không có số đang nói (" + toks[0] + ")");
+    if (+hat.style.opacity > 0) { const h = rect(hat.firstElementChild || hat); if (textRects(h, tf).some(q => hit(q, h))) problems.push(say + ": nón lá đè lên chữ của trang"); }
+    const m = tf.matches && tf.matches("tr,[role=row]") && modelOf(tf);
+    if (m && !m.headCells.some(sticks)) { const r = rect(tf), hd = m.headCells.map(rect).filter(q => q.height), top = Math.max(v.y, topCover(), stickyTops());
+      if (hd.length && r.bottom - Math.min(...hd.map(q => q.top)) < (rect($("bar")).top - top) * 0.8 && hd.some(q => q.top < top - 1 || q.bottom > v.y + v.h))
+        problems.push(say + ": tiêu đề bảng của dòng đang khoanh bị che hoặc ra ngoài màn hình"); }
   }
   // a lassoed region: after the page scrolls, its frame still goes round the cells it listed
   closePanel(); closeBubble(); clearFrames();

@@ -700,6 +700,8 @@ def declared_unit(text: str) -> Optional[str]:
 
 
 SIGN_WORD = {"-": "giảm/âm", "+": "tăng"}
+OVER_CAP = re.compile(r"(?<!\w)vượt\s+(?:trần|mức trần|ngân sách)(?:\s+[^\d,.;]{0,30})?\s*$", re.I)
+NEED_CUT = re.compile(r"(?<!\w)(?:cần|phải)\s+(?:giảm|cắt)(?!\w)", re.I)
 
 
 def check_figure(f: Fig, place: list, en: bool, declared: Optional[str]) -> Optional[str]:
@@ -715,7 +717,10 @@ def check_figure(f: Fig, place: list, en: bool, declared: Optional[str]) -> Opti
     if f.how == "word" and same and all(p.level for p in same) and verb_before(f):
         return (f"số {f.tok} là mức của thẻ, không phải mức {verb_before(f).lower()}; anh nói «là {f.tok}» "
                 "hoặc dùng số chênh lệch")
-    if f.sign and None not in signs and f.sign not in signs:
+    # "vượt trần 8,9 tỷ" on a tile "Cần giảm 8,9 tỷ": the overrun of a cap is the cut that reaches it, the same fact
+    over_cut = (f.sign == "+" and OVER_CAP.search(f.ctx) is not None
+                and all(p.sign == "-" and NEED_CUT.search(p.ctx) for p in same))
+    if f.sign and None not in signs and f.sign not in signs and not over_cut:
         return f"báo cáo ghi {SIGN_WORD[next(iter(signs))]}, câu nói lại là {SIGN_WORD[f.sign]}"
     if f.sign == "-" and f.how in ("sym", "am") and signs == {None} and all(p.how != "paren?" for p in same):
         return "báo cáo ghi số dương, câu nói lại là số âm"
@@ -3262,7 +3267,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     def timed(s):
         c = audio(None, s["sentences"], s.pop("dung", None))
         # the frame appears just before Clicky says the sentence, never after
-        s["points"] = [{"id": chi, "t": max(0.0, round(c["starts"][k] - LEAD, 3))}
+        s["points"] = [{"id": chi, "t": max(0.0, round(c["starts"][k] - LEAD, 3)), "k": k}
                        for k, chi in enumerate(s.pop("chi")) if chi]
         return c
 
@@ -3283,6 +3288,9 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
                            **({"tok": f["tok"]} if f["k"] == "t" else {}),
                            **({"vai": f["vai"]} if f.get("vai") == "uoc_tiet_kiem" else {})) for f in book],
             "quyet": story.decisions(script),
+            # the ask box's example names the row the talk is driven by (round 14: B said «headcount khối bán hàng?»)
+            "vi_du": next((str(c.get("neo") or "") for s in script.get("canh") or [] for c in s.get("cau") or []
+                           if c.get("vai") == "dong_luc" and c.get("neo")), ""),
             "cho_kiem": doubted_open(script) if script.get("kiem_tra") else draft.get("cho_kiem") or [],   # never quoted while in doubt
             "nghi": doubts(script),
             "fallback": fallback, "fallback_clip": audio(fallback), "aliases": doc_tai_chinh.aliases(), "ten_ke_hoach": plan_aliases(places, en),

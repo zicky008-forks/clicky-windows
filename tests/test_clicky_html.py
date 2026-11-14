@@ -111,7 +111,7 @@ def test_frames_come_just_before_the_sentence_that_names_them(report, tmp_path):
     first = 0.05 * len(clicky_html.doc_tai_chinh.doc("Kính chào anh chị."))
     lead_in = clicky_html.LEAD_IN                 # a breath of silence so audio wake-up never eats the first word
     assert s["starts"][0] == lead_in and abs(s["starts"][1] - (lead_in + first + clicky_html.PAUSE_SENTENCE)) < 0.01
-    assert s["points"] == [{"id": "c2", "t": round(s["starts"][1] - clicky_html.LEAD, 3)}]
+    assert s["points"] == [{"id": "c2", "t": round(s["starts"][1] - clicky_html.LEAD, 3), "k": 1}]
 
 
 def _script(tmp_path, cau):

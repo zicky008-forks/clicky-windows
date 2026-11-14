@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from present import clicky_html, goi_html, kiem_bien_ban, story
+from present import clicky_html, goi_html, kiem_bien_ban, kiem_hinh, story
 
 FIXTURE = Path(__file__).parent / "fixtures" / "bao_cao_html_gia_lap.html"
 BUILD = clicky_html.build
@@ -1160,3 +1160,44 @@ def test_round_fourteen_doubted_cap_bare_words_on_the_card_and_next_turn_correct
         browser.close()
         pw.stop()
 
+
+
+def test_round_fourteen_frames_hold_the_figure_said_and_the_end_card_shows_every_ask(report, drawn_report):
+    # "vượt trần 8,9 tỷ" on a tile "Cần giảm so với AOPR 8,9 tỷ" is one fact; "tăng 8,9 tỷ" on it is still refused
+    tile = clicky_html.figures("Cần giảm so với AOPR 8,9 tỷ")
+    over = next(f for f in clicky_html.figures("Nếu giữ nguyên, chi phí vượt trần đề xuất 8,9 tỷ.") if f.tok == "8,9")
+    up = next(f for f in clicky_html.figures("Chi phí tăng 8,9 tỷ.") if f.tok == "8,9")
+    assert clicky_html.check_figure(over, tile, False, "tỷ") is None
+    assert clicky_html.check_figure(up, tile, False, "tỷ")
+    repA, repB = build(report), build(drawn_report)
+    outA, outB = Path(repA["out"]), Path(repB["out"])
+    # the stakes line frames the tile that prints 8,9 (it sat on the 2,52% tile for four rounds)
+    stake = next(c for c in lines(repA) if c.get("vai") == "mo_rui_ro")
+    assert stake["chi"] == next(c for c in lines(repA) if c["noi"].startswith("Tức là phải giảm 8,9"))["chi"]
+    # B's why line ("Vì doanh thu chỉ tăng 8,0%") stays on the total: the note printing 8,0% holds the doubted 18,0%
+    why = next(c for c in lines(repB) if c["noi"].startswith("Vì doanh thu chỉ tăng 8,0%"))
+    assert why["chi"] == next(c for c in lines(repB) if c.get("vai") == "quy_mo")["chi"] and why["xac_nhan"] == ["8,0"]
+    # every line of the talk, played at 1366x768 and 911x512: the frame holds the figure said, the hat sits on no
+    # words, a framed row shows its table header
+    for out in (outA, outB):
+        res = kiem_hinh.check(str(out), sizes=((1366, 768), (911, 512)), phone=None)
+        if res["skipped"]:
+            pytest.skip(res["reason"])
+        assert res["ok"], res["problems"]
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser = kiem_hinh._launch(pw)
+        try:
+            for out, ex in ((outA, "Ví dụ: Khối Bán hàng tăng vì sao?"), (outB, "Ví dụ: Logistics tăng vì sao?")):
+                pg = browser.new_page(viewport={"width": 1366, "height": 768})
+                pg.goto(out.as_uri())
+                pg.wait_for_function("typeof window.__clickyHetBai === 'function'")
+                assert pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('q').placeholder") == ex
+                pg.evaluate("window.__clickyHetBai()")
+                card = pg.evaluate("""() => { const R = document.getElementById('clicky-host').shadowRoot, p = R.getElementById('panel'), q = p.getBoundingClientRect();
+                    return {rows: [...R.querySelectorAll('.decrow')].map(r => { const z = r.getBoundingClientRect(); return z.top >= q.top - 1 && z.bottom <= q.bottom + 1; }),
+                            scroll: p.scrollHeight - p.clientHeight, help: [...R.querySelectorAll('#panel .hint, .dec>.help')].some(h => h.getClientRects().length)}; }""")
+                assert all(card["rows"]) and card["scroll"] <= 2 and not card["help"], card   # every ask at once, no help text
+                pg.close()
+        finally:
+            browser.close()

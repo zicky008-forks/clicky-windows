@@ -504,6 +504,32 @@ class _Hidden:
         self.node, self.text, self.section = it.node, it.text, it.section
 
 
+SAID_FIG = re.compile(r"(?<![\d,.])(\d+(?:,\d+)?)\s*(tỷ|triệu|%)")
+
+
+def _prints(text: str, tok: str) -> bool:
+    return re.search(rf"(?<![\d,.]){re.escape(tok)}(?![\d,])", text) is not None
+
+
+def _reframe(lines: list, places: dict) -> None:
+    """Frame each line on the place that prints the figure it says (round-14 panel: "8,9 tỷ" was framed on the
+    2,52% tile, so the eye looked for a number that was not there). Lines that say no printed figure, or whose
+    frame already prints one, keep their place; a figure printed in two cards or rows keeps the line where it was. A line
+    whose figure is confirmed elsewhere on purpose (xac_nhan: the place that prints it is doubted) stays too."""
+    for _muc, ln in lines:
+        if not ln.chi or ln.chi not in places:
+            continue
+        toks = [m.group(1) for m in SAID_FIG.finditer(ln.noi)]
+        if ln.so_tinh or ln.xac_nhan or not toks or any(_prints(places[ln.chi].text, t) for t in toks):
+            continue                               # a worked-out line stays on the place its formula starts from
+        for tok in toks:
+            hits = [k for k, p in places.items() if p.kind in ("card", "row") and _prints(p.text, tok)]
+            hits = hits or [k for k, p in places.items() if p.kind == "note" and _prints(p.text, tok)]
+            if len(hits) == 1:
+                ln.chi = hits[0]
+                break
+
+
 def story(items: list, places: dict, owner: str, en: bool = False, hidden: frozenset = frozenset()) -> Optional[dict]:
     """The talk as scenes of lines (the script format clicky_html builds and checks), plus "phan_bien": what
     the owner should look at before the Board sees it. None when the report has no table to tell a story from.
@@ -560,9 +586,9 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         # the stakes in money right after the asks, so the room knows why before the detail (round-10 chair: risk came at 70 s)
         over0 = next((g for g in cut.figs if g.sign == "-"), None) if cut is not None and cap is not None else None
         rc0 = ratio_card(places, en) if over0 is not None else None
-        if rc0 is not None:                        # said like the risk line itself, on the ratio tile it comes from
+        if rc0 is not None:                        # framed on the tile that prints the figure said (round-14: it sat on the ratio tile)
             lines.append(("Mở đầu", Line(f"Nếu giữ nguyên, chi phí vượt trần đề xuất {over0.tok} {over0.unit or unit}."
-                                         .replace("  ", " ").replace(" .", "."), rc0[0].id, vai="mo_rui_ro", xac_nhan=[over0.tok])))
+                                         .replace("  ", " ").replace(" .", "."), cut.id, vai="mo_rui_ro", xac_nhan=[over0.tok])))
         elif ratio_card(places, en) is None:
             cond0 = if_note(items)
             if cond0 is not None and re.match(r"\s*nếu\s+doanh\s+(thu|số)", cond0[1], re.I):
@@ -826,6 +852,7 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         elif ln.vai == "tran":
             ln.dung = 0.4
 
+    _reframe(lines, places)
     scenes: list = []
     for muc, ln in lines:
         if not scenes or scenes[-1]["muc"] != muc:
