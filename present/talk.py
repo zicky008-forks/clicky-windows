@@ -13,7 +13,7 @@ from typing import Callable, Optional
 from present import deck as deck_mod
 from present.placeholders import Resolver
 from present.qa import Bank, fuzzy_names, parse_percent, pick_option
-from present.vn_format import speakable
+from present.doc_tai_chinh import doc as speakable  # FP&A readings (AOPR, Power BI), then numbers
 
 
 class Stop(RuntimeError):

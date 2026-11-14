@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><title>Chi phí vận hành AOPR FY2627 (giả lập)</title>
+<style>
+body{font-family:Arial,sans-serif;margin:0}
+nav.tabs{position:sticky;top:0;height:80px;background:#123;color:#fff;display:flex;align-items:center;padding:0 20px;z-index:5}
+main{padding:20px;max-width:1100px}
+table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px;text-align:right}td:first-child,th:first-child{text-align:left}
+li{margin:10px 0;line-height:1.6}
+</style></head>
+<body>
+<nav class="tabs">Tổng quan · Chi tiết theo phòng · Đề xuất</nav>
+<main>
+<h1>Chi phí vận hành AOPR FY2627 (giả lập)</h1>
+<h2>1. Thông điệp chính</h2>
+<p class="note">Chi phí vận hành AOPR tăng 18,0% trong khi doanh thu chỉ tăng 8,0%.</p>
+<h2>2. Chênh lệch theo phòng (tỷ đồng)</h2>
+<table id="t"><thead><tr><th>Phòng</th><th>AOP gốc</th><th>AOPR</th><th>Giải trình</th></tr></thead><tbody></tbody></table>
+<p class="note">Nếu doanh thu chỉ đạt 90% kế hoạch, tỷ lệ chi phí trên doanh thu lên 6,4%.</p>
+<h2>3. BOD cần quyết định hôm nay</h2>
+<ol class="dec">
+<li><strong>Duyệt trần chi phí vận hành 120,0 tỷ</strong> cho cả năm, bằng tỷ lệ chi phí trên doanh thu của AOP gốc. Phần vượt trần phải có giải trình riêng từng phòng, kèm kế hoạch cắt giảm theo quý, và FP&amp;A theo dõi nhịp chi hằng tháng để báo lại Ban Giám đốc trước ngày mười lăm của tháng sau.</li>
+<li><strong>Logistics phải giải trình trước khi duyệt</strong> phần tăng thuê kho.</li>
+<li><strong>Giữ quỹ lương bằng AOP gốc</strong> cho cả năm.</li>
+<li><strong>Hoãn dự án kho mới</strong> sang năm sau.</li>
+</ol>
+<div style="height:200px"></div>
+</main>
+<script>
+const rows = [["Khối vận hành", "70,0", "85,0", ""], ["Logistics", "40,0", "52,0", "Thuê kho"], ["Mua hàng", "30,0", "33,0", ""],
+  ["Khối hỗ trợ", "40,0", "44,0", ""], ["CNTT", "25,0", "27,5", "License"], ["Hành chính", "15,0", "16,5", ""],
+  ["Tổng", "110,0", "129,0", ""]];
+const tb = document.querySelector("#t tbody");
+for (const r of rows) { const tr = document.createElement("tr"); r.forEach(x => { const td = document.createElement("td"); td.textContent = x; tr.appendChild(td); }); tb.appendChild(tr); }
+</script>
+</body></html>

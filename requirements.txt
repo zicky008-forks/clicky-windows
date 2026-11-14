@@ -18,6 +18,8 @@ sounddevice>=0.4.6
 soundfile>=0.12.1
 numpy>=1.26.0
 av>=12.0.0,<19
+# MP3 for the HTML-report voice when ffmpeg is missing (pure wheel, LGPL, used unmodified)
+lameenc>=1.7
 
 # STT - local (free)
 # Offline Vietnamese (Zipformer-30M via sherpa-onnx, Apache-2.0). The model files ship in voice/asr-vi.
