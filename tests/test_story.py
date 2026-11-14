@@ -59,11 +59,9 @@ def test_the_story_asks_first_then_tells_one_driver_and_never_reads_the_page_in_
     fast = next(c for c in said if "nhanh gấp khoảng 1,8 lần doanh thu" in c["noi"])
     assert fast["so_tinh"] == ["1,8 = 12,6 / 7,2"]
     # it ends on the decision and hands the room the floor
-    # it closes on every ask again, with its money, then invites the room
-    assert [c["noi"] for c in said[-4:]] == [
-        "Em xin nhắc lại hai việc anh Tuấn xin anh chị quyết.",
-        "Một, giữ tỷ lệ chi phí nhân sự/DTT ở 2,40%, tức trần 177,5 tỷ.",
-        "Hai, giãn tuyển 30 vị trí bán hàng sang quý 3 và gắn với doanh thu trên mỗi người.",
+    # it closes on every ask again as a short tag with its money, never word for word, then invites the room
+    assert [c["noi"] for c in said[-2:]] == [
+        "Tóm lại, anh Tuấn xin anh chị quyết: một là giữ trần 177,5 tỷ; hai là giãn tuyển 30 vị trí bán hàng sang quý 3.",
         "Em kính mời anh chị cho ý kiến ạ."]
     # every line says which beat it is, so a question after the talk finds its answer
     assert all(c.get("vai") for c in said)
@@ -100,8 +98,10 @@ def test_the_owner_pre_flight_is_in_the_result_and_never_on_the_page(report):
 
 
 def test_a_kpi_that_holds_within_rounding_is_not_flagged_but_a_wrong_one_is(report):
-    # 149,4 triệu, +6,7%: recomputed from the rounded totals it is 6,74…6,96, so 6,7 holds; 9,5 does not
-    assert not any("Chi phí bình quân" in f for f in build(report)["phan_bien"])
+    # 149,4 triệu, +6,7%: the headcounts are exact, so from the rounded totals it is 6,79…6,91 and 6,7 is flagged
+    # (round-4 panel, CFO); 9,5 is flagged too
+    flag = next(f for f in build(report)["phan_bien"] if "Chi phí bình quân" in f)
+    assert "6,7%" in flag and "6,85%" in flag and "ly_do_bo" in flag
     report.write_text(report.read_text(encoding="utf-8").replace("+6,7% so với AOP gốc", "+9,5% so với AOP gốc"),
                       encoding="utf-8")
     for f in report.parent.glob("bao_cao_kich_ban*"):
@@ -131,6 +131,9 @@ def test_the_formula_reader_keeps_precedence_and_refuses_what_it_cannot_read():
     # one figure used twice is one quantity: it moves the same way in both places
     lo, hi = story.spread("(186,4 / 1.248) / (165,5 / (1.248 - 64)) × 100 - 100", False)
     assert Decimal("6.74") < lo < Decimal("6.75") and Decimal("6.96") < hi < Decimal("6.97")
+    # a headcount is a count: only the money moves, so the card's 6,7% is out of (6,79; 6,91) and is flagged
+    lo, hi = story.spread("(186,4 / 1.248) / (165,5 / (1.248 - 64)) × 100 - 100", False, exact=("1.248", "64"))
+    assert Decimal("6.78") < lo < Decimal("6.80") and Decimal("6.90") < hi < Decimal("6.92")
 
 
 def test_an_owner_who_changes_a_computed_figure_or_its_formula_is_stopped(report):
@@ -228,6 +231,14 @@ def drawn_report(tmp_path, monkeypatch):
     return dst
 
 
+def test_a_cap_said_to_keep_the_plans_ratio_is_checked_against_that_ratio(drawn_report):
+    # round-4 panel (Chair, CFO, Owner): "trần 120,0 tỷ, bằng tỷ lệ chi phí trên doanh thu của AOP gốc", but
+    # 110,0 × (1 + 8,0 ÷ 100) = 118,8; the owner is told first what to do, then why
+    pytest.importorskip("playwright")
+    flag = next(f for f in build(drawn_report)["phan_bien"] if "trần" in f and "118,8" in f)
+    assert flag.startswith("Anh sửa trần hoặc ghi ly_do_bo") and "110,0 × (1 + 8,0 ÷ 100) = 118,8 tỷ" in flag
+
+
 def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(drawn_report):
     pytest.importorskip("playwright")
     rep = build(drawn_report)
@@ -236,15 +247,16 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     # four asks are all said up front, each keeping its object ("… trước khi duyệt phần tăng thuê kho"), and again
     # at the close
     asks = ["Một, duyệt trần chi phí vận hành 120,0 tỷ cho cả năm.",
-            "Hai, logistics phải giải trình trước khi duyệt phần tăng thuê kho.",
+            "Hai, Logistics phải giải trình trước khi duyệt phần tăng thuê kho.",
             "Ba, giữ quỹ lương bằng AOP gốc cho cả năm.", "Bốn, hoãn dự án kho mới sang năm sau."]
     assert said[1]["noi"] == "Anh Tuấn xin anh chị quyết bốn việc." and [c["noi"] for c in said[2:6]] == asks
     close = [c["noi"] for c in said if c.get("vai") == "chot"]
-    assert close == ["Em xin nhắc lại bốn việc anh Tuấn xin anh chị quyết.", *asks]
+    assert close == ["Tóm lại, anh Tuấn xin anh chị quyết: một là duyệt trần chi phí vận hành 120,0 tỷ; hai là Logistics "
+                     "phải giải trình; ba là giữ quỹ lương bằng AOP gốc; bốn là hoãn dự án kho mới sang năm sau."]
     # the table has no variance column: code works it out from the drawn rows; a group row ("Khối vận hành" adds up
     # Logistics and Mua hàng) is never the driver; the unit comes from the table's heading "(tỷ đồng)"
     driver = next(c for c in said if c.get("vai") == "dong_luc")
-    assert driver["noi"] == "Logistics chiếm gần hai phần ba phần tăng: 12,0 tỷ." and driver["so_tinh"] == ["12,0 = 52,0 - 40,0"]
+    assert driver["noi"] == "Logistics chiếm gần hai phần ba phần tăng: 12,0 tỷ; giải trình ghi: thuê kho." and driver["so_tinh"] == ["12,0 = 52,0 - 40,0"]
     assert driver["chi"].startswith("v")
     rest = next(c for c in said if c["noi"].startswith("Bỏ Logistics ra"))
     # 10% is still faster than revenue's 8,0%: never "chỉ"
@@ -454,7 +466,7 @@ def test_once_the_owner_rules_a_doubted_sentence_is_quoted_with_his_reason_never
 def test_the_pre_flight_checks_head_the_script_and_hold_the_approval(report):
     rep = build(report)
     script = clicky_html.load_script(rep["kich_ban"])
-    assert len(script["kiem_tra"]) == len(rep["phan_bien"]) == 3
+    assert len(script["kiem_tra"]) == len(rep["phan_bien"]) == 4
     assert all(k["da_xem"] == "chưa" for k in script["kiem_tra"])
     path = Path(rep["kich_ban"])
     path.write_text(re.sub(r"^(\s+da_xem:) 'chưa'", r"\1 'có'", path.read_text(encoding="utf-8"), count=1, flags=re.M),

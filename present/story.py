@@ -119,12 +119,13 @@ def decimals(tok: str, en: bool) -> int:
     return len(tok.split(mark)[1]) if mark in tok else 0
 
 
-def spread(expr: str, en: bool) -> tuple:
-    """(lowest, highest) value of the formula when each printed input moves within its own rounding."""
+def spread(expr: str, en: bool, exact: tuple = ()) -> tuple:
+    """(lowest, highest) value of the formula when each printed input moves within its own rounding. A count of
+    people (exact) does not move: 1.248 người is 1.248, not anything from 1.247,5 to 1.248,5."""
     lits = literals(expr)
     half = lambda t: Decimal(5) / Decimal(10) ** (decimals(t, en) + 1)                     # noqa: E731
     # one printed figure used twice is one quantity: it moves the same way in both places
-    vary = [t for t in dict.fromkeys(lits) if t not in ("1", "100")][:8]
+    vary = [t for t in dict.fromkeys(lits) if t not in ("1", "100") and t not in exact][:8]
     out = []
     for signs in itertools.product((-1, 1), repeat=len(vary)):
         move = dict(zip(vary, signs))
@@ -513,9 +514,14 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
     first = ask_pairs[0][0] if ask_pairs else None
     lines.append(("Mở đầu", Line(f"Thưa anh chị, em là trợ lý AI của {owner}.", cid(first) if first else "", vai="chao")))
 
+    names = {str(getattr(r, "label", "") or "").split(" ")[0] for r in t.rows} - {""}
+
+    def lc(a) -> str:                              # "Logistics phải giải trình" keeps the row's own name
+        return a if str(a).split(" ")[0] in names else _lc(a)
+
     def said(a) -> str:
         money = getattr(a, "money", "")
-        return f"{_lc(a)}, tức {money}" if money else _lc(a)
+        return f"{lc(a)}, tức {money}" if money else lc(a)
 
     if ask_list and not many:
         lines.append(("Mở đầu", Line(f"{who} xin anh chị quyết {count_w[len(ask_list)]}.", cid(first), vai="hoi")))
@@ -590,8 +596,11 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         lines.append(("Động lực chính", Line(f"Vậy phần {verb} thêm nằm ở đâu?", t.total.id, dung=1.5, vai="cau_hoi")))
         sw = share_words(abs(share))
         name = _cap(_short(top.label))
-        text = (f"{name} chiếm {sw} phần {verb}: {top_tok} {unit}." if sw
-                else f"Lớn nhất là {_short(top.label)}: {verb} {top_tok} {unit}.").replace(" .", ".")
+        why = next((c for c in (top.cols or []) if re.search(r"giải trình|lý do|nguyên nhân|diễn giải|ghi chú", c.header, re.I)
+                    and c.text.strip() and not re.search(r"\d", c.text) and len(c.text.split()) <= 8), None)
+        cause = f"; giải trình ghi: {_lc(why.text.strip().rstrip('.'))}" if why else ""   # the row's own printed reason
+        text = (f"{name} chiếm {sw} phần {verb}: {top_tok} {unit}{cause}." if sw
+                else f"Lớn nhất là {_short(top.label)}: {verb} {top_tok} {unit}{cause}.").replace(" .", ".").replace(" ;", ";")
         lines.append(("Động lực chính", Line(text, top.id, so_tinh=[f"{top_tok} = {top_f}"] if top_f else [], vai="dong_luc")))
         tp, ta = _num(top, t.plan, en), _num(top, t.actual, en)
         if tp and ta and abs(share) >= Decimal("0.4") and len(same) + len([m for m in moves if m[1]]) > 2:
@@ -677,12 +686,15 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
     if ask_list and many:                          # just listed one by one: the card after the talk holds them
         lines.append(("Chốt", Line(f"Tóm lại, {owner} xin anh chị quyết {count_w.get(len(ask_list), 'các việc')} vừa nêu; "
                                    "em để sẵn trên màn hình.", cid(first), dung=1.0, vai="chot")))
-    elif ask_list:                                 # every ask again, with its money, one short sentence each
-        lines.append(("Chốt", Line(f"Em xin nhắc lại {count_w.get(len(ask_list), 'các việc')} {owner} xin anh chị quyết.",
-                                   cid(first), vai="chot")))
-        for k, (n, a) in enumerate(ask_pairs[:6]):
-            lines.append(("Chốt", Line(f"{nth[k]}, {said(a)}." if len(ask_pairs) > 1 else f"{_cap(said(a))}.", cid(n),
-                                       dung=1.0 if k == len(ask_pairs[:6]) - 1 else 0.0, vai="chot")))
+    elif ask_list:                                 # every ask again as a short tag, never word for word (round-4 coach)
+        def tag(a) -> str:
+            t = said(a)
+            if ", tức " in t:                          # "giữ tỷ lệ … ở 2,40%, tức trần 177,5 tỷ": the money is the tag
+                t = t.split()[0] + " " + t.split(", tức ", 1)[1]
+            return re.sub(r"\s+(trước khi|và gắn với|cho cả năm|để)\b.*$", "", t)
+        tags = [tag(a) for _n, a in ask_pairs[:6]]
+        body = "; ".join(f"{nth[k].lower()} là {x}" for k, x in enumerate(tags)) if len(tags) > 1 else tags[0]
+        lines.append(("Chốt", Line(f"Tóm lại, {owner} xin anh chị quyết: {body}.", cid(first), dung=1.0, vai="chot")))
     elif cap is not None:
         f = cap.figs[0]
         lines.append(("Chốt", Line(f"Tóm lại, {owner} xin anh chị cho ý kiến về mức trần {f.tok} {f.unit or unit}."
@@ -820,17 +832,35 @@ def preflight(items: list, places: dict, t: Table, en: bool, note, cut, owner: s
                                           con[0].text)})
         except ValueError:
             pass
+    if con is not None:                             # a cap said to keep the plan's cost/revenue ratio, against that ratio
+        rev_tok = con[2].tok
+        basis = next(((said, m) for it in items for said in re.split(r"(?<=[.;])\s+", it.text)
+                      for m in [re.search(r"trần[^0-9;]*?(\d[\d.,]*)\s*(tỷ|triệu)?", said, re.I)]
+                      if m and re.search(r"(bằng|giữ|như)\s+(nguyên\s+)?tỷ lệ.*(AOP gốc|kế hoạch gốc|ngân sách gốc)", said, re.I)), None)
+        for said, m in [basis] if basis else []:
+                expr = f"{p_tok} × (1 + {rev_tok} / 100)"
+                try:
+                    lo, hi = spread(expr, en)
+                    cap, k = C.value(m.group(1), en), decimals(m.group(1), en)
+                    if cap is not None and not (rounded(lo, k) <= cap <= rounded(hi, k)):
+                        flags.append({"xem": f"Anh sửa trần hoặc ghi ly_do_bo: báo cáo ghi trần {m.group(1)} "
+                                             f"{m.group(2) or t.unit or ''} «{C.clip(said, 70)}», nhưng giữ đúng tỷ lệ "
+                                             f"chi phí trên doanh thu của {t.plan_name} thì trần là {pretty(expr)} = "
+                                             f"{say(evaluate(expr, en), k, en)} {m.group(2) or t.unit or ''}.".replace("  ", " ")})
+                except ValueError:
+                    pass
     if hc and rate:
         n_tok, dn_tok = hc.figs[0].tok, hc.figs[1].tok
         expr = f"({a_tok} / {n_tok}) / ({p_tok} / ({n_tok} - {dn_tok})) × 100 - 100"
         try:
             exact = evaluate(expr, en)
-            lo, hi = spread(expr, en)
+            lo, hi = spread(expr, en, exact=(n_tok, dn_tok))
             printed = C.value(rate.figs[1].tok, en)
             places_ = decimals(rate.figs[1].tok, en)
             if not (rounded(lo, places_) <= printed <= rounded(hi, places_)):
                 flags.append({"xem": f"Thẻ «{rate.label}» ghi tăng {rate.figs[1].tok}%, tính lại từ tổng chi phí và số "
-                                     f"người thì ra khoảng {say(exact, 2, en)}%. Công thức: {expr}."})
+                                     f"người thì ra khoảng {say(exact, 2, en)}%. Công thức: {expr}. Anh sửa thẻ, hoặc ghi ly_do_bo nếu "
+                                     "thẻ tính theo cách khác (ví dụ từ đơn giá đã làm tròn)."})
         except ValueError:
             pass
     if note is not None:
