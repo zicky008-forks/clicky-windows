@@ -319,10 +319,12 @@ def test_a_condition_a_time_or_an_exclusion_is_never_recorded_as_plain_agreement
     assert a.startswith("Đề nghị là «Giữ tỷ lệ") and "tháng sau và có thêm điều kiện" in a, a
     card = " ".join(pg.evaluate("window.__clickyHetBai()").split())
     assert card.count("(chưa xác nhận)") == 2 and "Em đã ghi «Đồng ý»" not in card, card
+    pg.evaluate("window.__clickyGhi('Cảm ơn')")   # a fresh card: since round 14 a pending condition is a choice a «cả hai» asks before replacing
     a = _r3(pg, "Đồng ý cả hai, nhưng trần 170 tỷ")                               # the figure is about the ceiling only
     assert a.startswith("Em đã ghi việc hai «Đồng ý». Còn đề nghị «Giữ tỷ lệ") and "nói 170 tỷ." in a, a
     assert "năm sau" in _r3(pg, "Đồng ý giãn tuyển 30 vị trí sang năm sau")        # the ask says quý 3
     assert "anh chị nói 20 vị trí" in _r3(pg, "Tôi chỉ duyệt 20 vị trí thôi")
+    pg.evaluate("window.__clickyGhi('Cảm ơn')")   # a fresh card (round 14: a pending condition is asked before a «hết» replaces it)
     a = _r3(pg, "Đồng ý hết trừ việc hai")
     assert a.startswith("Em đã ghi «Đồng ý» cho việc: «Giữ tỷ lệ") and "Việc hai em chưa ghi." in a, a
     assert _r3(pg, "Thôi, việc hai để bàn thêm").startswith("Em đã ghi «Cần bàn thêm» cho việc: «Giãn tuyển")
