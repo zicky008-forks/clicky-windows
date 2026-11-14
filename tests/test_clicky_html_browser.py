@@ -328,14 +328,14 @@ def test_a_condition_a_time_or_an_exclusion_is_never_recorded_as_plain_agreement
     assert _r3(pg, "Thôi, việc hai để bàn thêm").startswith("Em đã ghi «Cần bàn thêm» cho việc: «Giãn tuyển")
     assert _r3(pg, "Tôi đồng ý trần 177,5 tỷ").startswith("Em đã ghi «Đồng ý» cho việc: «Giữ tỷ lệ")   # the ask's own figure
     # round-10 panel: a clause keeps its own verdict and condition; a trailing "thì không" is a verdict; natural words count
-    a = _r3(pg, "Duyệt việc một, việc hai để quý sau tính")
-    assert a.startswith("Em đã ghi việc một «Đồng ý». Còn đề nghị «Giãn tuyển") and "quý sau" in a, a
+    a = _r3(pg, "Duyệt việc một, việc hai để quý sau tính")                   # round 11: put off is «Cần bàn thêm», with its words
+    assert a.startswith("Em đã ghi việc một «Đồng ý»; việc hai «Cần bàn thêm».") and "Cần bàn thêm — anh chị ghi: «việc hai để quý sau tính»" in _parked(pg), a
     a = _r3(pg, "Đồng ý việc một nhưng không quá 180 tỷ, việc hai thì không")
     assert a.startswith("Em đã ghi việc hai «Không đồng ý». Còn đề nghị «Giữ tỷ lệ") and "180 tỷ" in a, a
     pg.evaluate(f"[...{SR}.querySelectorAll('#a button, #ba button')].find(b => b.textContent === 'Ghi nguyên văn').click()")
-    assert "«Giữ tỷ lệ chi phí nhân sự trên doanh thu thuần ở 2,40%, tức trần 177,5 tỷ»: Đồng ý có điều kiện — anh chị ghi: «Đồng ý việc một nhưng không quá 180 tỷ, việc hai thì không»" in _parked(pg)
+    assert "«Giữ tỷ lệ chi phí nhân sự trên doanh thu thuần ở 2,40%, tức trần 177,5 tỷ»: Đồng ý có điều kiện — anh chị ghi: «Đồng ý việc một nhưng không quá 180 tỷ»" in _parked(pg)   # the clause, not the sentence
     assert "đã đổi từ Đồng ý có điều kiện" not in _parked(pg)                       # an unconfirmed record is never history
-    assert _r3(pg, "Được, làm đi").startswith("Anh chị đồng ý việc nào ạ? Bấm từng việc.")
+    assert _r3(pg, "Được, làm đi").startswith("Em đã ghi «Đồng ý» cho cả 2 việc")      # round 11: the whole proposal
     assert _r3(pg, "Thôi được rồi, cảm ơn em") == "Dạ."
     assert not errors
 

@@ -615,7 +615,7 @@ def test_a_doubted_card_or_cap_figure_is_held_with_both_figures_and_a_worked_out
         assert ask("Tổng tăng bao nhiêu phần trăm so với AOP gốc?").startswith("Tổng tăng 17,3% từ AOP gốc lên AOPR")
         assert ask("Logistics tăng bao nhiêu phần trăm so với AOP gốc?").startswith("Logistics tăng 30,0% từ AOP gốc lên AOPR")
         assert ask("Đồng ý hết trừ việc một và việc bốn").startswith("Em đã ghi việc hai «Đồng ý»; việc ba «Đồng ý». Việc một, bốn em chưa ghi.")
-        assert ask("Đồng ý hết, riêng việc một để bàn thêm").startswith("Em đã ghi việc hai «Đồng ý»; việc ba «Đồng ý»; việc bốn «Đồng ý»; việc một «Cần bàn thêm».")
+        assert ask("Đồng ý hết, riêng việc một để bàn thêm").startswith("Em đã ghi việc một «Cần bàn thêm»; việc hai «Đồng ý»; việc ba «Đồng ý»; việc bốn «Đồng ý».")   # ask order (round 11)
         assert pg.evaluate("q => window.__clickyHoi(q, \"[data-clicky='c9']\")", "Đồng ý").startswith("Em đã ghi «Đồng ý» cho việc: «Logistics phải giải trình")   # a tapped ask
         assert ask("Đồng ý việc hai và việc bốn").startswith("Em đã ghi việc hai «Đồng ý»; việc bốn «Đồng ý».")
         x = ask("Đồng ý việc một, việc ba cần bàn thêm")
@@ -785,4 +785,63 @@ def test_round_ten_desktop_frames_bar_chips_charts_and_answer_wording(report, dr
         assert close is True, caps
         assert tallest <= 110, tallest
         assert "120,0 · đang kiểm lại" in chips and not any("đúng chỗ đang khoanh" in c for c in chips), chips
+        browser.close()
+
+
+def test_round_eleven_decisions_by_clause_a_tapped_row_and_who_or_when(report, drawn_report):
+    # round-11 panel: clauses recorded the opposite or were queued as questions; a tapped row's "%" gave the total's
+    # doubt; "18% à?" and a tapped doubted paragraph carried no note; "ai / bao giờ" found nothing
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    from present import kiem_hinh
+    a, b = build(report), build(drawn_report)
+    SR = "document.getElementById('clicky-host').shadowRoot"
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 768})
+        ask = lambda q, s=None: pg.evaluate("([q, s]) => window.__clickyHoi(q, s)", [q, s])   # noqa: E731
+        listed = lambda: pg.evaluate(f"{SR}.getElementById('tl').innerText")   # noqa: E731
+        pg.goto(Path(a["out"]).as_uri())
+        pg.wait_for_timeout(800)
+        assert ask("Việc một không, còn lại đồng ý").startswith("Em đã ghi việc một «Không đồng ý»; việc hai «Đồng ý».")
+        x = ask("Đồng ý hết trừ trần")
+        assert x.startswith("Em đã ghi «Đồng ý» cho việc: «Giãn tuyển") and "Việc một em chưa ghi." in x, x
+        assert ask("Không duyệt trần, giãn tuyển thì triển khai").startswith("Em đã ghi việc một «Không đồng ý»; việc hai «Đồng ý».")
+        assert ask("Việc hai làm đi. Việc một để tuần sau họp lại").startswith("Em đã ghi việc một «Cần bàn thêm»; việc hai «Đồng ý».")
+        assert ask("Ok hết").startswith("Em đã ghi «Đồng ý» cho cả 2 việc")
+        ask("Tôi không đồng ý giãn tuyển, đội tôi cần người")
+        assert "Không đồng ý — anh chị ghi: «Tôi không đồng ý giãn tuyển, đội tôi cần người»" in listed()
+        assert "(đã đổi từ Đồng ý)" in listed() and "đã đổi từ Không đồng ý)" not in listed().split("Giãn tuyển")[-1]
+        assert not ask("Vì sao không duyệt trần").startswith("Em đã ghi")       # a question, never a decision
+        assert ask("Khi nào giãn tuyển?").startswith("Báo cáo ghi: «giãn tuyển 30 vị trí bán hàng sang quý 3")
+        pg.goto(Path(b["out"]).as_uri())
+        pg.wait_for_timeout(900)
+        assert ask("Đồng ý tất cả trừ việc 1 và 4").startswith("Em đã ghi việc hai «Đồng ý»; việc ba «Đồng ý». Việc một, bốn em chưa ghi.")
+        assert ask("Ok hết, riêng việc một để bàn thêm").startswith(
+            "Em đã ghi việc một «Cần bàn thêm»; việc hai «Đồng ý»; việc ba «Đồng ý»; việc bốn «Đồng ý».")
+        assert ask("Không, việc bốn chưa được").startswith("Em đã ghi «Không đồng ý» cho việc: «Hoãn dự án kho mới")
+        assert ask("Cứ làm như anh Tuấn đề xuất đi").startswith("Em đã ghi «Đồng ý» cho cả 4 việc")
+        assert ask("Đồng ý ba việc đầu; không đồng ý hoãn kho mới, đội bán hàng cần kho").startswith(
+            "Em đã ghi việc một «Đồng ý»; việc hai «Đồng ý»; việc ba «Đồng ý»; việc bốn «Không đồng ý».")
+        assert ask("Không phản đối việc một").startswith("Em đã ghi «Đồng ý» cho việc: «Duyệt trần")
+        assert ask("Nhất trí việc hai và ba, việc bốn tạm treo").startswith("Em đã ghi việc hai «Đồng ý»; việc ba «Đồng ý»; việc bốn «Cần bàn thêm».")
+        # a tapped row: "%" is that row's own rate, never the total's doubt
+        assert ask("Tăng bao nhiêu phần trăm?", "#t tbody tr:nth-child(1) td:nth-child(2)").startswith("Khối vận hành tăng 21,4%")
+        assert ask("Tăng bao nhiêu phần trăm?", "#t tbody tr:nth-child(2) td:nth-child(2)").startswith("Logistics tăng 30,0%")
+        # one doubt gate: the rounded figure and a tapped doubted paragraph say it is being checked
+        assert "Lưu ý: số 18,0 anh Tuấn đang kiểm lại" in ask("18% à?")
+        pg.keyboard.press("Escape")
+        pg.wait_for_timeout(200)
+        pg.evaluate("document.querySelector('[data-clicky=c3]').scrollIntoView({block: 'center'})")
+        box = pg.locator("[data-clicky=c3]").bounding_box()
+        pg.mouse.click(box["x"] + 20, box["y"] + box["height"] / 2)
+        pg.wait_for_timeout(500)
+        assert "Lưu ý: câu «Chi phí vận hành AOPR tăng…» anh Tuấn đang kiểm lại" in pg.evaluate(f"{SR}.getElementById('ba').textContent")
+        # who and when: the clause that names them
+        assert ask("Ai theo dõi nhịp chi hằng tháng?").startswith("Báo cáo ghi: «FP&A theo dõi nhịp chi hằng tháng")
+        assert "mười lăm" in ask("Bao giờ báo lại?")
+        assert ask("Ai phải giải trình?").startswith("Anh Tuấn đề nghị: «Logistics phải giải trình")
         browser.close()
