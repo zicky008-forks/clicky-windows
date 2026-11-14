@@ -2604,7 +2604,7 @@ def make_record(script: dict, places: dict, page_text: str, meta: dict, en: bool
             for f in figures(noi):
                 v = value(f.tok, en)
                 why = check_at(f, places.get(chi), en, declared)
-                clash = unit_clash(f)
+                clash = unit_clash(f) if v not in computed else None   # worked out: 4,1 tỷ is not the page's 4,1%
                 if clash:
                     bad.append((noi, f.tok, clash))
                     continue

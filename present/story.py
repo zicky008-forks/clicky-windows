@@ -710,9 +710,13 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             expr = f"{a_tok} - {m.group(1)}"
             got = say(a_val - v, max(decimals(a_tok, en), decimals(m.group(1), en)), en)
             text = f"Trần {m.group(1)} {unit} nghĩa là phải giảm {got} {unit} so với {plan_said(t.actual_name)}.".replace("  ", " ")   # standalone: never "Tức là" after a line it does not follow from
-            lines.append(("Đề nghị", Line(text, cid(n), so_tinh=[f"{got} = {expr}"], dung=1.0, bat=False, vai="tran")))
-            flags.append({"xem": f"Câu «{text}» do em tính ({expr} = {got}); báo cáo chưa ghi số này. Anh xem, đúng ý "
-                                 "thì bật để em nói.", "cau": [text]})
+            # said with its formula (user, 11-14), unless the cap it is worked out from is itself in doubt
+            held = any(m.group(1) in (fl.get("so") or []) for fl in flags)
+            lines.append(("Đề nghị", Line(text, cid(n), so_tinh=[f"{got} = {expr}"], dung=1.0, bat=not held, vai="tran")))
+            flags.append({"xem": f"Câu «{text}» do em tính ({expr} = {got}); báo cáo chưa ghi số này. "
+                                 + ("Em chưa nói vì mức trần đang bị nghi; anh quyết xong trần, đúng ý thì bật (bat: 'có')."
+                                    if held else "Em nói kèm công thức; anh không muốn nói thì ghi bat: 'chưa'."),
+                          "cau": [text]})
             break
 
     # B9: say plainly what the report does not give a figure for; the owner switches on one, both, or says why not
@@ -721,9 +725,9 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             # no figure in it, so on by default: the Board hears the gap even before the owner fills it (round-5 #13)
             lines.append(("Đề nghị", Line(fl["noi_thang"], cid(note), vai="thang")))
             fl.setdefault("cau", []).append(fl["noi_thang"])
-        if fl.get("de_xuat") and note is not None:       # a bound worked out from printed figures: the owner decides
-            lines.append(("Đề nghị", Line(fl["de_xuat"][0], cid(note), so_tinh=fl["de_xuat"][1], bat=False,
-                                          vai="uoc_tiet_kiem")))
+        if fl.get("de_xuat") and note is not None:       # a bound worked out from printed figures: said with its formula (user, 11-14)
+            lines.append(("Đề nghị", Line(fl["de_xuat"][0], cid(note), so_tinh=fl["de_xuat"][1],
+                                          xac_nhan=fl["de_xuat"][2], vai="uoc_tiet_kiem")))
             fl.setdefault("cau", []).append(fl["de_xuat"][0])
 
     # B10: close on every decision asked at the start, then stop for questions
@@ -735,7 +739,12 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             t = said(a)
             if ", tức " in t:                          # "giữ tỷ lệ … ở 2,40%, tức trần 177,5 tỷ": the money is the tag
                 t = t.split()[0] + " " + t.split(", tức ", 1)[1]
-            return re.sub(r"\s+(trước khi|và gắn với|cho cả năm|để)\b.*$", "", t)
+            t = re.sub(r"\s+(trước khi|và gắn với|cho cả năm|để)\b.*$", "", t)
+            if len(ask_pairs) > 2:                     # three asks or more: a few words each, or the close outruns the room
+                m = re.search(r"\btrần\b[^0-9;]*?(\d[\d.,]*\s*(tỷ|triệu)?)", t)
+                t = f"{t.split()[0]} trần {m.group(1)}" if m else \
+                    re.sub(r"\s+(bằng|sang|cho|với|trong|từ)\b.*$", "", t).replace(" phải ", " ")
+            return t
         tags = [tag(a) for _n, a in ask_pairs[:6]]
         body = "; ".join(f"{nth[k].lower()} là {x}" for k, x in enumerate(tags)) if len(tags) > 1 else tags[0]
         lines.append(("Chốt", Line(f"Tóm lại, {owner} xin anh chị quyết: {body}.", cid(first), dung=1.0, vai="chot")))
@@ -775,6 +784,8 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             c["xac_nhan"] = ln.xac_nhan
         if not ln.bat:
             c["bat"] = "chưa"
+        elif ln.so_tinh:                           # a figure code worked out: said, and the owner can switch it off
+            c["bat"] = "có"
         if ln.vai:
             c["vai"] = ln.vai
         scenes[-1]["cau"].append(c)
@@ -819,7 +830,7 @@ def headcount_bridge(places: dict, t: Table, en: bool) -> Optional[tuple]:
     if share <= 0 or share >= 100:
         return None
     rest = "phần lớn hơn" if share < 50 else "phần còn lại"
-    return (f"Phần tăng do thêm người chỉ chiếm khoảng {got[0]}%; {rest} là chi phí mỗi người tăng." if share < 50 else
+    return (f"Phần tăng do thêm người chiếm khoảng {got[0]}%; {rest} là chi phí mỗi người tăng." if share < 50 else
             f"Phần tăng do thêm người chiếm khoảng {got[0]}%; {rest} là chi phí mỗi người tăng.", hc.id, f"{got[0]} = {expr}")
 
 
@@ -929,8 +940,8 @@ def preflight(items: list, places: dict, t: Table, en: bool, note, cut, owner: s
                     need = f" so với {cut.figs[0].tok} {cut.figs[0].unit or ''} cần giảm" if cut is not None else ""
                     flag = {"xem": f"Đề xuất «{m.group(0)}» chưa ghi tiết kiệm được bao nhiêu. Theo bình quân "
                                    f"{_short(row.label)} ({per}), giãn trọn năm khoảng {say(year, 1, en)} "
-                                   f"{t.unit or ''}{need}. Anh bổ sung số tháng giãn vào báo cáo, hoặc bật câu em đề xuất "
-                                   "(bat: 'có') trong kịch bản.",
+                                   f"{t.unit or ''}{need}. Anh bổ sung số tháng giãn vào báo cáo, em đang nói câu "
+                                   "ước tính kèm công thức (anh không muốn thì ghi bat: 'chưa').",
                             "noi_thang": f"Có một điểm báo cáo chưa có số: giãn {m.group(1)} {m.group(2)} tiết kiệm "
                                          "được bao nhiêu."}
                     expr = f"{m.group(1)} × {per}"
@@ -940,10 +951,11 @@ def preflight(items: list, places: dict, t: Table, en: bool, note, cut, owner: s
                     if cut is not None and got:
                         ratio = year / C.value(cut.figs[0].tok, en)
                         enough = ("chưa bằng một nửa" if ratio < Decimal("0.45") else "chưa đủ" if ratio < 1 else "đủ bù")
-                        flag["de_xuat"] = (f"Kể cả giãn trọn năm, {m.group(1)} {m.group(2)} cũng chỉ tiết kiệm "
+                        flag["de_xuat"] = (f"Em tính theo chi phí bình quân một người ở {_short(row.label)}: kể cả giãn trọn năm, "
+                                           f"{m.group(1)} {m.group(2)} cũng chỉ tiết kiệm "
                                            f"khoảng {got[0]} {t.unit or ''}, {enough} mức {cut.figs[0].tok} "
                                            f"{cut.figs[0].unit or ''} cần giảm.".replace("  ", " ").replace(" ,", ","),
-                                           [f"{got[0]} = {expr}"])
+                                           [f"{got[0]} = {expr}"], [cut.figs[0].tok])   # the cut is printed at its own place
                     flags.append(flag)
                 except ValueError:
                     pass

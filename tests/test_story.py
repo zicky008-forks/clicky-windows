@@ -62,7 +62,7 @@ def test_the_story_asks_first_then_tells_one_driver_and_never_reads_the_page_in_
     driver = next(c for c in said if c.get("vai") == "dong_luc")
     assert driver["noi"] == "Khối Bán hàng chiếm khoảng 67% phần tăng: 14,1 tỷ." and "hai phần ba" not in text.lower()
     assert driver["so_tinh"] == ["67 = 14,1 / 20,9 × 100"]
-    assert rep["record"]["em_tinh"] == 3
+    assert rep["record"]["em_tinh"] == 4
     # how much faster is said as a figure the Board can check: 12,6 / 7,2 = 1,75, said "khoảng 1,8"
     fast = next(c for c in said if "nhanh gấp khoảng 1,8 lần doanh thu" in c["noi"])
     assert fast["so_tinh"] == ["1,8 = 12,6 / 7,2"]
@@ -79,12 +79,12 @@ def test_a_computed_figure_is_rechecked_from_the_output_file(report):
     rep = build(report)
     res = kiem_bien_ban.verify(rep["out"], str(report))
     assert res["ok"], res["errors"]
-    assert res["tong"]["em_tinh"] == 3
+    assert res["tong"]["em_tinh"] == 4
     page = Path(rep["out"]).read_text(encoding="utf-8")
     data = json.loads(re.search(r'<script id="clicky-data" type="application/json">(.*?)</script>', page, re.S).group(1))
     chips = [e for s in data["scenes"] for ev in s["ev"] for e in ev if e[1] == "t"]
     assert chips == [["1,8", "t", "12,6 / 7,2"], ["67", "t", "14,1 / 20,9 × 100"],
-                     ["8", "t", "(20,9 - 14,1) / (165,5 - 78,2) × 100"]]
+                     ["8", "t", "(20,9 - 14,1) / (165,5 - 78,2) × 100"], ["3,9", "t", "30 × 92,3 / 712"]]
 
 
 def test_the_owner_pre_flight_is_in_the_result_and_never_on_the_page(report):
@@ -97,11 +97,15 @@ def test_the_owner_pre_flight_is_in_the_result_and_never_on_the_page(report):
     gap = next(f for f in flags if "30 vị trí" in f)
     assert "3,9 tỷ" in gap and "8,9 tỷ" in gap
     # the gap carries no figure, so it is said by default (round-5 Chair, three rounds running); the owner can switch
-    # it off; the bound he must check is still his to switch on
+    # it off; the bound is worked out by code and, by the owner's decision (11-14), said with its formula
     gapline = next(c for c in lines(rep) if c["noi"].startswith("Có một điểm báo cáo chưa có số: giãn 30 vị trí"))
     assert "bat" not in gapline
     bound = next(c for c in lines(rep) if c.get("vai") == "uoc_tiet_kiem")
     assert "khoảng 3,9 tỷ" in bound["noi"] and "4 tỷ" not in bound["noi"]   # 30 × 92,3 / 712 = 3,89, never rounded up to 4
+    assert bound["noi"] == ("Em tính theo chi phí bình quân một người ở khối Bán hàng: kể cả giãn trọn năm, 30 vị trí "
+                            "cũng chỉ tiết kiệm khoảng 3,9 tỷ, chưa bằng một nửa mức 8,9 tỷ cần giảm.")
+    assert bound["so_tinh"] == ["3,9 = 30 × 92,3 / 712"] and bound["bat"] == "có" and bound["xac_nhan"] == ["8,9"]
+    assert "anh không muốn thì ghi bat: 'chưa'" in gap
     page = Path(rep["out"]).read_text(encoding="utf-8")
     assert "Hai phần ba" not in page.split('id="clicky-data"')[1] and "43%" not in page
     assert any(t.startswith("Trước khi gửi, anh soát:") for t in clicky_html.todo_list(rep))
@@ -261,8 +265,9 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
             "Ba là giữ quỹ lương bằng kế hoạch gốc cho cả năm.", "Bốn là hoãn dự án kho mới sang năm sau."]
     assert said[1]["noi"] == "Anh Tuấn xin anh chị quyết bốn việc." and [c["noi"] for c in said[2:6]] == asks
     close = [c["noi"] for c in said if c.get("vai") == "chot"]
-    assert close == ["Tóm lại, anh Tuấn xin anh chị quyết: một là duyệt trần chi phí vận hành 120,0 tỷ; hai là Logistics "
-                     "phải giải trình; ba là giữ quỹ lương bằng kế hoạch gốc; bốn là hoãn dự án kho mới sang năm sau."]
+    # four asks: the close says a few words each, never the opening again word for word (round-6 Coach)
+    assert close == ["Tóm lại, anh Tuấn xin anh chị quyết: một là duyệt trần 120,0 tỷ; hai là Logistics giải trình; "
+                     "ba là giữ quỹ lương; bốn là hoãn dự án kho mới."]
     # the table has no variance column: code works it out from the drawn rows; a group row ("Khối vận hành" adds up
     # Logistics and Mua hàng) is never the driver; the unit comes from the table's heading "(tỷ đồng)"
     driver = next(c for c in said if c.get("vai") == "dong_luc")
