@@ -128,7 +128,7 @@ def test_click_a_paragraph_or_heading(page):
 def test_draw_a_box_around_part_of_the_report(page):
     pg, errors = page
     rows = pg.locator("table[data-clicky] tr")
-    rows.nth(2).scroll_into_view_if_needed()
+    rows.nth(2).evaluate("e => e.scrollIntoView({block: 'center'})")   # never under the bar (an undrawn chart now takes one line)
     a, b = rows.nth(1).locator("td").nth(1).bounding_box(), rows.nth(2).locator("td").nth(3).bounding_box()
     pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('lassob').click()")
     pg.mouse.move(a["x"] - 4, a["y"] - 4)
@@ -237,7 +237,7 @@ def test_questions_the_talk_answers_come_from_the_approved_lines_and_the_page_st
     assert "12,6 ÷ 7,2 = 1,75, nói tròn là 1,8" in a and "biên bản kiểm lại công thức" not in a   # round 10: no log wording
     assert _ask(pg, "Nếu không cắt thì sao?").startswith("Nếu giữ nguyên, tỷ lệ chi phí nhân sự trên doanh thu thuần là 2,52%")
     a = _ask(pg, "Em là ai?")
-    assert "kèm công thức" in a and "Theo kịch bản nháp của anh Tuấn (chưa duyệt)" in a       # never "đã duyệt" on a draft
+    assert "kèm công thức" in a and "đã duyệt" not in a       # never "đã duyệt" on a draft; the draft's source was said once already (round 10)
     # a question the page answers directly is never taken over by the talk
     assert _ask(pg, "Cần giảm bao nhiêu?").startswith("Cần giảm so với AOPR: 8,9 tỷ")
     assert _ask(pg, "Khối nào tăng nhiều nhất?").startswith("Khối Bán hàng")
@@ -883,7 +883,7 @@ def test_round2_frames_dim_and_hat(page):
 def test_round2_lasso_frame_follows_its_cells_after_scrolling(page):
     pg, errors = page
     rows = pg.locator("table[data-clicky] tbody tr")
-    rows.nth(0).scroll_into_view_if_needed()
+    rows.nth(2).evaluate("e => e.scrollIntoView({block: 'center'})")   # never under the bar (an undrawn chart now takes one line)
     a, b = rows.nth(0).locator("td").nth(1).bounding_box(), rows.nth(4).locator("td").nth(3).bounding_box()
     pg.evaluate(f"{SR}.getElementById('lassob').click()")
     pg.mouse.move(a["x"] - 3, a["y"] - 3)
@@ -1493,7 +1493,7 @@ def test_nods_junk_and_say_again_never_reach_the_owner_and_plan_names_explain_th
     for q in ("hmm ???", "Đúng.", "Chuẩn rồi.", "Cảm ơn em, vậy thôi.", "Được, tiếp đi.", "hmm, ok.."):
         assert _r3(pg, q) == "Dạ.", q
     assert _r3(pg, "Em vừa nói gì?").startswith("Thưa anh chị, em là trợ lý AI của anh Tuấn.")   # nothing played yet: the first line
-    assert _r3(pg, "Em nói lại phần đề nghị").startswith("Vì vậy anh Tuấn đề xuất mức trần 177,5 tỷ.")
+    assert _r3(pg, "Em nói lại phần đề nghị").startswith("Anh Tuấn đề xuất mức trần 177,5 tỷ.")   # round 10: no dangling "Vì vậy"
     assert _r3(pg, "Ý chính là gì?").startswith("Anh Tuấn xin anh chị duyệt trần 177,5 tỷ (giảm 8,9 tỷ)")
     assert _r3(pg, "Theo em có nên duyệt không?").startswith("Em không khuyên thay anh chị.")
     assert "48 nhân viên" in _r3(pg, "vì sao bán hàng tăng? nói đơn giản thôi")

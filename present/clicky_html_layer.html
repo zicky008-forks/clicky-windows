@@ -237,7 +237,23 @@ function narrowTables() {   // a phone: a table wider than the screen scrolls in
     for (const r of t.rows) { const c = r.cells[0]; if (c && c.colSpan === 1 && !c.style.backgroundColor) c.style.backgroundColor = opaque(c); }   // pinned cells hide what scrolls under them
   }
 }
-narrowTables(); addEventListener("load", () => setTimeout(narrowTables, 300));   // never in the middle of framing a place:
+function blankCharts() {   // a chart its library never drew (opened offline) leaves a tall empty hole: one line in its place (round 10)
+  if (window.Chart || window.echarts || window.ApexCharts || window.Plotly || window.Highcharts || window.d3) return;   // a library that may still draw
+  let moved = false;
+  document.querySelectorAll("canvas").forEach(c => { if (c.closest("[data-clicky-layer]") || c.hasAttribute("data-clicky-trong") || !c.width || !c.height) return;
+    let drawn = true; try { const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; drawn = false;
+      for (let i = 3; i < d.length; i += 16) if (d[i]) { drawn = true; break; } } catch (_) {}
+    if (drawn) return;
+    c.setAttribute("data-clicky-trong", "1");   // the canvas stays (it is a place to click and ask about), one line high, saying so
+    const box = c.parentElement; if (box && box !== document.body && !box.textContent.trim()) { box.style.height = "auto"; box.style.minHeight = "0"; }
+    const w = Math.max(200, Math.min(c.clientWidth || c.width, 640)), dpr = window.devicePixelRatio || 1, label = "Biểu đồ chưa hiện trên máy này; số của nó có trong báo cáo.";
+    c.style.width = w + "px"; c.style.height = "24px"; c.width = Math.round(w * dpr); c.height = Math.round(24 * dpr);
+    if (c.getAttribute("aria-label")) c.title = c.getAttribute("aria-label");
+    try { const g = c.getContext("2d"); g.scale(dpr, dpr); g.font = "13px system-ui, sans-serif"; g.fillStyle = "#667"; g.fillText(label, 0, 17, w); } catch (_) {}
+    moved = true; });
+  if (moved && frames.length) redraw();   // a frame already up follows its place
+}
+narrowTables(); if (document.readyState === "complete") blankCharts(); addEventListener("load", () => { blankCharts(); setTimeout(narrowTables, 300); });   // never in the middle of framing a place:
 addEventListener("resize", () => narrowTables());                                // a table that moves under a frame misplaces it
 function capFit() {   // a clamped caption never hides a figure: smaller type first, a third line only if it must
   const c = $("cap"); c.classList.remove("tight", "tighter", "x3");
@@ -745,16 +761,16 @@ function clearFrames() { frames.forEach(f => { f.box.remove(); f.soft.forEach(s 
 
 // --- the talk: one sentence on screen at a time, following the voice ---
 let lastSaid = "";   // the sentence the voice said last: "nói lại" gives it back
-function capParts(x) {   // a long sentence in parts of at most ~80 letters, cut at «:» or «;», then at a comma
-  if (x.length <= 80) return [x];
+function capParts(x, n) {   // a long sentence in parts of at most ~80 letters (a desktop: ~95), cut at «:» or «;», then at a comma
+  n = n || 80; if (x.length <= n) return [x];
   const parts = []; let cur = "";
-  const bits = x.split(/(?<=[:;])\s+/).flatMap(b => b.length > 80 ? b.split(/(?<=,)\s+/) : [b]);
-  for (const bit of bits) { if (cur && (cur + " " + bit).length > 80) { parts.push(cur); cur = bit; } else cur = cur ? cur + " " + bit : bit; }
+  const bits = x.split(/(?<=[:;])\s+(?![^(]*\))/).flatMap(b => b.length > n ? b.split(/(?<=,)\s+(?![^(]*\))/) : [b]);
+  for (const bit of bits) { if (cur && (cur + " " + bit).length > n) { parts.push(cur); cur = bit; } else cur = cur ? cur + " " + bit : bit; }
   if (cur) parts.push(cur); return parts.map((p, i) => (i ? "… " : "") + p);
 }
 function capPart(s, k, t) {   // on a phone a long sentence is shown in parts, in step with the voice (round 9: 16px, two lines)
-  const x = s.sentences[k] || ""; if (!host.hasAttribute("data-small")) return x;
-  const parts = capParts(x); if (parts.length < 2) return x;
+  const x = s.sentences[k] || "", small = host.hasAttribute("data-small");
+  const parts = capParts(x, small ? 80 : 95); if (parts.length < 2) return x;   // a desktop bar stays at two lines too (round 10)
   const a = s.starts[k] || 0, b = s.starts[k + 1] || (isFinite(audio.duration) ? audio.duration : a + x.length / 14), f = Math.max(0, Math.min(1, (t - a) / Math.max(0.1, b - a)));
   let n = 0, i = 0; for (; i < parts.length - 1; i++) { n += parts[i].length; if (f * x.length < n) break; }
   return parts[i]; }
@@ -769,7 +785,7 @@ function caption(t) {   // the sentence being said now, from the voice's own tim
   lastSaid = s.sentences[k] || lastSaid;
   const part = capPart(s, k, t);
   if (spareKey !== idx + ":" + k) { spareKey = idx + ":" + k; spare(s.sentences[k] + " " + (s.sentences[k + 1] || "")); }
-  $("cap").innerHTML = "<span>" + esc(part) + "</span>" + evidence((s.ev || [])[k]) +
+  $("cap").innerHTML = "<span>" + esc(part) + "</span>" + evidence((s.ev || [])[k], part) +
     "<small>Phần " + (idx + 1) + "/" + S.length + (s.title ? " · " + esc(s.title) : "") + "</small>";
   fitBar();
 }
@@ -784,13 +800,18 @@ function idleLine() {
 }
 // where each spoken figure comes from, from the sealed record: k = the framed place, b = elsewhere in the report, o = owner
 // t = worked out by code from figures printed in the report (the formula is in the chip's tooltip)
-const EV = {k: "đúng chỗ đang khoanh", b: "có trong báo cáo", o: esc(OWNER) + " bổ sung", t: "em tính từ báo cáo"};
-function evidence(list) {
+const EV = {k: "đang khoanh", b: "có trong báo cáo", o: esc(OWNER) + " bổ sung", t: "em tính"};   // short: one row of chips (round 10)
+function evDoubt(so) {   // a figure the owner is still checking says so on its chip, never «đang khoanh» alone
+  const it = (D.nghi || []).find(x => (x.so || []).length && String(x.so[0]) === so && !(x.xong && x.quyet !== "báo cáo sai"));
+  return it ? (it.quyet === "báo cáo sai" ? "cần sửa" : "đang kiểm lại") : "";
+}
+function evidence(list, part) {
   list = (list || []).filter(([so, w]) => w === "t" || /[.,]|\d\d/.test(so));   // "Phần 1." is a heading, not a figure
+  if (part) list = list.filter(([so]) => new RegExp("(^|[^\\d.,])" + so.replace(/[.,]/g, "\\$&") + "(?![\\d]|[.,]\\d)").test(part));   // the part on screen only
   if (!list.length) return "";
-  return '<span class="ev">' + list.slice(0, 4).map(([so, w, f]) =>
-    '<span class="' + (w === "k" ? "" : w === "o" ? "o" : "k") + '"' + (f ? ' title="' + esc(f) + '"' : "") + ">" +
-    esc(so) + " · " + EV[w] + "</span>").join("") + "</span>";
+  return '<span class="ev">' + list.slice(0, 3).map(([so, w, f]) => { const d = evDoubt(so);
+    return '<span class="' + (d ? "o" : w === "k" ? "" : w === "o" ? "o" : "k") + '"' + (f ? ' title="' + esc(f) + '"' : "") + ">" +
+    esc(so) + " · " + (d || EV[w]) + "</span>"; }).join("") + "</span>";
 }
 const sceneSrc = i => "data:" + (S[i].mime || "audio/mpeg") + ";base64," + S[i].audio;
 function stopVoice() { try { window.speechSynthesis && speechSynthesis.cancel(); } catch (_) {} }
@@ -819,7 +840,12 @@ function setPlaying(v) {
 function onTime() {
   if (aside || !S[idx]) return;
   const s = S[idx], t = audio.currentTime; caption(t);
-  s.points.forEach((p, k) => { if (!shown.has(k) && t >= p.t) { shown.add(k); frame(el(p.id)); } });
+  s.points.forEach((p, k) => { if (!shown.has(k) && t >= p.t) { shown.add(k); frame(pointEl(s, k, p)); } });
+}
+function pointEl(s, k, p) {   // a sentence that lists several asks ("một là …; hai là …") frames the whole list, never its first item (round 10)
+  const e = el(p.id), x = fold((s.sentences || [])[k] || "");
+  if (e && e.tagName === "LI" && /\bmot la\b/.test(x) && /\bhai la\b/.test(x) && e.parentElement && /^(OL|UL)$/.test(e.parentElement.tagName)) return e.parentElement;
+  return e;
 }
 audio.addEventListener("timeupdate", onTime);
 (function tick() { if (playing && !audio.paused) onTime(); requestAnimationFrame(tick); })();   // every frame, not every 250 ms
@@ -834,8 +860,8 @@ function resume() {   // back to the exact sentence the talk was at before the q
   const seek = () => { try { audio.currentTime = t; } catch (_) {} };
   if (audio.readyState >= 1) seek(); else audio.addEventListener("loadedmetadata", seek, {once: true});
   shown = new Set(); let last = null;
-  S[i].points.forEach((p, k) => { if (p.t <= t) { shown.add(k); last = p; } });
-  clearFrames(); if (last) frame(el(last.id));
+  S[i].points.forEach((p, k) => { if (p.t <= t) { shown.add(k); last = [p, k]; } });
+  clearFrames(); if (last) frame(pointEl(S[i], last[1], last[0]));
   caption(t); start();
 }
 function togglePlay() {
@@ -1877,6 +1903,7 @@ function whole(t, n) {   // whole sentences, never a fragment; figures in bold
   return esc(out).replace(/(\d[\d.,]*\d|\d)(\s*(?:%|tỷ|triệu|người|ngày|vị trí|nhân viên|điểm))?/g, "<b>$&</b>");
 }
 let toldNoVoice = false;
+const SRC_SEEN = new Set();   // the script's source line, said on the first answer it backs
 let LAST_ANS = "";   // the last answer shown: a follow-up with no subject of its own ("đủ không?") is about it
 const SAID = [];     // figures worked out in answers this session ("5,0 (em tính: 8,9 − 3,9)"): asked back, never disowned
 function sessionFig(q, late) {   // "5,0 tỷ ở đâu ra?", "3,9 tỷ à?", "3,9 là số báo cáo hay em tính?": a figure Clicky said, with its working
@@ -1941,6 +1968,7 @@ function doubtNote(text) {   // one gate: any answer that shows a figure the own
 }
 function answer(text, target, o) {
   o = o || {};
+  text = String(text).replace(/^(Vì vậy|Tức là|Do đó|Vậy nên),?\s+(.)/, (m, w, c) => c.toUpperCase());   // a talk line's link word dangles alone
   { const n = doubtNote(text); if (n) text = text + (o.html ? esc(n) : n); }
   { const t = String(text).replace(/<[^>]*>/g, ""); LAST_ANS = t;
     for (const m of t.matchAll(/(\d[\d.,]*\d|\d)\s*(tỷ|triệu|%)?\s*\(em tính: ([^)]+)\)/g))
@@ -1950,7 +1978,10 @@ function answer(text, target, o) {
         ((it.so || [])[0] ? "số " + it.so[0] : "câu đang làm mờ") + ": " + it.tinh.charAt(0).toLowerCase() + it.tinh.slice(1) + ".", full: true}); } }
   const a = isOpen($("bub")) ? $("ba") : $("a"); a.className = "ans " + (o.cls || ""); a.innerHTML = "<div>" + (o.html ? text : esc(text)) + "</div>";
   setTimeout(oneSend, 0);
-  const src = o.src !== undefined ? o.src : target ? "Lấy từ báo cáo «" + TITLE + "», đúng chỗ đang khoanh" : "";
+  let src = o.src !== undefined ? o.src : target ? "Lấy từ báo cáo «" + TITLE + "», đúng chỗ đang khoanh" : "";
+  { const body = String(text).replace(/<[^>]*>/g, "");   // a source is said once: not again under a body that says it, and the script's own once a session
+    if (src && body.includes(src.split(" «")[0])) src = "";
+    if (src && /^Theo (kịch bản nháp|lời) /.test(src)) { if (SRC_SEEN.has(src)) src = ""; else SRC_SEEN.add(src); } }
   const ex = [].concat(o.extra || []).filter(Boolean);
   const figs = x => /^(UL|TABLE)$/.test(x.tagName) || (x.classList && x.classList.contains("mtw"));
   $("bub").classList.toggle("wide", ex.some(x => x.classList && x.classList.contains("mtw")));
@@ -2259,12 +2290,14 @@ function rejectCap(q) {   // "nếu không duyệt trần thì sao": first what 
   return true;
 }
 function condAsk(q) {   // "nếu doanh thu chỉ đạt 90% thì phải cắt bao nhiêu": a scenario the report computes, or none
-  const f = " " + fold(q) + " ", m = f.match(/ neu (.+?) (thi|,) (.+)$/); if (!m || !/(bao nhieu|may|the nao|sao)/.test(m[3])) return false;
+  const f = " " + fold(q) + " ", m = f.match(/ neu (.+?) (thi|,) (.+)$/) ||   // "doanh thu hụt 10% thì …" has no "nếu" but is the same scenario
+    f.match(/ ((?:doanh thu|doanh so|ban hang) (?:(?:chi )?(?:hut|dat|thieu|giam|mat|con) (?:[^,\d]*? )?)?\d[\d.,]*%[^,]*?) (thi|,) (.+)$/); if (!m || !/(bao nhieu|may|the nao|sao)/.test(m[3])) return false;
   const figs = m[1].match(/\d[\d.,]*%?/g) || []; if (!figs.length) return false;
   const open = /^\s*(sao|the nao|ra sao)\b/.test(m[3]);   // "… thì sao": the report's own sentence with that condition
   const ask = open ? [] : words(m[3]).filter(w => w.length > 2 && !ECHO_NOT.has(w) && !/^(thi|se|phai|can|chi_phi|doanh|thu|loi|nhuan|tong)$/.test(w));   // what is asked, not whose
   if (!open && !ask.length) return false;
   for (const b of blocks()) for (const x of splitSent(b.text)) { const fx = " " + joined(fold(x)) + " ";
+    if (doubted(x)) continue;   // a doubted sentence is never the scenario's answer
     if (figs.every(g => fx.includes(fold(g).replace(/%$/, ""))) && (open || ask.some(w => fx.includes(" " + w + " ")))) {
       answer("Báo cáo ghi: «" + whole(x) + "»", b.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"}); return true; } }
   answer("Báo cáo không tính kịch bản này, nên em không đưa số.", null, {cls: "park", extra: parkNote(q)});
@@ -2349,8 +2382,8 @@ function absentFig(q) {   // "9,0 tính thế nào" where no 9,0 is printed or s
   const f = " " + fold(q) + " "; if (!/ (tinh the nao|tinh sao|o dau ra|tu dau ra|lay o dau|dung khong|co dung) /.test(f)) return false;
   const toks = q.match(/\d[\d.,]*\d%?|\d%?/g) || []; if (!toks.length) return false;
   if (toks.some(t => placesOf(t).n) || spokenWith(toks)) return false;
-  const t = toks[0];
-  answer("Báo cáo này không có số " + t + ", em cũng chưa nói số này, nên em không giải thích.", null, {src: ""}); return true;
+  const t = toks[0];   // set aside for the owner, never a dead end
+  answer("Báo cáo này không có số " + t + ", em cũng chưa nói số này, nên em không giải thích.", null, {cls: "park", extra: parkNote(q), src: ""}); return true;
 }
 function sayAgain(q) {   // "nói lại", "em vừa nói gì", "nói lại phần đề nghị": the talk's own words again, never a new question
   const f = " " + fold(q).replace(/[,.!?;…]+/g, " ").replace(/\s+/g, " ") + " ";
@@ -2432,7 +2465,8 @@ function peopleAsk(q) {   // "đội bán hàng tăng bao nhiêu người": no p
   return true;
 }
 function spokenWith(toks) {   // an approved line of the talk that says this figure ("1,8 lần", worked out with its formula)
-  const hit = f => toks.some(tok => { const t = tok.replace(/%$/, ""); return new RegExp("(^|[^\\d.,])" + t.replace(/[.,]/g, "\\$&") + "(?![\\d]|[.,]\\d)").test(f.a || ""); });
+  const hit = f => toks.some(tok => { const t = tok.replace(/%$/, ""), z = /[.,]/.test(t) ? "" : "(?:,0)?";   // "5" is the 5,0 said
+    return new RegExp("(^|[^\\d.,])" + t.replace(/[.,]/g, "\\$&") + z + "(?![\\d]|[.,]\\d)").test(f.a || ""); });
   return FACTS.find(f => f.k === "t" && hit(f)) || FACTS.find(hit) || null;
 }
 function figureAsk(q) {   // "6,7% nghĩa là gì?", "6,4% là sao?": the one tile, cell or sentence that prints that very figure
@@ -3186,6 +3220,7 @@ function whereNow() {   // the place a question was asked at, as the owner will 
 function draw() { const l = load().filter(x => !x.sent); $("tb").classList.toggle("hidden", !l.length && !$("sent").textContent);
   const dec = l.filter(x => DEC.test(x.q)), qs = l.filter(x => !DEC.test(x.q)), WAIT = "Câu chờ " + OWNER + " trả lời";
   $("tbh").textContent = dec.length && !qs.length ? "Quyết định anh chị đã ghi" : WAIT;
+  $("tbh").classList.toggle("hidden", !!(dec.length && qs.length));   // both kinds: each section names itself, one heading each
   const li = x => "<li>" + esc(DEC.test(x.q) ? x.q.replace(/^Quyết định /, "") : x.q) + "</li>";
   $("tl").innerHTML = dec.length && qs.length ? '<li class="sec">Quyết định anh chị đã ghi</li>' + dec.map(li).join("") + '<li class="sec">' + esc(WAIT) + "</li>" + qs.map(li).join("")
     : l.map(li).join("");
@@ -3353,7 +3388,7 @@ window.__clickyKiemHinh = async function () {
 };
 window.__clickyChuCat = function () {   // every sentence of the talk in the caption as it is now: those that still hide words
   const keep = $("cap").innerHTML, out = [];
-  S.forEach(s => s.sentences.forEach(t => (host.hasAttribute("data-small") ? capParts(t) : [t]).forEach(x => { $("cap").innerHTML = "<span>" + esc(x) + "</span>"; capFit();
+  S.forEach(s => s.sentences.forEach(t => capParts(t, host.hasAttribute("data-small") ? 80 : 95).forEach(x => { $("cap").innerHTML = "<span>" + esc(x) + "</span>"; capFit();
     const sp = $("cap").querySelector(":scope>span"); if (sp.scrollHeight > sp.clientHeight + 1) out.push(x); })));
   $("cap").innerHTML = keep; capFit(); return out;
 };

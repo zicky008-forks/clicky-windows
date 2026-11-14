@@ -30,7 +30,7 @@ def voice(text):
 
 
 def build(report, **k):
-    return BUILD(str(report), voice=voice, **{**OWNER, **k})
+    return BUILD(str(report), **{"voice": voice, **OWNER, **k})
 
 
 def lines(rep):
@@ -234,7 +234,9 @@ def test_next_months_report_works_the_computed_figure_out_again(report):
     assert any("đổi mức độ" in n and "phần lớn" in n for n in rep["canh_bao"])
     # the stake line ("… tức vượt trần 8,9 tỷ") keeps its lock on the tile that still prints 8,9: month 2 builds
     stake = [c for c in lines(rep) if "vượt trần" in c["noi"]]
-    assert len(stake) == 1 and stake[0]["xac_nhan"] == ["8,9"] and "8,9 tỷ" in report.read_text(encoding="utf-8")
+    # round 10: the opening says the stakes too, locked the same way
+    assert [c["vai"] for c in stake] == ["mo_rui_ro", "neu_giu"] and all(c["xac_nhan"] == ["8,9"] for c in stake)
+    assert "8,9 tỷ" in report.read_text(encoding="utf-8")
     assert kiem_bien_ban.verify(rep["out"], str(report))["ok"]
 
 
@@ -703,3 +705,84 @@ def test_switching_on_a_proposed_line_settles_its_check_and_never_breaks_the_bui
     assert done["trang_thai"].startswith("CHÍNH THỨC"), done["canh_bao"]
     said = " ".join(c["noi"] for c in lines(done))
     assert "3,9 tỷ" in said and "Có một điểm báo cáo chưa có số" in said
+
+
+def _silent_wav(text):   # playable silence at a natural pace (~15 letters a second), so the talk really plays
+    import io, wave
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(8000)
+        w.writeframes(b"\0\0" * int(8000 * max(0.6, len(text) / 15)))
+    return out.getvalue()
+
+
+def _wav_secs(wav):
+    import io, wave
+    with wave.open(io.BytesIO(wav)) as w:
+        return wav, w.getnframes() / w.getframerate()
+
+
+def test_round_ten_desktop_frames_bar_chips_charts_and_answer_wording(report, drawn_report, monkeypatch):
+    # round-10 panel: the close framed ask 1 only; long captions grew the bar to 125-149 px; a doubted cap's chip said
+    # «đúng chỗ đang khoanh»; an undrawn chart left a hole; the panel heading was printed twice; the script's source
+    # closed every answer; "hụt 10%" was answered with the 9,0 cut; "Doanh thu 90%" denied the printed 90% sentence
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    from present import kiem_hinh
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", _wav_secs)
+    a, b = build(report, voice=_silent_wav), build(drawn_report, voice=_silent_wav)
+    SR = "document.getElementById('clicky-host').shadowRoot"
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 768})
+        ask = lambda q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        pg.goto(Path(a["out"]).as_uri())
+        pg.wait_for_timeout(1800)
+        # the chart its library never drew is one line, not a 150 px hole
+        holes = pg.evaluate("""[...document.querySelectorAll('body *')].filter(e => { const r = e.getBoundingClientRect();
+            return r.height > 120 && !e.textContent.trim() && !e.closest('[data-clicky-layer]') && !e.querySelector('img,svg,table,canvas:not([data-clicky-trong])'); }).length""")
+        assert holes == 0 and pg.evaluate("[...document.querySelectorAll('canvas[data-clicky-trong]')].map(c => c.getBoundingClientRect().height)") == [24]
+        # the script's source is said on the first answer it backs, not on every one
+        assert "Theo kịch bản nháp của anh Tuấn (chưa duyệt)" in ask("Tóm lại anh Tuấn cần quyết gì?")
+        assert "Theo kịch bản nháp" not in ask("Còn gì nữa không?")
+        x = ask("Giãn 30 vị trí tiết kiệm được bao nhiêu?")
+        assert x.count("Em tính từ") <= 1, x
+        assert ask("9,0 tính thế nào?").startswith("Báo cáo này không có số 9,0") and "9,0 tính thế nào?" in pg.evaluate(f"{SR}.getElementById('tl').innerText")
+        pg.goto(Path(b["out"]).as_uri())
+        pg.wait_for_timeout(900)
+        x = ask("Doanh thu hụt 10% thì chi phí phải cắt bao nhiêu?")
+        assert x.startswith("Báo cáo không tính kịch bản này") and "9,0" not in x, x
+        assert ask("Doanh thu 90% thì sao?").startswith("Báo cáo ghi: «Nếu doanh thu chỉ đạt 90% kế hoạch, tỷ lệ chi phí trên doanh thu lên 6,4%.»")
+        ask("Đồng ý việc một")
+        heads = pg.evaluate(f"[...{SR}.querySelectorAll('#tbh,#tl li.sec')].filter(x => x.getClientRects().length).map(x => x.textContent)")
+        assert heads == ["Quyết định anh chị đã ghi", "Câu chờ anh Tuấn trả lời"], heads
+        # play the talk fast: the bar stays two lines, a doubted figure's chip says so, the close frames every ask
+        pg.goto(Path(b["out"]).as_uri())
+        pg.wait_for_timeout(900)
+        pg.evaluate(f"{SR}.getElementById('play').click(); window.__clickyAudio.playbackRate = 4")
+        tallest, chips, close, caps = 0, set(), None, []
+        for _ in range(400):
+            pg.wait_for_timeout(120)
+            s = pg.evaluate(f"""(() => {{ const r = {SR}; window.__clickyAudio.playbackRate = 4;
+                const f = [...r.querySelectorAll('[data-clicky-frame=main]'), ...document.querySelectorAll('[data-clicky-frame=main]')].map(x => x.getBoundingClientRect())[0];
+                const li = [...document.querySelectorAll('ol.dec li')].map(x => x.getBoundingClientRect());
+                return {{cap: r.getElementById('cap').textContent, bar: r.getElementById('bar').getBoundingClientRect().height,
+                        chips: [...r.querySelectorAll('#cap .ev span')].map(x => x.textContent),
+                        all: !!f && li.every(q => q.top >= f.top - 2 && q.bottom <= f.bottom + 2)}}; }})()""")
+            tallest = max(tallest, s["bar"]); caps.append(s["cap"][:40])
+            chips.update(s["chips"])
+            if "Tóm lại" in s["cap"] and close is None:
+                pg.wait_for_timeout(400)
+                close = pg.evaluate(f"""(() => {{ const f = [...{SR}.querySelectorAll('[data-clicky-frame=main]'), ...document.querySelectorAll('[data-clicky-frame=main]')].map(x => x.getBoundingClientRect())[0];
+                    return !!f && [...document.querySelectorAll('ol.dec li')].every(q => {{ const r = q.getBoundingClientRect(); return r.top >= f.top - 2 && r.bottom <= f.bottom + 2; }}); }})()""")
+            if "mời anh chị cho ý kiến" in s["cap"]:
+                break
+        assert close is True, caps
+        assert tallest <= 110, tallest
+        assert "120,0 · đang kiểm lại" in chips and not any("đúng chỗ đang khoanh" in c for c in chips), chips
+        browser.close()

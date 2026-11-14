@@ -556,6 +556,12 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         for k, (n, a) in enumerate(ask_pairs):
             lines.append(("Mở đầu", Line(f"{nth[k]} là {said(a)}." if len(ask_pairs) > 1 else f"{_cap(said(a))}.", cid(n),
                                          vai="hoi")))
+        # the stakes in money right after the asks, so the room knows why before the detail (round-10 chair: risk came at 70 s)
+        over0 = next((g for g in cut.figs if g.sign == "-"), None) if cut is not None and cap is not None else None
+        rc0 = ratio_card(places, en) if over0 is not None else None
+        if rc0 is not None:                        # said like the risk line itself, on the ratio tile it comes from
+            lines.append(("Mở đầu", Line(f"Nếu giữ nguyên, chi phí vượt trần đề xuất {over0.tok} {over0.unit or unit}."
+                                         .replace("  ", " ").replace(" .", "."), rc0[0].id, vai="mo_rui_ro", xac_nhan=[over0.tok])))
     elif ask_list:
         lines.append(("Mở đầu", Line(f"{who} xin anh chị quyết {count_w.get(len(ask_list), 'nhiều việc')}; việc đầu tiên "
                                      f"là {said(ask_list[0])}.", cid(first), vai="hoi")))
