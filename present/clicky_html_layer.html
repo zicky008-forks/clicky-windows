@@ -1461,7 +1461,7 @@ const NOPE = new RegExp("\\b(khong dong y|khong duyet|khong duoc|khong chap thua
 // làm luôn / triển khai ngay» is its opposite
 const NEGV = /\b(dung|khoi|thoi khoi|chua can|khong phai) (@|(hoan|gian|giu|duyet|lam|cat|dung)\b)|@ (thi |cung |deu )*(rat |hoi |that )?khow( lam| qua| day| that)?( |$)|\bkhong chiu (duoc|noi)\b|\bkhong (on|duoc) dau\b/;
 const STOPV = /^(hoan|gian|giu|cat|dung|tam dung|tam hoan)\b/;
-const ANTI = /\b(cu lam|lam tiep|lam luon|lam ngay|lam (trong |ngay )?nam nay|(cu )?trien khai (ngay|luon|tiep|nam nay)|cu trien khai|cu tuyen|tuyen tiep|tuyen (du|luon|ngay)|tang them|noi them)\b/;
+const ANTI = /\bcu @|\b(cu lam|lam tiep|lam luon|lam ngay|lam (trong |ngay )?nam nay|(cu )?trien khai (ngay|luon|tiep|nam nay)|cu trien khai|cu tuyen|tuyen tiep|tuyen (du|luon|ngay)|tang them|noi them)\b/;
 const CHUA = /(@|\b(thi|cung|deu|kia|con lai|khac)) (thi |cung |deu )*chua( |$)(?!(duoc|dong y|duyet))/;   // «việc hai chưa»: put off or no? asked back (round 13)
 const YES = /\b(dong y|duyet|chap thuan|thong qua|thong nhat|nhat tri|khong phan doi|ok|oke|okay|lam di|trien khai|tien hanh|cu lam|lam luon|cho lam|chot|duoc|hop ly|nhu de xuat|nhu de nghi|theo de xuat|theo de nghi|thay on|cu the (ma )?lam|cu vay( di)?)\b|@ (thi |cung |deu )*(co|on|chiu|lam)( |$)/;
 const NOALL = /\b(khong|chua) (dong y|duyet|ok|chap thuan|thong qua) (het|tat ca|toan bo|ca (hai|ba|bon|nam|\d)|viec nao)\b|\b(bac|tu choi) (het|tat ca)\b|\bca (hai|ba|bon|nam|\d) (deu )?(khong|bac)\b|\b(het|tat ca) (deu )?khong (dong y|duyet|duoc)\b/;   // «Không đồng ý hết», «Cả 4 không» (round 14)
@@ -1702,6 +1702,7 @@ function capBox(ks, words, done) {   // a yes on an ask whose figure the owner i
 }
 function cardOpen() { return $("a").classList.contains("dec") && isOpen($("panel")); }
 function decPending() { return cardOpen() || (QUYET.length > 0 && Object.keys(DECIDED).length > 0 && QUYET.some((_, k) => !DECIDED[k])); }   // the card, or some asks recorded and some still open (round 16)
+const CONSENT = /^\s*(?:(?:dạ|vâng|ừ|ok|oke|thôi|vậy|thế)\s*,?\s*)*(?:(?:tôi|anh|chị|chúng\s+tôi)\s+)?(?:cứ\s+(?:thế|vậy)(?:\s+(?:đi|nhé|nha))?|cứ\s+theo\s+(?:đề\s+xuất|đề\s+nghị|anh\s+\S+|chị\s+\S+)(?:\s+(?:đi|nhé|nha))?|theo\s+(?:đề\s+xuất|đề\s+nghị)(?:\s+của\s+(?:anh|chị)\s+\S+)?(?:\s+(?:đi|nhé|nha))?|ủng\s+hộ\s+(?:anh\s+\S+|chị\s+\S+|cả\s+(?:hai|ba|bốn|\d)(?:\s+việc)?|hết|tất\s+cả)|không\s+phản\s+đối\s+(?:việc\s+nào|gì)(?:\s+cả)?|không\s+có\s+lý\s+do\s+(?:gì\s+)?để\s+không\s+(?:duyệt|đồng\s+ý)|(?:mọi\s+người|cả\s+nhà|các\s+anh\s+chị)\s+(?:đồng\s+ý|nhất\s+trí)(?:\s+cả)?\s+(?:chứ|nhé|nhỉ|hết\s+chứ)\s*\??\s*(?:(?:ok|vậy|thế|thì)\s*,?\s*)*(?:duyệt|thông\s+qua|đồng\s+ý|chốt|nhất\s+trí)?(?:\s+(?:nhé|nha|đi|luôn))?)\s*[.!]?\s*$/i;
 function typedDecision(q, scope) {   // "Tôi đồng ý trần 177,5 tỷ", "Đồng ý việc hai, việc ba cần bàn thêm", "Bác việc hai": recorded like the card, never queued
   if (!QUYET.length) return false;
   const q0 = q.trim().replace(/[.!]+$/, "");   // what the reader typed: the only words ever quoted as theirs (round 17)
@@ -1709,6 +1710,7 @@ function typedDecision(q, scope) {   // "Tôi đồng ý trần 177,5 tỷ", "Đ
   q = q.replace(/^\s*(?:(?:à|ờ|ơ|ồ)\s+(?:không|nhầm)|à nhầm|nhầm|xin lỗi)\s*[,.!]\s*(?=\S)/i, "");   // «À không, …»: a self-correction marker, not a verdict
   // round 15: «Không ai phản đối thì coi như thông qua» is a yes on all (the «không» is about «ai»); «Không đồng ý việc nào ngoài
   // việc hai» is a yes on việc hai and a no on the rest
+  q = q.replace(CONSENT, "Đồng ý hết");   // «Dạ, cứ thế», «Tôi ủng hộ anh Tuấn», «Mọi người đồng ý chứ? Ok vậy duyệt»: a yes on all, never a question (round 17)
   q = q.replace(/(?:nếu\s+)?không\s+(?:có\s+)?ai\s+(?:phản\s+đối|có\s+ý\s+kiến(?:\s+gì)?(?:\s+(?:khác|thêm))?)(?:\s+(?:gì|nữa))?(?:\s*(?:chứ|nhé|à|hả|phải\s+không|đúng\s+không))?(?:\s*\?)?(?:\s*(?:vậy|thế))?(?:\s+(?:thì|là))?(?:\s+coi\s+như)?(?:\s+(?:thông\s+qua|đồng\s+ý|duyệt|nhất\s+trí))?/i, "Đồng ý hết")
     .replace(/^\s*không\s+(đồng\s+ý|duyệt)\s+(?:việc|cái|mục)\s+nào\s+(?:ngoài|trừ)\s+(.+?)(?:\s+ra)?\s*[.!]?\s*$/i, (m, verb, x) => "Đồng ý " + x + ", còn lại không đồng ý");
   const plainQ = fold(q).replace(/[.!?…]+/g, " ").replace(/\s+/g, " ").trim();
@@ -2827,7 +2829,9 @@ function talkIntent(q) {   // round 16: what a Board member asks first, answered
   if (/ (so bo|chinh thuc) (hay|hoac) (so bo|chinh thuc) | (ban|bao cao) (nay )?(la )?(so bo|chinh thuc) (khong|chua|a|ha) /.test(f)) {
     answer(DRAFT ? "Bản này SƠ BỘ: kịch bản " + OWNER + " chưa duyệt." : "Bản này CHÍNH THỨC: " + OWNER + " đã duyệt kịch bản.", null, {src: ""}); return true; }
   if (/ (rui ro|lo nhat|dang lo|nguy co|dieu gi quan trong|quan trong nhat|dieu quan trong|can nho)( |$)/.test(f))   /* «nếu không duyệt thì sao» keeps its own worked answer */
-    return say(all.filter(x => /^(mo_rui_ro|neu_hut|con_thieu)$/.test(x.vai)));
+  { const r = all.filter(x => /^(mo_rui_ro|neu_hut|con_thieu)$/.test(x.vai)), big = [all.find(x => x.vai === "quy_mo"), all.find(x => x.vai === "mau_thuan")].filter(Boolean);
+    if (r.some(x => x.vai !== "neu_hut") || !big.length) return say(r);   // a talk with no risk line of its own: its size and its contradiction first (round 17)
+    return say(/ (dieu gi quan trong|quan trong nhat|dieu quan trong|can nho)( |$)/.test(f) ? big : r.concat(big)); }
   { const m = f.match(/ tran (\d+(?:,\d)?)(?: ty)? (?:thi |la )?(?:phai |se )?(giam|cat|vuot|thua|thieu|con vuot) (?:them )?(?:bao nhieu|may)/) || f.match(/ (?:duyet )?tran (\d+(?:,\d)?)(?: ty)? .*(?:giam|cat) (?:bao nhieu|may)/);
     const tot = all.find(x => x.vai === "quy_mo"), T = tot && (tot.s.match(/tổng là (\d[\d.]*,\d)/) || [])[1];
     if (m && T) {   // «Duyệt trần 118,8 thì phải giảm bao nhiêu?»: the total said in the talk, minus the reader's cap, worked out
@@ -2850,7 +2854,8 @@ function sayAgain(q) {   // "nói lại", "em vừa nói gì", "nói lại phầ
       figs.length ? all.filter(x => figs.every(g => new RegExp("(^|[^\\d,])" + g.replace(",", "\\,") + "(,0)?(?![\\d]|,\\d)").test(x.s))) :
       ws.length ? all.filter(x => ws.every(w => words(x.s).includes(w))) : [];
     const pick = hit.filter(x => x.vai !== "chot").slice(0, 3);
-    if (pick.length) { answer(pick.map(x => x.s).join(" "), null, {src: "Lời em nói trong bài"}); return true; } }
+    if (pick.length) { answer(pick.map(x => x.s).join(" "), null, {src: "Lời em nói trong bài"}); return true; }
+    if (figs.length) { answer("Trong bài em không nói số " + figs.join(", ") + (/\bty\b/.test(p) ? " tỷ" : /%/.test(q) ? "%" : "") + " ạ.", null, {src: ""}); return true; } }   // never the greeting again (round 17)
   const said = lastSaid || ((S[0] || {}).sentences || [])[0] || "";
   if (!said) return false;
   answer(said, null, {src: "Câu em vừa nói"}); return true;
@@ -3017,7 +3022,15 @@ function verifyAsk(q, scope) {   // "12,6% có đúng không", "số này nghĩa
   }
   const tok = toks.find(x => placesOf(x).n) || toks[0], pl = placesOf(tok), shown = /%$/.test(tok) ? tok.replace(/%$/, "") + "%" : tok;
   { const Q = qinfo(q), mine = pl.cells.filter(x => rowMatch(Q, x.row));   // "Khối CNTT 12,0% đúng không": CNTT's cell, never Marketing's
-    if (mine.length === 1 && pl.cells.length > 1) { checkAnswer(q, mine[0].m, mine[0].row, mine[0].c); return true; } }
+    if (mine.length === 1 && pl.cells.length > 1) { checkAnswer(q, mine[0].m, mine[0].row, mine[0].c); return true; }
+    // round 17: «Logistics tăng 15 tỷ đúng không?» is about Logistics' row only, never «Hành chính 15,0» because the figure matches
+    const named = []; if (!mine.length) tables().forEach(m => m.rows.forEach(row => { if (numCols(m, row).length && rowMatch(Q, row)) named.push({m, row}); }));
+    if (named.length === 1 && !pl.sents.some(x => fold(x.s).includes(fold(rowName(named[0].row).replace(/^(khối|phòng|bộ phận)\s+/i, ""))))) {
+      if (workedOut(q, toks)) return true;   // «Logistics tăng 30%»: the row's own worked change says yes
+      const {m, row} = named[0], cells = numCols(m, row).map(c => colName(m, c) + " " + cellText(row.cells[c])).filter(x => /\d/.test(x));
+      const rc = rowChange(Q, null) || rowChange(qinfo(q + " tăng"), null), ab = rc && rc.row === row && diffOf(rc.m, rc.row, rc.df, false), pr = ab && diffOf(rc.m, rc.row, rc.df, true);
+      answer("Không ạ, báo cáo không ghi " + shown + " cho dòng " + rowName(row) + "." + (ab ? " Theo bảng, " + rowName(row) + (rc.d.k < 0 ? " giảm " : " tăng ") + withUnit(ab.s.replace(/^-/, ""), uOf(rc.m, rc.row, rc.df[1])) +
+        (pr ? ", tức " + pr.s.replace(/^-/, "") + "%" : "") + " (em tính: " + cellText(rc.d.a) + " − " + cellText(rc.d.p) + (pr ? "; (" + cellText(rc.d.a) + " − " + cellText(rc.d.p) + ") ÷ " + cellText(rc.d.p) + " × 100" : "") + ")." : " Dòng này ghi: " + cells.join("; ") + "."), row.cells[0], {src: ab ? "Em tính từ hai số trên báo cáo «" + TITLE + "»" : "Lấy từ báo cáo «" + TITLE + "»"}); return true; } }
   if (!pl.n) { const sp = spokenWith(toks); if (sp) { answerFact(sp); return true; }
     if (workedOut(q, toks)) return true;
     if (sessionFig(q, true)) return true;   // not printed, but worked out in an answer this session: its working
@@ -3066,6 +3079,7 @@ function undoLast(q) {   // round 15: a bare «À không» / «Thôi» after a r
   answer("Em bỏ " + ks.map(k => "«" + DECIDED[k].v + "» việc " + NUMW[k]).join(", ") + " ạ? Anh chị chọn giúp em.", null, {src: "", extra: box}); return true;
 }
 function splitAsk(q) {   // round 15: «Hoãn kho mới thì … có chậm không? Mấy việc kia đồng ý»: the question is answered, the decision recorded
+  if (CONSENT.test(q)) return null;   // «Mọi người đồng ý chứ? Ok vậy duyệt» is one consent, never a question (round 17)
   const isQ = x => /\?\s*$/.test(x) || /\b(co|co the) .+ khong$|\b(bao nhieu|o dau|the nao|vi sao|tai sao|ra sao|lam sao)$/.test(fold(x).replace(/[.!…]+$/, "").trim());
   let parts = q.split(/(?<=[?!.])\s+(?=\S)/).filter(x => x.trim());
   const out = [];
@@ -3087,6 +3101,9 @@ function ask(q, scope) {
         ask(sp.qs, null); const b = isOpen($("bub")) ? $("ba") : $("a"), first = b.firstElementChild;
         if (first) first.textContent = "Còn câu «" + sp.qs.replace(/\s+$/, "") + "»: " + first.textContent;
         const box = document.createElement("div"); box.className = "qdec"; keep.forEach(n => box.appendChild(n)); b.insertBefore(box, b.firstChild); return; } } }
+  // round 17: the same Board question in its everyday forms reaches the answer the talk already has
+  if (QUYET.some(t => /(^|\s)trần\s/i.test(t)) && /^\s*(?:nếu\s+)?(?:(?:chúng\s+tôi|tôi|anh\s+chị|ban\s+giám\s+đốc|hđqt|bod)\s+)?không\s+(?:duyệt|đồng\s+ý)(?:\s+(?:đề\s+nghị|đề\s+xuất|kế\s+hoạch\s+này|cái\s+này|việc\s+này))?\s*(?:thì\s+)?(?:sao|thế\s+nào|ra\s+sao|có\s+sao\s+không|hậu\s+quả\s+(?:là\s+)?gì)\s*\??\s*$/i.test(q)) q = "Nếu không duyệt trần thì sao?";
+  if (/(?<![\p{L}\p{M}])(sa\s+thải|cho\s+nghỉ\s+việc|cắt\s+(?:giảm\s+)?(?:người|nhân\s+sự)|giảm\s+người)(?![\p{L}\p{M}])/iu.test(q) && !/\d/.test(q)) q = "Cắt bao nhiêu người?";
   q = planWords(q);
   const tapK = tapAsk(scope);   // a tapped ask: «Ok» is its verdict, and «Ai theo dõi?» is asked of the whole report (round 12)
   if (tapK < 0 && tapAsks(scope).length < 2 && !(decPending() && /^\s*(ok|oke|okay|u|uh|um|o|da|duoc|thoi duoc|u duoc|u thi duoc|vang|duyet|dong y|chot|khong|khong a|khong nhe)\s*$/.test(fold(q).replace(/[,.!?;…]+/g, " ").replace(/\s+/g, " "))) && /^\s*(ok|oke|okay|u|uh|um|hm+|vang|da|cam on|thanks|duoc roi|hieu roi|ro roi|tot|thoi|dung|dung roi|chuan|chuan roi|vay thoi|the thoi|duoc|hieu|xong)( (ok|oke|vang|da|cam on|thanks|em|nhe|nha|a|nhieu|roi|lam|duoc roi|duoc|thoi|vay|the|tiep di|tiep|tiep tuc|vay thoi|hm+|um))*\s*$/.test(fold(q).replace(/[,.!?;…]+/g, " ").replace(/\s+/g, " "))) {

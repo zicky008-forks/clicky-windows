@@ -1408,3 +1408,48 @@ def test_round_seventeen_an_asks_own_verb_said_the_other_way_is_never_a_yes_and_
     finally:
         browser.close()
         pw.stop()
+
+
+def test_round_seventeen_consent_words_row_claims_and_board_questions(report, drawn_report):
+    # round-17 panel: «Dạ, cứ thế», «Tôi ủng hộ anh Tuấn», «Mọi người đồng ý chứ? Ok vậy duyệt» were mailed as questions;
+    # «Logistics tăng 15 tỷ đúng không?» was answered with Hành chính's 15,0; «Nói lại đoạn 7 tỷ» replayed the greeting;
+    # «Nếu chúng tôi không duyệt thì sao?» and «Có phải sa thải không?» were queued; B's «Quan trọng nhất» gave only the 90% line
+    pw, browser, pages = _ghi_pages(report, drawn_report)
+    try:
+        A, B = pages["A"], pages["B"]
+        hoi = lambda pg, q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        thu = lambda pg: pg.evaluate("() => window.__clickyThu()")   # noqa: E731
+        fresh = lambda pg: (pg.evaluate("() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} }"), pg.reload(), pg.wait_for_timeout(700))   # noqa: E731
+        for q in ("Dạ, cứ thế", "Cứ theo anh Tuấn", "Theo đề xuất của anh Tuấn", "Tôi ủng hộ anh Tuấn", "Tôi không phản đối việc nào",
+                  "Không có lý do gì để không duyệt", "Mọi người đồng ý chứ? Ok vậy duyệt"):
+            fresh(B)
+            hoi(B, q)
+            mail = thu(B)
+            assert "CÂU HỎI" not in mail and "4. «Hoãn dự án kho mới sang năm sau»: Đồng ý" in mail, (q, mail)
+            assert f"anh chị đồng ý chung (câu: «{q}»)" in mail, (q, mail)
+        fresh(A)
+        assert hoi(A, "Cứ tuyển đi").startswith("Em đã ghi «Không đồng ý» cho việc: «Giãn tuyển")
+        fresh(A)
+        assert hoi(A, "Cứ giãn tuyển đi").startswith("Em đã ghi «Đồng ý» cho việc: «Giãn tuyển")
+        # a claim about a named row is checked on that row only
+        x = hoi(B, "Logistics tăng 15 tỷ đúng không?")
+        assert x.startswith("Không ạ, báo cáo không ghi 15 cho dòng Logistics. Theo bảng, Logistics tăng 12,0 tỷ, tức 30,0% (em tính: 52,0 − 40,0;") and "Hành chính" not in x, x
+        assert hoi(B, "Logistics tăng 30% đúng không?").startswith("Đúng theo bảng: Logistics tăng 30,0%")
+        x = hoi(A, "Bán hàng tăng 20 tỷ đúng không?")
+        assert x.startswith("Không ạ") and "14,1" in x, x
+        assert hoi(A, "Khối CNTT 12,0% đúng không?").startswith("Khối CNTT, % tăng: 12,0%.")
+        # a replay of a figure the talk never says is said so, never the greeting
+        x = hoi(B, "Nói lại đoạn 7 tỷ")
+        assert x.startswith("Trong bài em không nói số 7 tỷ ạ.") and "trợ lý AI" not in x, x
+        # everyday forms reach the answers the talk has
+        for q in ("Nếu chúng tôi không duyệt thì sao?", "Không duyệt thì có sao không?"):
+            assert hoi(B, q).startswith("Nếu không duyệt, chi phí theo AOPR là 129,0 tỷ"), q
+        assert hoi(A, "Có phải sa thải không?").startswith("Báo cáo không ghi số người phải cắt.")
+        x = hoi(B, "Quan trọng nhất là gì?")
+        assert x.startswith("Theo kế hoạch điều chỉnh, tổng là 129,0 tỷ, cao hơn kế hoạch gốc 19,0 tỷ.") and "6,4%" not in x, x
+        x = hoi(B, "Rủi ro lớn nhất là gì?")
+        assert x.startswith("Nếu doanh thu chỉ đạt 90% kế hoạch") and "129,0" in x, x
+        assert hoi(A, "Quan trọng nhất là gì?").startswith("Nếu giữ nguyên, chi phí vượt trần đề xuất 8,9 tỷ.")
+    finally:
+        browser.close()
+        pw.stop()
