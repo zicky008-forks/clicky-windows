@@ -335,7 +335,10 @@ def test_a_condition_a_time_or_an_exclusion_is_never_recorded_as_plain_agreement
     pg.evaluate(f"[...{SR}.querySelectorAll('#a button, #ba button')].find(b => b.textContent === 'Ghi nguyên văn').click()")
     assert "«Giữ tỷ lệ chi phí nhân sự trên doanh thu thuần ở 2,40%, tức trần 177,5 tỷ»: Đồng ý có điều kiện — anh chị ghi: «Đồng ý việc một nhưng không quá 180 tỷ»" in _parked(pg)   # the clause, not the sentence
     assert "đã đổi từ Đồng ý có điều kiện" not in _parked(pg)                       # an unconfirmed record is never history
-    assert _r3(pg, "Được, làm đi").startswith("Em đã ghi «Đồng ý» cho cả 2 việc")      # round 11: the whole proposal
+    a = _r3(pg, "Được, làm đi")                                                       # round 11: the whole proposal;
+    assert "Việc một đang ghi «Đồng ý có điều kiện», việc hai đang ghi «Không đồng ý»; anh chị đổi thành «Đồng ý» ạ?" in a, a   # round 13: asked first
+    pg.evaluate(f"[...{SR}.querySelectorAll('#a button, #ba button')].find(b => b.textContent === 'Đổi').click()")
+    assert "«Giãn tuyển 30 vị trí bán hàng sang quý 3 và gắn với doanh thu trên mỗi người»: Đồng ý (đã đổi từ Không đồng ý)" in _parked(pg), _parked(pg)
     assert _r3(pg, "Thôi được rồi, cảm ơn em") == "Dạ."
     assert not errors
 

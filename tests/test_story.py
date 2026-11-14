@@ -811,7 +811,8 @@ def test_round_eleven_decisions_by_clause_a_tapped_row_and_who_or_when(report, d
         assert x.startswith("Em đã ghi «Đồng ý» cho việc: «Giãn tuyển") and "Việc một em chưa ghi." in x, x
         assert ask("Không duyệt trần, giãn tuyển thì triển khai").startswith("Em đã ghi việc một «Không đồng ý»; việc hai «Đồng ý».")
         assert ask("Việc hai làm đi. Việc một để tuần sau họp lại").startswith("Em đã ghi việc một «Cần bàn thêm»; việc hai «Đồng ý».")
-        assert ask("Ok hết").startswith("Em đã ghi «Đồng ý» cho cả 2 việc")
+        x = ask("Ok hết")   # round 13: a «hết» asks before it changes an ask chosen on its own
+        assert "Việc một đang ghi «Cần bàn thêm»; anh chị đổi thành «Đồng ý» ạ?" in x and "Giữ như cũ" in x, x
         ask("Tôi không đồng ý giãn tuyển, đội tôi cần người")
         assert "Không đồng ý — anh chị ghi: «Tôi không đồng ý giãn tuyển, đội tôi cần người»" in listed()
         assert "(đã đổi từ Đồng ý)" in listed() and "đã đổi từ Không đồng ý)" not in listed().split("Giãn tuyển")[-1]
@@ -823,7 +824,8 @@ def test_round_eleven_decisions_by_clause_a_tapped_row_and_who_or_when(report, d
         assert ask("Ok hết, riêng việc một để bàn thêm").startswith(
             "Em đã ghi việc một «Cần bàn thêm»; việc hai «Đồng ý»; việc ba «Đồng ý»; việc bốn «Đồng ý».")
         assert ask("Không, việc bốn chưa được").startswith("Em đã ghi «Không đồng ý» cho việc: «Hoãn dự án kho mới")
-        assert ask("Cứ làm như anh Tuấn đề xuất đi").startswith("Em đã ghi «Đồng ý» cho cả 4 việc")
+        x = ask("Cứ làm như anh Tuấn đề xuất đi")   # round 13: asks 1 and 4, chosen on their own, are asked before they change
+        assert x.startswith("Em đã ghi việc hai «Đồng ý»; việc ba «Đồng ý». Việc một đang ghi «Cần bàn thêm», việc bốn đang ghi «Không đồng ý»; anh chị đổi thành «Đồng ý» ạ?"), x
         assert ask("Đồng ý ba việc đầu; không đồng ý hoãn kho mới, đội bán hàng cần kho").startswith(
             "Em đã ghi việc một «Đồng ý»; việc hai «Đồng ý»; việc ba «Đồng ý»; việc bốn «Không đồng ý».")
         assert ask("Không phản đối việc một").startswith("Em đã ghi «Đồng ý» cho việc: «Duyệt trần")
@@ -895,7 +897,9 @@ def test_round_twelve_decision_clauses_table_grid_and_tapped_asks(report, drawn_
         for pk, q, want in cases:
             r = pages[pk].evaluate("q => window.__clickyGhi(q)", q)
             got = {k: letter.get(v[0], v[0]) for k, v in r["rec"].items()}
-            if got != ({} if want is None else {str(k): v for k, v in want.items()}):
+            # "?" (round 13): a bare «chưa» is not recorded; it is asked back with «để bàn thêm, hay không đồng ý»
+            back = want is not None and "?" in want.values()
+            if got != {str(k): v for k, v in (want or {}).items() if v != "?"} or (back and "hay không đồng ý ạ?" not in r["a"]):
                 bad.append((pk, q, got, want, r["a"][:120]))
         assert not bad, "\n".join(map(str, bad[:20]))
         pg = pages["B"]
@@ -937,3 +941,120 @@ def test_round_twelve_talk_arc_says_each_figure_at_most_twice_with_cause_and_bri
     assert tb.count("19,0") == 1 and "chưa bằng một nửa tốc độ tăng của chi phí" in tb
     vai = [c.get("vai") for c in said_b]
     assert vai.index("neu_hut") == max(k for k, v in enumerate(vai) if v == "hoi") + 1   # the stakes right after the asks
+
+
+def _ghi_pages(report, drawn_report, **viewport):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    from present import kiem_hinh
+    a, b = build(report), build(drawn_report)
+    pw = sync_playwright().start()
+    try:
+        browser = kiem_hinh._launch(pw)
+    except RuntimeError as exc:
+        pw.stop()
+        pytest.skip(str(exc))
+    pages = {}
+    for pk, out in (("A", a["out"]), ("B", b["out"])):
+        pg = browser.new_page(viewport=viewport or {"width": 1366, "height": 768})
+        pg.goto(Path(out).as_uri())
+        pg.wait_for_timeout(700)
+        pages[pk] = pg
+    return pw, browser, pages
+
+
+def test_round_thirteen_put_off_tails_no_comma_clauses_and_money_words_record_what_was_said(report, drawn_report):
+    # round-13 panel: «Đồng ý hết, trừ kho mới để quý sau» inverted, «Trần ok giãn tuyển chưa» (no comma) was one clause,
+    # «còn lại 5 tỷ» was read as the rest of the asks; each axis is generated in both orders for both packs
+    letter = {"Đồng ý": "Y", "Không đồng ý": "N", "Cần bàn thêm": "D", "Đồng ý có điều kiện": "C"}
+    alias, num = {"A": ["trần", "giãn tuyển"], "B": ["trần", "logistics", "quỹ lương", "kho mới"]}, ["một", "hai", "ba", "bốn"]
+    forms = [("Y", "đồng ý {}"), ("Y", "{} thì được"), ("N", "không đồng ý {}"), ("N", "{} thì không"), ("D", "tạm treo {}"), ("D", "{} để bàn thêm")]
+    defer = ["để quý sau", "để tuần sau họp lại", "chờ anh Tuấn kiểm lại", "để bàn thêm", "để sang tháng sau"]
+    ex = ["Đồng ý hết, trừ {x} {d}", "Duyệt tất cả, riêng {x} {d}", "Trừ {x} {d}, còn lại đồng ý", "Đồng ý cả {n} việc, riêng {x} thì {d}"]
+    cases = []
+    for pk, names in alias.items():
+        m = len(names)
+        for k in range(m):
+            for d, dv in enumerate(defer):
+                for e, form in enumerate(ex):
+                    ref = [names[k], "việc " + num[k]][(k + d + e) % 2]
+                    q = form.format(x=ref, d=dv, n=["", "", "hai", "ba", "bốn"][m])
+                    cases.append((pk, q, {str(j): "D" if j == k else "Y" for j in range(m)}))
+        for i in range(m):
+            for j in range(m):
+                for v1, f1 in forms:
+                    for v2, f2 in forms:
+                        if i == j or (f1.endswith("không") and f2.startswith("đồng ý")):   # «trần thì không đồng ý logistics» reads both ways
+                            continue
+                        c1 = f1.format(names[i])
+                        cases.append((pk, c1[:1].upper() + c1[1:] + " " + f2.format(names[j]), {str(i): v1, str(j): v2}))
+        cases += [(pk, "Ok trần, còn lại 5 tỷ thì để anh Tuấn bù", {"0": "C"}), (pk, "Duyệt trần, phần còn lại anh Tuấn tự tính", {"0": "Y"}),
+                  (pk, "Đồng ý trần, số còn lại 5 tỷ chờ phương án", {"0": "C"})]
+    assert len(cases) == 616
+    pw, browser, pages = _ghi_pages(report, drawn_report)
+    try:
+        bad = []
+        for pk, q, want in cases:
+            r = pages[pk].evaluate("q => window.__clickyGhi(q)", q)
+            got = {k: letter.get(v[0], v[0]) for k, v in r["rec"].items()}
+            if got != want:
+                bad.append((pk, q, got, want, r["a"][:100]))
+        assert not bad, "\n".join(map(str, bad[:20]))
+    finally:
+        browser.close()
+        pw.stop()
+
+
+def test_round_thirteen_record_guards_tap_scope_places_with_two_asks_and_no_silent_overwrite(report, drawn_report):
+    pw, browser, pages = _ghi_pages(report, drawn_report)
+    try:
+        A, B = pages["A"], pages["B"]
+        ghi = lambda pg, q, s=None: pg.evaluate("([q, s]) => window.__clickyGhi(q, s)", [q, s])   # noqa: E731
+        hoi = lambda pg, q, s=None: pg.evaluate("([q, s]) => window.__clickyHoi(q, s)", [q, s])   # noqa: E731
+        # A's «Đề xuất: … trần 177,5 tỷ; giãn tuyển …» states both asks: a bare verdict asks which one; the cap tile is the cap
+        for q in ("Đồng ý", "Ok"):
+            r = ghi(A, q, "[data-clicky=c13]")
+            assert r["rec"] == {} and r["a"].startswith("Chỗ này nói về 2 việc anh Tuấn xin quyết; anh chị đồng ý việc nào ạ?"), r
+        assert ghi(A, "Đồng ý cả hai", "[data-clicky=c13]")["rec"] == {"0": ["Đồng ý", "", False], "1": ["Đồng ý", "", False]}
+        assert ghi(A, "Đồng ý", "[data-clicky=c14]")["rec"] == {"0": ["Đồng ý", "", False]}
+        assert ghi(A, "Không", "[data-clicky=c14]")["rec"] == {"0": ["Không đồng ý", "", False]}
+        # a bare «chưa» on a tapped ask is asked back, never recorded as «Không»
+        for q in ("Chưa", "Cái này thì chưa"):
+            r = ghi(B, q, "[data-clicky=c10]")
+            assert r["rec"] == {} and "ý anh chị là để bàn thêm, hay không đồng ý ạ?" in r["a"], r
+        # Owner: ask 4 «Không», then ask 1 tapped + «Đồng ý nhưng chỉ 118,8» touches ask 1 only, and never offers the refused figure
+        ghi(B, "Không", "[data-clicky=c11]")
+        a = hoi(B, "Đồng ý nhưng chỉ 118,8", "[data-clicky=c8]")
+        assert a.startswith("Đề nghị là «Duyệt trần chi phí vận hành 120,0 tỷ cho cả năm»; anh chị nói 118,8") and "Đồng ý như đề nghị" not in a, a
+        got = B.evaluate("() => window.__clickyDaGhi()")
+        assert got["3"] == ["Không đồng ý", "", False] and got["0"][0] == "Đồng ý có điều kiện" and set(got) == {"0", "3"}, got
+        # a condition on a tapped ask is that ask's, with its words
+        r = ghi(B, "Ok nếu Logistics giải trình trước ngày 15", "[data-clicky=c11]")
+        assert r["rec"] == {"3": ["Đồng ý có điều kiện", "Ok nếu Logistics giải trình trước ngày 15", True]}, r
+        # CFO: chosen ask by ask, then «Đồng ý hết» asks before changing them; a changed mind is said
+        ghi(B, "Để bàn thêm", "[data-clicky=c8]")
+        hoi(B, "Không", "[data-clicky=c9]")
+        a = hoi(B, "Đồng ý hết")
+        assert "Việc một đang ghi «Cần bàn thêm», việc hai đang ghi «Không đồng ý»; anh chị đổi thành «Đồng ý» ạ?" in a and "Giữ như cũ" in a, a
+        a = hoi(B, "Việc hai để bàn thêm")
+        assert "Việc hai em đổi từ «Không đồng ý»" in a, a
+        # «Không có ý kiến gì, cứ làm» records; «…, kho mới để anh Tuấn quyết» says kho mới is not recorded
+        assert len(ghi(A, "Không có ý kiến gì, cứ làm")["rec"]) == 2
+        r = ghi(B, "Trần thì không, kho mới để anh Tuấn quyết")
+        assert r["rec"] == {"0": ["Không đồng ý", "", False]} and "Việc bốn anh chị chưa cho ý kiến" in r["a"], r
+    finally:
+        browser.close()
+        pw.stop()
+
+
+def test_round_thirteen_phone_sheet_keeps_every_ask_tappable_above_send(report, drawn_report):
+    # round-13 Chair: with asks 1-3 chosen, ask 4 sat under the sticky «Gửi anh Tuấn» and a tap reached the report
+    pw, browser, pages = _ghi_pages(report, drawn_report, width=390, height=664)
+    try:
+        for pk in ("A", "B"):
+            res = pages[pk].evaluate("window.__clickyKiemDienThoai()")
+            assert res["problems"] == [], (pk, res)
+    finally:
+        browser.close()
+        pw.stop()
+
