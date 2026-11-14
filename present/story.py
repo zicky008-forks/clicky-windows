@@ -538,6 +538,7 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
     count_w = {1: "một việc", 2: "hai việc", 3: "ba việc", 4: "bốn việc", 5: "năm việc", 6: "sáu việc"}
     nth = ["Một", "Hai", "Ba", "Bốn", "Năm", "Sáu"]
     many = len(ask_list) > 4                       # up to four asks are each said up front; more go to the end
+    early_risk = False
     who = owner[:1].upper() + owner[1:]
     first = ask_pairs[0][0] if ask_pairs else None
     lines.append(("Mở đầu", Line(f"Thưa anh chị, em là trợ lý AI của {owner}.", cid(first) if first else "", vai="chao")))
@@ -562,6 +563,11 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         if rc0 is not None:                        # said like the risk line itself, on the ratio tile it comes from
             lines.append(("Mở đầu", Line(f"Nếu giữ nguyên, chi phí vượt trần đề xuất {over0.tok} {over0.unit or unit}."
                                          .replace("  ", " ").replace(" .", "."), rc0[0].id, vai="mo_rui_ro", xac_nhan=[over0.tok])))
+        elif ratio_card(places, en) is None:
+            cond0 = if_note(items)
+            if cond0 is not None and re.match(r"\s*nếu\s+doanh\s+(thu|số)", cond0[1], re.I):
+                lines.append(("Mở đầu", Line(cond0[1], cid(cond0[0]), vai="neu_hut")))
+                early_risk = True
     elif ask_list:
         lines.append(("Mở đầu", Line(f"{who} xin anh chị quyết {count_w.get(len(ask_list), 'nhiều việc')}; việc đầu tiên "
                                      f"là {said(ask_list[0])}.", cid(first), vai="hoi")))
@@ -603,10 +609,16 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         if con_doubt and faster and table_says:
             # the printed rate disagrees with the table: say only what holds under both, the owner picks the rate
             # revenue's half of the sentence is not in doubt: keep its figure, frame the table's total
-            money = f"Vì chi phí tăng thêm {tdelta[0]} {t.unit or ''}".rstrip()
-            lines.append(("Vì sao cần quyết", Line(f"{money}, trong khi doanh thu chỉ tăng {rev.tok}%.",
-                                            t.total.id, so_tinh=[f"{tdelta[0]} = {tdelta[2]}"] if tdelta[2] else [],
-                                            vai="mau_thuan", xac_nhan=[rev.tok])))
+            texpr = f"({a_tok} - {p_tok}) / {p_tok} × 100"
+            slow = (C.value(rev.tok, en) * 2 < min(evaluate(texpr, en), C.value(cost.tok, en)))
+            if slow:                               # true under both rates, so no figure in doubt is said, and 19,0 only once
+                lines.append(("Vì sao cần quyết", Line(f"Vì doanh thu chỉ tăng {rev.tok}%, chưa bằng một nửa tốc độ tăng của chi phí.",
+                                                t.total.id, vai="mau_thuan", xac_nhan=[rev.tok])))
+            else:
+                money = f"Vì chi phí tăng thêm {tdelta[0]} {t.unit or ''}".rstrip()
+                lines.append(("Vì sao cần quyết", Line(f"{money}, trong khi doanh thu chỉ tăng {rev.tok}%.",
+                                                t.total.id, so_tinh=[f"{tdelta[0]} = {tdelta[2]}"] if tdelta[2] else [],
+                                                vai="mau_thuan", xac_nhan=[rev.tok])))
             lines.append(("Vì sao cần quyết", Line(printed, cid(it), bat=False, vai="mau_thuan")))
             con_doubt["cau"] = [lines[-1][1].noi]
         else:
@@ -653,6 +665,21 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             den = f"({tdelta[2]})" if tdelta[2] else tdelta[0]
             st.append(f"{say(abs(share) * HUNDRED, 0, en)} = {num} / {den} × 100")
         lines.append(("Phần tăng nằm ở đâu", Line(text, top.id, so_tinh=st, vai="dong_luc")))
+        if not why:
+            key = jfold(_short(top.label))
+            for it2 in items:
+                if getattr(it2, "kind", "") not in ("note", "text", "para", "card") or not it2.text:
+                    continue
+                hit = None
+                for x in re.split(r"(?<=[.;])\s+", it2.text):
+                    m_ = re.search(r",?\s+do\s+(kế hoạch|việc|tuyển|thuê|tăng|mở|chi)\b(.+?)[.;]?$", x)
+                    if m_ and key and key in jfold(x) and not any(jfold(fl.get("sai", "")) and jfold(fl["sai"]) in jfold(x) for fl in flags):
+                        hit = (m_.group(1) + m_.group(2)).strip()
+                        break
+                if hit:
+                    figs_ = [g.tok for g in C.figures(hit)] if C.figures(hit) else []
+                    lines.append(("Phần tăng nằm ở đâu", Line(f"Báo cáo ghi lý do: {hit}.", cid(it2), xac_nhan=figs_, vai="nguyen_nhan")))
+                    break
         tp, ta = _num(top, t.plan, en), _num(top, t.actual, en)
         if tp and ta and abs(share) >= Decimal("0.4") and len(same) + len([m for m in moves if m[1]]) > 2:
             num = f"({tdelta[0]} - {top_tok})" if not (tdelta[2] or top_f) else \
@@ -690,12 +717,14 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
     if rc is not None:
         p, a, b = rc
         over = next((g for g in cut.figs if g.sign == "-"), None) if cut is not None and cap is not None else None
-        money = f", tức vượt trần {over.tok} {over.unit or unit}".replace("  ", " ") if over else ""   # the stakes in money
-        lines.append(("Nếu giữ nguyên", Line(f"Nếu giữ nguyên, {_lc(p.label)} là {a.tok}%, thay vì {b.tok}% như kế hoạch "
-                                             f"gốc{money}.", p.id, vai="neu_giu", xac_nhan=[over.tok] if over else [])))
+        said_up = any(ln.vai == "mo_rui_ro" for _m, ln in lines)
+        money = f", tức vượt trần {over.tok} {over.unit or unit}".replace("  ", " ") if over and not said_up else ""
+        opener = f"Với {plan_said(t.actual_name)} này" if said_up else "Nếu giữ nguyên"
+        lines.append(("Nếu giữ nguyên", Line(f"{opener}, {_lc(p.label)} là {a.tok}%, thay vì {b.tok}% như kế hoạch "
+                                             f"gốc{money}.", p.id, vai="neu_giu", xac_nhan=[over.tok] if money else [])))
     else:
         cond = if_note(items)
-        if cond is not None:
+        if cond is not None and not early_risk:
             sens = bool(re.match(r"\s*nếu\s+doanh\s+(thu|số)", cond[1], re.I))
             lines.append(("Rủi ro nếu doanh thu hụt" if sens else "Nếu giữ nguyên",
                           Line(cond[1], cid(cond[0]), vai="neu_hut" if sens else "neu_giu")))
@@ -706,8 +735,9 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             lines.append(("Đề nghị", Line(f"{nth[k]} là {said(a)}.", cid(n), vai="hoi")))
     if cap is not None:
         f = cap.figs[0]
-        lines.append(("Đề nghị", Line(f"Vì vậy {owner} đề xuất mức trần {f.tok} {f.unit or unit}.".replace("  ", " "), cap.id,
-                                      vai="tran")))
+        rule = f"Giữ {rc[2].tok}% như kế hoạch gốc thì trần là" if rc is not None else f"{who} đề xuất mức trần"
+        lines.append(("Đề nghị", Line(f"{rule} {f.tok} {f.unit or unit}.".replace("  ", " "), cap.id,
+                                      vai="tran", xac_nhan=[rc[2].tok] if rc is not None else [])))
     if cut is not None:
         f = next(g for g in cut.figs if g.sign == "-")
         lines.append(("Đề nghị", Line(f"Tức là phải giảm {f.tok} {f.unit or unit} so với {plan_said(t.actual_name)}.".replace("  ", " "),
@@ -731,6 +761,14 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                           "cau": [text]})
             break
 
+    if cut is not None and cap is not None and len(ask_pairs) > 1 and not many:
+        capt = cap.figs[0].tok                     # the ask that is not the cap itself («giữ tỷ lệ …, tức trần 177,5 tỷ»)
+        nxt = next((a for _n, a in ask_pairs if not getattr(a, "money", "") and capt not in a and not re.search(r"\btrần\b", a)), None)
+        if nxt is not None:
+            short = re.sub(r"\s+(và gắn với|trước khi|để)\b.*$", "", lc(nxt))
+            lines.append(("Đề nghị", Line(f"Để giảm, {owner} đề nghị {short}.", cid(next(n for n, a in ask_pairs if a is nxt)),
+                                          vai="cau_noi_hoi")))
+
     # B9: say plainly what the report does not give a figure for; the owner switches on one, both, or says why not
     for fl in flags:
         if fl.get("noi_thang") and note is not None:
@@ -745,6 +783,9 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                 lines.append(("Đề nghị", Line(fl["de_xuat"][3][0], cid(note), so_tinh=[fl["de_xuat"][3][1]],
                                               xac_nhan=fl["de_xuat"][2], vai="con_thieu")))
                 fl["cau"].append(fl["de_xuat"][3][0])
+                lines.append(("Đề nghị", Line(f"Phần này anh chị có thể hỏi {owner} ngay sau phần em trình bày.", "",
+                                              dung=0.6, vai="moi_hoi_sau")))
+                fl["cau"].append(lines[-1][1].noi)
 
     # B10: close on every decision asked at the start, then stop for questions
     if ask_list and many:                          # just listed one by one: the card after the talk holds them
@@ -969,8 +1010,7 @@ def preflight(items: list, places: dict, t: Table, en: bool, note, cut, owner: s
                         enough = ("chưa bằng một nửa" if ratio < Decimal("0.45") else "chưa đủ" if ratio < 1 else "đủ bù")
                         flag["de_xuat"] = (f"Em tính theo chi phí bình quân một người ở {_short(row.label)}: kể cả giãn trọn năm, "
                                            f"{m.group(1)} {m.group(2)} cũng chỉ tiết kiệm "
-                                           f"khoảng {got[0]} {t.unit or ''}, {enough} mức {cut.figs[0].tok} "
-                                           f"{cut.figs[0].unit or ''} cần giảm.".replace("  ", " ").replace(" ,", ","),
+                                           f"khoảng {got[0]} {t.unit or ''}, {enough} mức cần giảm.".replace("  ", " ").replace(" ,", ","),
                                            [f"{got[0]} = {expr}"], [cut.figs[0].tok], None)   # the cut is printed at its own place
                         if ratio < 1:                    # what is left of the cut: from the printed figures, never from 3,9
                             rest = f"{cut.figs[0].tok} - {expr}"

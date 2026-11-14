@@ -235,7 +235,7 @@ def test_questions_the_talk_answers_come_from_the_approved_lines_and_the_page_st
     assert _ask(pg, "Tóm lại anh Tuấn cần quyết gì?").startswith("Anh Tuấn xin anh chị quyết hai việc. Một là giữ tỷ lệ")
     a = _ask(pg, "Con số 1,8 lần em lấy ở đâu ra?")
     assert "12,6 ÷ 7,2 = 1,75, nói tròn là 1,8" in a and "biên bản kiểm lại công thức" not in a   # round 10: no log wording
-    assert _ask(pg, "Nếu không cắt thì sao?").startswith("Nếu giữ nguyên, tỷ lệ chi phí nhân sự trên doanh thu thuần là 2,52%")
+    assert _ask(pg, "Nếu không cắt thì sao?").startswith("Với kế hoạch điều chỉnh này, tỷ lệ chi phí nhân sự trên doanh thu thuần là 2,52%")
     a = _ask(pg, "Em là ai?")
     assert "kèm công thức" in a and "đã duyệt" not in a       # never "đã duyệt" on a draft; the draft's source was said once already (round 10)
     # a question the page answers directly is never taken over by the talk
@@ -1493,7 +1493,7 @@ def test_nods_junk_and_say_again_never_reach_the_owner_and_plan_names_explain_th
     for q in ("hmm ???", "Đúng.", "Chuẩn rồi.", "Cảm ơn em, vậy thôi.", "Được, tiếp đi.", "hmm, ok.."):
         assert _r3(pg, q) == "Dạ.", q
     assert _r3(pg, "Em vừa nói gì?").startswith("Thưa anh chị, em là trợ lý AI của anh Tuấn.")   # nothing played yet: the first line
-    assert _r3(pg, "Em nói lại phần đề nghị").startswith("Anh Tuấn đề xuất mức trần 177,5 tỷ.")   # round 10: no dangling "Vì vậy"
+    assert _r3(pg, "Em nói lại phần đề nghị").startswith("Giữ 2,40% như kế hoạch gốc thì trần là 177,5 tỷ.")   # never "Vì vậy … đề xuất"
     assert _r3(pg, "Ý chính là gì?").startswith("Anh Tuấn xin anh chị duyệt trần 177,5 tỷ (giảm 8,9 tỷ)")
     assert _r3(pg, "Theo em có nên duyệt không?").startswith("Em không khuyên thay anh chị.")
     assert "48 nhân viên" in _r3(pg, "vì sao bán hàng tăng? nói đơn giản thôi")

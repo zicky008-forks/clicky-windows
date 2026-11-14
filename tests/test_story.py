@@ -107,7 +107,7 @@ def test_the_owner_pre_flight_is_in_the_result_and_never_on_the_page(report):
     bound = next(c for c in lines(rep) if c.get("vai") == "uoc_tiet_kiem")
     assert "khoảng 3,9 tỷ" in bound["noi"] and "4 tỷ" not in bound["noi"]   # 30 × 92,3 / 712 = 3,89, never rounded up to 4
     assert bound["noi"] == ("Em tính theo chi phí bình quân một người ở khối Bán hàng: kể cả giãn trọn năm, 30 vị trí "
-                            "cũng chỉ tiết kiệm khoảng 3,9 tỷ, chưa bằng một nửa mức 8,9 tỷ cần giảm.")
+                            "cũng chỉ tiết kiệm khoảng 3,9 tỷ, chưa bằng một nửa mức cần giảm.")   # 8,9 said twice at most (round 12)
     assert bound["so_tinh"] == ["3,9 = 30 × 92,3 / 712"] and bound["bat"] == "có" and bound["xac_nhan"] == ["8,9"]
     assert "anh không muốn thì ghi bat: 'chưa'" in gap
     page = Path(rep["out"]).read_text(encoding="utf-8")
@@ -235,7 +235,7 @@ def test_next_months_report_works_the_computed_figure_out_again(report):
     # the stake line ("… tức vượt trần 8,9 tỷ") keeps its lock on the tile that still prints 8,9: month 2 builds
     stake = [c for c in lines(rep) if "vượt trần" in c["noi"]]
     # round 10: the opening says the stakes too, locked the same way
-    assert [c["vai"] for c in stake] == ["mo_rui_ro", "neu_giu"] and all(c["xac_nhan"] == ["8,9"] for c in stake)
+    assert [c["vai"] for c in stake] == ["mo_rui_ro"] and all(c["xac_nhan"] == ["8,9"] for c in stake)   # round 12: once up front
     assert "8,9 tỷ" in report.read_text(encoding="utf-8")
     assert kiem_bien_ban.verify(rep["out"], str(report))["ok"]
 
@@ -292,8 +292,8 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     # frames the total, and keeps the printed rate and the 2,3 built on it as his to switch on
     why = next(k for k, c in enumerate(said) if c["noi"] == "Vì sao cần quyết?")   # the question alone, a breath
     assert said[why]["vai"] == "cau_hoi" and said[why]["dung"] == 0.8
-    assert any(c["noi"] == "Vì chi phí tăng thêm 19,0 tỷ, trong khi doanh thu chỉ tăng 8,0%."
-               and c["so_tinh"] == ["19,0 = 129,0 - 110,0"] and c["xac_nhan"] == ["8,0"] and c["chi"] == next(x for x in said if x.get("vai") == "quy_mo")["chi"]
+    assert any(c["noi"] == "Vì doanh thu chỉ tăng 8,0%, chưa bằng một nửa tốc độ tăng của chi phí."   # holds under 17,3 and 18,0; 19,0 said once
+               and c["xac_nhan"] == ["8,0"] and c["chi"] == next(x for x in said if x.get("vai") == "quy_mo")["chi"]
                for c in said)
     ratio = next(c for c in said if c["noi"] == "Tức là chi phí tăng nhanh gấp khoảng 2,3 lần doanh thu.")
     assert ratio["bat"] == "chưa"
@@ -311,7 +311,7 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     # is told the two disagree
     assert not any("khoảng 17%" in c["noi"] for c in said)
     assert any("18,0%" in f and "17,3%" in f for f in rep["phan_bien"])
-    assert res["tong"]["em_tinh"] == 4
+    assert res["tong"]["em_tinh"] == 3   # round 12: the contrast says no worked-out 19,0 a second time
 
 
 def test_the_screen_check_finds_drawn_places_and_keeps_a_tall_item_clear_of_a_sticky_header(drawn_report):
@@ -332,9 +332,9 @@ def test_the_talk_breathes_after_the_greeting_and_the_asks_and_rests_on_the_cap(
     contrast = [c for c in said if c.get("vai") == "mau_thuan"]
     assert contrast[-1]["dung"] == 0.8
     assert said[-1]["vai"] == "moi_hoi" and said[-1]["dung"] == 2.0
-    # the stakes in money: holding the cost means going over the cap by the printed cut, confirmed at draft time
+    # the stakes in money are said up front (mo_rui_ro); the ratio line names the measure only (round 12: 8,9 four times)
     stakes = next(c for c in said if c.get("vai") == "neu_giu")
-    assert stakes["noi"].endswith("thay vì 2,40% như kế hoạch gốc, tức vượt trần 8,9 tỷ.") and stakes["xac_nhan"] == ["8,9"]
+    assert stakes["noi"].endswith("thay vì 2,40% như kế hoạch gốc.") and not stakes.get("xac_nhan")
 
 
 def test_words_of_degree_and_names_inside_a_sentence():
@@ -663,7 +663,7 @@ def test_board_questions_in_the_talks_own_words_get_the_asks_the_columns_and_hon
         x = ask("Em khuyên anh nên chọn gì?")
         assert x.startswith("Em không khuyên thay anh chị. Đề xuất của anh Tuấn là: «Giữ tỷ lệ") and "2,52%" in x
         assert ask("Cắt 8,9 tỷ ở đâu?").startswith("Báo cáo chỉ nêu cách: «Giãn tuyển 30 vị trí")
-        assert ask("Có gì đáng lo nhất?").startswith("Nếu giữ nguyên, tỷ lệ chi phí nhân sự trên doanh thu thuần là 2,52%")
+        assert ask("Có gì đáng lo nhất?").startswith("Với kế hoạch điều chỉnh này, tỷ lệ chi phí nhân sự trên doanh thu thuần là 2,52%")
         pg.goto(Path(b["out"]).as_uri())
         pg.wait_for_timeout(800)
         assert ask("Ai phải giải trình?").startswith("Anh Tuấn đề nghị: «Logistics phải giải trình")
@@ -845,3 +845,91 @@ def test_round_eleven_decisions_by_clause_a_tapped_row_and_who_or_when(report, d
         assert "mười lăm" in ask("Bao giờ báo lại?")
         assert ask("Ai phải giải trình?").startswith("Anh Tuấn đề nghị: «Logistics phải giải trình")
         browser.close()
+
+
+def test_round_twelve_decision_clauses_table_grid_and_tapped_asks(report, drawn_report):
+    # round-12 panel: a reason clause («vì … thuê kho») named another ask, «trần thì không» and «việc hai chưa» were queued,
+    # clauses with no verdict were recorded blank, and a tapped ask line took no «Ok» and found no «Ai theo dõi?».
+    # Every sentence in tests/fixtures/ghi_quyet_dinh.json, then a generated grid of two-clause sentences in every order,
+    # joiner and reason tail (with trap words), must record exactly the asks and verdicts it names
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    from present import kiem_hinh
+    a, b = build(report), build(drawn_report)
+    letter = {"Đồng ý": "Y", "Không đồng ý": "N", "Cần bàn thêm": "D", "Đồng ý có điều kiện": "C"}
+    cases = json.loads((Path(__file__).parent / "fixtures" / "ghi_quyet_dinh.json").read_text(encoding="utf-8"))
+    num, alias = ["một", "hai", "ba", "bốn"], {"A": ["trần", "giãn tuyển"], "B": ["trần", "logistics", "quỹ lương", "kho mới"]}
+    forms = [("Y", "đồng ý {}"), ("Y", "{} thì được"), ("N", "không đồng ý {}"), ("N", "{} thì không"), ("D", "tạm treo {}"), ("D", "{} để bàn thêm")]
+    joins = [", ", "; ", ". ", ", còn ", ", riêng ", " nhưng "]
+    traps = ["kho cũ hết chỗ", "hợp đồng thuê kho hết hạn", "phải giữ người", "không muốn hoãn", "anh đồng ý với chị Lan", "trần cũ quá thấp"]
+    tails = ["", ", vì {}", " vì {}", " do {}"]
+    n = 0
+    for pk in ("A", "B"):
+        m = len(alias[pk])
+        for i in range(m):
+            for j in range(m):
+                if i == j:
+                    continue
+                for v1, f1 in forms:
+                    for v2, f2 in forms:
+                        ref = lambda k, t: ["việc " + num[k], "việc %d" % (k + 1), alias[pk][k]][t % 3]   # noqa: E731
+                        c1 = f1.format(ref(i, n)) + tails[n % 4].format(traps[n % 6])
+                        c2 = f2.format(ref(j, n + 1))
+                        jn = joins[n % 6]
+                        q = c1[:1].upper() + c1[1:] + jn + (c2[:1].upper() + c2[1:] if jn == ". " else c2)
+                        cases.append([pk, q, {str(i): v1, str(j): v2}])
+                        n += 1
+    assert n == 504
+    bad = []
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pages = {}
+        for pk, out in (("A", a["out"]), ("B", b["out"])):
+            pg = browser.new_page(viewport={"width": 1366, "height": 768})
+            pg.goto(Path(out).as_uri())
+            pg.wait_for_timeout(700)
+            pages[pk] = pg
+        for pk, q, want in cases:
+            r = pages[pk].evaluate("q => window.__clickyGhi(q)", q)
+            got = {k: letter.get(v[0], v[0]) for k, v in r["rec"].items()}
+            if got != ({} if want is None else {str(k): v for k, v in want.items()}):
+                bad.append((pk, q, got, want, r["a"][:120]))
+        assert not bad, "\n".join(map(str, bad[:20]))
+        pg = pages["B"]
+        ghi = lambda q, s: pg.evaluate("([q, s]) => window.__clickyGhi(q, s)", [q, s])   # noqa: E731
+        # the report's own ask line, tapped: a bare verdict is that ask's, a question is asked of the whole report
+        for cid, k in (("c8", "0"), ("c9", "1"), ("c11", "3")):
+            for q, v in (("Ok", "Đồng ý"), ("Không", "Không đồng ý"), ("Để bàn thêm", "Cần bàn thêm")):
+                assert ghi(q, f"[data-clicky={cid}]")["rec"] == {k: [v, "", False]}, (cid, q)
+        r = ghi("Không, đội bán hàng cần kho", "[data-clicky=c11]")
+        assert r["rec"] == {"3": ["Không đồng ý", "Không, đội bán hàng cần kho", False]}
+        assert ghi("Ai theo dõi?", "[data-clicky=c8]")["a"].startswith("Báo cáo ghi: «FP&A theo dõi nhịp chi hằng tháng")
+        assert ghi("Trần bao nhiêu?", "[data-clicky=c8]")["a"].startswith("Anh Tuấn đề nghị: «Duyệt trần chi phí vận hành 120,0 tỷ")
+        assert ghi("Vì sao?", "[data-clicky=c10]")["a"].startswith("Báo cáo chưa ghi lý do riêng cho đề nghị «Giữ quỹ lương")
+        assert ghi("Không có ý kiến", None)["a"].startswith("Dạ, em ghi anh chị chưa cho ý kiến")
+        # a clause with asks but no verdict is asked back, never recorded blank
+        r = ghi("Đồng ý trần, việc hai thì anh Tuấn gặp anh sau", None)
+        assert r["rec"] == {"0": ["Đồng ý", "", False]} and "Việc hai anh chị nói «việc hai thì anh Tuấn gặp anh sau»" in r["a"], r
+        browser.close()
+
+
+def test_round_twelve_talk_arc_says_each_figure_at_most_twice_with_cause_and_bridge(report, drawn_report):
+    # round-12 panel: 8,9 said four times, «Nếu giữ nguyên» twice, «Vì vậy … đề xuất mức trần» circular, the printed cause
+    # (48 hires) never voiced, no bridge to the second ask; on B 19,0 twice (tỷ against %) and the 6,4% stakes at 62 s of 88 s
+    a, b = build(report), build(drawn_report)
+    said_a = [c for c in lines(a) if c.get("bat", "có") == "có"]
+    talk = " ".join(c["noi"] for c in said_a)
+    assert talk.count("8,9") == 2 and talk.count("Nếu giữ nguyên") == 1 and "Vì vậy" not in talk
+    assert "Báo cáo ghi lý do: kế hoạch tuyển thêm 48 nhân viên bán hàng kênh MT và HRC+KA." in talk
+    assert "Giữ 2,40% như kế hoạch gốc thì trần là 177,5 tỷ. Tức là phải giảm 8,9 tỷ" in talk
+    assert "Để giảm, anh Tuấn đề nghị giãn tuyển 30 vị trí bán hàng sang quý 3." in talk
+    gap = talk.index("Còn lại khoảng 5,0 tỷ")
+    assert talk[gap:].split(". ", 1)[1].startswith("Phần này anh chị có thể hỏi anh Tuấn ngay sau phần em trình bày.")
+    said_b = [c for c in lines(b) if c.get("bat", "có") == "có"]
+    tb = " ".join(c["noi"] for c in said_b)
+    assert tb.count("19,0") == 1 and "chưa bằng một nửa tốc độ tăng của chi phí" in tb
+    vai = [c.get("vai") for c in said_b]
+    assert vai.index("neu_hut") == max(k for k, v in enumerate(vai) if v == "hoi") + 1   # the stakes right after the asks
