@@ -2000,7 +2000,7 @@ SCRIPT_HEAD = """# Kịch bản Clicky cho «{report}».
 #   Mục có dòng "cau" là các câu em đề xuất cho điểm đó: anh bật một câu (bat: 'có'), hoặc ghi vào ly_do_bo vì sao
 #   không nói (ví dụ ly_do_bo: 'Số báo cáo đúng, giữ nguyên câu'). Còn mục nào chưa xong thì bản trình bày vẫn là
 #   SƠ BỘ, kể cả khi đã ghi da_duyet: 'có'.
-#   Mục nghi một câu trong báo cáo (có ma_cau): ghi quyet: 'giữ câu' nếu số báo cáo đúng, hoặc quyet: 'báo cáo sai'
+#   Mục nghi một câu hay một con số trong báo cáo (có ma_cau hoặc ma_so): ghi quyet: 'giữ câu' nếu số báo cáo đúng, hoặc quyet: 'báo cáo sai'
 #   (khi đó anh sửa báo cáo rồi kéo thả lại). ly_do_bo là ghi chú riêng của anh, Ban Giám đốc không thấy; câu duy
 #   nhất Ban Giám đốc thấy về điểm này là noi_voi_BOD (để trống thì em dùng câu chuẩn).
 # Đọc và sửa xong: đổi da_duyet: 'chưa' thành da_duyet: 'có', rồi kéo thả báo cáo vào Clicky lần nữa.
@@ -2262,11 +2262,13 @@ def _check_row(k: dict) -> dict:
     if k.get("tinh"):
         row["tinh"] = _Q(str(k["tinh"]))
     row["da_xem"] = _Q("có" if _seen(k) else "chưa")
-    if k.get("cau") or k.get("ma_cau"):
+    if k.get("cau") or k.get("ma_cau") or k.get("ma_so"):
         row["ly_do_bo"] = _Q(str(k.get("ly_do_bo") or ""))
-    if k.get("ma_cau"):                            # a doubted sentence: the owner's ruling, and the one line the Board may see
+    if k.get("ma_cau") or k.get("ma_so"):          # a doubted sentence or figure: the ruling, and the one line the Board may see
         row["quyet"] = _Q(str(k.get("quyet") or ""))
         row["noi_voi_BOD"] = _Q(str(k.get("noi_voi_BOD") or ""))
+        if k.get("so_rieng"):
+            row["so_rieng"] = [_Q(str(x)) for x in _toks(k["so_rieng"])]
     return row
 
 
@@ -2277,7 +2279,7 @@ def _lines_on(script: dict) -> set:
 def ruled(k: dict, said: set) -> bool:
     """An item that governs lines or doubts a sentence is settled only by an act: one of its lines switched on, or
     the owner's reason in ly_do_bo. Ticking da_xem alone is looking, not deciding."""
-    if not (k.get("cau") or k.get("ma_cau")):
+    if not (k.get("cau") or k.get("ma_cau") or k.get("ma_so")):
         return True
     q = verdict(k)
     if q == "báo cáo sai":                         # the report is to be fixed first: the pack stays a draft until then
@@ -2314,10 +2316,25 @@ def doubts(script: dict) -> list:
     """Every doubted report sentence, for the page: its fingerprint, the doubted figures, the table's own working,
     and, once the owner has ruled, his reason. Never the sentence or the owner's finding in words."""
     said = _lines_on(script)
-    return [{"ma": str(k["ma_cau"]), "so": [str(x) for x in k.get("ma_so") or []], "tinh": str(k.get("tinh") or ""),
+    return [{"ma": str(k.get("ma_cau") or ""), "so": [str(x) for x in k.get("ma_so") or []], "tinh": str(k.get("tinh") or ""),
              "xong": ruled(k, said) or verdict(k) == "báo cáo sai", "quyet": verdict(k),
              "noi": str(k.get("noi_voi_BOD") or "").strip()}   # ly_do_bo is the owner's own note: never on the page
-            for k in script.get("kiem_tra") or [] if isinstance(k, dict) and k.get("ma_cau")]
+            for k in script.get("kiem_tra") or [] if isinstance(k, dict) and (k.get("ma_cau") or k.get("ma_so"))]
+
+
+def bod_figures_unlocked(script: dict, page_text: str, en: bool) -> list:
+    """noi_voi_BOD is the one free text the Board sees: a figure in it goes through the same lock as a spoken line.
+    A figure on neither the page nor the item's so_rieng keeps the pack a draft (round-6: "khoảng 10 tỷ" went out)."""
+    on_page, out = _vals(page_text, en), []
+    for k in script.get("kiem_tra") or []:
+        if not isinstance(k, dict) or not str(k.get("noi_voi_BOD") or "").strip():
+            continue
+        own = {value(t, en) for t in _toks(k.get("so_rieng"))}
+        bad = [f.tok for f in figures(str(k["noi_voi_BOD"])) if value(f.tok, en) not in on_page | own]
+        if bad:
+            out.append(f"(noi_voi_BOD có số {', '.join(bad)} chưa có trong báo cáo: ghi vào so_rieng của mục này hoặc bỏ số) "
+                       + str(k.get("muc", "")))
+    return out
 
 
 def doubted_open(script: dict) -> list:
@@ -2357,7 +2374,9 @@ def refresh_checks(kept: list, fresh: list) -> list:
 
 def unedited(script: dict) -> bool:
     return bool(script.get("ma_nhap")) and script_hash(script.get("canh")) == script.get("ma_nhap") \
-        and len(open_checks(script)) == len(script.get("kiem_tra") or [])     # a ticked check is an edit too
+        and len(open_checks(script)) == len(script.get("kiem_tra") or []) \
+        and not any(str(k.get(f) or "").strip() for k in (script.get("kiem_tra") or []) if isinstance(k, dict)
+                    for f in ("quyet", "ly_do_bo", "noi_voi_BOD"))      # a ticked check or a ruling alone is an edit too
 
 
 def _toks(v) -> list:
@@ -3120,7 +3139,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
                      f"«{want.label}»." + (f" Câu nháp mới: «{d['noi']}»." if d else ""))
     scenes = scenes_from_script(script, known)
     ok = approved(script)
-    unchecked = open_checks(script)
+    unchecked = open_checks(script) + bod_figures_unlocked(script, page_text, en)
     if ok and unchecked:                       # approved without looking at what the pre-flight found: still a draft
         ok = False
         notes.insert(0, f"Anh đã ghi duyệt nhưng còn {len(unchecked)} mục cần soát chưa xong (đầu file kịch bản: đánh dấu "

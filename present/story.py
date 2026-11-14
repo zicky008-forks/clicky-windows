@@ -783,6 +783,7 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             k["cau"] = [plain(x) for x in fl["cau"]]
         if fl.get("sai"):
             k["ma_cau"] = fingerprint(fl["sai"])
+        if fl.get("sai") or fl.get("tinh"):      # a doubted sentence, or a doubted figure printed on a card or in an ask
             if fl.get("so"):
                 k["ma_so"] = list(fl["so"])
             if fl.get("tinh"):
@@ -885,10 +886,16 @@ def preflight(items: list, places: dict, t: Table, en: bool, note, cut, owner: s
                     lo, hi = spread(expr, en)
                     cap, k = C.value(m.group(1), en), decimals(m.group(1), en)
                     if cap is not None and not (rounded(lo, k) <= cap <= rounded(hi, k)):
-                        flags.append({"xem": f"Anh sửa trần hoặc ghi ly_do_bo: báo cáo ghi trần {m.group(1)} "
-                                             f"{m.group(2) or t.unit or ''} «{C.clip(said, 70)}», nhưng giữ đúng tỷ lệ "
+                        u = m.group(2) or t.unit or ""
+                        got = say(evaluate(expr, en), k, en)
+                        # a doubted figure: the Board asking "120 có đúng không" is held with both figures until he rules
+                        flags.append({"xem": f"Anh sửa trần hoặc ghi quyet: báo cáo ghi trần {m.group(1)} "
+                                             f"{u} «{C.clip(said, 70)}», nhưng giữ đúng tỷ lệ "
                                              f"chi phí trên doanh thu của {t.plan_name} thì trần là {pretty(expr)} = "
-                                             f"{say(evaluate(expr, en), k, en)} {m.group(2) or t.unit or ''}.".replace("  ", " ")})
+                                             f"{got} {u}.".replace("  ", " "),
+                                      "so": [m.group(1)],
+                                      "tinh": f"giữ đúng tỷ lệ chi phí trên doanh thu của {plan_said(t.plan_name)} thì trần là "
+                                              f"{pretty(expr)} = {got} {u}".replace("  ", " ").strip()})
                 except ValueError:
                     pass
     if hc and rate:
@@ -901,8 +908,10 @@ def preflight(items: list, places: dict, t: Table, en: bool, note, cut, owner: s
             places_ = decimals(rate.figs[1].tok, en)
             if not (rounded(lo, places_) <= printed <= rounded(hi, places_)):
                 flags.append({"xem": f"Thẻ «{rate.label}» ghi tăng {rate.figs[1].tok}%, tính lại từ tổng chi phí và số "
-                                     f"người thì ra khoảng {say(exact, 2, en)}%. Công thức: {expr}. Anh sửa thẻ, hoặc ghi ly_do_bo nếu "
-                                     "thẻ tính theo cách khác (ví dụ từ đơn giá đã làm tròn)."})
+                                     f"người thì ra khoảng {say(exact, 2, en)}%. Công thức: {expr}. Anh sửa thẻ, hoặc ghi "
+                                     "quyet: 'giữ câu' nếu thẻ tính theo cách khác (ví dụ từ đơn giá đã làm tròn).",
+                              "so": [rate.figs[1].tok],
+                              "tinh": f"tính từ tổng chi phí và số người: {pretty(expr)} ≈ {say(exact, 2, en)}%"})
         except ValueError:
             pass
     if note is not None:

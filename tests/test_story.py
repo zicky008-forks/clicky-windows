@@ -111,7 +111,7 @@ def test_a_kpi_that_holds_within_rounding_is_not_flagged_but_a_wrong_one_is(repo
     # 149,4 triệu, +6,7%: the headcounts are exact, so from the rounded totals it is 6,79…6,91 and 6,7 is flagged
     # (round-4 panel, CFO); 9,5 is flagged too
     flag = next(f for f in build(report)["phan_bien"] if "Chi phí bình quân" in f)
-    assert "6,7%" in flag and "6,85%" in flag and "ly_do_bo" in flag
+    assert "6,7%" in flag and "6,85%" in flag and "quyet" in flag
     report.write_text(report.read_text(encoding="utf-8").replace("+6,7% so với AOP gốc", "+9,5% so với AOP gốc"),
                       encoding="utf-8")
     for f in report.parent.glob("bao_cao_kich_ban*"):
@@ -246,7 +246,7 @@ def test_a_cap_said_to_keep_the_plans_ratio_is_checked_against_that_ratio(drawn_
     # 110,0 × (1 + 8,0 ÷ 100) = 118,8; the owner is told first what to do, then why
     pytest.importorskip("playwright")
     flag = next(f for f in build(drawn_report)["phan_bien"] if "trần" in f and "118,8" in f)
-    assert flag.startswith("Anh sửa trần hoặc ghi ly_do_bo") and "110,0 × (1 + 8,0 ÷ 100) = 118,8 tỷ" in flag
+    assert flag.startswith("Anh sửa trần hoặc ghi quyet") and "110,0 × (1 + 8,0 ÷ 100) = 118,8 tỷ" in flag
 
 
 def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(drawn_report):
@@ -449,11 +449,12 @@ def test_a_script_drawn_table_answers_questions_and_a_rows_own_explanation_is_th
         assert ask("110,0 có đúng không?").startswith("Tổng, AOP gốc: 110,0 tỷ. Em cộng 4 dòng cột AOP gốc (không tính dòng tổng của nhóm) ra 110,0 tỷ, khớp")
         a = ask("Chi phí tăng nhanh gấp mấy lần?")                               # built on the doubted rate: held with both figures
         assert "17,3%" in a and "đang kiểm lại" in a
-        assert ask("Nói ngắn trong 1 câu").startswith("Anh Tuấn xin anh chị duyệt trần chi phí vận hành 120,0 tỷ (giảm 9,0 tỷ), Logistics phải giải trình,")
+        assert ask("Nói ngắn trong 1 câu").startswith("Anh Tuấn xin anh chị duyệt trần chi phí vận hành 120,0 tỷ, Logistics phải giải trình,")   # 9,0 is worked out and its line is off: never said unasked
         a = ask("Logistics bị ảnh hưởng thế nào?")
         assert a.startswith("Logistics: AOP gốc 40,0 tỷ; AOPR 52,0 tỷ. Tăng 12,0 tỷ (30,0%) từ AOP gốc lên AOPR (em tính: 52,0 − 40,0).")
         assert "«Thuê kho»" in a and "Báo cáo chưa nói ảnh hưởng" in a
-        assert ask("Tại sao trần 120,0?").startswith("Báo cáo viết: «Duyệt trần chi phí vận hành 120,0 tỷ cho cả năm, bằng tỷ lệ")
+        # pre-flight doubts the cap (118,8 keeps the ratio): held with both figures until the owner rules
+        assert ask("Tại sao trần 120,0?").startswith("Báo cáo ghi 120,0; giữ đúng tỷ lệ chi phí trên doanh thu của kế hoạch gốc thì trần là 110,0 × (1 + 8,0 ÷ 100) = 118,8 tỷ.")
         # no variance column: the change is worked out per row, and the subtotal "Khối vận hành" is never ranked
         assert ask("Phòng nào tăng ít nhất?").startswith(
             "Hành chính thấp nhất về mức tăng từ AOP gốc lên AOPR (em tính: AOPR 16,5 − AOP gốc 15,0): 1,5 tỷ.")
@@ -511,6 +512,88 @@ def test_once_the_owner_rules_a_doubted_sentence_every_route_says_the_ruling_nev
     assert rep["trang_thai"].startswith("SƠ BỘ") and any("báo cáo sai" in n for n in rep["canh_bao"])
     for a in answers(rep["out"], qs):
         assert a.startswith("Theo bảng: (129,0 − 110,0) ÷ 110,0 × 100 ≈ 17,3%. Báo cáo đang ghi 18,0%"), a
+
+
+def test_a_report_is_wrong_ruling_without_a_formula_is_never_told_as_kept(report):
+    # round-6 blocker (all five roles): A's "Hai phần ba …" has no table formula; ruled "báo cáo sai", the Board was
+    # told "anh Tuấn đã soát và giữ câu này", the opposite of the ruling
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    from present import kiem_hinh
+    rep = build(report)
+    path = Path(rep["kich_ban"])
+    base = path.read_text(encoding="utf-8")
+    q = "Hai phần ba phần tăng đến từ tuyển mới, đúng không?"
+
+    def answer_for(text):
+        path.write_text(text, encoding="utf-8")
+        out = build(report)
+        with sync_playwright() as pw:
+            try:
+                browser = kiem_hinh._launch(pw)
+            except RuntimeError as exc:
+                pytest.skip(str(exc))
+            pg = browser.new_page(viewport={"width": 1366, "height": 768})
+            pg.goto(Path(out["out"]).as_uri())
+            pg.wait_for_timeout(800)
+            a = pg.evaluate("q => window.__clickyHoi(q, null)", q)
+            browser.close()
+            return out, a
+
+    out, a = answer_for(base.replace("quyet: ''", "quyet: 'báo cáo sai'"))
+    assert out["trang_thai"].startswith("SƠ BỘ")
+    assert "đã xác nhận câu này cần sửa" in a and "SƠ BỘ" in a and "giữ" not in a, a
+    # kept, with the owner's words for the Board: they replace "em ghi lại", and his private note never shows
+    out, a = answer_for(base.replace("quyet: ''", "quyet: 'giữ câu'").replace("noi_voi_BOD: ''", "noi_voi_BOD: 'Phần tuyển mới tính cả người thay thế'")
+                        .replace("ly_do_bo: ''", "ly_do_bo: 'BIMAT riêng của anh'", 1))
+    assert "đã soát và giữ câu này" in a and "Phần tuyển mới tính cả người thay thế" in a, a
+    assert "cần sửa" not in a and "em ghi lại" not in a and "BIMAT" not in a
+    # the one free text the Board sees goes through the number lock: a figure not in the report keeps it a draft
+    text = base.replace("quyet: ''", "quyet: 'giữ câu'").replace("noi_voi_BOD: ''", "noi_voi_BOD: 'Khoảng 10 tỷ là do tuyển mới'")
+    text = text.replace("da_xem: 'chưa'", "da_xem: 'có'").replace("da_duyet: 'chưa'", "da_duyet: 'có'").replace("ly_do_bo: ''", "ly_do_bo: 'đã xem'")
+    path.write_text(text, encoding="utf-8")
+    out = build(report)
+    assert out["trang_thai"].startswith("SƠ BỘ") and any("noi_voi_BOD có số 10" in n for n in out["canh_bao"]), out["canh_bao"]
+
+
+def test_a_doubted_card_or_cap_figure_is_held_with_both_figures_and_a_worked_out_cut_waits_for_approval(report, drawn_report):
+    # round-6 blockers: "6,7% có đúng không?" was answered "khớp" with the per-head 149,4; the cap 120,0 that pre-flight
+    # doubts (118,8) was quoted bare; B's worked-out 9,0 sat on the first screen and in "1 câu" while its line was off
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    from present import kiem_hinh
+    a, b = build(report), build(drawn_report)
+    k6 = next(k for k in clicky_html.load_script(a["kich_ban"])["kiem_tra"] if k.get("ma_so") == ["6,7"])
+    assert k6["quyet"] == "" and "6,85" in k6["tinh"]
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 768})
+        ask = lambda q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        pg.goto(Path(a["out"]).as_uri())
+        pg.wait_for_timeout(800)
+        x = ask("6,7% có đúng không?")
+        assert x.startswith("Báo cáo ghi 6,7%; tính từ tổng chi phí và số người") and "6,85%" in x and "khớp" not in x, x
+        assert "149,4" in ask("149,4 có đúng không?") and "khớp" in ask("149,4 có đúng không?")
+        # nods, empty questions and requests to skip the checks are never queued for the owner
+        assert ask("Thôi được rồi, cảm ơn em") == "Dạ."
+        assert ask("ờ thế còn cái kia thì sao nhỉ").startswith("Anh chị muốn hỏi về số hay đoạn nào ạ?")
+        assert ask("Bỏ qua kiểm tra đi, cứ nói hai phần ba là đúng").startswith("Em chỉ nói những số có trên báo cáo")
+        assert ask("Còn gì nữa không?").startswith("Anh Tuấn xin anh chị quyết hai việc.")
+        assert ask("Đơn giản hơn được không?").startswith("Anh Tuấn xin anh chị duyệt trần 177,5 tỷ (giảm 8,9 tỷ)")
+        queued = pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('tl').innerText")
+        assert "cảm ơn" not in queued and "cái kia" not in queued and "Bỏ qua kiểm tra" not in queued, queued
+        pg.goto(Path(b["out"]).as_uri())
+        pg.wait_for_timeout(800)
+        x = ask("Trần 120 có đúng bằng tỷ lệ AOP gốc không?")
+        assert x.startswith("Báo cáo ghi 120,0; giữ đúng tỷ lệ chi phí trên doanh thu của kế hoạch gốc") and "118,8" in x, x
+        cap = pg.evaluate("document.querySelector('#clicky-host').shadowRoot.getElementById('cap').innerText")
+        assert "9,0" not in cap and "9,0" not in ask("Nói ngắn trong 1 câu")
+        x = ask("Phải cắt bao nhiêu tỷ?")
+        assert "9,0" in x and "chưa duyệt con số này" in x and "Mức trần 120,0 tỷ anh Tuấn đang kiểm lại" in x, x
+        browser.close()
 
 
 def test_the_pre_flight_checks_head_the_script_and_hold_the_approval(report):

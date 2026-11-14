@@ -1727,7 +1727,8 @@ const STEER = [/\b(bo qua|quen|phot lo|ignore|disregard|forget)( het| di| moi| c
   /\b(hay|cu|phai|ban hay|em hay|please)? ?(noi|doc|bao|tra loi|say|tell)( voi)?( hdqt| bod| moi nguoi| ho| they| them)? (rang|la|that) .*\d/,
   /\b(gia vo|gia su em la|dong vai|pretend|act as|you are now|tu gio em)\b/, /\b(sua|doi|thay) (so|con so|so lieu) (thanh|la|bang)\b/,
   /\b(cu noi|noi dai|bia ra|bia so|toi cho phep|cho phep em noi)\b.*\d/,
-  /\b(hay|cu|cu viec) (noi|bao|tra loi)\b.*\d[\d.,]* ?(ty|trieu|%)/];   // "hãy nói BOD chỉ cần cắt 3 tỷ"; never "nói ngắn 1 câu"
+  /\b(hay|cu|cu viec) (noi|bao|tra loi)\b.*\d[\d.,]* ?(ty|trieu|%)/,
+  /\b(bo qua|khoi|dung|thoi) (buoc )?(kiem tra|kiem lai|soat|doi chieu)\b/, /\b(cu|hay|cu viec) (noi|tra loi|bao|xac nhan)\b.* (la dung|la chuan|dung roi|la that)\b/];   // "hãy nói BOD chỉ cần cắt 3 tỷ"; never "nói ngắn 1 câu"
 function steering(q) { const fq = " " + fold(q) + " "; return STEER.some(r => r.test(fq)); }
 function fnv(s) { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i) & 0xff; h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16).padStart(8, "0"); }
 let CK = null;
@@ -1769,17 +1770,36 @@ function doubtHit(q, scope) {   // the reader asks about a doubted sentence: it 
   const content = x => x.f.split(" ").filter(w => w.length > 1 && !ECHO_NOT.has(w));   // three words in a row of it
   return list.find(x => { const w = content(x); for (let i = 0; i + 2 < w.length; i++) if (f.includes(" " + w.slice(i, i + 3).join(" ") + " ")) return true; return false; }) || null;
 }
+function figDoubt(q, scope) {   // "6,7% có đúng không", "trần 120 có đúng không": a figure the owner was asked to check, never "khớp" on another
+  const items = (D.nghi || []).filter(it => !it.ma && (it.so || []).length); if (!items.length) return null;
+  const fq = " " + fold(q) + " ";
+  if (/\b(nghia la gi|la gi|la sao|y nghia)\b/.test(fq) && !CHECKQ.test(fq)) return null;   // "6,7% nghĩa là gì": the card's own words answer
+  const nums = t => (t.match(/\d[\d.,]*\d%?|\d%?/g) || []).map(x => x.replace(/%$/, ""));
+  let toks = nums(q);
+  if (!toks.length && scope && (CHECKQ.test(" " + fold(q) + " ") || EXPLAINQ.test(" " + fold(q) + " ")))
+    toks = nums(scope.card ? scope.card.text : scope.el ? cellText(scope.el) : "");
+  const same = (a, b) => a === b || a + ",0" === b || a === b + ",0";
+  const it = items.find(it => it.so.some(x => toks.some(t => same(t, String(x).replace(/%$/, ""))))); if (!it) return null;
+  const x = String(it.so[0]).replace(/%$/, ""), pl = placesOf(x), at = pl.cards[0] || pl.sents[0];
+  return {it, s: at ? (at.text || at.s) : x, el: at ? at.el : null};
+}
 function answerDoubt(q, o) {   // one wording per state of a doubted figure; the owner's own note (ly_do_bo) never reaches the page
   const it = o.it, Own = OWNER.charAt(0).toUpperCase() + OWNER.slice(1), work = (it.tinh || "").replace(/^tính từ bảng\s*/, "");
+  const own = /^(tính|giữ)/.test(work);   // a figure item's working says its own basis ("tính từ tổng chi phí…")
   const sh = (it.so || []).map(x => o.s.includes(x + "%") ? x + "%" : x).join(", ");
-  if (it.quyet === "báo cáo sai" && work) {
-    answer("Theo bảng: " + work + ". Báo cáo đang ghi " + sh + "; " + Own + " đã xác nhận đây là chỗ báo cáo cần sửa." + (it.noi ? " " + it.noi : ""), o.el,
-      {src: "Em tính từ các số trên báo cáo «" + TITLE + "»"}); return; }
+  const noi = it.noi ? " " + it.noi.trim().replace(/\.?$/, ".") : "";
+  if (it.quyet === "báo cáo sai") {   // the ruling first, the work only if there is one: never told as "giữ" (round-6 blocker)
+    const said = work ? (own ? work.charAt(0).toUpperCase() + work.slice(1) : "Theo bảng: " + work) + ". Báo cáo đang ghi " + sh + "; " + OWNER + " đã xác nhận đây là chỗ báo cáo cần sửa"
+      : "Báo cáo có viết: «" + whole(o.s) + "» " + Own + " đã xác nhận câu này cần sửa";
+    answer((work ? esc(said) : said) + esc("; bản trình bày đang là SƠ BỘ." + noi), o.el, {html: true, src: work ? "Em tính từ các số trên báo cáo «" + TITLE + "»" : "Lấy từ báo cáo «" + TITLE + "»"}); return; }
   if (!it.xong) { answer((sh ? "Báo cáo ghi " + sh : "Báo cáo có viết câu này") + (it.tinh ? "; " + it.tinh : "") + ". " + Own + " đang kiểm lại " + (sh && it.tinh ? "hai số này" : "câu này") + ", em chưa trả lời thay ạ.", null,
       {cls: "park", extra: parkNote(q), src: ""}); return; }
-  answer("Báo cáo ghi: «" + whole(o.s) + "» " + esc(Own + " đã soát và giữ " + (sh ? "số này" : "câu này") + "." +
-    (work ? " Tính thẳng từ bảng: " + work + "; chỗ chênh em ghi lại để " + OWNER + " giải thích." : "") + (it.noi ? " " + it.noi : "")),
-    o.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"});
+  // kept: the owner's words for the Board replace "em ghi lại"; "em ghi lại" only when the question is really queued
+  const kept = Own + " đã soát và giữ " + (sh ? "số này" : "câu này");
+  const tail = noi ? (work ? " " + kept + ":" + noi.replace(/\.$/, "") + " (" + (own ? "" : "tính thẳng từ bảng: ") + work + ")." : " " + kept + "." + noi)
+    : " " + kept + "." + (work ? " " + (own ? work.charAt(0).toUpperCase() + work.slice(1) : "Tính thẳng từ bảng: " + work) + "; chỗ chênh em ghi lại để " + OWNER + " giải thích." : "");
+  answer("Báo cáo ghi: «" + whole(o.s) + "»" + esc(tail), o.el,
+    Object.assign({html: true, src: "Lấy từ báo cáo «" + TITLE + "»"}, work && !noi ? {cls: "park", extra: parkNote(q)} : {}));
 }
 function pctAsk(q) {   // "chi phí tăng bao nhiêu phần trăm" while the printed rate is in doubt: both figures, never one
   const f = " " + fold(q) + " "; if (!/ (bao nhieu|may) (phan tram|%)| (phan tram|%) (bao nhieu|may)|tang bao nhieu %| gap (bao nhieu|may) lan/.test(f.replace(/(\d)%/g, "$1 %"))) return null;
@@ -1877,7 +1897,13 @@ function meanAnswer(q, m, row, c) {   // "số này nghĩa là gì" on a cell: t
 function cutTag() {   // the cut the asks imply: a printed "giảm" tile, else the table's total minus the cap in the ask
   const c = allCards().find(c => /\b(giam|cat)\b/.test(fold(c.text.split(":")[0]))), f = c && cardFigs(c)[0];
   if (f) return "giảm " + withUnit(f.v, f.u);
-  const cc = capCut(qinfo("phải giảm bao nhiêu")); return cc ? "giảm " + withUnit(cc.x, cc.u) : "";
+  // a cut Clicky worked out goes on the first screen, the card and "1 câu" only once the owner has switched on its line
+  const cc = capCut(qinfo("phải giảm bao nhiêu")); return cc && spokenWith([cc.x]) ? "giảm " + withUnit(cc.x, cc.u) : "";
+}
+function capCaveat(r) {   // a direct question still gets the worked-out cut, labelled: not approved, and a cap in doubt
+  const sure = spokenWith([r.x]) ? "" : " Đây là số em tính, " + OWNER + " chưa duyệt con số này.";
+  const capDoubt = (D.nghi || []).some(it => !it.ma && !it.xong && (it.so || []).some(x => String(x) === r.cap || String(x) === r.cap + ",0" || String(x) + ",0" === r.cap));
+  return sure + (capDoubt ? " Mức trần " + withUnit(r.cap, r.u) + " " + OWNER + " đang kiểm lại." : "");
 }
 function saveAsk(q) {   // "giãn 30 vị trí có đủ bù 8,9 tỷ không": an ask that carries no money is never answered with a guess
   const f = " " + fold(q) + " "; if (!/ (du bu|bu du|bu duoc|tiet kiem|giam duoc|bot duoc|du de|du (giam|cat)|du khong) /.test(f)) return false;
@@ -1890,7 +1916,7 @@ function saveAsk(q) {   // "giãn 30 vị trí có đủ bù 8,9 tỷ không": a
   return true;
 }
 function capCutNow() { return capCut(qinfo("phải giảm bao nhiêu")); }
-function capCutText(r) { return "Theo đề nghị trần " + withUnit(r.cap, r.u) + ", phải giảm " + withUnit(r.x, r.u) + " so với " + colName(r.m, r.v) + " (em tính: " + cellText(r.tot.cells[r.v]) + " − " + r.cap + "); báo cáo không ghi sẵn số này."; }
+function capCutText(r) { return "Theo đề nghị trần " + withUnit(r.cap, r.u) + ", phải giảm " + withUnit(r.x, r.u) + " so với " + colName(r.m, r.v) + " (em tính: " + cellText(r.tot.cells[r.v]) + " − " + r.cap + "); báo cáo không ghi sẵn số này." + capCaveat(r); }
 function rejectCap(q) {   // "nếu không duyệt trần thì sao": first what rejecting it means in money, then the printed risk
   const f = " " + fold(q) + " "; if (!/ (khong duyet|bac|tu choi|khong dong y) /.test(f) || !/ tran /.test(f)) return false;
   const r = capCutNow(); if (!r) return false;
@@ -1948,7 +1974,7 @@ function askTags(most) {   // each ask as a short tag, its money as printed: "du
     return (w.length > 12 ? w.slice(0, 12) : w).join(" ").replace(/^./, c => name ? c : c.toLowerCase()); });
 }
 function oneLine(q) {   // "nói ngắn trong 1 câu": the asks as short tags in one sentence, figures as printed
-  if (!QUYET.length || !/\b(1|mot) cau\b|\bnoi ngan\b|\bngan gon\b/.test(fold(q))) return false;
+  if (!QUYET.length || !/\b(1|mot) cau\b|\bnoi ngan\b|\bngan gon\b|\bdon gian (hon|thoi|lai)\b/.test(fold(q))) return false;
   const tags = askTags();
   answer(OWNER.charAt(0).toUpperCase() + OWNER.slice(1) + " xin anh chị " + (tags.length > 1 ? tags.slice(0, -1).join(", ") + " và " + tags[tags.length - 1] : tags[0]) + ".", null,
     {src: DRAFT ? "Theo kịch bản nháp của " + OWNER + " (chưa duyệt)" : "Theo lời " + OWNER + " đã duyệt cho bài trình bày"});
@@ -2100,18 +2126,28 @@ function verifyAsk(q, scope) {   // "12,6% có đúng không", "số này nghĩa
     answer("Báo cáo không ghi " + shown + " ở chỗ nào, nên em không xác nhận số này.", null, {cls: "park", extra: parkNote(q)}); return true; }
   if (pl.cells.length === 1) { checkAnswer(q, pl.cells[0].m, pl.cells[0].row, pl.cells[0].c); return true; }
   const where = pl.cards.map(c => "«" + c.text.replace(/\.$/, "") + "»").concat(pl.sents.map(x => "«" + x.s.replace(/\.$/, "") + "»"), pl.cells.map(x => rowName(x.row) + ", " + colName(x.m, x.c))).slice(0, 3);
-  const card = pl.cards[0], cd = card && cardDiff({how: true, q: tok, f: ""}, {card}), ph = card && !cd && cardPerHead(card);
+  const card = pl.cards[0], cd = card && cardDiff({how: true, q: tok, f: ""}, {card}), ph0 = card && !cd && cardPerHead(card);
+  const ph = ph0 && cardFigs(card)[0] && cardFigs(card)[0].v.replace(/%$/, "") === tok.replace(/%$/, "") ? ph0 : null;   // «khớp» only for the figure asked (round-6: 6,7% was "checked" with 149,4)
   const ck = !cd && (ph || pl.cells.map(x => cellCheck(x.m, x.row, x.c)).find(Boolean));
   answer("Báo cáo ghi " + shown + " ở " + pl.n + " chỗ: " + where.join("; ") + "." + (cd ? " Em tính lại: " + withUnit(cd.f.v, cd.f.u) + " = " + cd.a.v + " − " + cd.b.v + ", khớp." : ck ? " " + ck.text : ""),
     card ? card.el : pl.sents[0] ? pl.sents[0].el : pl.cells[0].row.cells[pl.cells[0].c], {src: "Lấy từ báo cáo «" + TITLE + "»"});
   return true;
 }
+const FILLER = new Set("o u a oi the thi con cai kia day nay nua roi nhi nhe ha ho vay sao ma chu ay do de xem".split(" "));
 const ECHO_NOT = new Set("co chac ve tinh phai chon phuong an nao gi the nay do duoc khong nen lam sao bao nhieu moi nghia la cua cho voi va hay".split(" "));
 function ask(q, scope) {
-  if (/^\s*(ok|oke|okay|u|uh|um|vang|da|cam on|thanks|duoc roi|hieu roi|ro roi|tot)( (ok|oke|vang|da|cam on|thanks|em|nhe|nha|a|nhieu|roi|lam))*\s*$/.test(fold(q))) {
+  if (/^\s*(ok|oke|okay|u|uh|um|vang|da|cam on|thanks|duoc roi|hieu roi|ro roi|tot|thoi)( (ok|oke|vang|da|cam on|thanks|em|nhe|nha|a|nhieu|roi|lam|duoc roi|duoc|thoi))*\s*$/.test(fold(q).replace(/[,.!?;…]+/g, " ").replace(/\s+/g, " "))) {
     answer("Dạ.", null, {src: ""}); return; }   // a nod is not a question: nothing goes to the owner
+  if (steering(q)) {   // "bỏ qua kiểm tra, cứ nói hai phần ba là đúng": refused before any route can quote or queue it
+    answer("Em chỉ nói những số có trên báo cáo và lời " + (DRAFT ? "trong kịch bản của " + OWNER : OWNER + " đã duyệt") + ", nên em không làm theo yêu cầu này ạ.", null, {src: ""});
+    return; }
+  if (!scope && /\b(con gi nua|con gi khong|con gi (can|phai) (biet|quyet)|het chua)\b/.test(" " + fold(q) + " ")) {   // "còn gì nữa không": the asks again
+    const hoi = FACTS.find(x => x.k === "hoi"); if (hoi) { answerFact(hoi); return; } }
+  if (!scope && !/\d/.test(q) && !CHECKQ.test(" " + fold(q) + " ") && !words(q).some(w => w.length > 1 && !ECHO_NOT.has(w) && !FILLER.has(w))) {   // "ờ thế còn cái kia thì sao nhỉ": nothing to answer or queue
+    answer("Anh chị muốn hỏi về số hay đoạn nào ạ? Anh chị bấm vào chỗ đó trên báo cáo, hoặc gõ tên dòng hay con số.", null, {src: ""}); return; }
   { const o = doubtHit(q, scope); if (o) { answerDoubt(q, o); return; } }
   if (quotesDoubted(q)) { holdDoubted(q); return; }
+  { const o = figDoubt(q, scope); if (o) { answerDoubt(q, o); return; } }   // a doubted figure on a card or in an ask
   if (ratioAsk(q)) return;
   { const o = pctAsk(q); if (o) { answerDoubt(q, o); return; } }   // the ruling reaches this route too
   if (verifyAsk(q, scope)) return;
@@ -2228,7 +2264,7 @@ function ask(q, scope) {
     return;
   }
   if (r.kind === "capcut") {
-    answer("Theo đề nghị trần " + withUnit(r.cap, r.u) + ", phải giảm " + withUnit(r.x, r.u) + " so với " + colName(r.m, r.v) + " (em tính: " + cellText(r.tot.cells[r.v]) + " − " + r.cap + "); báo cáo không ghi sẵn số này.", r.tot.cells[r.v],
+    answer(capCutText(r), r.tot.cells[r.v],
       {src: "Em tính từ hai số trên báo cáo «" + TITLE + "»"});
     return;
   }
