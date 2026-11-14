@@ -283,6 +283,49 @@ def test_after_the_talk_the_decisions_wait_on_screen_and_a_choice_goes_to_the_ow
     assert not errors
 
 
+def test_the_decision_record_never_misstates_the_board(page):
+    pg, errors = page
+    sr = "document.getElementById('clicky-host').shadowRoot"
+    # round-8 panel: "không đồng ý" is its own state, a changed mind leaves one line, a figure that differs from the ask
+    # is never recorded as agreeing to the ask
+    assert _r3(pg, "Bác việc hai").startswith("Em đã ghi «Không đồng ý» cho việc: «Giãn tuyển 30 vị trí")
+    assert _r3(pg, "Đồng ý việc hai").startswith("Em đã ghi «Đồng ý» cho việc: «Giãn tuyển 30 vị trí")
+    a = _r3(pg, "Tôi đồng ý nhưng giãn 50 vị trí")
+    assert a.startswith("Đề nghị là «Giãn tuyển 30 vị trí") and "anh chị nói 50" in a and "Ghi nguyên văn" in a
+    assert _r3(pg, "Đồng ý việc năm").startswith("Báo cáo có 2 việc;")          # out of range: nothing recorded, asked which
+    card = " ".join(pg.evaluate("window.__clickyHetBai()").split())
+    assert card.count("Không đồng ý") == 1 and "mỗi người Em đã ghi «Đồng ý». Đổi" in card, card
+    pg.evaluate(f"""() => {{ const r = {sr}.querySelector('[data-quyet="1"]');
+                            [...r.querySelectorAll('button')].find(b => b.textContent === 'Đổi').click();
+                            [...r.querySelectorAll('button')].find(b => b.textContent === 'Cần bàn thêm').click(); }}""")
+    pg.evaluate(f"{sr}.getElementById('send').click()")
+    href = pg.evaluate(f"{sr}.querySelector('#sent a.mail').getAttribute('href')")
+    from urllib.parse import unquote
+    body = unquote(href.split("&body=")[1])
+    assert body.count("Giãn tuyển 30 vị trí") == 1, body                       # one line per ask, the last choice
+    assert "2. «Giãn tuyển 30 vị trí bán hàng sang quý 3 và gắn với doanh thu trên mỗi người»: Cần bàn thêm (đã đổi từ Đồng ý)" in body, body
+    assert "1. «Giữ tỷ lệ chi phí nhân sự trên doanh thu thuần ở 2,40%, tức trần 177,5 tỷ»: chưa cho ý kiến" in body, body
+    assert not errors
+
+
+def test_short_follow_ups_and_figures_said_this_session_are_answered_with_their_working(page):
+    pg, errors = page
+    # round-8 panel: "đủ không?", "3,9 tỷ à?", "5,0 tỷ ở đâu ra?" were parked as "not in the report" a second after saying them
+    assert "3,9 tỷ" in _r3(pg, "Giãn 30 vị trí tiết kiệm được bao nhiêu?")
+    a = _r3(pg, "Đủ không?")
+    assert "3,9 tỷ" in a and "Phần còn thiếu khoảng 5,0 tỷ (em tính: 8,9 − 3,9)" in a, a
+    assert _r3(pg, "5,0 tỷ ở đâu ra?").startswith("Phần còn thiếu khoảng 5,0 tỷ (em tính: 8,9 − 3,9).")
+    assert "30 × 92,3 ÷ 712" in _r3(pg, "3,9 tỷ à?")
+    assert _r3(pg, "3,9 là số báo cáo hay em tính?").startswith("3,9 là số em tính, báo cáo chưa ghi số này.")
+    assert _r3(pg, "67% à?").startswith("Khối Bán hàng chiếm khoảng 67% phần tăng: 14,1 tỷ.")
+    assert _r3(pg, "12,6% à?").startswith("Tổng, % tăng: 12,6%.") and "khớp" in _r3(pg, "12,6% à?")   # a printed figure: checked
+    a = _r3(pg, "Có số nào sai không?")                                          # every open doubt, in one answer
+    assert a.startswith("Có 2 chỗ anh Tuấn đang kiểm lại: một câu trong báo cáo (đoạn đang làm mờ); số 6,7 (") and "≈ 6,85%" in a, a
+    queued = pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('tl').innerText")
+    assert "ở đâu ra" not in queued and "số báo cáo hay em tính" not in queued, queued   # "đủ không" parks only how to cover the rest
+    assert not errors
+
+
 def test_a_doubted_sentence_is_dimmed_never_framed_and_held_only_when_asked_about(page):
     # 2026-11-13 panel round 3: the talk framed the whole box, doubted sentence included; and "vì sao" on other rows
     # was held as "đang kiểm lại" though nobody had quoted it
@@ -1387,11 +1430,11 @@ def test_a_board_members_plain_questions_get_the_rows_facts_the_sentences_and_on
     assert _r3(pg, "Đồng ý").startswith("Anh chị đồng ý việc nào ạ?")
     assert _r3(pg, "Tôi đồng ý trần 177,5 tỷ").startswith(
         "Em đã ghi «Đồng ý» cho việc: «Giữ tỷ lệ chi phí nhân sự trên doanh thu thuần ở 2,40%, tức trần 177,5 tỷ».")
-    assert _r3(pg, "Không đồng ý việc hai").startswith("Em đã ghi «Cần bàn thêm» cho việc: «Giãn tuyển 30 vị trí")
+    assert _r3(pg, "Không đồng ý việc hai").startswith("Em đã ghi «Không đồng ý» cho việc: «Giãn tuyển 30 vị trí")
     assert not _r3(pg, "Đồng ý không?").startswith("Em đã ghi")
     card = " ".join(pg.evaluate("window.__clickyHetBai()").split())
-    assert "177,5 tỷ (cần giảm 8,9 tỷ) Em đã ghi «Đồng ý»." in card and "mỗi người Em đã ghi «Cần bàn thêm»." in card
-    assert card.index("Em đã ghi «Cần bàn thêm»") < card.index("Bấm «Gửi anh Tuấn»")
+    assert "177,5 tỷ (cần giảm 8,9 tỷ) Em đã ghi «Đồng ý»." in card and "mỗi người Em đã ghi «Không đồng ý»." in card
+    assert card.index("Em đã ghi «Không đồng ý»") < card.index("Bấm «Gửi anh Tuấn»")
     assert not errors
 
 

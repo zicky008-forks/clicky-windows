@@ -3280,7 +3280,8 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
             "cot": table_columns(places),
             "ve": drawn_locators(script, drawn),
             "facts": [dict(audio(f["noi"]), k=f["k"], y=f["y"], n=f.get("n", ""), x=f["x"], a=f["a"], chi=f["chi"],
-                           **({"tok": f["tok"], "vai": f["vai"]} if f.get("vai") == "uoc_tiet_kiem" else {})) for f in book],
+                           **({"tok": f["tok"]} if f["k"] == "t" else {}),
+                           **({"vai": f["vai"]} if f.get("vai") == "uoc_tiet_kiem" else {})) for f in book],
             "quyet": story.decisions(script),
             "cho_kiem": doubted_open(script) if script.get("kiem_tra") else draft.get("cho_kiem") or [],   # never quoted while in doubt
             "nghi": doubts(script),

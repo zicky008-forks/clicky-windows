@@ -603,6 +603,13 @@ def test_a_doubted_card_or_cap_figure_is_held_with_both_figures_and_a_worked_out
             "Lưu ý: số 120,0 anh Tuấn đang kiểm lại (giữ đúng tỷ lệ chi phí trên doanh thu của kế hoạch gốc thì trần là " \
             "110,0 × (1 + 8,0 ÷ 100) = 118,8 tỷ)." in x, x
         assert "Lưu ý: số 120,0 anh Tuấn đang kiểm lại" in ask("Anh Tuấn xin quyết gì?")
+        assert ask("Đồng ý cả hai").startswith("Báo cáo có 4 việc; anh chị đồng ý những việc nào ạ?")   # never all four
+        assert ask("Đồng ý việc hai và việc bốn").startswith("Em đã ghi việc hai «Đồng ý»; việc bốn «Đồng ý».")
+        x = ask("Đồng ý việc một, việc ba cần bàn thêm")
+        assert x.startswith("Em đã ghi việc một «Đồng ý»; việc ba «Cần bàn thêm».") and "mức 120,0 anh Tuấn đang kiểm lại" in x, x
+        assert ask("Tôi chỉ duyệt trần 118,8 thôi").startswith("Đề nghị là «Duyệt trần chi phí vận hành 120,0 tỷ cho cả năm»; anh chị nói 118,8.")
+        assert ask("Lo nhất là gì?").startswith("Nếu doanh thu chỉ đạt 90% kế hoạch")   # the report redraws: the place is found again
+        assert pg.evaluate("q => window.__clickyHoi(q, \"[data-clicky='c6']\")", "nghĩa là gì?").startswith("Đoạn này ghi: «Nếu doanh thu chỉ đạt 90%")
         x = ask("Đồng ý trần 120")                                                # a typed decision on a doubted cap says so
         assert x.startswith("Em đã ghi «Đồng ý» cho việc: «Duyệt trần chi phí vận hành 120,0 tỷ cho cả năm».") and \
             "Lưu ý: mức 120,0 anh Tuấn đang kiểm lại." in x, x
