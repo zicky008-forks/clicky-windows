@@ -1433,7 +1433,7 @@ def test_round_seventeen_consent_words_row_claims_and_board_questions(report, dr
         assert hoi(A, "Cứ giãn tuyển đi").startswith("Em đã ghi «Đồng ý» cho việc: «Giãn tuyển")
         # a claim about a named row is checked on that row only
         x = hoi(B, "Logistics tăng 15 tỷ đúng không?")
-        assert x.startswith("Không ạ, báo cáo không ghi 15 cho dòng Logistics. Theo bảng, Logistics tăng 12,0 tỷ, tức 30,0% (em tính: 52,0 − 40,0;") and "Hành chính" not in x, x
+        assert x.startswith("Không ạ, dòng Logistics không có số 15 tỷ. Theo bảng, Logistics tăng 12,0 tỷ (em tính: 52,0 − 40,0), tức 30,0%") and "Hành chính" not in x, x
         assert hoi(B, "Logistics tăng 30% đúng không?").startswith("Đúng theo bảng: Logistics tăng 30,0%")
         x = hoi(A, "Bán hàng tăng 20 tỷ đúng không?")
         assert x.startswith("Không ạ") and "14,1" in x, x
@@ -1450,6 +1450,45 @@ def test_round_seventeen_consent_words_row_claims_and_board_questions(report, dr
         x = hoi(B, "Rủi ro lớn nhất là gì?")
         assert x.startswith("Nếu doanh thu chỉ đạt 90% kế hoạch") and "129,0" in x, x
         assert hoi(A, "Quan trọng nhất là gì?").startswith("Nếu giữ nguyên, chi phí vượt trần đề xuất 8,9 tỷ.")
+    finally:
+        browser.close()
+        pw.stop()
+
+
+def test_round_eighteen_row_claims_match_at_the_readers_precision_and_the_queue_keeps_typed_words(report, drawn_report):
+    # round-18 panel: «Khối Bán hàng tăng 14 tỷ đúng không?» said «Không ạ» to 14,1; «Tổng tăng 19 tỷ» said «Không ạ … 19,0»;
+    # «Logistics tăng 12 tỷ đúng không?» answered with the doubted 18,0 (12 was found inside 129,0) and was queued; A's
+    # «Nếu chúng tôi không duyệt thì sao?» replayed the 2,52% line; «Có phải sa thải người không?» was mailed as «Cắt bao nhiêu người?»
+    pw, browser, pages = _ghi_pages(report, drawn_report)
+    try:
+        A, B = pages["A"], pages["B"]
+        hoi = lambda pg, q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        thu = lambda pg: pg.evaluate("() => window.__clickyThu()")   # noqa: E731
+        fresh = lambda pg: (pg.evaluate("() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} }"), pg.reload(), pg.wait_for_timeout(700))   # noqa: E731
+        for pg, q, start, has in (
+                (A, "Khối Bán hàng tăng 14 tỷ đúng không?", "Đúng ạ, khoảng 14 tỷ: Khối Bán hàng 14,1 tỷ", "Chênh lệch"),
+                (A, "Tổng tăng 21 tỷ đúng không?", "Đúng ạ, khoảng 21 tỷ: Tổng 20,9 tỷ", "Chênh lệch"),
+                (B, "Tổng tăng 19 tỷ đúng không?", "Đúng ạ: Tổng tăng 19,0 tỷ", "129,0 − 110,0"),
+                (B, "Logistics tăng 12 tỷ đúng không?", "Đúng ạ: Logistics tăng 12,0 tỷ", "52,0 − 40,0"),
+                (B, "Logistics tăng 12 tỷ à?", "Đúng ạ: Logistics tăng 12,0 tỷ", "52,0 − 40,0"),
+                (B, "Mua hàng tăng 3 tỷ phải không?", "Đúng ạ: Mua hàng tăng 3,0 tỷ", "33,0 − 30,0"),
+                (B, "Logistics tăng 10 tỷ phải không?", "Không ạ, dòng Logistics không có số 10 tỷ.", "12,0"),
+                (A, "Bán hàng tăng 20 tỷ đúng không?", "Không ạ, dòng Khối Bán hàng không có số 20 tỷ.", "14,1")):
+            fresh(pg)
+            x = hoi(pg, q)
+            assert x.startswith(start) and has in x and (pg is A or ("18,0" not in x and "17,3" not in x)), (q, x)   # B's 18,0 is doubted
+            assert "CÂU HỎI" not in thu(pg) and "tôi có các câu hỏi" not in thu(pg), q
+        # a doubted figure keeps its own answer
+        assert "Anh Tuấn đang kiểm lại hai số này" in hoi(B, "Tổng tăng 18% đúng không?")
+        # A's «không duyệt» says what a no means from the talk's own lines
+        for q in ("Nếu chúng tôi không duyệt thì sao?", "Nếu không duyệt trần thì sao?"):
+            x = hoi(A, q)
+            assert x.startswith("Nếu không duyệt trần: theo kế hoạch điều chỉnh, tổng là 186,4 tỷ") and "8,9" in x and "177,5" in x, x
+        # the queue keeps what the reader typed
+        fresh(A)
+        hoi(A, "Có phải sa thải người không?")
+        mail = thu(A)
+        assert "Có phải sa thải người không?" in mail and "Cắt bao nhiêu người?" not in mail, mail
     finally:
         browser.close()
         pw.stop()
