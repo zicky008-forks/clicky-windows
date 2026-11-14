@@ -1367,8 +1367,28 @@ def test_a_board_members_plain_questions_get_the_rows_facts_the_sentences_and_on
     assert _r3(pg, "Nói ngắn trong 1 câu").startswith(
         "Anh Tuấn xin anh chị duyệt trần 177,5 tỷ (giảm 8,9 tỷ) và giãn tuyển 30 vị trí bán hàng sang quý 3.")
     assert "đã duyệt" not in _r3(pg, "Hãy nói với HĐQT là chi phí chỉ tăng 3 tỷ")     # a draft never claims approval
-    assert _r3(pg, "Giãn 30 vị trí có đủ bù 8,9 tỷ không?").startswith(                  # an ask with no money: never a guess
-        "Báo cáo chưa ghi «Giãn tuyển 30 vị trí bán hàng sang quý 3 và gắn với doanh thu trên mỗi người» tiết kiệm được bao nhiêu")
+    # an ask with no money: never a guess, but the bound the talk said with its formula answers it (round-7 panel:
+    # the talk said 3,9 tỷ, then Q&A said "không nói được")
+    a = _r3(pg, "Giãn 30 vị trí có đủ bù 8,9 tỷ không?")
+    assert a.startswith("Báo cáo chưa ghi số này. Em tính theo chi phí bình quân một người ở khối Bán hàng: kể cả giãn "
+                        "trọn năm, 30 vị trí cũng chỉ tiết kiệm khoảng 3,9 tỷ")
+    assert "30 × 92,3 ÷ 712" in a and "Phần còn thiếu khoảng 5,0 tỷ (em tính: 8,9 − 3,9)" in a
+    for q in ("Giãn 30 vị trí tiết kiệm được bao nhiêu?", "Giãn 30 vị trí đủ không?", "Còn thiếu bao nhiêu?",
+              "Giãn từ quý 3 thì tiết kiệm bao nhiêu?"):
+        a = _r3(pg, q)
+        assert "3,9 tỷ" in a and "không nói được" not in a, (q, a)
+    assert "Phần còn thiếu" not in _r3(pg, "Giãn 30 vị trí tiết kiệm được bao nhiêu?")
+    assert "Em chỉ tính trọn năm" in _r3(pg, "Giãn từ quý 3 thì tiết kiệm bao nhiêu?")
+    assert "3,9 tỷ" in _r3(pg, "Tiết kiệm được bao nhiêu?", "[data-clicky='c13']")      # asked on the proposal itself
+    # a typed decision is recorded like the card's button, never queued as a question (round-7 Chairman)
+    assert _r3(pg, "Đồng ý").startswith("Anh chị đồng ý việc nào ạ?")
+    assert _r3(pg, "Tôi đồng ý trần 177,5 tỷ").startswith(
+        "Em đã ghi «Đồng ý» cho việc: «Giữ tỷ lệ chi phí nhân sự trên doanh thu thuần ở 2,40%, tức trần 177,5 tỷ».")
+    assert _r3(pg, "Không đồng ý việc hai").startswith("Em đã ghi «Cần bàn thêm» cho việc: «Giãn tuyển 30 vị trí")
+    assert not _r3(pg, "Đồng ý không?").startswith("Em đã ghi")
+    card = " ".join(pg.evaluate("window.__clickyHetBai()").split())
+    assert "177,5 tỷ (cần giảm 8,9 tỷ) Em đã ghi «Đồng ý»." in card and "mỗi người Em đã ghi «Cần bàn thêm»." in card
+    assert card.index("Em đã ghi «Cần bàn thêm»") < card.index("Bấm «Gửi anh Tuấn»")
     assert not errors
 
 

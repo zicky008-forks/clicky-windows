@@ -1072,7 +1072,7 @@ def facts(script: dict, places: dict, en: bool, owner: str) -> list:
             out.append({"k": "t", "y": [tok_pattern(tok) + r".*" + HOW, HOW + r".*" + tok_pattern(tok)], "x": [],
                         "a": f"{said} Em tính từ các số trên báo cáo: {formula_text(tok, expr, en)}.",
                         "noi": f"{said} Công thức em hiện trên màn hình ạ.", "chi": c.get("chi") or "", "tu": [i],
-                        "tok": tok, "cong_thuc": expr})
+                        "tok": tok, "cong_thuc": expr, "vai": c.get("vai") or ""})
     has = {c.get("vai") for _i, c in lines}
     for k, beats in BEATS.items():
         used = [(i, c) for i, c in lines if c.get("vai") in beats]

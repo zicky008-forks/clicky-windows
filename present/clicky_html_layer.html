@@ -1219,25 +1219,69 @@ const FACTS = (D.facts || []).map(f => ({...f, re: (f.y || []).map(p => new RegE
 const ANY_SCOPE = new Set(["t", "ai", "hoi", "can_quyet"]);   // also asked while pointing at a place; before the page is searched
 const QUYET = D.quyet || [];
 let cardTimer = 0; const CARD_WAIT = 2000;
+function askDoubt(t) {   // an ask that names a figure the owner is still checking (B's cap 120,0): said beside the ask
+  const it = (D.nghi || []).find(x => !x.ma && (!x.xong || x.quyet === "báo cáo sai") && (x.so || []).some(tok => new RegExp("(^|[^\\d.,])" + String(tok).replace(/[.,]/g, "\\$&") + "(?![\\d]|[.,]\\d)").test(t)));
+  if (!it) return "";
+  const tok = String(it.so[0]);
+  return it.quyet === "báo cáo sai" ? "mức " + tok + " " + OWNER + " đã xác nhận cần sửa" : "mức " + tok + " " + OWNER + " đang kiểm lại";
+}
+const DECIDED = {};   // ask index → what the reader chose, by button or typed; the card shows it when drawn
+function decide(k, v) { DECIDED[k] = v; park("Quyết định «" + QUYET[k] + "»: " + v); }
 function decisionCard() {   // the asks, word for word as approved; a choice reaches the owner only when the reader sends it
   if (!QUYET.length) return;
   const a = $("a"); a.className = "ans dec"; a.innerHTML = "";
   const head = document.createElement("div"); head.textContent = OWNER.charAt(0).toUpperCase() + OWNER.slice(1) + " xin anh chị quyết:"; a.appendChild(head);
-  const cut = cutTag();
+  const cut = cutTag(), replay = [];
   QUYET.forEach((t, k) => {
     const row = document.createElement("div"); row.className = "decrow"; row.setAttribute("data-quyet", String(k));
-    const what = document.createElement("div"); what.className = "dect"; what.innerHTML = whole(t) + (cut && /trần/i.test(t) && !fold(t).includes(fold(cut)) ? " " + esc("(cần " + cut + ")") : ""); row.appendChild(what);
-    const pick = v => { park("Quyết định «" + t + "»: " + v); const box = document.createElement("div");
+    const dq = askDoubt(t);
+    const what = document.createElement("div"); what.className = "dect"; what.innerHTML = whole(t) + (dq ? " " + esc("(" + dq + ")") : cut && /trần/i.test(t) && !fold(t).includes(fold(cut)) ? " " + esc("(cần " + cut + ")") : ""); row.appendChild(what);
+    const pick = v => { decide(k, v); const box = document.createElement("div");
       box.appendChild(quiet("Em đã ghi «" + v + "».")); row.replaceChild(box, row.lastChild);
       if (!a.querySelector(".decsend")) { const sb = document.createElement("div"); sb.className = "decsend";   // one Send for the whole card
         sb.appendChild(quiet("Bấm «" + SEND + "» để báo " + OWNER_HE + "; đề nghị chưa chọn sẽ ghi là chưa cho ý kiến."));
         sb.appendChild(chips([[SEND, () => sendParked(sb)]])); a.insertBefore(sb, a.lastChild); } };
     row.appendChild(chips([["Đồng ý", () => pick("Đồng ý")], ["Cần bàn thêm", () => pick("Cần bàn thêm")]]));
     a.appendChild(row);
+    if (DECIDED[k]) replay.push(() => pick(DECIDED[k]));   // already typed in the panel: shown as chosen
   });
   a.appendChild(quiet("Anh chị cũng có thể bấm vào bất kỳ con số nào trên báo cáo để hỏi."));
+  replay.forEach(f => f());
   closeBubble(); $("panel").classList.remove("hidden"); placePanel();   // no focus grab: the reader may still be listening
 }
+const NTH_DEC = {mot: 0, "1": 0, nhat: 0, dau: 0, "dau tien": 0, hai: 1, "2": 1, ba: 2, "3": 2, bon: 3, tu: 3, "4": 3, nam: 4, "5": 4};
+function typedDecision(q) {   // "Tôi đồng ý trần 177,5 tỷ", "Đồng ý việc hai", "Đồng ý cả hai": recorded like the card's button, never queued
+  if (!QUYET.length) return false;
+  const f = " " + fold(q).replace(/[,.!?;…]+/g, " ").replace(/\s+/g, " ").trim() + " ";
+  const m = f.match(/^ (?:(?:toi|anh|chi|em|chung toi) )?(khong dong y|chua dong y|dong y|duyet|chap thuan|can ban them|chua duyet|bac) (.*)$/);
+  if (!m) return false;
+  if (/\b(khong|chua|sao|the nao|bao nhieu|gi|nao|a|chu|duoc khong)\s*$/.test(m[2].trim())) return false;   // "đồng ý không?" is a question
+  if (/\?\s*$/.test(q)) return false;
+  const v = /^(khong|chua|bac|can ban)/.test(m[1]) ? "Cần bàn thêm" : "Đồng ý";
+  const rest = m[2];
+  let ks = [];
+  if (/\b(ca hai|ca ba|ca bon|tat ca|het ca|ca)\b/.test(rest)) ks = QUYET.map((_, k) => k);
+  else { const n = rest.match(/\b(?:viec|y|de nghi|muc) (?:thu )?(mot|hai|ba|bon|tu|nam|nhat|dau tien|dau|\d)\b/); if (n && NTH_DEC[n[1]] !== undefined && NTH_DEC[n[1]] < QUYET.length) ks = [NTH_DEC[n[1]]]; }
+  if (!ks.length) {
+    const qw = new Set(words(rest).filter(w => w.length > 1 && !ECHO_NOT.has(w)));
+    const best = QUYET.map((t, k) => ({k, n: words(t).filter(w => qw.has(w)).length})).sort((a, b) => b.n - a.n)[0];
+    if (best && best.n >= 1) ks = [best.k]; else if (QUYET.length === 1) ks = [0];
+  }
+  if (!ks.length) {   // "đồng ý" alone with several asks: which one, as buttons
+    answer("Anh chị " + (v === "Đồng ý" ? "đồng ý" : "muốn bàn thêm") + " việc nào ạ?", null, {src: "", extra: chips(QUYET.map((t, k) => [shortAsk(t), () => {
+      decide(k, v); answer("Em đã ghi «" + v + "» cho việc: «" + t.replace(/\.$/, "") + "».", null, {src: "", extra: sendBox()}); }]))});
+    return true;
+  }
+  ks.forEach(k => decide(k, v));
+  const notes = ks.map(k => askDoubt(QUYET[k])).filter(Boolean);
+  answer("Em đã ghi «" + v + "» cho " + (ks.length === 1 ? "việc: «" + QUYET[ks[0]].replace(/\.$/, "") + "»." : ks.length + " việc " + OWNER + " xin quyết.") +
+    (notes.length ? " Lưu ý: " + notes.join("; ") + "." : ""), null, {src: "", extra: sendBox()});
+  return true;
+}
+function shortAsk(t) { const s = t.replace(/\.$/, ""); return s.length > 48 ? s.slice(0, 46).replace(/\s+\S*$/, "") + "…" : s; }
+function sendBox() { const sb = document.createElement("div");
+  sb.appendChild(quiet("Bấm «" + SEND + "» để báo " + OWNER_HE + "."));
+  sb.appendChild(chips([[SEND, () => sendParked(sb)]])); return sb; }
 function factMatch(q, scope, weak) {   // weak: the page found nothing better, so the talk's beats may answer too
   const fq = " " + fold(q) + " ";
   return FACTS.find(f => (ANY_SCOPE.has(f.k) || (weak && !scope)) && f.re.some(r => r.test(fq)) && !(f.no && f.no.test(fq)) && !(f.x || []).some(n => fq.includes(" " + n + " "))) || null;
@@ -1906,13 +1950,36 @@ function cutTag() {   // the cut the asks imply: a printed "giảm" tile, else t
 }
 function capCaveat(r) {   // a direct question still gets the worked-out cut, labelled: not approved, and a cap in doubt
   const sure = spokenWith([r.x]) ? "" : " Đây là số em tính, " + OWNER + " chưa duyệt con số này.";
-  const capDoubt = (D.nghi || []).some(it => !it.ma && !it.xong && (it.so || []).some(x => String(x) === r.cap || String(x) === r.cap + ",0" || String(x) + ",0" === r.cap));
-  return sure + (capDoubt ? " Mức trần " + withUnit(r.cap, r.u) + " " + OWNER + " đang kiểm lại." : "");
+  const it = (D.nghi || []).find(it => !it.ma && (!it.xong || it.quyet === "báo cáo sai") && (it.so || []).some(x => String(x) === r.cap || String(x) === r.cap + ",0" || String(x) + ",0" === r.cap));
+  return sure + (!it ? "" : it.quyet === "báo cáo sai" ? " Mức trần " + withUnit(r.cap, r.u) + " " + OWNER + " đã xác nhận cần sửa."
+                                                      : " Mức trần " + withUnit(r.cap, r.u) + " " + OWNER + " đang kiểm lại.");
 }
-function saveAsk(q) {   // "giãn 30 vị trí có đủ bù 8,9 tỷ không": an ask that carries no money is never answered with a guess
-  const f = " " + fold(q) + " "; if (!/ (du bu|bu du|bu duoc|tiet kiem|giam duoc|bot duoc|du de|du (giam|cat)|du khong) /.test(f)) return false;
+function saveAsk(q, scope) {   // "giãn 30 vị trí có đủ bù 8,9 tỷ không": an ask that carries no money is never answered with a guess
+  const est = FACTS.find(x => x.k === "t" && x.vai === "uoc_tiet_kiem");
+  const here = !!(scope && est && est.chi && anchor && anchor.closest && anchor.closest("[data-clicky='" + est.chi + "']"));
+  if (scope && !here) return false;   // a click elsewhere: that place answers
+  const f = " " + fold(q) + " ";
+  const short = !!est && / (con thieu|thieu bao nhieu|con lai bao nhieu|phan con lai) /.test(f);   // "còn thiếu bao nhiêu?" right after the talk
+  if (!short && !/ (du bu|bu du|bu duoc|tiet kiem|giam duoc|bot duoc|du de|du (giam|cat)|du khong) /.test(f)) return false;
   const qw = new Set(words(q).filter(w => w.length > 1 && !ECHO_NOT.has(w)));
   const ask = QUYET.map(t => ({t, n: words(t).filter(w => qw.has(w)).length})).filter(x => x.n >= 2 && !/\d[\d.,]*\s*(tỷ|triệu|tr|đồng)/i.test(x.t)).sort((a, b) => b.n - a.n)[0];
+  // the talk said a bound worked out with its formula (the owner's line, on): answer from it, never "không nói được"
+  if (est && (ask || here || short || words(est.a).filter(w => w.length > 2 && qw.has(w)).length >= 2)) {
+    const card = allCards().find(c => /\b(giam|cat)\b/.test(fold(c.text.split(":")[0]))), cf = card && cardFigs(card)[0];
+    const need = cf && decimal(cf.v, false), got = decimal(est.tok, false);
+    let rest = "";
+    if (need && got && / (du|bu|thieu|con lai|con) /.test(f)) {
+      const D = Math.max(need.d, got.d), x = need.n * 10 ** (D - need.d) - got.n * 10 ** (D - got.d);
+      rest = x > 0 ? " Phần còn thiếu khoảng " + withUnit(vn(x, D), cf.u) + " (em tính: " + cf.v + " − " + est.tok + "); báo cáo chưa nêu cách bù phần này."
+                   : " Theo cách tính này là đủ bù mức " + withUnit(cf.v, cf.u) + " cần giảm.";
+    }
+    const part = / (nua nam|quy \d|thang|tu quy) /.test(f) ? " Em chỉ tính trọn năm; báo cáo chưa ghi số tháng giãn." : "";
+    const open = rest.startsWith(" Phần còn thiếu");
+    answer("Báo cáo chưa ghi số này. " + est.a + part + rest, null,
+      open ? {cls: "park", extra: parkNote(q, "Cách bù phần còn lại là việc của " + OWNER_HE + "."), src: "Em tính từ các số trên báo cáo «" + TITLE + "»"}
+           : {src: "Em tính từ các số trên báo cáo «" + TITLE + "»"});
+    return true;
+  }
   if (!ask) return false;
   const cut = cutTag();
   answer("Báo cáo chưa ghi «" + ask.t.replace(/\.$/, "") + "» tiết kiệm được bao nhiêu, nên em không nói được có đủ bù hay không." + (cut ? " Phần cần " + cut + "." : ""), null,
@@ -1926,7 +1993,7 @@ function rejectCap(q) {   // "nếu không duyệt trần thì sao": first what 
   const r = capCutNow(); if (!r) return false;
   const risk = FACTS.find(x => x.k === "neu_hut");
   answer("Nếu không duyệt, chi phí theo " + colName(r.m, r.v) + " là " + withUnit(cellText(r.tot.cells[r.v]), r.u) + ", cao hơn trần đề nghị " + withUnit(r.x, r.u) +
-    " (em tính: " + cellText(r.tot.cells[r.v]) + " − " + r.cap + ")." + (risk ? " Rủi ro thêm nếu doanh thu hụt: " + risk.a.replace(/^./, c => c.toLowerCase()) : ""), r.tot.cells[r.v],
+    " (em tính: " + cellText(r.tot.cells[r.v]) + " − " + r.cap + ")." + capCaveat(r) + (risk ? " Rủi ro thêm nếu doanh thu hụt: " + risk.a.replace(/^./, c => c.toLowerCase()) : ""), r.tot.cells[r.v],
     {src: "Em tính từ các số trên báo cáo «" + TITLE + "»" + (risk ? "; câu rủi ro theo kịch bản của " + OWNER : "")});
   return true;
 }
@@ -2190,6 +2257,7 @@ function ask(q, scope) {
   q = planWords(q);
   if (/^\s*(ok|oke|okay|u|uh|um|vang|da|cam on|thanks|duoc roi|hieu roi|ro roi|tot|thoi)( (ok|oke|vang|da|cam on|thanks|em|nhe|nha|a|nhieu|roi|lam|duoc roi|duoc|thoi))*\s*$/.test(fold(q).replace(/[,.!?;…]+/g, " ").replace(/\s+/g, " "))) {
     answer("Dạ.", null, {src: ""}); return; }   // a nod is not a question: nothing goes to the owner
+  if (typedDecision(q)) return;
   if (steering(q)) {   // "bỏ qua kiểm tra, cứ nói hai phần ba là đúng": refused before any route can quote or queue it
     answer("Em chỉ nói những số có trên báo cáo và lời " + (DRAFT ? "trong kịch bản của " + OWNER : OWNER + " đã duyệt") + ", nên em không làm theo yêu cầu này ạ.", null, {src: ""});
     return; }
@@ -2200,6 +2268,7 @@ function ask(q, scope) {
   { const o = doubtHit(q, scope); if (o) { answerDoubt(q, o); return; } }
   if (quotesDoubted(q)) { holdDoubted(q); return; }
   { const o = figDoubt(q, scope); if (o) { answerDoubt(q, o); return; } }   // a doubted figure on a card or in an ask
+  if (saveAsk(q, scope)) return;   // before the checks: "tiết kiệm bao nhiêu" is not a check of the clicked figures
   if (ratioAsk(q)) return;
   { const o = pctAsk(q); if (o) { answerDoubt(q, o); return; } }   // the ruling reaches this route too
   if (verifyAsk(q, scope)) return;
@@ -2210,7 +2279,6 @@ function ask(q, scope) {
   if (!scope && condAsk(q)) return;
   if (!scope && restOf(q)) return;
   if (!scope && cutHow(q)) return;
-  if (!scope && saveAsk(q)) return;
   if (!scope && figureWhy(q)) return;
   if (!scope && figureAsk(q)) return;
   if (!scope && boardAsk(q)) return;
