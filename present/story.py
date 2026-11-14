@@ -374,8 +374,10 @@ RATIO_SAID = {"DTT": "doanh thu thuần", "DT": "doanh thu", "LNG": "lợi nhu�
 def plain(text: str) -> str:
     """A ratio's short form in words on the caption, as the voice already reads it: "nhân sự/DTT" is
     "nhân sự trên doanh thu thuần"."""
-    return re.sub(r"(?<=\w)\s*/\s*(" + "|".join(sorted(RATIO_SAID, key=len, reverse=True)) + r")\b",
+    text = re.sub(r"(?<=\w)\s*/\s*(" + "|".join(sorted(RATIO_SAID, key=len, reverse=True)) + r")\b",
                   lambda m: " trên " + RATIO_SAID[m.group(1)], text)
+    # one plain name per plan in every spoken line, the owner's quoted asks too ("bằng AOP gốc" is "bằng kế hoạch gốc")
+    return re.sub(r"\b(AOPR|AOP gốc)\b", lambda m: plan_said(m.group(1)), text)
 
 
 def _cap(text: str) -> str:
@@ -577,7 +579,7 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                 f"{tdelta[0]} {unit}").replace("  ", " ")
         # the note's own cost growth is said next: never a second rate for the same change
         size += (f", tức khoảng {pct}%." if pct_expr else f", tức {pct}%.") if pct and con is None and not con_doubt else "."
-        lines.append(("Mâu thuẫn", Line(size.replace(" ,", ","), t.total.id, vai="quy_mo",
+        lines.append(("Vì sao cần quyết", Line(size.replace(" ,", ","), t.total.id, vai="quy_mo",
                                         so_tinh=[x for x in (f"{tdelta[0]} = {tdelta[2]}" if tdelta[2] else "",
                                                              f"{pct} = {pct_expr}" if pct_expr and pct else "") if x])))
     if con is not None:
@@ -590,24 +592,24 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             got = robust_token(f"({a_tok} - {p_tok}) / {p_tok} × 100", en)
             table_says = got and C.value(got[0], en) > C.value(rev.tok, en)
         if faster:                                 # the question on a line of its own, a breath, then the answer
-            lines.append(("Mâu thuẫn", Line("Vì sao cần quyết?", t.total.id if con_doubt and table_says else cid(it),
+            lines.append(("Vì sao cần quyết", Line("Vì sao cần quyết?", t.total.id if con_doubt and table_says else cid(it),
                                             dung=0.8, vai="cau_hoi")))
         if con_doubt and faster and table_says:
             # the printed rate disagrees with the table: say only what holds under both, the owner picks the rate
             # revenue's half of the sentence is not in doubt: keep its figure, frame the table's total
-            lines.append(("Mâu thuẫn", Line(f"Vì doanh thu chỉ tăng {rev.tok}%, chậm hơn chi phí.",
+            lines.append(("Vì sao cần quyết", Line(f"Vì doanh thu chỉ tăng {rev.tok}%, chậm hơn chi phí.",
                                             t.total.id, vai="mau_thuan", xac_nhan=[rev.tok])))
-            lines.append(("Mâu thuẫn", Line(printed, cid(it), bat=False, vai="mau_thuan")))
+            lines.append(("Vì sao cần quyết", Line(printed, cid(it), bat=False, vai="mau_thuan")))
             con_doubt["cau"] = [lines[-1][1].noi]
         else:
-            lines.append(("Mâu thuẫn", Line(printed, cid(it), vai="mau_thuan")))
+            lines.append(("Vì sao cần quyết", Line(printed, cid(it), vai="mau_thuan")))
         if faster:
             expr = f"{cost.tok} / {rev.tok}"
             ratio = evaluate(expr, en)
             if ratio >= Decimal("1.3"):
                 tok = say(ratio, 1, en)
                 tail = ", gần gấp đôi" if Decimal("1.85") <= ratio < Decimal("1.95") else ""
-                lines.append(("Mâu thuẫn", Line(f"Tức là chi phí tăng nhanh gấp khoảng {tok} lần doanh thu{tail}.", cid(it),
+                lines.append(("Vì sao cần quyết", Line(f"Tức là chi phí tăng nhanh gấp khoảng {tok} lần doanh thu{tail}.", cid(it),
                                                 so_tinh=[f"{tok} = {expr}"], vai="mau_thuan",
                                                 bat=lines[-1][1].bat)))
                 if not lines[-1][1].bat and con_doubt:
@@ -623,7 +625,7 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         top, (top_tok, top_val, top_f) = same[0]
         share = top_val / tdelta[1]
         noun = t.what or "chỗ"
-        lines.append(("Động lực chính", Line(f"Vậy phần {verb} thêm nằm ở đâu?", t.total.id, dung=1.5, vai="cau_hoi")))
+        lines.append(("Phần tăng nằm ở đâu", Line(f"Vậy phần {verb} thêm nằm ở đâu?", t.total.id, dung=1.5, vai="cau_hoi")))
         sw = share_words(abs(share))
         doubted_txt = " ".join(jfold(fl.get("sai", "")) for fl in flags)
         if sw and jfold(sw.split(" ", 1)[-1]) in doubted_txt:   # never echo a doubted sentence's words: the figure instead
@@ -638,7 +640,7 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         st = [f"{top_tok} = {top_f}"] if top_f else []
         if sw and sw.endswith("%"):                # the share said as a figure: its own formula, checked like any other
             st.append(f"{sw.split()[1].rstrip('%')} = {top_tok} / {tdelta[0]} × 100")
-        lines.append(("Động lực chính", Line(text, top.id, so_tinh=st, vai="dong_luc")))
+        lines.append(("Phần tăng nằm ở đâu", Line(text, top.id, so_tinh=st, vai="dong_luc")))
         tp, ta = _num(top, t.plan, en), _num(top, t.actual, en)
         if tp and ta and abs(share) >= Decimal("0.4") and len(same) + len([m for m in moves if m[1]]) > 2:
             num = f"({tdelta[0]} - {top_tok})" if not (tdelta[2] or top_f) else \
@@ -664,12 +666,12 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                     how = "chỉ tăng" if rest_v < whole else "tăng"
                     if rev_v is not None:
                         tail = ", không nhanh hơn doanh thu"
-                lines.append(("Động lực chính", Line(f"Bỏ {_short(top.label)} ra, {others} {how} khoảng {rest_tok}%{tail}.",
+                lines.append(("Phần tăng nằm ở đâu", Line(f"Bỏ {_short(top.label)} ra, {others} {how} khoảng {rest_tok}%{tail}.",
                                                      top.id, so_tinh=[f"{rest_tok} = {expr}"], vai="phan_con_lai",
                                                      xac_nhan=[con[2].tok] if con is not None and con[2].tok in tail else [])))
     bridge = headcount_bridge(places, t, en)
     if bridge is not None:                         # proposed: it may contradict the report's own words
-        lines.append(("Động lực chính", Line(bridge[0], bridge[1], so_tinh=[bridge[2]], bat=False, vai="cau_noi")))
+        lines.append(("Phần tăng nằm ở đâu", Line(bridge[0], bridge[1], so_tinh=[bridge[2]], bat=False, vai="cau_noi")))
 
     # B6: what happens if nothing changes, the measure named
     rc = ratio_card(places, en)

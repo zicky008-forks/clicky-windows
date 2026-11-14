@@ -1484,6 +1484,8 @@ function resolve(q, scope) {
     const term = q.replace(/\s*(là gì|la gi|nghĩa là gì|nghia la gi|là viết tắt của gì|la viet tat cua gi|viết tắt của gì|là viết tắt|la viet tat)\s*[?.!]*\s*$/i, "").replace(/^\s*(chữ|chu|từ|tu)\s+/i, "").trim();
     const key = Object.keys(D.aliases || {}).find(k => fold(k) === fold(term));
     if (key) return {kind: "define", term: key, says: D.aliases[key], Q};
+    const col = Object.keys(D.ten_ke_hoach || {}).find(k => (D.ten_ke_hoach[k] || []).some(v => fold(v) === fold(k === term ? "" : term)) && pageText().includes(k));
+    if (col) return {kind: "colname", term, col, Q};   // "kế hoạch điều chỉnh là gì": the column the talk calls that
     const ab = (term.match(/\b[A-Z][A-Z0-9&+]{1,5}\b/g) || []).find(x => !Object.keys(D.aliases || {}).some(k => k.toUpperCase() === x));
     if (ab && pageText().includes(ab)) return {kind: "noalias", term: ab, Q};   // printed, never explained: said, never guessed
   }
@@ -1973,6 +1975,48 @@ function askTags(most) {   // each ask as a short tag, its money as printed: "du
     const name = tables().some(m => m.rows.some(r => fold(r.label).split(" ")[0] === fold(w[0])));   // "Logistics" keeps its capital
     return (w.length > 12 ? w.slice(0, 12) : w).join(" ").replace(/^./, c => name ? c : c.toLowerCase()); });
 }
+function planWords(q) {   // "kế hoạch điều chỉnh" as the talk says it: the column it names ("AOPR"), so the right column answers
+  let out = q;
+  for (const [k, v] of Object.entries(D.ten_ke_hoach || {})) for (const w of v || [])
+    if (pageText().includes(k)) out = out.replace(new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), k);
+  return out;
+}
+const NTH_ASK = {mot: 1, nhat: 1, "1": 1, hai: 2, "2": 2, ba: 3, "3": 3, bon: 4, tu: 4, "4": 4};
+function boardAsk(q) {   // plain Board questions about the asks: answered from the owner's own words, never a fragment of the question
+  const f = " " + fold(q) + " ", Own = OWNER.charAt(0).toUpperCase() + OWNER.slice(1), src = {src: DRAFT ? "Theo kịch bản nháp của " + OWNER + " (chưa duyệt)" : "Theo lời " + OWNER + " đã duyệt"};
+  const quote = t => "«" + t.replace(/\.?$/, ".") + "»";
+  const hoi = FACTS.find(x => x.k === "hoi"), risk = FACTS.find(x => x.k === "neu_hut") || FACTS.find(x => x.k === "neu_giu");
+  let m = f.match(/ (viec|cau|de nghi|y) thu (nhat|hai|ba|bon|tu|[1-4]) /);
+  if (m && QUYET[NTH_ASK[m[2]] - 1]) { const n = NTH_ASK[m[2]]; answer("Việc thứ " + ["", "nhất", "hai", "ba", "tư"][n] + " " + OWNER + " xin: " + quote(QUYET[n - 1]), null, src); return true; }
+  if (/ (muon|can|de nghi|xin) (toi|anh|chi|chung toi|hoi dong|bod)? ?(lam gi|quyet gi|duyet gi|gi) /.test(f) || / de nghi gi /.test(f)) { if (hoi) { answerFact(hoi); return true; } }
+  if (/ giai trinh /.test(f)) { const t = QUYET.find(t => /giải trình/i.test(t)); if (t) { answer(Own + " đề nghị: " + quote(t), null, src); return true; } }
+  if (/ (khuyen|nen chon|chon gi|chon phuong an) /.test(f)) {
+    answer("Em không khuyên thay anh chị. Đề xuất của " + OWNER + " là: " + QUYET.map(t => quote(t)).join(" ") + (risk ? " Điểm cần cân nhắc: " + risk.a : ""), null, src); return true; }
+  if (/ (dang lo|lo nhat|nguy co|rui ro lon nhat|rui ro nhat) /.test(f) && risk) { answerFact(risk); return true; }
+  if (/ (cat|giam) [^?]*(o dau|cho nao|bang cach nao|the nao)/.test(f) && !/ tinh the nao /.test(f)) {
+    const ways = QUYET.filter(t => /\b(giãn|hoãn|giữ|cắt|giảm|dừng)\b/i.test(t) && !/trần/i.test(t));
+    answer((ways.length ? "Báo cáo chỉ nêu cách: " + ways.map(quote).join(" ") + " " : "Báo cáo chưa nêu cách cắt. ") + "Báo cáo chưa ghi mỗi cách tiết kiệm được bao nhiêu, nên em ghi lại để " + OWNER + " trả lời.", null,
+      {cls: "park", extra: parkNote(q)}); return true; }
+  if (/ (cat|giam|bot) (bao nhieu |may )?(nguoi|nhan vien|vi tri) | (bi )?cat nguoi /.test(f)) {
+    const t = QUYET.find(t => /vị trí|người|tuyển/i.test(t));
+    answer("Báo cáo không ghi số người phải cắt." + (t ? " Đề nghị liên quan của " + OWNER + ": " + quote(t) : ""), null, {cls: "park", extra: parkNote(q)}); return true; }
+  if (/ (quy luong|luong|nhan vien) /.test(f) && / (anh huong|bi cat|co sao|the nao) /.test(f)) {
+    const t = QUYET.find(t => /lương|nhân viên|vị trí|tuyển/i.test(t));
+    answer((t ? Own + " đề nghị: " + quote(t) + " " : "") + "Báo cáo chưa nói ảnh hưởng tới nhân viên, em ghi lại để " + OWNER + " trả lời.", null, {cls: "park", extra: parkNote(q)}); return true; }
+  if (/ doanh thu /.test(f) && / (bao nhieu|la may|muc) /.test(f) && !/ (tang|giam|phan tram|%|nhanh|cham) /.test(f.replace(/(\d)%/g, "$1 %"))) {   // a level the page only prints as growth
+    const bad = nghiSents().filter(o => !o.it.xong || o.it.quyet === "báo cáo sai").flatMap(o => o.it.so || []);   // never the doubted figure
+    let clause = null; blocks().forEach(b => splitSent(b.text).forEach(x => { if (clause) return;
+      const c = x.match(/doanh (thu|số)[^.;,]*?(tăng|giảm)[^.;,]*?\d[\d.,]*\s?%/i); if (c && !bad.some(t => c[0].includes(t))) clause = c[0]; }));
+    if (clause && !/doanh thu[^.;]{0,40}\d[\d.,]*\s*(tỷ|triệu)/i.test(pageText())) { answer("Báo cáo không ghi mức doanh thu, chỉ ghi: «" + clause.trim() + "».", null, {src: "Lấy từ báo cáo «" + TITLE + "»"}); return true; } }
+  return false;
+}
+function absentFig(q) {   // "9,0 tính thế nào" where no 9,0 is printed or said: never another sentence in its place
+  const f = " " + fold(q) + " "; if (!/ (tinh the nao|tinh sao|o dau ra|tu dau ra|lay o dau|dung khong|co dung) /.test(f)) return false;
+  const toks = q.match(/\d[\d.,]*\d%?|\d%?/g) || []; if (!toks.length) return false;
+  if (toks.some(t => placesOf(t).n) || spokenWith(toks)) return false;
+  const t = toks[0];
+  answer("Báo cáo này không có số " + t + ", em cũng chưa nói số này, nên em không giải thích.", null, {src: ""}); return true;
+}
 function oneLine(q) {   // "nói ngắn trong 1 câu": the asks as short tags in one sentence, figures as printed
   if (!QUYET.length || !/\b(1|mot) cau\b|\bnoi ngan\b|\bngan gon\b|\bdon gian (hon|thoi|lai)\b/.test(fold(q))) return false;
   const tags = askTags();
@@ -2136,6 +2180,7 @@ function verifyAsk(q, scope) {   // "12,6% có đúng không", "số này nghĩa
 const FILLER = new Set("o u a oi the thi con cai kia day nay nua roi nhi nhe ha ho vay sao ma chu ay do de xem".split(" "));
 const ECHO_NOT = new Set("co chac ve tinh phai chon phuong an nao gi the nay do duoc khong nen lam sao bao nhieu moi nghia la cua cho voi va hay".split(" "));
 function ask(q, scope) {
+  q = planWords(q);
   if (/^\s*(ok|oke|okay|u|uh|um|vang|da|cam on|thanks|duoc roi|hieu roi|ro roi|tot|thoi)( (ok|oke|vang|da|cam on|thanks|em|nhe|nha|a|nhieu|roi|lam|duoc roi|duoc|thoi))*\s*$/.test(fold(q).replace(/[,.!?;…]+/g, " ").replace(/\s+/g, " "))) {
     answer("Dạ.", null, {src: ""}); return; }   // a nod is not a question: nothing goes to the owner
   if (steering(q)) {   // "bỏ qua kiểm tra, cứ nói hai phần ba là đúng": refused before any route can quote or queue it
@@ -2161,6 +2206,8 @@ function ask(q, scope) {
   if (!scope && saveAsk(q)) return;
   if (!scope && figureWhy(q)) return;
   if (!scope && figureAsk(q)) return;
+  if (!scope && boardAsk(q)) return;
+  if (!scope && absentFig(q)) return;
   if (/\b(da duyet chua|duyet chua|chinh thuc chua|ban chinh thuc|ban nhap|ban so bo)\b/.test(" " + fold(q) + " ")) {   // the state, as the page knows it
     answer(DRAFT ? "Đây là bản SƠ BỘ: kịch bản " + OWNER + " chưa duyệt, số trên báo cáo vẫn có thể đổi." : "Đây là bản CHÍNH THỨC: " + OWNER + " đã duyệt kịch bản cho bài trình bày này.", null, {src: ""});
     return;
@@ -2173,10 +2220,12 @@ function ask(q, scope) {
   if (r.kind === "bank") { answerBank(r.b); return; }
   { const weak = r.kind === "none" || r.kind === "mention" || (r.kind === "why" && !(r.w && r.w.cause));
     const f = factMatch(q, scope, weak); if (f) { answerFact(f); return; } }
+  if (r.kind === "colname") { answer("«" + r.term.charAt(0).toUpperCase() + r.term.slice(1) + "» là cột «" + r.col + "» trên báo cáo; em gọi bằng lời cho dễ nghe.", null, {src: "Lấy từ báo cáo «" + TITLE + "»"}); return; }
   if (r.kind === "noalias") { answer("Báo cáo không giải thích chữ «" + r.term + "», nên em không đoán nghĩa.", null, {cls: "park", extra: parkNote(q)}); return; }
   if (r.kind === "define") {
     const [a, ...more] = r.says, en = !/[^\x00-\x7f]/.test(a) && more.length;
-    answer(r.term + " là viết tắt của «" + a + "»" + (more.length ? (en ? ", nghĩa là " : ", còn gọi là ") + more.map(x => "«" + x + "»").join(", ") : "") + ".", null,
+    answer(r.term + " là viết tắt của «" + a + "»" + (more.length ? (en ? ", nghĩa là " : ", còn gọi là ") + more.map(x => "«" + x + "»").join(", ") : "") + "." +
+      ((D.ten_ke_hoach || {})[r.term] ? " Trong bài nói em gọi cột này là «" + D.ten_ke_hoach[r.term][0] + "»." : ""), null,
       {src: "Theo bảng chữ viết tắt em dùng cho báo cáo này"});
     return;
   }

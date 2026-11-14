@@ -2322,6 +2322,19 @@ def doubts(script: dict) -> list:
             for k in script.get("kiem_tra") or [] if isinstance(k, dict) and (k.get("ma_cau") or k.get("ma_so"))]
 
 
+def plan_aliases(places: dict, en: bool) -> dict:
+    """Each plan column under the name the talk says ("AOPR" is "kế hoạch điều chỉnh"): a Board member asks with
+    the words he just heard (round-6: "kế hoạch điều chỉnh là bao nhiêu" found nothing)."""
+    from present import story
+    out: dict = {}
+    t = story.main_table(places, en)
+    for name in ((t.actual_name, t.plan_name) if t else ()):
+        said = story.plan_said(name)
+        if said and tri_nho.fold(said) != tri_nho.fold(name):
+            out[name] = [said] + (["bản điều chỉnh"] if "điều chỉnh" in said else [])
+    return out
+
+
 def bod_figures_unlocked(script: dict, page_text: str, en: bool) -> list:
     """noi_voi_BOD is the one free text the Board sees: a figure in it goes through the same lock as a spoken line.
     A figure on neither the page nor the item's so_rieng keeps the pack a draft (round-6: "khoảng 10 tỷ" went out)."""
@@ -3270,7 +3283,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
             "quyet": story.decisions(script),
             "cho_kiem": doubted_open(script) if script.get("kiem_tra") else draft.get("cho_kiem") or [],   # never quoted while in doubt
             "nghi": doubts(script),
-            "fallback": fallback, "fallback_clip": audio(fallback), "aliases": doc_tai_chinh.aliases(),
+            "fallback": fallback, "fallback_clip": audio(fallback), "aliases": doc_tai_chinh.aliases(), "ten_ke_hoach": plan_aliases(places, en),
             "bank": [dict(audio(f"{who} đã trả lời" + (f" kỳ {b['ky']}" if b["cu"] and b["ky"] else "")
                                 + f": {_sentence(b['tra_loi'])}"),
                           q=b["cau"], a=b["tra_loi"], ngay=b["ngay"], ky=b["ky"], cu=b["cu"]) for b in bank]}

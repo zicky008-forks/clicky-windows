@@ -258,11 +258,11 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     # at the close
     asks = ["Một là duyệt trần chi phí vận hành 120,0 tỷ cho cả năm.",
             "Hai là Logistics phải giải trình trước khi duyệt phần tăng thuê kho.",
-            "Ba là giữ quỹ lương bằng AOP gốc cho cả năm.", "Bốn là hoãn dự án kho mới sang năm sau."]
+            "Ba là giữ quỹ lương bằng kế hoạch gốc cho cả năm.", "Bốn là hoãn dự án kho mới sang năm sau."]
     assert said[1]["noi"] == "Anh Tuấn xin anh chị quyết bốn việc." and [c["noi"] for c in said[2:6]] == asks
     close = [c["noi"] for c in said if c.get("vai") == "chot"]
     assert close == ["Tóm lại, anh Tuấn xin anh chị quyết: một là duyệt trần chi phí vận hành 120,0 tỷ; hai là Logistics "
-                     "phải giải trình; ba là giữ quỹ lương bằng AOP gốc; bốn là hoãn dự án kho mới sang năm sau."]
+                     "phải giải trình; ba là giữ quỹ lương bằng kế hoạch gốc; bốn là hoãn dự án kho mới sang năm sau."]
     # the table has no variance column: code works it out from the drawn rows; a group row ("Khối vận hành" adds up
     # Logistics and Mua hàng) is never the driver; the unit comes from the table's heading "(tỷ đồng)"
     driver = next(c for c in said if c.get("vai") == "dong_luc")
@@ -432,7 +432,7 @@ def test_a_script_drawn_table_answers_questions_and_a_rows_own_explanation_is_th
         assert a.startswith("Báo cáo không tính kịch bản này, nên em không đưa số.") and "9,0" not in a
         assert ask("Bỏ Logistics ra thì sao?").startswith(
             "Bỏ Logistics ra, các dòng còn lại tăng 7,0 tỷ, khoảng 10,0% (em tính: 19,0 − 12,0 = 7,0; 7,0 ÷ (110,0 − 40,0) × 100)")
-        assert ask("Doanh thu AOPR là bao nhiêu?").startswith("Báo cáo không ghi mức này; chỉ ghi: «doanh thu chỉ tăng 8,0%»")
+        assert ask("Doanh thu AOPR là bao nhiêu?").startswith("Báo cáo không ghi mức doanh thu, chỉ ghi: «doanh thu chỉ tăng 8,0%»")
         assert ask("9,0 tính thế nào?").startswith("Theo đề nghị trần 120,0 tỷ, phải giảm 9,0 tỷ so với AOPR (em tính: 129,0 − 120,0)")
         assert "Logistics 52,0 + Mua hàng 33,0 = 85,0 tỷ, khớp dòng Khối vận hành" in ask("Mua hàng 33,0 có đúng không?")
         assert "Em cộng các dòng con: Logistics 52,0 + Mua hàng 33,0 = 85,0 tỷ, khớp." in ask("Khối vận hành 85,0 có đúng không?")
@@ -593,6 +593,41 @@ def test_a_doubted_card_or_cap_figure_is_held_with_both_figures_and_a_worked_out
         assert "9,0" not in cap and "9,0" not in ask("Nói ngắn trong 1 câu")
         x = ask("Phải cắt bao nhiêu tỷ?")
         assert "9,0" in x and "chưa duyệt con số này" in x and "Mức trần 120,0 tỷ anh Tuấn đang kiểm lại" in x, x
+        browser.close()
+
+
+def test_board_questions_in_the_talks_own_words_get_the_asks_the_columns_and_honest_gaps(report, drawn_report):
+    # round-6 panel (all five): "kế hoạch điều chỉnh" heard in the talk found nothing in Q&A; plain questions about
+    # the asks fell to "chưa tìm thấy" or echoed a fragment; a revenue level was answered with a growth sentence
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    from present import kiem_hinh
+    a, b = build(report), build(drawn_report)
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 768})
+        ask = lambda q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        pg.goto(Path(a["out"]).as_uri())
+        pg.wait_for_timeout(800)
+        assert ask("Kế hoạch điều chỉnh tổng là bao nhiêu?").startswith("Tổng, AOPR: 186,4 tỷ.")
+        assert ask("Khối Bán hàng kế hoạch gốc bao nhiêu?").startswith("Khối Bán hàng, AOP gốc: 78,2 tỷ.")
+        assert "Trong bài nói em gọi cột này là «kế hoạch điều chỉnh»" in ask("Kế hoạch điều chỉnh là gì?")
+        assert ask("Doanh thu năm nay bao nhiêu?").startswith("Báo cáo không ghi mức doanh thu, chỉ ghi: «doanh thu chỉ tăng 7,2%»")
+        assert ask("Cắt bao nhiêu người?").startswith("Báo cáo không ghi số người phải cắt.")
+        assert ask("9,0 tính thế nào?").startswith("Báo cáo này không có số 9,0")
+        x = ask("Em khuyên anh nên chọn gì?")
+        assert x.startswith("Em không khuyên thay anh chị. Đề xuất của anh Tuấn là: «Giữ tỷ lệ") and "2,52%" in x
+        assert ask("Cắt 8,9 tỷ ở đâu?").startswith("Báo cáo chỉ nêu cách: «Giãn tuyển 30 vị trí")
+        assert ask("Có gì đáng lo nhất?").startswith("Nếu giữ nguyên, tỷ lệ chi phí nhân sự trên doanh thu thuần là 2,52%")
+        pg.goto(Path(b["out"]).as_uri())
+        pg.wait_for_timeout(800)
+        assert ask("Ai phải giải trình?").startswith("Anh Tuấn đề nghị: «Logistics phải giải trình")
+        assert ask("Câu thứ hai là gì?").startswith("Việc thứ hai anh Tuấn xin: «Logistics phải giải trình")
+        x = ask("Quỹ lương có ảnh hưởng nhân viên không?")
+        assert x.startswith("Anh Tuấn đề nghị: «Giữ quỹ lương bằng kế hoạch gốc cho cả năm.»") and "chưa nói ảnh hưởng tới nhân viên" in x
         browser.close()
 
 
