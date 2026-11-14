@@ -1211,8 +1211,10 @@ def test_round_fifteen_typed_answers_press_the_prompt_undo_asks_back_and_a_quest
     # round-15 panel: «Ghi nguyên văn» typed in the box was read as a new decision; «À không» after a record was lost;
     # «Ừ» with the card open said only «Dạ»; a sentence with a question and a decision dropped one of them;
     # «Bỏ Logistics ra» framed the driver's row, and a sentence that points at nothing kept the frame before it
-    for rep in (build(report), build(drawn_report)):
-        said = lines(rep)
+    for k, src in enumerate((report, drawn_report)):
+        if k:
+            pytest.importorskip("playwright")   # the drawn report is told only from the page as drawn
+        said = lines(build(src))
         rest = next(c for c in said if c.get("vai") == "phan_con_lai")
         assert rest["chi"] == next(c for c in said if c.get("vai") == "quy_mo")["chi"], rest   # the rest is the total, not the row taken out
     pw, browser, pages = _ghi_pages(report, drawn_report)
