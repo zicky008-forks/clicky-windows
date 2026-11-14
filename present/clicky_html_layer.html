@@ -1714,8 +1714,22 @@ function whole(t, n) {   // whole sentences, never a fragment; figures in bold
   return esc(out).replace(/(\d[\d.,]*\d|\d)(\s*(?:%|tỷ|triệu|người|ngày|vị trí|nhân viên|điểm))?/g, "<b>$&</b>");
 }
 let toldNoVoice = false;
+function doubtNote(text) {   // one gate: any answer that shows a figure the owner is still checking (or ruled wrong) says so
+  const plainText = String(text).replace(/<[^>]*>/g, "");
+  if (/kiểm lại|cần sửa|đã soát/.test(plainText)) return "";   // the route already said the ruling
+  const notes = [];
+  for (const it of (D.nghi || [])) {
+    if (it.ma || !(it.so || []).length || (it.xong && it.quyet !== "báo cáo sai")) continue;
+    const tok = String(it.so[0]);
+    if (!new RegExp("(^|[^\\d.,])" + tok.replace(/[.,]/g, "\\$&") + "(?![\\d]|[.,]\\d)").test(plainText)) continue;
+    notes.push(it.quyet === "báo cáo sai" ? "số " + tok + " " + OWNER + " đã xác nhận cần sửa"
+                                          : "số " + tok + " " + OWNER + " đang kiểm lại" + (it.tinh ? " (" + it.tinh + ")" : ""));
+  }
+  return notes.length ? " Lưu ý: " + notes.join("; ") + "." : "";
+}
 function answer(text, target, o) {
   o = o || {};
+  { const n = doubtNote(text); if (n) text = text + (o.html ? esc(n) : n); }
   const a = isOpen($("bub")) ? $("ba") : $("a"); a.className = "ans " + (o.cls || ""); a.innerHTML = "<div>" + (o.html ? text : esc(text)) + "</div>";
   const src = o.src !== undefined ? o.src : target ? "Lấy từ báo cáo «" + TITLE + "», đúng chỗ đang khoanh" : "";
   const ex = [].concat(o.extra || []).filter(Boolean);
@@ -2058,6 +2072,8 @@ function boardAsk(q) {   // plain Board questions about the asks: answered from 
   let m = f.match(/ (viec|cau|de nghi|y) thu (nhat|hai|ba|bon|tu|[1-4]) /);
   if (m && QUYET[NTH_ASK[m[2]] - 1]) { const n = NTH_ASK[m[2]]; answer("Việc thứ " + ["", "nhất", "hai", "ba", "tư"][n] + " " + OWNER + " xin: " + quote(QUYET[n - 1]), null, src); return true; }
   if (/ (muon|can|de nghi|xin) (toi|anh|chi|chung toi|hoi dong|bod)? ?(lam gi|quyet gi|duyet gi|gi) /.test(f) || / de nghi gi /.test(f)) { if (hoi) { answerFact(hoi); return true; } }
+  if (/ tran /.test(f) && / (bao nhieu|muc nao|la bao nhieu|de nghi|xin) /.test(f) && !/ (giam|cat) /.test(f)) {   // "trần bao nhiêu?": the ask that names it
+    const t = QUYET.find(t => /trần[^0-9;]*?\d/i.test(t)); if (t) { answer(Own + " đề nghị: " + quote(t), null, src); return true; } }
   if (/ giai trinh /.test(f)) { const t = QUYET.find(t => /giải trình/i.test(t)); if (t) { answer(Own + " đề nghị: " + quote(t), null, src); return true; } }
   if (/ (khuyen|nen chon|chon gi|chon phuong an) /.test(f)) {
     answer("Em không khuyên thay anh chị. Đề xuất của " + OWNER + " là: " + QUYET.map(t => quote(t)).join(" ") + (risk ? " Điểm cần cân nhắc: " + risk.a : ""), null, src); return true; }

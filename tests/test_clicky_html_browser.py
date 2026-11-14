@@ -1380,6 +1380,9 @@ def test_a_board_members_plain_questions_get_the_rows_facts_the_sentences_and_on
     assert "Phần còn thiếu" not in _r3(pg, "Giãn 30 vị trí tiết kiệm được bao nhiêu?")
     assert "Em chỉ tính trọn năm" in _r3(pg, "Giãn từ quý 3 thì tiết kiệm bao nhiêu?")
     assert "3,9 tỷ" in _r3(pg, "Tiết kiệm được bao nhiêu?", "[data-clicky='c13']")      # asked on the proposal itself
+    # one gate: a route that shows the doubted 6,7% card figure says it is being checked (round-7 panel #1)
+    a = _r3(pg, "Chi phí bình quân mỗi người tăng bao nhiêu phần trăm?")
+    assert "tăng 6,7%" in a and "Lưu ý: số 6,7 anh Tuấn đang kiểm lại (tính từ tổng chi phí và số người:" in a and "≈ 6,85%)" in a, a
     # a typed decision is recorded like the card's button, never queued as a question (round-7 Chairman)
     assert _r3(pg, "Đồng ý").startswith("Anh chị đồng ý việc nào ạ?")
     assert _r3(pg, "Tôi đồng ý trần 177,5 tỷ").startswith(

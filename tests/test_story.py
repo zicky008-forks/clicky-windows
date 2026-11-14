@@ -598,6 +598,11 @@ def test_a_doubted_card_or_cap_figure_is_held_with_both_figures_and_a_worked_out
         assert "9,0" not in cap and "9,0" not in ask("Nói ngắn trong 1 câu")
         x = ask("Nếu không duyệt trần thì sao?")                                 # the worked-out 9,0 keeps its labels here too
         assert "9,0" in x and "chưa duyệt con số này" in x and "Mức trần 120,0 tỷ anh Tuấn đang kiểm lại" in x, x
+        x = ask("Trần bao nhiêu?")                                               # one gate: every route that shows 120,0 holds it
+        assert x.startswith("Anh Tuấn đề nghị: «Duyệt trần chi phí vận hành 120,0 tỷ cho cả năm.»") and \
+            "Lưu ý: số 120,0 anh Tuấn đang kiểm lại (giữ đúng tỷ lệ chi phí trên doanh thu của kế hoạch gốc thì trần là " \
+            "110,0 × (1 + 8,0 ÷ 100) = 118,8 tỷ)." in x, x
+        assert "Lưu ý: số 120,0 anh Tuấn đang kiểm lại" in ask("Anh Tuấn xin quyết gì?")
         x = ask("Đồng ý trần 120")                                                # a typed decision on a doubted cap says so
         assert x.startswith("Em đã ghi «Đồng ý» cho việc: «Duyệt trần chi phí vận hành 120,0 tỷ cho cả năm».") and \
             "Lưu ý: mức 120,0 anh Tuấn đang kiểm lại." in x, x
