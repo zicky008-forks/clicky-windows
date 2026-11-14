@@ -1453,13 +1453,13 @@ function chooser(v, text, only, words) {   // which ask(s): each press records o
 // đồng thuê kho hết hạn» never names an ask or a verdict. A verdict may sit before or after the ask («trần thì không»). A clause that
 // names asks with no verdict of its own takes the bare verdict said before it («Đồng ý, …») or the verdict-only clause after it
 // («Việc một đổi ý, không đồng ý»); otherwise it is asked back, never recorded blank
-const DEFER = /\b(de (tuan|thang|quy|ky|nam|lan|buoi) (sau|toi)|de sang (tuan|thang|quy|nam) (sau|toi)|(tuan|thang|quy|ky|nam) sau (tinh|ban|hop|xem)|(tuan|thang|quy) sau hop( lai)?|hop lai|xem lai|de xem|de lai|tinh sau|de sau|tam treo|treo lai|treo|tam hoan|can ban( them| lai)?|de ban( them)?|ban them|ban lai|chua (quyet|chot|chac)|khong chac|((de|cho) )?(anh |chi |toi |em )?(suy nghi|can nhac|xem xet|nghi) them|can (them )?thoi gian|(roi|sau do|xong( roi)?) (tinh|ban|xem|quyet|duyet)|(roi|sau do|xong( roi)?) moi (tinh|ban|xem|xet|quyet|can nhac)|de (toi |anh |chi |em )\S+ (tinh|xem|xet|can nhac|nghi)( lai| them| ky| sau)?|tinh (them|tiep|lai)|xem sau|trinh lai|can them (so lieu|thong tin|du lieu|phan tich)|(tam )?doi (phuong an|kiem|ket qua|bao cao|giai trinh|them)|(tam )?doiw (phuong an|kiem|tinh|xem|ket qua|bao cao|giai trinh|them|anh|chi|toi|em|so|hop|muc)|de (toi |anh |chi |em )?(hop|ban|hoi)( voi| lai| them| \S+)?|ban voi|hoi lai|de do( da)?$|can nhac lai|(de|doiw) (anh |chi |em )?\S+ kiem (lai|tra)|kiem lai (\S+ ){0,3}da$|de (toi |anh |chi |em )?(xem|tinh|can nhac|nghi)( lai| them| sau| ky)?( da)?$|de (toi |anh |chi |em )(xem|tinh|can nhac|nghi))\b/;
+const DEFER = /\b(de (tuan|thang|quy|ky|nam|lan|buoi) (sau|toi)|de sang (tuan|thang|quy|nam) (sau|toi)|(tuan|thang|quy|ky|nam) sau (tinh|ban|hop|xem)|(tuan|thang|quy) sau hop( lai)?|hop lai|xem lai|de xem|de lai|tinh sau|de sau|tam treo|treo lai|treo|tam hoan|can ban( them| lai)?|de ban( them)?|ban them|ban lai|chua (quyet|chot|chac)|khong chac|((de|cho) )?(anh |chi |toi |em )?(suy nghi|can nhac|xem xet|nghi) them|can (them )?thoi gian|(roi|sau do|xong( roi)?) (tinh|ban|xem|quyet|duyet)|(roi|sau do|xong( roi)?) moi (tinh|ban|xem|xet|quyet|can nhac)|de (toi |anh |chi |em )\S+ (tinh|xem|xet|can nhac|nghi)( lai| them| ky| sau)?|tinh (them|tiep|lai)|xem sau|trinh lai|lam ro( them| lai)?|bao lai|giai trinh them|can them (so lieu|thong tin|du lieu|phan tich)|(tam )?doi (phuong an|kiem|ket qua|bao cao|giai trinh|them)|(tam )?doiw (phuong an|kiem|tinh|xem|ket qua|bao cao|giai trinh|them|anh|chi|toi|em|so|hop|muc)|de (toi |anh |chi |em )?(hop|ban|hoi)( voi| lai| them| \S+)?|ban voi|hoi lai|de do( da)?$|can nhac lai|(de|doiw) (anh |chi |em )?\S+ kiem (lai|tra)|kiem lai (\S+ ){0,3}da$|de (toi |anh |chi |em )?(xem|tinh|can nhac|nghi)( lai| them| sau| ky)?( da)?$|de (toi |anh |chi |em )(xem|tinh|can nhac|nghi))\b/;
 const NEG_OK = "(?! (qua|vuot|hon|duoi|it|nhieu|phai|de|co y))";
 const NOPE = new RegExp("\\b(khong dong y|khong duyet|khong duoc|khong chap thuan|khong dong tinh|chua dong y|chua duyet|chua duoc|tu choi|bac|phan doi)\\b|(^| )(viec|y|de nghi) (thu )?\\S+ (thi |cung )*khong( |$)|^khong(?! (qua|vuot|hon|duoi|it|nhieu|can|phai|de|co))( |$)| (thi|cung|deu) khong" + NEG_OK + "( |$)|@ (thi |cung |deu |doi y |doi lai (la )?)*khong" + NEG_OK + "( duoc| can| dong y| duyet| lam| nen)?( |$)|\\bkhong (hoan|gian|giu|lam|nen)\\b|@ khong can\\b|\\bdung (hoan|gian|giu|duyet|lam|cat)\\b|@ (thi )?(\\S+ ){0,5}chet\\b|@ thi (thoi|bo)( khoi| di| nhe)?$|@ bo( di)?$|\\bthoi khoi\\b|\\b(kia|con lai|khac) (thi |cung |deu )*khong" + NEG_OK + "( dong y| duyet)?( |$)");
 // round 17: an ask's own verb said the other way. «khỏi / đừng / chưa cần / không phải» + the verb or the ask's name, «X thì khó»
 // («khó» is folded to «khow», never «kho»), «không chịu được»; and for a stop or hold ask («hoãn / giãn / giữ / cắt»), «cứ làm tiếp /
 // làm luôn / triển khai ngay» is its opposite
-const NEGV = /\b(dung|khoi|thoi khoi|chua can|khong phai) (@|(hoan|gian|giu|duyet|lam|cat|dung)\b)|@ (thi |cung |deu )*(rat |hoi |that )?khow( lam| qua| day| that)?( |$)|\bkhong chiu (duoc|noi)\b|\bkhong (on|duoc) dau\b/;
+const NEGV = /\b(dung|khoi|thoi khoi|chua can|khong phai|khong can|chang can|cha can|khong nen|chang nen|khong nhat thiet( phai)?|chua phai luc|viec gi phai) (@|(hoan|gian|giu|duyet|lam|cat|dung)\b)|@ (thi |cung |deu )*(rat |hoi |that )?khow( lam| qua| day| that)?( |$)|\bkhong chiu (duoc|noi)\b|\bkhong (on|duoc) dau\b|@ (thi |la |nay |do |cung |deu )*(rat |hoi |that |qua )?(sai lam|sai|khong hop ly|khong on|khong can thiet|khong noi|vo ly)( |$)|\b(hoan|gian|giu|cat|dung) (\S+ )?khong noi\b|\b(toi|minh|anh|chi) (thi )?khong chiu\b/;   // round 19: «không cần giãn tuyển», «giãn tuyển là sai lầm», «giãn không nổi», «tôi không chịu»
 const STOPV = /^(hoan|gian|giu|cat|dung|tam dung|tam hoan)\b/;
 const ANTI = /\bcu @|\b(cu lam|lam tiep|lam luon|lam ngay|lam (trong |ngay )?nam nay|(cu )?trien khai (ngay|luon|tiep|nam nay)|cu trien khai|cu tuyen|tuyen tiep|tuyen (du|luon|ngay)|tang them|noi them)\b/;
 const CHUA = /(@|\b(thi|cung|deu|kia|con lai|khac)) (thi |cung |deu )*chua( |$)(?!(duoc|dong y|duyet))/;   // «việc hai chưa»: put off or no? asked back (round 13)
@@ -1516,7 +1516,7 @@ const VRANK = {"Cần bàn thêm": 3, "Không đồng ý": 2, "Đồng ý": 1, "
 let WEAK = false, ISCHUA = false;
 function verdictIn(c, asks, s) {   // put off > no > yes; "hoãn kho mới sang quý 2" agrees with an ask that is itself a hoãn (a weak yes)
   WEAK = false; ISCHUA = false;
-  s = (s || c).replace(/\bkhong phan doi\b/g, "dong y").replace(/\bkhong can (ban them|ban|xem lai|hop lai)\b/g, "dong y");   // "không cần bàn thêm" is a yes
+  s = (s || c).replace(/\bkhong phan doi\b/g, "dong y").replace(/\bkhong can (ban them|ban|xem lai|hop lai)\b/g, "dong y").replace(/\b(khong|chang|cha) (he )?(sai|sai lam|vo ly)\b/g, "dong y");   // «giãn tuyển không sai» is a yes   // "không cần bàn thêm" is a yes
   if (NOTALL.test(s)) { s = s.replace(NOTALL, " "); if (!/\S/.test(s.replace(/@/g, ""))) return ""; }
   if (NOALL.test(s)) return "Không đồng ý";
   if (NEGV.test(s + " ")) return "Không đồng ý";   // «Đừng giãn tuyển», «kho mới khỏi hoãn», «giãn tuyển thì khó» (round 17)
@@ -3002,35 +3002,90 @@ function placesOf(tok) {   // every place the report prints one figure: cells, t
   const sents = []; blocks().forEach(b => splitSent(b.text).forEach(x => { if (re.test(x)) sents.push({el: b.el, s: x}); }));
   return {cells, cards, sents, n: cells.length + cards.length + sents.length};
 }
-function rowClaim(q) {   // round 18: a claim about one named row («Tổng tăng 19 tỷ», «Bán hàng tăng 14 tỷ à?»), matched at the reader's precision
+function tapRow(scope) {   // the table row a tapped place sits in, its total row included
+  if (!scope) return null; if (scope.m && scope.row && scope.row.cells) return {m: scope.m, row: scope.row};
+  const e = scope.el || (scope.card && scope.card.el), tr = e && e.closest && e.closest("tr,[role=row]"); if (!tr) return null;
+  for (const m of tables()) { const row = m.rows.find(r => r.r === tr); if (row) return {m, row}; }
+  return null;
+}
+function claimRow(part) {   // the one row a claim names: by its words, else by a word no other row has («Tài chính» is «Khối Tài chính - Kế toán»)
+  const Q = qinfo(part), named = [], all = [];
+  tables().forEach(m => m.rows.forEach(row => { if (!numCols(m, row).length) return; all.push({m, row}); if (rowMatch(Q, row)) named.push({m, row}); }));
+  if (named.length) return named.length === 1 ? named[0] : undefined;
+  const own = x => core(x.row.label).filter(w => w.length > 2 && !all.some(y => y !== x && core(y.row.label).includes(w)));
+  const loose = all.filter(x => own(x).some(w => Q.w.includes(w)));
+  return loose.length === 1 ? loose[0] : null;
+}
+function rowClaim(q, scope, force) {   // a claim about a row («Tổng tăng 19 tỷ, tức 17%?»), each figure judged against its own row (rounds 18–19)
   const fq = " " + fold(q).replace(/[?.!…]+/g, " ").replace(/\s+/g, " ").trim() + " ";
-  if (!/ (dung khong|phai khong|a|ha|chu|that khong|dung chua|dung ko|phai ko) $/.test(fq)) return false;
-  const toks = q.match(/\d[\d.,]*\d%?|\d%?/g) || []; if (toks.length !== 1) return false;
-  const tok = toks[0], pc = /%$/.test(tok) || / phan tram /.test(fq), bare = tok.replace(/%$/, "");
+  if (!force && !/ (dung khong|phai khong|a|ha|chu|that khong|dung chua|dung ko|phai ko|sai khong) $/.test(fq)) return false;
   const num = x => parseFloat(String(x).replace(/%$/, "").replace(/\./g, "").replace(",", "."));
-  const dec = (bare.split(",")[1] || "").length, v = num(bare);
-  if ((D.nghi || []).some(it => (it.so || []).some(x => Math.abs(num(x) - v) < 1e-9))) return false;   // a doubted figure keeps its own answer
-  const Q = qinfo(q), named = [];
-  tables().forEach(m => m.rows.forEach(row => { if (numCols(m, row).length && rowMatch(Q, row)) named.push({m, row}); }));
-  if (named.length !== 1) return false;
-  const {m, row} = named[0], isPc = c => colUnit(m, c) === "%" || /%$/.test(cellText(row.cells[c]));
-  const cands = numCols(m, row).map(c => ({v: cellText(row.cells[c]).replace(/%$/, ""), pc: isPc(c), c}));
-  const rc = rowChange(Q, null) || rowChange(qinfo(q + " tăng"), null), mineRc = rc && rc.row === row;
-  if (mineRc) { const ab = diffOf(rc.m, rc.row, rc.df, false), pr = diffOf(rc.m, rc.row, rc.df, true), a = cellText(rc.d.a), p = cellText(rc.d.p);
-    if (ab) cands.push({v: ab.s.replace(/^-/, ""), pc: false, how: a + " − " + p, u: uOf(rc.m, rc.row, rc.df[1])});
-    if (pr) cands.push({v: pr.s.replace(/^-/, ""), pc: true, how: "(" + a + " − " + p + ") ÷ " + p + " × 100"}); }
-  const r = x => Math.round(num(x) * 10 ** dec) / 10 ** dec;
-  const exact = cands.find(x => x.pc === pc && Math.abs(num(x.v) - v) < 1e-9), near = !exact && cands.find(x => x.pc === pc && Math.abs(r(x.v) - v) < 1e-9);
-  if (exact && exact.c !== undefined) { checkAnswer(q, m, row, exact.c); return true; }
-  if (exact && workedOut(q, [tok])) return true;
-  const say = x => (x.pc ? x.v + "%" : withUnit(x.v, x.c !== undefined ? uOf(m, row, x.c) : x.u)) + (x.c !== undefined ? " (cột " + colName(m, x.c) + ")" : " (em tính: " + x.how + ")");
-  const sayV = x => (x.c === undefined ? "tăng " : "") + say(x);
-  const hit = exact || near;
-  if (hit) { answer("Đúng ạ" + (near ? ", khoảng " + tok + (pc || /%$/.test(tok) ? "" : /\bty\b/.test(fq) ? " tỷ" : "") : "") + ": " + rowName(row) + " " + sayV(hit) + ".", hit.c !== undefined ? row.cells[hit.c] : rc.d.a,
-    {src: hit.c !== undefined ? "Lấy từ báo cáo «" + TITLE + "»" : "Em tính từ hai số trên báo cáo «" + TITLE + "»"}); return true; }
-  const chg = cands.filter(x => x.how), cells = numCols(m, row).map(c => colName(m, c) + " " + cellText(row.cells[c])).filter(x => /\d/.test(x));
-  answer("Không ạ, dòng " + rowName(row) + " không có số " + tok + (pc ? "" : /\bty\b/.test(fq) ? " tỷ" : "") + "." + (chg.length ? " Theo bảng, " + rowName(row) + " tăng " + chg.map(say).join(", tức ") + "." : " Dòng này ghi: " + cells.join("; ") + "."),
-    row.cells[0], {src: chg.length ? "Em tính từ hai số trên báo cáo «" + TITLE + "»" : "Lấy từ báo cáo «" + TITLE + "»"});
+  const re = /\d[\d.,]*\d%?|\d%?/g, parts = [];
+  for (const raw of q.split(/,\s+|;\s*|\s+(?=(?:và|tức là|tức|trong đó|còn)\s)/i)) {
+    let mt; re.lastIndex = 0;
+    while ((mt = re.exec(raw))) { const before = fold(raw.slice(0, mt.index)), after = raw.slice(mt.index + mt[0].length);
+      if (/\b(quy|thang|nam|viec|top|fy|ngay|tuan)\s*$/.test(before) || (/^(19|20)\d\d$/.test(mt[0]) && !/^\s*(tỷ|triệu|người|%)/i.test(after))) continue;   // «quý 3» is never a claim
+      const tu = (after.match(/^\s*(%|phần trăm|tỷ|triệu|nghìn|ngàn|người|vị trí)/i) || [])[1] || "";
+      parts.push({raw, tok: mt[0], v: num(mt[0]), pc: /%$/.test(mt[0]) || /phần trăm/i.test(tu), tu: /^(tỷ|triệu|người)$/i.test(tu) ? tu.toLowerCase() : /vị trí/i.test(tu) ? "người" : "",
+        f: " " + fold(raw) + " ", before}); } }
+  if (!parts.length) return false;
+  if ((D.nghi || []).some(it => (it.so || []).some(x => parts.some(p => Math.abs(num(x) - p.v) < 1e-9)))) return false;   // a doubted figure keeps its own answer
+  if (parts.length === 1 && nghiSents().some(x => new RegExp("(^|[^\\d.,])" + parts[0].tok.replace(/%$/, "").replace(/[.,]/g, "\\$&") + "(?![\\d]|[.,]\\d)").test(x.it.tinh || ""))) return false;
+  const tap = tapRow(scope); let prev = null, chgPrev = false;
+  for (const p of parts) {   // a part with no row of its own is about the row before it, else the tapped row (a named row beats the tap)
+    const r = claimRow(p.raw); if (r === undefined) return false;
+    p.at = r || prev || tap; if (!p.at) return false; prev = p.at;
+    p.chg = /\b(tang|giam|chenh|lech|them|bot)\b/.test(p.f) || (chgPrev && !r && (p.pc || /\btuc\b/.test(p.f))); chgPrev = p.chg;
+    p.sign = /\b(giam|bot)\b/.test(p.f) ? -1 : /\b(tang|them)\b/.test(p.f) ? 1 : 0;
+    p.over = /\b(hon|tren|vuot|qua)\s*$/.test(p.before); p.under = /\b(duoi|chua toi|chua den|gan)\s*$/.test(p.before); }
+  const facts = new Map();
+  const cands = at => { if (facts.has(at.row)) return facts.get(at.row);
+    const {m, row} = at, out = [], isPc = c => colUnit(m, c) === "%" || /%$/.test(cellText(row.cells[c]));
+    numCols(m, row).forEach(c => { const t = cellText(row.cells[c]); out.push({v: t.replace(/%$/, "").replace(/^[-−]/, ""), pc: isPc(c), c, u: isPc(c) ? "%" : uOf(m, row, c),
+      chg: /\b(chenh|lech|tang|giam|bien dong|so voi)\b/.test(fold(colName(m, c))), k: /^[-−]/.test(t) ? -1 : 1}); });
+    const rc = rowChange(qinfo(rowName(row) + " tăng"), {m, row});
+    if (rc && rc.row === row) { const ab = diffOf(rc.m, rc.row, rc.df, false), pr = diffOf(rc.m, rc.row, rc.df, true), a = cellText(rc.d.a), p = cellText(rc.d.p), k = rc.d.k < 0 ? -1 : 1;
+      if (ab) out.push({v: ab.s.replace(/^-/, ""), pc: false, how: a + " − " + p, u: uOf(rc.m, rc.row, rc.df[1]), chg: true, k, el: rc.d.a});
+      if (pr) out.push({v: pr.s.replace(/^-/, ""), pc: true, how: "(" + a + " − " + p + ") ÷ " + p + " × 100", u: "%", chg: true, k, el: rc.d.a}); }
+    facts.set(at.row, out); return out; };
+  for (const p of parts) {
+    const dec = (p.tok.replace(/%$/, "").split(",")[1] || "").length, r = x => Math.round(num(x) * 10 ** dec) / 10 ** dec;
+    const pool = cands(p.at).filter(x => x.pc === p.pc && (!p.tu || !x.u || x.u === p.tu) && (!p.chg || x.chg)), wrongUnit = !pool.length && cands(p.at).some(x => x.pc === p.pc && (!p.chg || x.chg));
+    const ex = pool.find(x => Math.abs(num(x.v) - p.v) < 1e-9), close = x => Math.abs(r(x.v) - p.v) < 1e-9, rel = x => Math.abs(num(x.v) - p.v) / Math.max(Math.abs(num(x.v)), 1e-9);
+    const cmp = (p.over || p.under) && pool.find(x => p.over ? num(x.v) > p.v : num(x.v) < p.v && (!/\bgan\s*$/.test(p.before) || rel(x) <= 0.1));
+    const nr = !ex && pool.find(x => close(x) && rel(x) <= 0.1), rough = !ex && !nr && pool.find(close);
+    p.hit = ex || cmp || nr || rough || null;
+    p.best = p.hit || cands(p.at).filter(x => x.pc === p.pc && (!p.chg || x.chg)).sort((a, b) => (a.how ? 0 : 1) - (b.how ? 0 : 1))[0] || cands(p.at).find(x => x.chg) || null;
+    p.st = ex && !(p.over || p.under) ? "exact" : cmp ? "cmp" : (p.over || p.under) ? "off" : nr ? "near" : rough ? "rough" : wrongUnit ? "unit" : "off";
+    if (p.hit && p.sign && p.hit.k && p.sign !== p.hit.k && p.st !== "off") p.st = "sign";
+  }
+  const unitOf = p => p.pc ? "%" : p.tu ? " " + p.tu : /\bty\b/.test(p.f) ? " tỷ" : "";
+  const say = (p, x) => (x.c === undefined ? (x.k < 0 ? "giảm " : "tăng ") : "") + (x.pc ? x.v + "%" : withUnit(x.v, x.u)) + (x.c !== undefined ? " (cột " + colName(p.at.m, x.c) + ")" : " (em tính: " + x.how + ")");
+  const fact = (p, i) => i && parts[i - 1].at.row === p.at.row ? (p.best && p.best.pc ? "tức " : "") + (p.best ? say(p, p.best).replace(/^(tăng|giảm) /, "") : "")
+    : rowName(p.at.row) + " " + (p.best ? say(p, p.best) : "");
+  const el = (parts[0].best && (parts[0].best.c !== undefined ? parts[0].at.row.cells[parts[0].best.c] : parts[0].best.el)) || parts[0].at.row.cells[0];
+  const src = parts.some(p => p.best && p.best.how) ? "Em tính từ hai số trên báo cáo «" + TITLE + "»" : "Lấy từ báo cáo «" + TITLE + "»";
+  const ok = p => /^(exact|near|cmp)$/.test(p.st), polar = / sai /.test(fq);
+  if (parts.length === 1) { const p = parts[0];
+    if (p.st === "exact" && p.hit.c !== undefined && !polar) { checkAnswer(q, p.at.m, p.at.row, p.hit.c); return true; }
+    if (p.st === "exact" && !polar && (p.pc || /,/.test(p.tok))) { answer("Đúng theo bảng: " + rowName(p.at.row) + " " + say(p, p.hit).replace(/\)$/, "); báo cáo không in sẵn số này."), p.hit.el || el, {src}); return true; } }
+  const facts1 = parts.map(fact).join(", ");
+  let text;
+  if (parts.every(ok)) {
+    const p = parts[0], lone = parts.length === 1;
+    text = (polar ? "Số này khớp bảng: " : lone && p.st === "near" ? "Đúng ạ, khoảng " + p.tok.replace(/%$/, "") + unitOf(p) + ": " : "Đúng ạ: ") + facts1 + (lone && p.st === "cmp" ? ", " + (p.over ? "trên " : "dưới ") + p.tok.replace(/%$/, "") + unitOf(p) : "") + ".";
+  } else {
+    const bad = parts.filter(p => !ok(p)), good = parts.filter(ok), b0 = bad[0];
+    const why = p => p.st === "sign" ? rowName(p.at.row) + (p.hit.k > 0 ? " tăng chứ không giảm: " : " giảm chứ không tăng: ") + say(p, p.hit).replace(/^(tăng|giảm) /, "")
+      : p.st === "rough" ? rowName(p.at.row) + " " + say(p, p.hit) + "; làm tròn mới thành " + p.tok.replace(/%$/, "") + unitOf(p)
+      : (p.over || p.under) && p.best ? rowName(p.at.row) + " " + say(p, p.best) + ", " + (p.over ? "không trên " : "không dưới ") + p.tok.replace(/%$/, "") + unitOf(p)
+      : "dòng " + rowName(p.at.row) + " không có số " + p.tok.replace(/%$/, "") + unitOf(p) + (p.best ? ". Theo bảng, " + rowName(p.at.row) + " " + say(p, p.best) + (() => { const pr = !p.best.pc && p.best.how && cands(p.at).find(x => x.pc && x.how);
+        return pr ? ", tức " + say(p, pr).replace(/^(tăng|giảm) /, "") : ""; })() : ". Dòng này ghi: " +
+        numCols(p.at.m, p.at.row).map(c => colName(p.at.m, c) + " " + cellText(p.at.row.cells[c])).filter(x => /\d/.test(x)).join("; "));
+    text = (polar ? "Số này chưa khớp bảng: " : bad.every(p => p.st === "rough") ? "Không hẳn ạ: " : parts.length === 1 && b0.st !== "sign" ? "Không ạ, " : "Không ạ: ") + bad.map(why).join("; ") + "." +
+      (good.length ? " Phần còn lại khớp: " + good.map(p => rowName(p.at.row) + " " + say(p, p.hit)).join(", ") + "." : "");
+  }
+  answer(text, el, {src});
   return true;
 }
 function verifyAsk(q, scope) {   // "12,6% có đúng không", "số này nghĩa là gì" on a cell: where it is printed, and the sum behind it
@@ -3060,6 +3115,7 @@ function verifyAsk(q, scope) {   // "12,6% có đúng không", "số này nghĩa
     // round 17: «Logistics tăng 15 tỷ đúng không?» is about Logistics' row only, never «Hành chính 15,0» because the figure matches
     const named = []; if (!mine.length) tables().forEach(m => m.rows.forEach(row => { if (numCols(m, row).length && rowMatch(Q, row)) named.push({m, row}); }));
     if (named.length === 1 && !pl.sents.some(x => fold(x.s).includes(fold(rowName(named[0].row).replace(/^(khối|phòng|bộ phận)\s+/i, ""))))) {
+      if (rowClaim(q, null, true)) return true;   // the same verdict as a tagged claim: never «Không ạ» when the rounded change matches (round 19)
       if (workedOut(q, toks)) return true;   // «Logistics tăng 30%»: the row's own worked change says yes
       const {m, row} = named[0], cells = numCols(m, row).map(c => colName(m, c) + " " + cellText(row.cells[c])).filter(x => /\d/.test(x));
       const rc = rowChange(Q, null) || rowChange(qinfo(q + " tăng"), null), ab = rc && rc.row === row && diffOf(rc.m, rc.row, rc.df, false), pr = ab && diffOf(rc.m, rc.row, rc.df, true);
@@ -3166,7 +3222,7 @@ function ask(q, scope) {
   if (doubtList(q)) return;   // with or without a place tapped (round 9: a tapped place broke it)
   const tr = scopedRow(scope), rowQ = tr && !fold(q).includes(fold(tr.label)) ? tr.label + " " + q : q;   // a tapped Logistics row: "%" is Logistics' (round 11)
   if (tr && rowQ !== q && /( phan tram| %)/.test(" " + fold(q).replace(/(\d)%/g, "$1 %").replace(/%/g, " %")) && !/\d/.test(q)) { ask2(rowQ); return; }
-  if (!scope && rowClaim(q)) return;   // «Bán hàng tăng 14 tỷ đúng không?»: the named row first, never another row's doubt (round 18)
+  if (rowClaim(q, scope)) return;   // «Bán hàng tăng 14 tỷ đúng không?»: the named row first, else the tapped row; never another row's doubt (rounds 18–19)   // «Bán hàng tăng 14 tỷ đúng không?»: the named row first, never another row's doubt (round 18)
   { const o = doubtHit(q, scope); if (o && (!tr || doubtHit(rowQ, scope))) { answerDoubt(q, o); return; } }
   if (quotesDoubted(q)) { holdDoubted(q); return; }
   { const o = figDoubt(q, scope); if (o) { answerDoubt(q, o); return; } }   // a doubted figure on a card or in an ask

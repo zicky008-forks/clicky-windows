@@ -1499,3 +1499,62 @@ def test_round_eighteen_row_claims_match_at_the_readers_precision_and_the_queue_
     finally:
         browser.close()
         pw.stop()
+
+
+def test_round_nineteen_a_disclosure_line_never_rules_a_doubted_figure():
+    # round-19 panel: switching on «Mức 120,0 anh Tuấn đang kiểm lại …» marked the doubt done, so the page answered
+    # as if the cap were checked; a disclosure tells the Board the figure is open, it never settles it
+    tell = "Mức 120,0 anh Tuấn đang kiểm lại; giữ đúng tỷ lệ thì trần là khoảng 118,8 tỷ."
+    plain = "Trần 120,0 tỷ giữ nguyên như báo cáo."
+    item = {"ma_cau": "abc123", "ma_so": ["120,0"], "cau": [tell, plain]}
+    script = {"canh": [{"cau": [{"noi": tell, "bat": "có"}, {"noi": plain, "bat": "chưa"}]}], "kiem_tra": [item]}
+    assert clicky_html.doubts(script)[0]["xong"] is False
+    assert clicky_html.doubted_open(script) == ["abc123"]
+    script["canh"][0]["cau"][1]["bat"] = "có"       # a line that states the figure as the talk's own: the owner ruled
+    assert clicky_html.doubts(script)[0]["xong"] is True
+    assert clicky_html.doubted_open(script) == []
+
+
+def test_round_nineteen_row_claims_judge_the_named_or_tapped_row_and_every_figure(report, drawn_report):
+    # round-19 panel: after a tap, «Khối Bán hàng tăng 14 tỷ đúng không?» said «Không ạ» (the claim check was skipped) or
+    # answered another row; «Tổng tăng 19 tỷ, tức 17%» was refused; «giảm», «triệu», «hơn» and «sai» swapped into a true
+    # claim could still be confirmed; 2,5 was «Đúng ạ, khoảng 3»
+    pw, browser, pages = _ghi_pages(report, drawn_report)
+    try:
+        A, B = pages["A"], pages["B"]
+        hoi = lambda pg, q, s=None: pg.evaluate("([q, s]) => window.__clickyHoi(q, s)", [q, s])   # noqa: E731
+        sweep = {B: ("#t tbody tr:nth-of-type(%d) td:nth-of-type(3)", [("Khối vận hành", "15"), ("Logistics", "12"), ("Mua hàng", "3"),
+                                                                       ("Khối hỗ trợ", "4"), ("CNTT", "2,5"), ("Hành chính", "1,5"), ("Tổng", "19")]),
+                 A: ("table tbody tr:nth-of-type(%d) td:nth-of-type(4)", [("Khối Bán hàng", "14"), ("Khối Marketing", "1,5"),
+                                                                          ("Khối Chuỗi cung ứng", "2"), ("Khối Tài chính - Kế toán", "0,6"),
+                                                                          ("Khối Nhân sự - Hành chính", "0,7"), ("Khối CNTT", "2"), ("Tổng", "21")])}
+        for pg, (sel, rows) in sweep.items():
+            for i, (row, v) in enumerate(rows):
+                for scope in (None, sel % (i + 1), sel % ((i + 3) % len(rows) + 1)):   # the panel, the same row tapped, another row tapped
+                    for tail in ("đúng không?", "phải không?"):
+                        x = hoi(pg, f"{row} tăng {v} tỷ {tail}", scope)
+                        assert x.startswith(("Đúng", "Khối")) and "Không ạ" not in x and row.split(" - ")[0] in x, (row, scope, tail, x)
+                        assert "khớp" in x or x.startswith("Đúng"), x
+        for pg, q, scope, start in (
+                (B, "Tổng tăng 19 tỷ, tức 17% đúng không?", None, "Đúng ạ: Tổng tăng 19,0 tỷ (em tính: 129,0 − 110,0), tức 17,3%"),
+                (B, "Logistics tăng 12 tỷ và CNTT tăng 2,5 tỷ đúng không?", None, "Đúng ạ: Logistics tăng 12,0 tỷ"),
+                (B, "Tăng 12 tỷ đúng không?", "#t tbody tr:nth-of-type(2) td:nth-of-type(3)", "Đúng ạ: Logistics tăng 12,0 tỷ"),
+                (B, "CNTT tăng 2,5 tỷ phải không?", "#t tbody tr:nth-of-type(1) td:nth-of-type(3)", "Đúng theo bảng: CNTT tăng 2,5 tỷ"),
+                (B, "Tổng giảm 19 tỷ đúng không?", None, "Không ạ: Tổng tăng chứ không giảm: 19,0 tỷ"),
+                (B, "Logistics tăng 12 triệu đúng không?", None, "Không ạ, dòng Logistics không có số 12 triệu."),
+                (B, "Logistics tăng hơn 10 tỷ đúng không?", None, "Đúng ạ: Logistics tăng 12,0 tỷ"),
+                (B, "Logistics tăng hơn 15 tỷ đúng không?", None, "Không ạ, Logistics tăng 12,0 tỷ"),
+                (B, "Tổng tăng 19 tỷ là sai à?", None, "Số này khớp bảng: Tổng tăng 19,0 tỷ"),
+                (B, "CNTT tăng 3 tỷ đúng không?", None, "Không hẳn ạ: CNTT tăng 2,5 tỷ"),
+                (B, "Hành chính tăng 2 tỷ phải không?", "#t tbody tr:nth-of-type(6) td:nth-of-type(3)", "Không hẳn ạ: Hành chính tăng 1,5 tỷ"),
+                (A, "Khối Marketing tăng 2 tỷ đúng không?", None, "Không hẳn ạ: Khối Marketing 1,5 tỷ"),
+                (A, "Khối Bán hàng tăng 92 tỷ đúng không?", None, "Không ạ, dòng Khối Bán hàng không có số 92 tỷ."),
+                (A, "Khối Bán hàng giảm 14 tỷ à?", None, "Không ạ: Khối Bán hàng tăng chứ không giảm: 14,1 tỷ"),
+                (A, "Tài chính tăng 0,6 tỷ đúng không?", None, "Khối Tài chính - Kế toán, Chênh lệch: 0,6 tỷ.")):
+            x = hoi(pg, q, scope)
+            assert x.startswith(start), (q, scope, x)
+            if start.startswith(("Không", "Số này khớp")):
+                assert not x.startswith("Đúng"), x
+        assert "Anh Tuấn đang kiểm lại hai số này" in hoi(B, "Tổng tăng 18% đúng không?")   # a doubted figure keeps its own answer
+    finally:
+        browser.close()

@@ -234,5 +234,15 @@
  ["B", "Kho mới chưa được", {"3": "?"}],
  ["B", "Đồng ý hết, riêng kho mới thì cần bàn", {"0": "Y", "1": "Y", "2": "Y", "3": "D"}],
  ["B", "Đồng ý hết, ngoài kho mới", {"0": "Y", "1": "Y", "2": "Y"}],
- ["B", "Duyệt hết, trừ kho mới", {"0": "Y", "1": "Y", "2": "Y"}]
+ ["B", "Duyệt hết, trừ kho mới", {"0": "Y", "1": "Y", "2": "Y"}],
+ ["A", "Không cần giãn tuyển", {"1": "N"}],
+ ["A", "Chẳng cần giãn tuyển", {"1": "N"}],
+ ["A", "Giãn tuyển là sai lầm", {"1": "N"}],
+ ["A", "Giãn tuyển thì tôi không chịu", {"1": "N"}],
+ ["A", "Chẳng cần duyệt trần", {"0": "N"}],
+ ["A", "Giãn tuyển không sai", {"1": "Y"}],
+ ["A", "Việc hai ok, mấy việc kia anh Tuấn làm rõ rồi báo lại", {"1": "Y", "0": "D"}],
+ ["B", "Logistics ok, mấy việc kia anh Tuấn làm rõ rồi báo lại", {"1": "Y", "0": "D", "2": "D", "3": "D"}],
+ ["B", "Không cần hoãn kho mới", {"3": "N"}],
+ ["B", "Hoãn kho mới là sai lầm", {"3": "N"}]
 ]

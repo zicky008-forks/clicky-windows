@@ -2293,6 +2293,11 @@ def ruled(k: dict, said: set) -> bool:
     return bool(q) or bool(str(k.get("ly_do_bo") or "").strip()) or any(str(x).strip() in said for x in k.get("cau") or [])
 
 
+def _discloses(line: str) -> bool:
+    """A spoken line that tells the Board the figure is still being checked: a disclosure, never a ruling (round 19)."""
+    return "đang kiểm lại" in str(line)
+
+
 def verdict(k: dict) -> str:
     """The owner's ruling on a doubted sentence: 'giữ câu', 'báo cáo sai', or '' (accents and case forgiven)."""
     q = "".join(c for c in unicodedata.normalize("NFD", str(k.get("quyet") or "").replace("đ", "d"))
@@ -2323,7 +2328,8 @@ def doubts(script: dict) -> list:
     and, once the owner has ruled, his reason. Never the sentence or the owner's finding in words."""
     said = _lines_on(script)
     return [{"ma": str(k.get("ma_cau") or ""), "so": [str(x) for x in k.get("ma_so") or []], "tinh": str(k.get("tinh") or ""),
-             "xong": ruled(k, said) or verdict(k) == "báo cáo sai", "quyet": verdict(k),
+             # the page keeps a doubt open while the only line switched on says «đang kiểm lại» (round 19)
+             "xong": ruled(k, {x for x in said if not _discloses(x)}) or verdict(k) == "báo cáo sai", "quyet": verdict(k),
              "noi": str(k.get("noi_voi_BOD") or "").strip()}   # ly_do_bo is the owner's own note: never on the page
             for k in script.get("kiem_tra") or [] if isinstance(k, dict) and (k.get("ma_cau") or k.get("ma_so"))]
 
@@ -2358,7 +2364,7 @@ def bod_figures_unlocked(script: dict, page_text: str, en: bool) -> list:
 
 def doubted_open(script: dict) -> list:
     """Fingerprints of report sentences still in doubt: the page holds questions on them until the owner rules."""
-    said = _lines_on(script)
+    said = {x for x in _lines_on(script) if not _discloses(x)}   # a disclosure keeps the doubt open (round 19)
     return [str(k["ma_cau"]) for k in script.get("kiem_tra") or []
             if isinstance(k, dict) and k.get("ma_cau") and not ruled(k, said)]
 
