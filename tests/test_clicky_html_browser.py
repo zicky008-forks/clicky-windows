@@ -1440,6 +1440,10 @@ def test_a_board_members_plain_questions_get_the_rows_facts_the_sentences_and_on
 
 def test_nods_junk_and_say_again_never_reach_the_owner_and_plan_names_explain_themselves(page):
     pg, errors = page
+    # round-8 panel: the desktop's first screen says the asks with their money too, never only how to use the page
+    first = pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('cap').innerText")
+    assert first.startswith("Em là trợ lý AI của anh Tuấn. Anh Tuấn xin anh chị quyết: duyệt trần 177,5 tỷ (giảm 8,9 tỷ); "
+                            "giãn tuyển 30 vị trí bán hàng. Bấm ▶ để nghe vì sao"), first
     # round-7 panel: these were queued and mailed under CÂU HỎI, or lost the real question
     for q in ("asdf qwe", "asdfgh"):
         assert _r3(pg, q) == "Em chưa hiểu câu hỏi, anh chị nói lại giúp em ạ."
