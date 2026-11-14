@@ -600,6 +600,12 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
 
     # pre-flight first: a sentence the owner must check is never the talk's own evidence until he rules on it
     flags += preflight(items, places, t, en, note, cut, owner)
+    for fl in flags:                               # a doubted cap in an ask: right after that ask, the proposal says so (round 18)
+        if fl.get("noi_nghi"):
+            at = next((k for k, (_m, ln) in enumerate(lines) if ln.vai == "hoi" and fl["so"][0] in ln.noi), None)
+            if at is not None:
+                lines.insert(at + 1, (lines[at][0], Line(fl["noi_nghi"][0], lines[at][1].chi, so_tinh=fl["noi_nghi"][1], bat=False, vai="nghi")))
+                fl.setdefault("cau", []).append(fl["noi_nghi"][0])
     con = contrast(items, en)
     con_doubt = None
     if con is not None:
@@ -680,9 +686,10 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         name = _cap(_short(top.label))
         why = next((c for c in (top.cols or []) if re.search(r"giải trình|lý do|nguyên nhân|diễn giải|ghi chú", c.header, re.I)
                     and c.text.strip() and not re.search(r"\d", c.text) and len(c.text.split()) <= 8), None)
-        cause = f"; giải trình ghi: {_lc(why.text.strip().rstrip('.'))}" if why else ""   # the row's own printed reason
+        # the row's own printed reason; said as speech, never «:» or «giải trình ghi:» read aloud (round 18 voice lint)
+        cause = f", theo giải trình là do {_lc(why.text.strip().rstrip('.'))}" if why else ""
         text = (f"{name} chiếm {sw} phần {verb}: {top_tok} {unit}{cause}." if sw
-                else f"Lớn nhất là {_short(top.label)}: {verb} {top_tok} {unit}{cause}.").replace(" .", ".").replace(" ;", ";")
+                else f"Lớn nhất là {_short(top.label)}: {verb} {top_tok} {unit}{cause}.").replace(" .", ".").replace(" ,", ",")
         st = [f"{top_tok} = {top_f}"] if top_f else []
         if sw and sw.endswith("%"):                # the share said as a figure: its own formula, checked like any other
             st.append(f"{sw.split()[1].rstrip('%')} = {top_tok} / {tdelta[0]} × 100")
@@ -704,7 +711,7 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                         break
                 if hit:
                     figs_ = [g.tok for g in C.figures(hit)] if C.figures(hit) else []
-                    lines.append(("Phần tăng nằm ở đâu", Line(f"Báo cáo ghi lý do: {hit}.", cid(it2), xac_nhan=figs_, vai="nguyen_nhan")))
+                    lines.append(("Phần tăng nằm ở đâu", Line(f"Báo cáo ghi lý do là {hit}.", cid(it2), xac_nhan=figs_, vai="nguyen_nhan")))
                     break
         tp, ta = _num(top, t.plan, en), _num(top, t.actual, en)
         if tp and ta and abs(share) >= Decimal("0.4") and len(same) + len([m for m in moves if m[1]]) > 2:
@@ -800,7 +807,7 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
     for fl in flags:
         if fl.get("noi_thang") and note is not None:
             # no figure in it, so on by default: the Board hears the gap even before the owner fills it (round-5 #13)
-            lines.append(("Đề nghị", Line(fl["noi_thang"], cid(note), vai="thang")))
+            lines.append(("Đề nghị", Line(fl["noi_thang"], cid(note), dung=1.2, vai="thang")))
             fl.setdefault("cau", []).append(fl["noi_thang"])
         if fl.get("de_xuat") and note is not None:       # a bound worked out from printed figures: said with its formula (user, 11-14)
             lines.append(("Đề nghị", Line(fl["de_xuat"][0], cid(note), so_tinh=fl["de_xuat"][1],
@@ -811,8 +818,16 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                                               xac_nhan=fl["de_xuat"][2], vai="con_thieu")))
                 fl["cau"].append(fl["de_xuat"][3][0])
                 lines.append(("Đề nghị", Line(f"Phần này anh chị có thể hỏi {owner} ngay sau phần em trình bày.", "",
-                                              dung=0.6, vai="moi_hoi_sau")))
+                                              dung=0.6, bat=False, vai="moi_hoi_sau")))   # off: the close already invites questions (round 18, the talk ran long)
                 fl["cau"].append(lines[-1][1].noi)
+
+    # proposed bridge (round 18): with no cut line, the asks that pull the rise down are named before the close
+    if ask_pairs and len(ask_pairs) > 2 and cut is None and up and not any(ln.vai == "cau_noi_hoi" for _m, ln in lines):
+        holds = [lc(a) for _n, a in ask_pairs if re.match(r"(giữ|hoãn|giãn|cắt|dừng)\b", str(a), re.I)]
+        holds = [re.sub(r"\s+(cho cả năm|sang năm sau)\b.*$", "", h) for h in holds]
+        if holds:
+            lines.append(("Chốt", Line(f"Để kéo phần tăng này xuống, {owner} đề nghị {' và '.join(holds)}.", cid(first),
+                                       bat=False, vai="cau_noi_hoi")))
 
     # B10: close on every decision asked at the start, then stop for questions
     if ask_list and many:                          # just listed one by one: the card after the talk holds them
@@ -993,7 +1008,11 @@ def preflight(items: list, places: dict, t: Table, en: bool, note, cut, owner: s
                                              f"{got} {u}.".replace("  ", " "),
                                       "so": [m.group(1)],
                                       "tinh": f"giữ đúng tỷ lệ chi phí trên doanh thu của {plan_said(t.plan_name)} thì trần là "
-                                              f"{pretty(expr)} = {got} {u}".replace("  ", " ").strip()})
+                                              f"{pretty(expr)} = {got} {u}".replace("  ", " ").strip(),
+                                      # proposed spoken doubt, off until the owner switches it on (round 18)
+                                      "noi_nghi": (f"Mức {m.group(1)} {owner} đang kiểm lại; giữ đúng tỷ lệ chi phí trên doanh thu của "
+                                                   f"{plan_said(t.plan_name)} thì trần là khoảng {got} {u}.".replace("  ", " ").replace(" .", "."),   # «khoảng»: the figure moves with the report's rounding
+                                                   [f"{got} = {expr}"])})
                 except ValueError:
                     pass
     if hc and rate:
@@ -1027,8 +1046,7 @@ def preflight(items: list, places: dict, t: Table, en: bool, note, cut, owner: s
                                    f"{_short(row.label)} ({per}), giãn trọn năm khoảng {say(year, 1, en)} "
                                    f"{t.unit or ''}{need}. Anh bổ sung số tháng giãn vào báo cáo, em đang nói câu "
                                    "ước tính kèm công thức (anh không muốn thì ghi bat: 'chưa').",
-                            "noi_thang": f"Có một điểm báo cáo chưa có số: giãn {m.group(1)} {m.group(2)} tiết kiệm "
-                                         "được bao nhiêu."}
+                            "noi_thang": f"Vậy giãn {m.group(1)} {m.group(2)} tiết kiệm được bao nhiêu? Báo cáo chưa ghi số này."}   # a turn the room hears as a question (round 18)
                     expr = f"{m.group(1)} × {per}"
                     got = robust_token(expr, en, most=1)
                     got = (say(year, 1, en), 1) if got and decimals(got[0], en) == 0 and \

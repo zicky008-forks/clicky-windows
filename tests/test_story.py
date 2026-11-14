@@ -102,7 +102,7 @@ def test_the_owner_pre_flight_is_in_the_result_and_never_on_the_page(report):
     assert "3,9 tỷ" in gap and "8,9 tỷ" in gap
     # the gap carries no figure, so it is said by default (round-5 Chair, three rounds running); the owner can switch
     # it off; the bound is worked out by code and, by the owner's decision (11-14), said with its formula
-    gapline = next(c for c in lines(rep) if c["noi"].startswith("Có một điểm báo cáo chưa có số: giãn 30 vị trí"))
+    gapline = next(c for c in lines(rep) if c["noi"].startswith("Vậy giãn 30 vị trí tiết kiệm được bao nhiêu? Báo cáo chưa ghi số này."))
     assert "bat" not in gapline
     bound = next(c for c in lines(rep) if c.get("vai") == "uoc_tiet_kiem")
     assert "khoảng 3,9 tỷ" in bound["noi"] and "4 tỷ" not in bound["noi"]   # 30 × 92,3 / 712 = 3,89, never rounded up to 4
@@ -269,7 +269,13 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     asks = ["Một là duyệt trần chi phí vận hành 120,0 tỷ cho cả năm.",
             "Hai là Logistics phải giải trình trước khi duyệt phần tăng thuê kho.",
             "Ba là giữ quỹ lương bằng kế hoạch gốc cho cả năm.", "Bốn là hoãn dự án kho mới sang năm sau."]
-    assert said[1]["noi"] == "Anh Tuấn xin anh chị quyết bốn việc." and [c["noi"] for c in said[2:6]] == asks
+    assert said[1]["noi"] == "Anh Tuấn xin anh chị quyết bốn việc." and [c["noi"] for c in said[2:7] if c.get("vai") == "hoi"] == asks
+    # round 18: the doubted cap's spoken note and the bridge before the close are proposed, off until the owner switches them on
+    nghi = said[3]
+    assert nghi["noi"] == "Mức 120,0 anh Tuấn đang kiểm lại; giữ đúng tỷ lệ chi phí trên doanh thu của kế hoạch gốc thì trần là khoảng 118,8 tỷ." and nghi["bat"] == "chưa"
+    assert nghi["so_tinh"] and nghi["so_tinh"][0].startswith("118,8 = ")
+    bridge = next(c for c in said if c["noi"].startswith("Để kéo phần tăng này xuống"))
+    assert bridge["noi"] == "Để kéo phần tăng này xuống, anh Tuấn đề nghị giữ quỹ lương bằng kế hoạch gốc và hoãn dự án kho mới." and bridge["bat"] == "chưa"
     close = [c["noi"] for c in said if c.get("vai") == "chot"]
     # four asks: the close says a few words each, never the opening again word for word (round-6 Coach)
     assert close == ["Tóm lại, anh Tuấn xin anh chị quyết: một là duyệt trần 120,0 tỷ; hai là Logistics giải trình; "
@@ -277,7 +283,7 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     # the table has no variance column: code works it out from the drawn rows; a group row ("Khối vận hành" adds up
     # Logistics and Mua hàng) is never the driver; the unit comes from the table's heading "(tỷ đồng)"
     driver = next(c for c in said if c.get("vai") == "dong_luc")
-    assert driver["noi"] == "Logistics chiếm gần hai phần ba phần tăng: 12,0 tỷ; giải trình ghi: thuê kho." and driver["so_tinh"] == ["12,0 = 52,0 - 40,0", "63 = (52,0 - 40,0) / (129,0 - 110,0) × 100"]   # the share behind "gần hai phần ba"
+    assert driver["noi"] == "Logistics chiếm gần hai phần ba phần tăng: 12,0 tỷ, theo giải trình là do thuê kho." and driver["so_tinh"] == ["12,0 = 52,0 - 40,0", "63 = (52,0 - 40,0) / (129,0 - 110,0) × 100"]   # the share behind "gần hai phần ba"
     assert driver["chi"].startswith("v")
     rest = next(c for c in said if c["noi"].startswith("Bỏ Logistics ra"))
     # 10% is still faster than revenue's 8,0%: never "chỉ"
@@ -704,7 +710,7 @@ def test_switching_on_a_proposed_line_settles_its_check_and_never_breaks_the_bui
     done = build(report)
     assert done["trang_thai"].startswith("CHÍNH THỨC"), done["canh_bao"]
     said = " ".join(c["noi"] for c in lines(done))
-    assert "3,9 tỷ" in said and "Có một điểm báo cáo chưa có số" in said
+    assert "3,9 tỷ" in said and "Vậy giãn 30 vị trí tiết kiệm được bao nhiêu?" in said
 
 
 def _silent_wav(text):   # playable silence at a natural pace (~15 letters a second), so the talk really plays
@@ -929,11 +935,12 @@ def test_round_twelve_talk_arc_says_each_figure_at_most_twice_with_cause_and_bri
     said_a = [c for c in lines(a) if c.get("bat", "có") == "có"]
     talk = " ".join(c["noi"] for c in said_a)
     assert talk.count("8,9") == 2 and talk.count("Nếu giữ nguyên") == 1 and "Vì vậy" not in talk
-    assert "Báo cáo ghi lý do: kế hoạch tuyển thêm 48 nhân viên bán hàng kênh MT và HRC+KA." in talk
+    assert "Báo cáo ghi lý do là kế hoạch tuyển thêm 48 nhân viên bán hàng kênh MT và HRC+KA." in talk
     assert "Giữ 2,40% như kế hoạch gốc thì trần là 177,5 tỷ. Tức là phải giảm 8,9 tỷ" in talk
     assert "Để giảm, anh Tuấn đề nghị giãn tuyển 30 vị trí bán hàng sang quý 3." in talk
     gap = talk.index("Còn lại khoảng 5,0 tỷ")
-    assert talk[gap:].split(". ", 1)[1].startswith("Phần này anh chị có thể hỏi anh Tuấn ngay sau phần em trình bày.")
+    assert talk[gap:].split(". ", 1)[1].startswith("Tóm lại")   # round 18: «Phần này anh chị có thể hỏi…» is proposed only (the talk ran long)
+    assert next(c for c in lines(a) if c["noi"].startswith("Phần này anh chị có thể hỏi"))["bat"] == "chưa"
     pytest.importorskip("playwright")              # B draws its table with a script: told from the page only once rendered
     from present import ve_trang
     b = build(drawn_report)
