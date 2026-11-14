@@ -202,6 +202,7 @@ class Line:
     xac_nhan: list = field(default_factory=list)     # printed figures this line names from another place
     bat: bool = True                                 # False: proposed, said only once the owner switches it on
     vai: str = ""                                    # the beat ("hoi", "dong_luc"…): how the page answers questions
+    thay: str = ""                                   # a proposal that, once switched on, replaces the line of this beat
 
 
 @dataclass
@@ -604,7 +605,10 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         if fl.get("noi_nghi"):
             at = next((k for k, (_m, ln) in enumerate(lines) if ln.vai == "hoi" and fl["so"][0] in ln.noi), None)
             if at is not None:
-                lines.insert(at + 1, (lines[at][0], Line(fl["noi_nghi"][0], lines[at][1].chi, so_tinh=fl["noi_nghi"][1], bat=False, vai="nghi")))
+                chi_at = lines[at][1].chi
+                while at + 1 < len(lines) and lines[at + 1][1].vai == "hoi" and re.match(r"(Hai|Ba|Bốn|Năm|Sáu) là ", lines[at + 1][1].noi):
+                    at += 1                        # after the last of «Một là … Bốn là»: the list is heard whole (round 21)
+                lines.insert(at + 1, (lines[at][0], Line(fl["noi_nghi"][0], chi_at, so_tinh=fl["noi_nghi"][1], bat=False, vai="nghi")))
                 fl.setdefault("cau", []).append(fl["noi_nghi"][0])
     con = contrast(items, en)
     con_doubt = None
@@ -851,6 +855,16 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         f = cap.figs[0]
         lines.append(("Chốt", Line(f"Tóm lại, {owner} xin anh chị cho ý kiến về mức trần {f.tok} {f.unit or unit}."
                                    .replace("  ", " "), cap.id, dung=1.0, vai="chot")))
+    for fl in flags:                               # a doubted cap: a close that never says it as firm, proposed (round 21)
+        if not fl.get("noi_nghi"):
+            continue
+        k = next((k for k, (_m, ln) in enumerate(lines) if ln.vai == "chot" and not ln.thay and fl["so"][0] in ln.noi), None)
+        if k is not None:
+            tok = re.escape(fl["so"][0])
+            soft = re.sub(rf"(duyệt|giữ)\s+trần(\s+chi phí[^0-9;,.]*?)?\s+{tok}(\s*(tỷ|triệu))?", rf"\1 trần ở mức {owner} chốt sau khi kiểm lại",
+                          lines[k][1].noi, count=1)
+            if soft != lines[k][1].noi:
+                lines.insert(k + 1, ("Chốt", Line(soft, lines[k][1].chi, dung=lines[k][1].dung, bat=False, vai="chot", thay="chot")))
     lines.append(("Chốt", Line("Em kính mời anh chị cho ý kiến ạ.", "", dung=2.0, vai="moi_hoi")))
 
     # pacing: a breath after the greeting and the contrast, a longer one after the asks, a short one on the cap
@@ -888,6 +902,8 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             c["bat"] = "có"
         if ln.vai:
             c["vai"] = ln.vai
+        if ln.thay:
+            c["thay"] = ln.thay
         scenes[-1]["cau"].append(c)
     checks = []
     for fl in flags:                               # each finding names the lines it governs and the sentence it doubts

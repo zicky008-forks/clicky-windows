@@ -270,16 +270,21 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
             "Hai là Logistics phải giải trình trước khi duyệt phần tăng thuê kho.",
             "Ba là giữ quỹ lương bằng kế hoạch gốc cho cả năm.", "Bốn là hoãn dự án kho mới sang năm sau."]
     assert said[1]["noi"] == "Anh Tuấn xin anh chị quyết bốn việc." and [c["noi"] for c in said[2:7] if c.get("vai") == "hoi"] == asks
-    # round 18: the doubted cap's spoken note and the bridge before the close are proposed, off until the owner switches them on
-    nghi = said[3]
+    # round 18: the doubted cap's spoken note and the bridge before the close are proposed, off until the owner switches them on;
+    # round 21: the note comes after «Bốn là», so the list is heard whole
+    nghi = said[6]
     assert nghi["noi"] == "Mức 120,0 anh Tuấn đang kiểm lại; giữ đúng tỷ lệ chi phí trên doanh thu của kế hoạch gốc thì trần là khoảng 118,8 tỷ." and nghi["bat"] == "chưa"
     assert nghi["so_tinh"] and nghi["so_tinh"][0].startswith("118,8 = ")
     bridge = next(c for c in said if c["noi"].startswith("Để kéo phần tăng này xuống"))
     assert bridge["noi"] == "Để kéo phần tăng này xuống, anh Tuấn đề nghị giữ quỹ lương bằng kế hoạch gốc và hoãn dự án kho mới." and bridge["bat"] == "chưa"
-    close = [c["noi"] for c in said if c.get("vai") == "chot"]
+    close = [c["noi"] for c in said if c.get("vai") == "chot" and not c.get("thay")]
     # four asks: the close says a few words each, never the opening again word for word (round-6 Coach)
     assert close == ["Tóm lại, anh Tuấn xin anh chị quyết: một là duyệt trần 120,0 tỷ; hai là Logistics giải trình; "
                      "ba là giữ quỹ lương; bốn là hoãn dự án kho mới."]
+    # round 21: while 120,0 is doubted, a close that never says it as firm is proposed; switched on, it replaces the close
+    soft = next(c for c in said if c.get("thay") == "chot")
+    assert soft["noi"] == ("Tóm lại, anh Tuấn xin anh chị quyết: một là duyệt trần ở mức anh Tuấn chốt sau khi kiểm lại; "
+                           "hai là Logistics giải trình; ba là giữ quỹ lương; bốn là hoãn dự án kho mới.") and soft["bat"] == "chưa"
     # the table has no variance column: code works it out from the drawn rows; a group row ("Khối vận hành" adds up
     # Logistics and Mua hàng) is never the driver; the unit comes from the table's heading "(tỷ đồng)"
     driver = next(c for c in said if c.get("vai") == "dong_luc")
@@ -620,7 +625,7 @@ def test_a_doubted_card_or_cap_figure_is_held_with_both_figures_and_a_worked_out
         # round-10 blockers: the column after "so với" is the base; an exclusion list and a "riêng" verdict are kept
         assert ask("Tổng tăng bao nhiêu phần trăm so với AOP gốc?").startswith("Tổng tăng 17,3% từ AOP gốc lên AOPR")
         assert ask("Logistics tăng bao nhiêu phần trăm so với AOP gốc?").startswith("Logistics tăng 30,0% từ AOP gốc lên AOPR")
-        assert ask("Đồng ý hết trừ việc một và việc bốn").startswith("Em đã ghi việc hai «Đồng ý»; việc ba «Đồng ý». Việc một, bốn em chưa ghi.")
+        assert ask("Đồng ý hết trừ việc một và việc bốn").startswith("Em đã ghi việc hai «Đồng ý»; việc ba «Đồng ý». Việc một, bốn anh chị trừ ra, em chưa ghi: anh chị không đồng ý hay cần bàn thêm ạ?")
         assert ask("Đồng ý hết, riêng việc một để bàn thêm").startswith("Em đã ghi việc một «Cần bàn thêm»; việc hai «Đồng ý»; việc ba «Đồng ý»; việc bốn «Đồng ý».")   # ask order (round 11)
         assert pg.evaluate("q => window.__clickyHoi(q, \"[data-clicky='c9']\")", "Đồng ý").startswith("Em đã ghi «Đồng ý» cho việc: «Logistics phải giải trình")   # a tapped ask
         assert ask("Đồng ý việc hai và việc bốn").startswith("Em đã ghi việc hai «Đồng ý»; việc bốn «Đồng ý».")
@@ -814,7 +819,7 @@ def test_round_eleven_decisions_by_clause_a_tapped_row_and_who_or_when(report, d
         pg.wait_for_timeout(800)
         assert ask("Việc một không, còn lại đồng ý").startswith("Em đã ghi việc một «Không đồng ý»; việc hai «Đồng ý».")
         x = ask("Đồng ý hết trừ trần")
-        assert x.startswith("Em đã ghi «Đồng ý» cho việc: «Giãn tuyển") and "Việc một em chưa ghi." in x, x
+        assert x.startswith("Em đã ghi «Đồng ý» cho việc: «Giãn tuyển") and "Việc một anh chị trừ ra, em chưa ghi: anh chị không đồng ý hay cần bàn thêm ạ?" in x, x
         assert ask("Không duyệt trần, giãn tuyển thì triển khai").startswith("Em đã ghi việc một «Không đồng ý»; việc hai «Đồng ý».")
         assert ask("Việc hai làm đi. Việc một để tuần sau họp lại").startswith("Em đã ghi việc một «Cần bàn thêm»; việc hai «Đồng ý».")
         x = ask("Ok hết")   # round 13: a «hết» asks before it changes an ask chosen on its own
@@ -826,7 +831,7 @@ def test_round_eleven_decisions_by_clause_a_tapped_row_and_who_or_when(report, d
         assert ask("Khi nào giãn tuyển?").startswith("Báo cáo ghi: «giãn tuyển 30 vị trí bán hàng sang quý 3")
         pg.goto(Path(b["out"]).as_uri())
         pg.wait_for_timeout(900)
-        assert ask("Đồng ý tất cả trừ việc 1 và 4").startswith("Em đã ghi việc hai «Đồng ý»; việc ba «Đồng ý». Việc một, bốn em chưa ghi.")
+        assert ask("Đồng ý tất cả trừ việc 1 và 4").startswith("Em đã ghi việc hai «Đồng ý»; việc ba «Đồng ý». Việc một, bốn anh chị trừ ra, em chưa ghi: anh chị không đồng ý hay cần bàn thêm ạ?")
         assert ask("Ok hết, riêng việc một để bàn thêm").startswith(
             "Em đã ghi việc một «Cần bàn thêm»; việc hai «Đồng ý»; việc ba «Đồng ý»; việc bốn «Đồng ý».")
         assert ask("Không, việc bốn chưa được").startswith("Em đã ghi «Không đồng ý» cho việc: «Hoãn dự án kho mới")
@@ -1595,6 +1600,102 @@ def test_round_twenty_approximate_share_unit_claims_and_short_row_names(report, 
     finally:
         browser.close()
         pw.stop()
+
+
+def test_round_twenty_one_spoken_and_printed_claims_shares_sums_and_tapped_rows(report, drawn_report):
+    # round-21 panel: a claim that repeats a line Clicky spoke or a sentence the report prints was denied («Không ạ … 8,9»);
+    # «hơn một nửa» lost its «hơn»; «Logistics và CNTT tăng 14,5 tỷ» and «chiếm 40% tổng chi phí» had no answer; a tapped
+    # Logistics cell bound «Marketing tăng 12 tỷ?» and «Doanh thu tăng 12 tỷ?» to Logistics and said «Đúng ạ»
+    pw, browser, pages = _ghi_pages(report, drawn_report)
+    try:
+        A, B = pages["A"], pages["B"]
+        hoi = lambda pg, q, s=None: pg.evaluate("([q, s]) => window.__clickyHoi(q, s)", [q, s])   # noqa: E731
+        tapB, tapA = "#t tbody tr:nth-of-type(2) td:nth-of-type(3)", "table tbody tr:nth-of-type(1) td:nth-of-type(4)"
+        for pg, q, scope, start in (
+                (B, "Tổng tăng hơn 18 tỷ đúng không?", None, "Đúng ạ: Tổng tăng 19,0 tỷ"),
+                (B, "Logistics chiếm hơn một nửa phần tăng à?", None, "Đúng ạ: Logistics chiếm 63,2% phần tăng (em tính: 12,0 ÷ 19,0 × 100), trên một nửa"),
+                (B, "Logistics chiếm phần lớn phần tăng đúng không?", None, "Đúng ạ: Logistics chiếm 63,2% phần tăng"),
+                (B, "Logistics chiếm dưới một nửa phần tăng đúng không?", None, "Không ạ, Logistics chiếm 63,2% phần tăng"),
+                (B, "Logistics chiếm khoảng một nửa phần tăng đúng không?", None, "Không hẳn ạ: Logistics chiếm 63,2% phần tăng"),
+                (B, "Logistics chiếm 40% tổng chi phí đúng không?", None, "Đúng ạ, khoảng 40%: Logistics chiếm 40,3% tổng AOPR (em tính: 52,0 ÷ 129,0 × 100)"),
+                (B, "Logistics và CNTT tăng 14,5 tỷ đúng không?", None, "Đúng theo bảng: Logistics và CNTT tăng 14,5 tỷ (em tính: 12,0 + 2,5)"),
+                (B, "Logistics và Mua hàng tăng 20 tỷ đúng không?", None, "Không ạ, Logistics và Mua hàng tăng 15,0 tỷ (em tính: 12,0 + 3,0), không phải 20 tỷ"),
+                (B, "Logistics với CNTT chiếm khoảng 76% phần tăng đúng không?", None, "Đúng ạ, khoảng 76%: Logistics và CNTT chiếm 76,3% phần tăng (em tính: (12,0 + 2,5) ÷ 19,0 × 100)"),
+                (A, "Bán hàng chiếm khoảng một nửa tổng chi phí đúng không?", None, "Đúng ạ, khoảng một nửa: Khối Bán hàng chiếm 49,5% tổng AOPR (em tính: 92,3 ÷ 186,4 × 100)"),
+                (A, "Bán hàng chiếm 67% tổng chi phí đúng không?", None, "Không ạ, Khối Bán hàng chiếm 49,5% tổng AOPR"),
+                (A, "Khối Bán hàng và Khối Marketing tăng 15,6 tỷ đúng không?", None, "Đúng theo bảng: Khối Bán hàng và Khối Marketing tăng 15,6 tỷ (em tính: 14,1 + 1,5)"),
+                (A, "Doanh thu tăng khoảng 7% đúng không?", None, "Đúng ạ, gần đúng. Báo cáo ghi: «Thông điệp chính: Chi phí nhân sự AOPR tăng 12,6% trong khi doanh thu chỉ tăng 7,2%.»"),
+                (B, "Doanh thu tăng 12 tỷ đúng không?", None, "Báo cáo không ghi «Doanh thu tăng 12 tỷ»."),
+                (B, "Doanh thu tăng 12 tỷ đúng không?", tapB, "Báo cáo không ghi «Doanh thu tăng 12 tỷ»."),
+                (B, "Marketing tăng 12 tỷ đúng không?", tapB, "Báo cáo này không có dòng hay mục «Marketing»; anh chị đang chọn dòng Logistics"),
+                (B, "CNTT tăng bao nhiêu?", tapB, "CNTT tăng 2,5 tỷ"),
+                (B, "Tăng 12 tỷ đúng không?", tapB, "Đúng ạ: Logistics tăng 12,0 tỷ"),
+                (A, "Logistics tăng 14 tỷ đúng không?", tapA, "Báo cáo này không có dòng hay mục «Logistics»; anh chị đang chọn dòng Khối Bán hàng"),
+                (A, "Tài chính tăng bao nhiêu?", tapA, "Khối Tài chính - Kế toán: Chênh lệch 0,6 tỷ"),
+                (A, "Tăng 14 tỷ đúng không?", tapA, "Đúng ạ, khoảng 14 tỷ: Khối Bán hàng 14,1 tỷ")):
+            x = hoi(pg, q, scope)
+            assert x.startswith(start), (q, scope, x)
+        x = hoi(A, "Doanh thu tăng khoảng 7% đúng không?")
+        assert "6,7" not in x, x   # a printed 7,2% is not the doubted 6,7% working: no doubt note
+        for q in ("Bỏ Logistics ra phần còn lại tăng khoảng 10% đúng không?", "Nếu doanh thu chỉ đạt 90% kế hoạch, tỷ lệ chi phí lên 6,4% đúng không?"):
+            x = hoi(B, q)
+            assert x.startswith("Đúng ạ"), (q, x)   # a line worked or printed is never denied
+        x = hoi(B, "Nếu giữ nguyên, chi phí vượt trần 8,9 tỷ đúng không?")   # not spoken on this page, and no row's change
+        assert x.startswith("Báo cáo không ghi 8,9"), x
+    finally:
+        browser.close()
+        pw.stop()
+
+
+def test_round_twenty_one_recorder_asks_back_what_is_left_out_and_quotes_every_no(report, drawn_report):
+    # round-21 panel: «trừ việc hoãn kho» read «hoãn» as the ask number and recorded a yes on it; «Không ai phản đối chứ?»
+    # alone recorded three yeses; «Không đồng ý, ngoài việc hai» was the exact opposite; a derived no had no quote
+    pw, browser, pages = _ghi_pages(report, drawn_report)
+    try:
+        A, B = pages["A"], pages["B"]
+
+        def ghi(pg, q):
+            pg.evaluate("() => { try { localStorage.clear() } catch (e) {} }")
+            pg.reload()
+            pg.wait_for_timeout(500)
+            return pg.evaluate("q => window.__clickyGhi(q)", q)
+        r = ghi(B, "Đồng ý hết, trừ việc hoãn kho")
+        assert "3" not in r["rec"] and "Việc bốn anh chị trừ ra, em chưa ghi: anh chị không đồng ý hay cần bàn thêm ạ?" in r["a"], r
+        r = ghi(B, "Không đồng ý, ngoài việc hai")
+        assert "1" not in r["rec"] and all(r["rec"][k][0] == "Không đồng ý" for k in ("0", "2", "3")), r
+        assert all(r["rec"][k][1] == "Không đồng ý, ngoài việc hai" for k in ("0", "2", "3")), r   # what was typed, never «Không đồng ý hết»
+        assert "Việc hai anh chị trừ ra, em chưa ghi: anh chị đồng ý hay cần bàn thêm ạ?" in r["a"], r
+        for q in ("Không ai phản đối chứ?", "Mọi người đồng ý chứ?"):
+            r = ghi(B, q)
+            assert r["rec"] == {} and r["a"].startswith("Anh chị chốt thông qua cả bốn việc chứ ạ?"), (q, r)
+        r = ghi(B, "Đồng ý hết nhưng không duyệt trần")
+        assert r["rec"]["0"][0] == "Không đồng ý" and r["rec"]["0"][1], r   # every derived no keeps the words it came from
+        r = ghi(B, "Duyệt 118,8 thôi, còn lại ok")
+        assert r["rec"]["0"][:2] == ["Đồng ý có điều kiện", "Duyệt 118,8 thôi"] and r["rec"]["1"][0] == "Đồng ý", r
+        r = ghi(A, "Giãn tuyển không sai, cứ làm")
+        assert list(r["rec"]) == ["1"], r   # the cap was never named
+    finally:
+        browser.close()
+        pw.stop()
+
+
+def test_round_twenty_one_a_switched_on_proposal_replaces_its_beat_and_the_owner_file_keeps_both():
+    # round-21 panel (Talk v4): B's close said «duyệt trần 120,0 tỷ» as firm while 120,0 was doubted. The soft close ships
+    # off with «thay: chot»; switched on, it stands in for the close, and the file the owner edits still holds both lines
+    firm = {"noi": "Tóm lại, anh Tuấn xin anh chị quyết: một là duyệt trần 120,0 tỷ.", "chi": "c1", "vai": "chot"}
+    soft = {"noi": "Tóm lại, anh Tuấn xin anh chị quyết: một là duyệt trần ở mức anh Tuấn chốt sau khi kiểm lại.", "chi": "c1",
+            "vai": "chot", "thay": "chot", "bat": "chưa"}
+    script = clicky_html._apply_thay({"canh": [{"muc": "Chốt", "cau": [dict(firm), dict(soft)]}]})
+    assert [c["noi"] for c in script["canh"][0]["cau"] if clicky_html.on(c)] == [firm["noi"]]
+    soft_on = dict(soft, bat="có")
+    script = clicky_html._apply_thay({"canh": [{"muc": "Chốt", "cau": [dict(firm), soft_on]}]})
+    assert [c["noi"] for c in script["canh"][0]["cau"] if clicky_html.on(c)] == [soft["noi"]]
+    scenes = clicky_html.scenes_from_script(script, {"c1"})
+    assert scenes[0]["sentences"] == [soft["noi"]]
+    text = clicky_html.dump_script(script, "bao_cao.html", draft=False)
+    assert "duyệt trần 120,0 tỷ" in text and "thay: 'chot'" in text and "_thay" not in text   # the firm close is only set aside
+    plain = {"canh": [{"muc": "Chốt", "cau": [dict(firm), soft_on]}]}
+    assert clicky_html.script_hash(script["canh"]) == clicky_html.script_hash(plain["canh"])
 
 
 def test_round_twenty_a_reworded_disclosure_keeps_its_tag_and_the_doubt_open():

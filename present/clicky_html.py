@@ -2016,11 +2016,29 @@ SCRIPT_HEAD = """# Kịch bản Clicky cho «{report}».
 
 def on(c: dict) -> bool:
     """A line Clicky says: every line, except one the owner has not switched on (bat: 'chưa')."""
+    if c.get("_thay"):                         # its beat has a switched-on proposal that replaces it (round 21)
+        return False
+    return _on_raw(c)
+
+
+def _on_raw(c: dict) -> bool:
     v = c.get("bat", True)
     return v is True or (v is not False and tri_nho.fold(str(v)) in YES)
 
 
+def _apply_thay(script: dict) -> dict:
+    """A switched-on line with «thay: chot» stands in for the other line of that beat; the owner's file is unchanged."""
+    beats = {str(c["thay"]) for s in script.get("canh") or [] for c in s.get("cau") or [] if c.get("thay") and _on_raw(c)}
+    for s in script.get("canh") or []:
+        for c in s.get("cau") or []:
+            if not c.get("thay") and c.get("vai") in beats:
+                c["_thay"] = True
+    return script
+
+
 def script_hash(canh) -> str:
+    canh = [{**s, "cau": [{k: v for k, v in c.items() if not str(k).startswith("_")} for c in s.get("cau") or []]}
+            if isinstance(s, dict) else s for s in canh or []]
     return hashlib.sha256(json.dumps(canh, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
 
 
@@ -2044,9 +2062,11 @@ def dump_script(script: dict, report: str, snap: Optional[dict] = None, draft: b
             if c.get("dung"):
                 row["dung"] = float(c["dung"])
             if "bat" in c:
-                row["bat"] = _Q("có" if on(c) else "chưa")
+                row["bat"] = _Q("có" if _on_raw(c) else "chưa")
             if c.get("vai"):
                 row["vai"] = _Q(c["vai"])
+            if c.get("thay"):
+                row["thay"] = _Q(c["thay"])
             sc["cau"].append(row)
         out.append(sc)
     body = {"bao_cao": _Q(report), "da_duyet": _Q("chưa"),
@@ -2244,7 +2264,7 @@ def load_script(path) -> dict:
         for c in s["cau"]:
             if not isinstance(c, dict) or "noi" not in c:
                 raise PackError(f"Phần «{s.get('muc', i)}» có một câu thiếu «noi:» hoặc thụt đầu dòng sai. File: {path}")
-    return script
+    return _apply_thay(script)
 
 
 def approved(script: dict) -> bool:
@@ -3084,12 +3104,13 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     now_snap = snapshot(script, places)
     changed = [k for k in old if k in now_snap and now_snap[k] != old[k]]
     by_chi = {str(c.get("chi")): c for s in draft["canh"] for c in s["cau"] if c.get("chi")}
-    by_beat = {(str(c.get("chi")), c["vai"]): c for s in draft["canh"] for c in s["cau"] if c.get("chi") and c.get("vai")}
-    beats = [c["vai"] for s in draft["canh"] for c in s["cau"] if c.get("vai")]
-    by_vai = {c["vai"]: c for s in draft["canh"] for c in s["cau"] if c.get("vai") and beats.count(c["vai"]) == 1}
+    by_beat = {(str(c.get("chi")), c["vai"], str(c.get("thay") or "")): c for s in draft["canh"] for c in s["cau"] if c.get("chi") and c.get("vai")}
+    beats = [(c["vai"], str(c.get("thay") or "")) for s in draft["canh"] for c in s["cau"] if c.get("vai")]
+    by_vai = {(c["vai"], str(c.get("thay") or "")): c for s in draft["canh"] for c in s["cau"] if c.get("vai") and beats.count((c["vai"], str(c.get("thay") or ""))) == 1}
 
     def same_line(c):                  # the same beat at the same place; else the one line of that beat (a new driver)
-        return by_beat.get((str(c.get("chi")), c.get("vai"))) or by_vai.get(c.get("vai")) or by_chi.get(str(c.get("chi")))
+        t = str(c.get("thay") or "")       # a proposal that replaces a beat is never matched to the line it replaces
+        return by_beat.get((str(c.get("chi")), c.get("vai"), t)) or by_vai.get((c.get("vai"), t)) or by_chi.get(str(c.get("chi")))
     period_note = ""
     if kind == "chu" and ((old and len(changed) >= 2) or (not old and stale_places(script, places, en) >= 2)):
         # a report of the next period saved under the same name: keep what the owner approved, put in the new

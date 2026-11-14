@@ -326,7 +326,7 @@ def test_a_condition_a_time_or_an_exclusion_is_never_recorded_as_plain_agreement
     assert "anh chị nói 20 vị trí" in _r3(pg, "Tôi chỉ duyệt 20 vị trí thôi")
     pg.evaluate("window.__clickyGhi('Cảm ơn')")   # a fresh card (round 14: a pending condition is asked before a «hết» replaces it)
     a = _r3(pg, "Đồng ý hết trừ việc hai")
-    assert a.startswith("Em đã ghi «Đồng ý» cho việc: «Giữ tỷ lệ") and "Việc hai em chưa ghi." in a, a
+    assert a.startswith("Em đã ghi «Đồng ý» cho việc: «Giữ tỷ lệ") and "Việc hai anh chị trừ ra, em chưa ghi: anh chị không đồng ý hay cần bàn thêm ạ?" in a, a
     assert _r3(pg, "Thôi, việc hai để bàn thêm").startswith("Em đã ghi «Cần bàn thêm» cho việc: «Giãn tuyển")
     assert _r3(pg, "Tôi đồng ý trần 177,5 tỷ").startswith("Em đã ghi «Đồng ý» cho việc: «Giữ tỷ lệ")   # the ask's own figure
     # round-10 panel: a clause keeps its own verdict and condition; a trailing "thì không" is a verdict; natural words count

@@ -249,5 +249,22 @@
  ["A", "Giãn tuyển thì cứ tuyển đi", {"1": "N"}],
  ["A", "Giãn tuyển thì cứ làm", {"1": "Y"}],
  ["B", "Đồng ý về nguyên tắc, nhưng không hoãn kho mới", {"0": "C", "1": "C", "2": "C", "3": "N"}],
- ["B", "Đồng ý hết nhưng không hoãn kho mới", {"1": "Y", "2": "Y", "3": "N"}]
+ ["B", "Đồng ý hết nhưng không hoãn kho mới", {"1": "Y", "2": "Y", "3": "N"}],
+ ["B", "Đồng ý hết, trừ việc hoãn kho", {"1": "Y", "2": "Y"}],
+ ["B", "Đồng ý cả, bỏ việc hoãn kho ra", {"1": "Y", "2": "Y"}],
+ ["B", "Duyệt hết, bỏ giữ quỹ lương ra", {"1": "Y", "3": "Y"}],
+ ["B", "Không ai phản đối chứ?", {}],
+ ["B", "Mọi người đồng ý chứ?", {}],
+ ["B", "Có ai phản đối không?", {}],
+ ["B", "Không đồng ý, ngoài việc hai", {"0": "N", "2": "N", "3": "N"}],
+ ["B", "Giữ quỹ lương thì đội bán hàng không chịu, còn lại ok", {"1": "Y", "2": "N", "3": "Y"}],
+ ["B", "Hoãn kho mới thì chẳng ai muốn", {"3": "N"}],
+ ["B", "Giữ quỹ lương à? Khó đấy", {"2": "N"}],
+ ["B", "Không hoãn thì không được, hoãn kho mới đi", {"3": "Y"}],
+ ["B", "Không phải không đồng ý hoãn kho mới", {"3": "Y"}],
+ ["B", "Duyệt 118,8 thôi, còn lại ok", {"0": "C", "1": "Y", "2": "Y", "3": "Y"}],
+ ["A", "Giãn tuyển không phải ý hay", {"1": "N"}],
+ ["A", "Giãn tuyển thì chẳng ai muốn", {"1": "N"}],
+ ["A", "Giãn tuyển không sai, cứ làm", {"1": "Y"}],
+ ["A", "Giãn tuyển không khó, cứ làm", {"1": "Y"}]
 ]
