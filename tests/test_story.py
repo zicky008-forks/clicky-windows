@@ -919,7 +919,7 @@ def test_round_twelve_decision_clauses_table_grid_and_tapped_asks(report, drawn_
 def test_round_twelve_talk_arc_says_each_figure_at_most_twice_with_cause_and_bridge(report, drawn_report):
     # round-12 panel: 8,9 said four times, «Nếu giữ nguyên» twice, «Vì vậy … đề xuất mức trần» circular, the printed cause
     # (48 hires) never voiced, no bridge to the second ask; on B 19,0 twice (tỷ against %) and the 6,4% stakes at 62 s of 88 s
-    a, b = build(report), build(drawn_report)
+    a = build(report)
     said_a = [c for c in lines(a) if c.get("bat", "có") == "có"]
     talk = " ".join(c["noi"] for c in said_a)
     assert talk.count("8,9") == 2 and talk.count("Nếu giữ nguyên") == 1 and "Vì vậy" not in talk
@@ -928,7 +928,11 @@ def test_round_twelve_talk_arc_says_each_figure_at_most_twice_with_cause_and_bri
     assert "Để giảm, anh Tuấn đề nghị giãn tuyển 30 vị trí bán hàng sang quý 3." in talk
     gap = talk.index("Còn lại khoảng 5,0 tỷ")
     assert talk[gap:].split(". ", 1)[1].startswith("Phần này anh chị có thể hỏi anh Tuấn ngay sau phần em trình bày.")
+    pytest.importorskip("playwright")              # B draws its table with a script: told from the page only once rendered
+    from present import ve_trang
+    b = build(drawn_report)
     said_b = [c for c in lines(b) if c.get("bat", "có") == "có"]
+    assert any(c.get("vai") == "hoi" for c in said_b), "B was not drawn: " + ve_trang.WHY_NOT
     tb = " ".join(c["noi"] for c in said_b)
     assert tb.count("19,0") == 1 and "chưa bằng một nửa tốc độ tăng của chi phí" in tb
     vai = [c.get("vai") for c in said_b]
