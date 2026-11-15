@@ -181,6 +181,7 @@ class Variance:
     no_element: list = field(default_factory=list)      # [where] detail lines without a cost element (grouped by account)
     dept_level: list = field(default_factory=list)      # [(dept label, actual-only lines, plan-only lines)] merged
     scope_notes: list = field(default_factory=list)     # the plan file's 'Ghi chú' / 'Phạm vi', for the code question
+    code_texts: dict = field(default_factory=dict)      # {unknown dept code: one voucher description of its lines}
 
     @staticmethod
     def totals(lines: list) -> tuple:
@@ -212,7 +213,10 @@ class Variance:
                            + (f" và {len(codes) - 5} mã khác" if len(codes) > 5 else "")
                            + "; em vẫn tính theo mã, cần chị cho biết gán vào đâu"
                            + (f" (file kế hoạch ghi: {'; '.join('“' + n + '”' for n in self.scope_notes[:2])})"
-                              if what == "bộ phận" and self.scope_notes else ""))
+                              if what == "bộ phận" and self.scope_notes else "")
+                           + (" (chứng từ ghi: " + "; ".join(f"{c}: “{self.code_texts[c]}”" for c in codes[:5]
+                                                           if self.code_texts.get(c)) + ")"
+                              if what == "bộ phận" and any(self.code_texts.get(c) for c in codes[:5]) else ""))
         for dept, actual_only, plan_only in self.dept_level:
             out.append(f"{dept}: thực hiện và kế hoạch không ghép được theo yếu tố chi phí ({actual_only} yếu tố chỉ có "
                        f"thực hiện, {plan_only} chỉ có kế hoạch), em so ở cấp cả bộ phận")

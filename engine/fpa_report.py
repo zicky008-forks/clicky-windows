@@ -110,6 +110,16 @@ def code_words(code: str, gl: list) -> set:
     return words
 
 
+def voucher_text(code: str, gl: list) -> str:
+    """The voucher description the code's lines use most, so the user (and a Board question that names the area,
+    not the code) can tell what the code is. Figures in it are dropped: the receipt line is a question, not a number."""
+    from collections import Counter
+    texts = Counter(re.sub(r"\s+", " ", re.sub(r"\S*\d\S*", "", e.text)).strip(" -:,") for e in gl
+                    if e.dept == code and e.text)
+    texts.pop("", None)
+    return texts.most_common(1)[0][0][:80] if texts else ""
+
+
 def notes_about(notes: list, codes: list, gl: list) -> list:
     """The plan's notes that speak of the department codes in question: a note that names the code (or a part of
     it, 'KD1' in 'KD1-MB'), the site, division or channel its ledger lines carry, or the words its voucher
@@ -165,6 +175,8 @@ def compute(folder: Path, version: Optional[str] = None, plan_file: Optional[str
                         plan_file=plan_file) if b.gl else None
     if costs is not None and costs.plan is not None:
         costs.scope_notes = notes_about(b.plan_notes.get(costs.plan.file, []), costs.unknown.get("bộ phận", []), b.gl)
+    if costs is not None:
+        costs.code_texts = {c: t for c in costs.unknown.get("bộ phận", []) if (t := voucher_text(c, b.gl))}
     sales = None
     if b.sales:
         sales = sales_pnl.compute(b.sales, b.sku_plans, b.plans, period=costs.period if costs else None,
@@ -707,8 +719,12 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
         vs.append(["Trước khi gọi là vượt hay tiết kiệm, em xét lệch thời điểm, khoản một lần, điều chỉnh bút toán và "
                    "chi phí biến đổi theo doanh thu. Dòng dưới ngưỡng không phải bất thường."])
         vs.append(["Bộ phận · yếu tố", "Số báo cáo", "Nguyên nhân", "Số thực chất", "Phân loại", "Ngưỡng", "Nguồn"])
-        for c in sorted((c for c in m.classified if c.material), key=lambda c: -abs(c.underlying)):
-            vs.append([c.line.label, c.reported, " ".join(x.text for x in c.causes) or "",
+        shown = [c for c in m.classified if c.material or (c.pending and c.above)]
+        for c in sorted(shown, key=lambda c: (c.pending, -abs(c.underlying))):
+            known = " ".join([x.text for x in c.causes] + ([c.maybe] if c.maybe and c.pending else []))
+            vs.append([c.line.label, c.reported,
+                       (f"Mã bộ phận còn chờ chị gán; riêng dòng này: {known}" if known else
+                        "Mã bộ phận còn chờ chị gán, em chưa xếp loại.") if c.pending else known,
                        c.underlying, c.verdict, c.threshold,
                        ", ".join(w for x in c.causes for w in x.where[:3]) or ", ".join(c.line.actual_from[:3])])
             expect[f"'{VARIANCES}'!D{vs.max_row}"] = c.underlying

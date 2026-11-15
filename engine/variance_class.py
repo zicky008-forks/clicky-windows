@@ -73,6 +73,12 @@ class Classified:
         """Above the threshold as reported, or (a variable cost) against the flexed plan. Never while pending."""
         if self.pending:
             return False
+        return self.above
+
+    @property
+    def above(self) -> bool:
+        """Above the threshold whether or not its code is pending: a held line is still examined, so what is known
+        about it (timing, one-off, volume) is said beside the open question."""
         return abs(self.reported) > self.threshold or abs(self.underlying) > self.threshold
 
     @property
@@ -101,8 +107,10 @@ class Classified:
     def sentence(self) -> str:
         label = self.line.label
         if self.pending:
+            known = " ".join([c.text for c in self.causes] + ([self.maybe] if self.maybe else []))
             return (f"{label}: chênh {fmt(self.reported)} đ so với kế hoạch, {PENDING}: mã bộ phận còn chờ chị cho biết "
-                    "gán vào đâu, em chưa xếp loại vượt hay thấp hơn.")
+                    "gán vào đâu, em chưa xếp loại vượt hay thấp hơn."
+                    + (f" Điều em đã thấy ở riêng dòng này: {known}" if known else ""))
         if not self.material:
             return (f"{label}: chênh {fmt(self.reported)} đ so với kế hoạch, dưới ngưỡng {fmt(self.threshold)} đ, "
                     "không phải bất thường.")
@@ -191,9 +199,8 @@ def classify(v, gl: list, plans: list, config=None, driver: Optional[tuple] = No
         thr = max(amount_t, abs(l.plan) * pct_t / 100)
         c = Classified(l, thr, ytd_variance=ytd[k].variance if k in ytd else l.variance, pending=k in waiting)
         out.append(c)
-        if c.pending:
-            continue
-        c.depends = depends.get(k, "")
+        if not c.pending:
+            c.depends = depends.get(k, "")
         # volume first: a variable cost is judged against the flexed plan
         if l.element in var_codes and driver and driver[1]:
             ratio = Decimal(driver[0]) / Decimal(driver[1])
@@ -201,7 +208,7 @@ def classify(v, gl: list, plans: list, config=None, driver: Optional[tuple] = No
             c.causes.append(Cause(VOLUME, c.flex - l.plan,       # either side: the rest is spending against the flex
                  f"Đây là chi phí biến đổi: doanh thu đạt {(ratio * 100).quantize(Decimal('0.1'))}% kế hoạch, "
                  f"ngân sách linh hoạt {fmt(c.flex)} đ, phần theo sản lượng {fmt(c.flex - l.plan)} đ."))
-        if not c.material:
+        if not c.above:
             continue
         private = opex_split.sensitive(l.element, next(iter(l.accounts), "") if l.accounts else "", config)
         mine = entries.get(k, [])

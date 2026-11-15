@@ -66,7 +66,7 @@ TOP_WORDS = ("lon nhat", "top", "nhieu nhat", "dang chu y", "can hoi", "chenh le
 ONE_OFF_WORDS = ("mot lan", "dot xuat", "one off", "phat sinh mot lan")
 TIMING_WORDS = ("thoi diem", "timing", "chi bu", "chi truoc", "dao nguoc", "lech thang", "som hon", "muon hon")
 BRIDGE_PARTS = (("volume", ("san luong", "volume", "luong ban")), ("mix", ("co cau", "mix")),
-                ("price", ("gia ban", "price")), ("cost", ("gia von don vi", "chi phi don vi", "anh huong gia von")))
+                ("price", ("gia ban", "price", "giam gia", "ha gia", "chiet khau", "tang gia", "dieu chinh gia")), ("cost", ("gia von don vi", "chi phi don vi", "anh huong gia von")))
 BRIDGE_WORDS = ("cau noi", "bridge", "anh huong", "tac dong", "phan tich lng", "phan tich loi nhuan gop",
                 "do gia hay do luong", "do luong hay do gia", "gia hay luong", "luong hay gia", "do gia", "do luong",
                 "yeu to gia", "yeu to luong")
@@ -84,6 +84,10 @@ UNUSUAL_WORDS = ("bat thuong", "co gi la", "dang chu y", "co van de", "la thuong
 UNKNOWN_CODE_WORDS = ("chua co trong danh muc", "ma la", "ma moi", "ngoai danh muc", "khong co trong danh muc",
                       "ma chua gan", "chua gan", "gan vao dau", "gan ma")
 ELEMENT_STOP = {"chi", "phi", "khac", "cac", "va", "cho", "cua", "theo", "dich", "vu", "mua", "ngoai", "bang", "tien"}
+CONTRAST = re.compile(r"(nhieu hon|vuot|tang|cao hon|dat|ban duoc).{0,40}?\b(ma|nhung|lai|van)\b.{0,40}?"
+                      r"(thap hon|giam|it hon|hut|khong dat|kem|lo)")
+BARE_PROFIT = re.compile(r"(?<![\wÀ-ỹ])(lãi|lời)(?![\wÀ-ỹ])", re.IGNORECASE)
+VOLUME_TALK = ("ban", "san luong", "doanh thu", "doanh so", "luong ban", "ban hang", "ban nhieu", "hang ban")
 NUMBER_WORDS = {"mot": 1, "hai": 2, "ba": 3, "bon": 4, "tu": 4, "nam": 5, "sau": 6, "bay": 7, "tam": 8, "chin": 9,
                 "muoi": 10}
 NUM_RE = re.compile(r"-?\d{1,3}(?:\.\d{3})+(?![\d.])|-?\d+(?:,\d+)?(?=\s*(?:đ|%))")
@@ -306,13 +310,57 @@ def _element_by_word(t: str, book: Book):
     return hits.pop() if len(hits) == 1 else None
 
 
+def _glue_units(text: str) -> str:
+    return re.sub(r"(\d)\s+(ml|l|lit|g|gr|kg|chai|lon|hop|goi|thung)\b", r"\1\2", text)
+
+
 def _sku_named(t: str, question: str, book: Book) -> Optional[str]:
-    """The one SKU the question names, by its code or its name, when the report has a row for it."""
+    """The one SKU the question names: by its code, its name, or every word of its name in any order with other
+    words between ('Trà xanh chai 500 ml' for 'Trà xanh 500ml')."""
     hits = set()
+    tg = _glue_units(t)
+    words = set(tg.split())
     for r in book.skus:
-        code, name = key(r["sku"]), key(r["name"])
-        if (code and _has(t, [code])) or (len(name) >= 4 and _has(t, [name])):
+        code, name = key(r["sku"]), _glue_units(key(r["name"]))
+        tokens = [w for w in name.split() if len(w) >= 2]
+        if (code and _has(t, [code])) or (len(name) >= 4 and _has(tg, [name])) \
+                or (len(tokens) >= 2 and all(w in words for w in tokens)):
             hits.add(r["sku"])
+    if len(hits) > 1:                                  # 'Trà xanh 500ml' and 'Trà xanh 1L': the size tells them apart
+        sized = {h for h in hits if any(w in words for w in _glue_units(key(next(
+            r["name"] for r in book.skus if r["sku"] == h))).split() if any(ch.isdigit() for ch in w))}
+        hits = sized if len(sized) == 1 else hits
+    return hits.pop() if len(hits) == 1 else None
+
+
+AREA_STOP = {"chi phi", "phi chi", "ke hoach", "ngan sach", "thang", "nam", "bo phan", "nam o", "o khoi", "cua",
+             "cho", "va", "theo", "du an"}
+
+
+def _area_words(text: str) -> set:
+    """Two-word names in a quoted note or voucher ('Miền Trung', 'dự án X'), folded, without the common ones."""
+    words = [w for w in key(text).split() if not any(ch.isdigit() for ch in w)]
+    pairs = {f"{a} {b}" for a, b in zip(words, words[1:])}
+    return {p for p in pairs if p not in AREA_STOP and not any(w in ("chi", "phi", "cac", "nhung") for w in p.split())}
+
+
+def _code_by_area(question: str, book: Book) -> Optional[str]:
+    """An unknown department asked by its business name, not its code: the words the receipt line quotes for that
+    code (its vouchers, or the plan note when only one code is in question)."""
+    t = f" {key(question)} "
+    hits = set()
+    for c in book.open:
+        text = str(c.value)
+        listed = re.split(r"chưa có trong danh mục:", text, maxsplit=1)
+        if len(listed) < 2 or "bộ phận" not in listed[0]:
+            continue
+        codes = [x for x in re.findall(r"[A-Za-z0-9_.\-]{2,}", listed[1].split(";")[0]) if x.lower() not in ("va", "ma")]
+        quotes = {code: q for code, q in re.findall(r"([A-Za-z0-9_.\-]{2,}): “([^”]+)”", text)}
+        if len(codes) == 1:
+            quotes = {codes[0]: " ".join(re.findall(r"“([^”]+)”", text))}
+        for code, q in quotes.items():
+            if any(f" {w} " in t for w in _area_words(q)):
+                hits.add(code)
     return hits.pop() if len(hits) == 1 else None
 
 
@@ -335,6 +383,11 @@ def parse(question: str, book: Book) -> Query:
     t = key(question)
     q = Query()
     line = next((code for code, words in LINES if _has(t, words)), None)
+    contrast = bool(CONTRAST.search(t))
+    if line is None and BARE_PROFIT.search(question):      # 'lãi' alone: gross profit when sales are talked about
+        line = "gp" if _has(t, VOLUME_TALK) else "op"
+    elif contrast and line == "revenue" and BARE_PROFIT.search(question):
+        line = "gp"
     sub = next(((code, name) for code, name, words in SUB_LINES if _has(t, words)), None)
     if sub and not _has(t, ("ban hang va quan ly", "ban hang quan ly")):
         q.sub, line = sub[0], "opex"
@@ -348,7 +401,8 @@ def parse(question: str, book: Book) -> Query:
     why = bool(_has(t, WHY_WORDS) or LEADING_WHY.search(t))
     targets = sorted({(r["dept"], "dept") for r in book.costs} | {(r["element"], "element") for r in book.costs
                                                                   if r["element"]}, key=lambda x: -len(x[0]))
-    target = next(((name, kind) for name, kind in targets if name and _has(t, [key(name)])), None)
+    t_names = re.sub(r"\b(san luong|luong ban)\b", " ", t)    # 'sản lượng' is never the element 'Lương'
+    target = next(((name, kind) for name, kind in targets if name and _has(t_names, [key(name)])), None)
     if target and target[0] and key(target[0]) in {w for _c, ws in LINES for w in ws}:
         target = None                                   # 'Chi phí' as an element name is the P&L line here
     named = None
@@ -367,9 +421,12 @@ def parse(question: str, book: Book) -> Query:
     if target is None and named is None and _has(t, UNUSUAL_WORDS + ("yeu to", "khoan muc")):
         target = _element_by_word(t, book)
     sku = _sku_named(t, question, book)
-    code = _open_code(question, book)
+    code = _open_code(question, book) or (_code_by_area(question, book) if target is None else None)
     part = next((p for p, words in BRIDGE_PARTS if _has(t, words)), None)
     absent = next((name for word, name in ABSENT if _has(t, [word])), None)
+    if contrast and line in ("gp", "op", "revenue") and not sku and not absent:
+        why = True                                     # 'bán nhiều hơn mà lãi thấp hơn': a why without the word
+        part = None
     if absent:
         q.intent, q.absent = "absent", absent
     elif _has(t, LY_WORDS) or UPPER_LY.search(question):
@@ -388,7 +445,7 @@ def parse(question: str, book: Book) -> Query:
         q.intent = "one_off"
     elif _has(t, TIMING_WORDS):
         q.intent = "timing"
-    elif part or _has(t, BRIDGE_WORDS):
+    elif (part or _has(t, BRIDGE_WORDS)) and not (contrast and why):
         q.intent, q.part = "bridge", part
     elif _has(t, SKU_WORDS) and not target:
         q.intent = "sku"
@@ -405,6 +462,8 @@ def parse(question: str, book: Book) -> Query:
         q.intent = "forecast" if q.time == "full" else "line"
     elif why:
         q.intent = "why"                                # 'vì sao?' alone: a follow-up takes the line from above
+    elif q.time == "full":
+        q.intent = "forecast"                           # 'cả năm thì sao?': revenue and operating profit, said so
     q.n = _count(t)
     return q
 
@@ -517,10 +576,18 @@ def _why(b: Book, q: Query, cites: list) -> str:
                                           ("cost", "giá vốn")) if k in b.bridge and (q.line == "gp" or k == "cost")]
         parts = [f"{name} {_num(b.bridge[k], cites)}" for k, name in keys]
         text = head + " Cầu nối lợi nhuận gộp: " + ", ".join(parts) + "."
-        sizes = [(abs(_dec(b.bridge[k].value) or 0), k, name) for k, name in keys]
+        gap = _dec(b.pnl.get(q.line, {}).get("var", Cell("", None)).value) if q.line in b.pnl else None
+        values = [(_dec(b.bridge[k].value) or Decimal(0), k, name) for k, name in keys]
+        short = gap is not None and gap < 0
+        sided = [v for v in values if (v[0] < 0) == short and v[0] != 0] or values
+        sizes = [(abs(v), k, name) for v, k, name in sided]
         if sizes:
             _size, big, big_name = max(sizes)
-            text += f" Phần lớn nhất là {big_name}."
+            if gap is not None and gap != 0 and len(sided) < len(values):
+                text += (f" Phần kéo xuống nhiều nhất là {big_name}." if short else
+                         f" Phần kéo lên nhiều nhất là {big_name}.")
+            else:
+                text += f" Phần lớn nhất là {big_name}."
             if b.skus:
                 part = big if big in ("mix", "price", "cost") else None
                 col = {"mix": "mix_part", "price": "price_part", "cost": "cost_part"}.get(part or "", "total")
@@ -590,6 +657,11 @@ def _unknown_code(b: Book, q: Query, cites: list) -> str:
             said = f"{r['element']} thực hiện {_num(c['month'], cites)}" if "month" in c else r["element"]
             parts.append(said + (f", {r['verdict']}" if r["verdict"] else ""))
         text += SEP + f"Các dòng của mã {q.target} trong tháng:" + SEP + SEP.join(parts) + "."
+    held = [r for r in b.costs if "gan ma" in key(r["verdict"]) and not (q.target and key(r["dept"]) == key(q.target))
+            and "var" in r["cells"]]
+    if held:
+        text += SEP + "Dòng có thể đang giữ kế hoạch của mã này, em cũng để chờ:" + SEP + SEP.join(
+            f"{r['dept']} · {r['element']} chênh {_num(r['cells']['var'], cites)}" for r in held[:4]) + "."
     pending = sum(1 for r in b.costs if "gan ma" in key(r["verdict"]))
     if pending:
         text += SEP + (f"{pending} dòng chi phí đang để “chờ chị gán mã”: em chưa kết luận vượt hay tiết kiệm "
@@ -619,6 +691,11 @@ def _lines_of(b: Book, q: Query, cites: list) -> str:
            f" {key(x['label'])}"]
     if why:
         text += SEP + "Giải thích:" + SEP + SEP.join(_variance_rows(b, 3, cites, why)) + "."
+    if any("gan ma" in key(r["verdict"]) for r in rows):
+        codes = [c for c in b.open if "danh muc" in key(c.value) and "bo phan" in key(c.value)]
+        if codes:
+            text += SEP + "Vì sao còn chờ:" + SEP + SEP.join(_quote(c.ref, c.value, cites).rstrip(".") + "."
+                                                           for c in codes)
     return text
 
 
@@ -650,6 +727,10 @@ def _by_verdict(b: Book, q: Query, cites: list, word: str, none: str) -> str:
 
 
 def _forecast(b: Book, q: Query, cites: list) -> str:
+    if q.line is None and b.forecast is not None:
+        said = [_forecast(b, replace(q, line=code), cites) for code in ("revenue", "op") if code in b.forecast.full]
+        if said:
+            return SEP.join(said)
     f = b.forecast
     if f is None or (q.line or "op") not in f.full:
         raise LookupError("forecast")
@@ -682,7 +763,7 @@ def reading(book: Book, q: Query) -> str:
         said = f"vì sao {line} {when} chênh {against}"
     elif i == "forecast":
         f = book.forecast
-        said = f"{line or 'lợi nhuận hoạt động'} cả năm ước" + (f", {key_words(f.basis)}" if f and f.basis else "") \
+        said = f"{line or 'doanh thu và lợi nhuận hoạt động'} cả năm ước" + (f", {key_words(f.basis)}" if f and f.basis else "") \
             + ", so với kế hoạch năm"
     elif i == "top":
         said = f"{q.n or 3} khoản chi phí chênh nhiều nhất {against}, {month}"
