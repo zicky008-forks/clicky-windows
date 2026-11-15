@@ -2005,6 +2005,7 @@ SCRIPT_HEAD = """# Kịch bản Clicky cho «{report}».
 # Trong câu có dấu nháy đơn thì gõ hai dấu nháy đơn liền nhau. Thụt đầu dòng bằng dấu cách, không dùng phím Tab.
 # Số anh tự thêm (không có trong báo cáo): ghi vào dòng so_rieng của câu đó, ví dụ   so_rieng: ['0,12']
 # Số có trong báo cáo nhưng ở chỗ khác chỗ khoanh: anh xem lại rồi ghi   xac_nhan: ['14,1']
+# cho_khac: số em tự dò thấy ở chỗ khác trong báo cáo (chưa phải anh xác nhận; em ghi vào kiem_tra để anh xem).
 # Số em tự tính từ số trên báo cáo: dòng so_tinh ghi công thức, ví dụ   so_tinh: ['8 = (20,9 - 14,1) / (165,5 - 78,2) × 100']
 # Câu có bat: 'chưa' là câu em đề xuất nhưng chưa nói. Anh đọc, thấy đúng thì đổi thành bat: 'có'.
 # dung: 1.5 là số giây em dừng lại sau câu đó (sau một câu hỏi để người nghe kịp nghĩ).
@@ -2063,7 +2064,7 @@ def dump_script(script: dict, report: str, snap: Optional[dict] = None, draft: b
             row = {"noi": _Q(c["noi"]), "chi": c.get("chi") or ""}
             if c.get("neo"):
                 row["neo"] = _Q(c["neo"])
-            for k in ("so_rieng", "xac_nhan", "so_tinh"):
+            for k in ("so_rieng", "xac_nhan", "cho_khac", "so_tinh"):
                 if c.get(k):
                     row[k] = [_Q(str(x)) for x in c[k]]
             if c.get("dung"):
@@ -2146,7 +2147,7 @@ def next_period(script: dict, old: dict, places: dict, en: bool) -> tuple:
         for c in s.get("cau") or []:
             if c.get("so_rieng"):
                 continue                   # a sentence with his own figures: he says what changes in it
-            if c.get("so_tinh") or (c.get("xac_nhan") and c.get("vai")) or \
+            if c.get("so_tinh") or ((c.get("xac_nhan") or c.get("cho_khac")) and c.get("vai")) or \
                     (c.get("vai") in ("dong_luc", "mau_thuan") and DEGREE.search(str(c.get("noi") or ""))):
                 flipped.append(c)          # a figure worked out, or a word of degree, from last period's figures
                 continue
@@ -2414,7 +2415,7 @@ def confirm_elsewhere(script: dict, places: dict, page_text: str, en: bool, decl
             extra = [f.tok for f in figures(c["noi"]) if value(f.tok, en) not in calc and value(f.tok, en) in on_page
                      and check_at(f, places.get(c.get("chi")), en, declared) == "missing"]
             if extra:
-                c["xac_nhan"] = list(dict.fromkeys(list(c.get("xac_nhan") or []) + extra))
+                c["cho_khac"] = list(dict.fromkeys(list(c.get("cho_khac") or []) + extra))   # code's finding, not his (TB11)
 
 
 def refresh_checks(kept: list, fresh: list) -> list:
@@ -2657,6 +2658,7 @@ def make_record(script: dict, places: dict, page_text: str, meta: dict, en: bool
             conf = c.get("xac_nhan")
             conf_all = conf is True or tri_nho.fold(str(conf or "")) in YES
             confirmed = {value(t, en) for t in _toks(conf)}
+            found_by_code = {value(t, en) for t in _toks(c.get("cho_khac"))}
             computed = {}                  # so_tinh: ["8 = (20,9 - 14,1) / (165,5 - 78,2) × 100"]: a figure code works out
             for entry in (c.get("so_tinh") or []):
                 tok, eq, expr = str(entry).partition("=")
@@ -2724,6 +2726,8 @@ def make_record(script: dict, places: dict, page_text: str, meta: dict, en: bool
                                             "số mới"))
                 elif v in on_page and (conf_all or v in confirmed):
                     found.append(dict(entry, nguon="bao_cao"))
+                elif v in on_page and v in found_by_code:     # printed elsewhere, found by code: listed as such (TB11)
+                    found.append(dict(entry, nguon="cho_khac"))
                 elif v in on_page:
                     where = f"chỗ Clicky khoanh («{clip(places[chi].anchor, 40)}»)" if chi in places else "câu này"
                     bad.append((noi, f.tok, f"có trong báo cáo nhưng không ở {where}. Sửa chi cho đúng chỗ, hoặc "
@@ -2741,8 +2745,9 @@ def make_record(script: dict, places: dict, page_text: str, meta: dict, en: bool
               "lap_luc": meta["built_iso"], "nguoi_chiu_trach_nhiem": meta["owner"], "dau_so": "en" if en else "vn",
               "don_vi": declared or "", "trang_thai": meta.get("trang_thai", ""), "cau": rows,
               "tong": {"cau": len(rows), "so": len(flat),
-                       "dung_cho_khoanh": sum(1 for x in flat if x not in ("bao_cao", "nguoi_soan", "em_tinh")),
-                       "cho_khac_trong_bao_cao": flat.count("bao_cao"), "nguoi_soan_them": flat.count("nguoi_soan"),
+                       "dung_cho_khoanh": sum(1 for x in flat if x not in ("bao_cao", "cho_khac", "nguoi_soan", "em_tinh")),
+                       "cho_khac_trong_bao_cao": flat.count("bao_cao"), "em_do_cho_khac": flat.count("cho_khac"),
+                       "nguoi_soan_them": flat.count("nguoi_soan"),
                        "em_tinh": flat.count("em_tinh")}}
     record["ma_bam"] = seal(record)
     return record
@@ -2935,7 +2940,7 @@ def attach_evidence(scenes: list, record: dict) -> None:
             if r["noi"] != sentence:                 # both come from the same script in the same order
                 raise PackError("Biên bản và lời nói lệch nhau. Hãy dựng lại.")
             s["ev"].append([[x["so"], "t", x["cong_thuc"]] if x["nguon"] == "em_tinh" else
-                            [x["so"], "o" if x["nguon"] == "nguoi_soan" else "b" if x["nguon"] == "bao_cao" else "k"]
+                            [x["so"], "o" if x["nguon"] == "nguoi_soan" else "b" if x["nguon"] in ("bao_cao", "cho_khac") else "k"]
                             for x in r["so"]])
 
 
@@ -3198,8 +3203,9 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
             if d and d.get("so_tinh"):
                 c["so_tinh"] = list(d["so_tinh"])
             c.pop("xac_nhan", None)             # last period's confirmation does not cover this period's figure
-            if d and d.get("xac_nhan"):
-                c["xac_nhan"] = list(d["xac_nhan"])
+            c.pop("cho_khac", None)
+            if d and d.get("cho_khac"):
+                c["cho_khac"] = list(d["cho_khac"])
         script["canh"] = [dict(s, cau=[c for c in s["cau"] if str(c.get("noi") or "").strip()])
                           for s in script["canh"]]
         for s in script["canh"]:
@@ -3315,6 +3321,9 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
                      "Clicky không nói về biểu đồ.")
     if record["tong"]["cho_khac_trong_bao_cao"]:
         notes.append(f"{record['tong']['cho_khac_trong_bao_cao']} con số anh đã xác nhận nằm ở chỗ khác chỗ khoanh.")
+    if record["tong"].get("em_do_cho_khac"):
+        notes.append(f"{record['tong']['em_do_cho_khac']} con số em dò thấy ở chỗ khác trong báo cáo, chưa ai xác nhận: "
+                     "anh xem ở mục kiem_tra.")
 
     say = voice or offline_voice()
     cache: dict = {}
@@ -3395,8 +3404,8 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
             "scenes": len(scenes), "minutes": meta["minutes"], "bytes": len(page.encode("utf-8")),
             "record": meta["record"], "doi_neo": moved, "phan_bien": draft.get("phan_bien") or [],
             "cau_tat": sum(1 for sc in script["canh"] for c in sc.get("cau") or [] if not on(c)),
-            "xem_lai": [{"cau": r["noi"], "so": [x["so"] for x in r["so"] if x["nguon"] == "bao_cao"]}
-                        for r in record["cau"] if any(x["nguon"] == "bao_cao" for x in r["so"])],
+            "xem_lai": [{"cau": r["noi"], "so": [x["so"] for x in r["so"] if x["nguon"] in ("bao_cao", "cho_khac")]}
+                        for r in record["cau"] if any(x["nguon"] in ("bao_cao", "cho_khac") for x in r["so"])],
             "found": {k: sum(1 for i in items if i.kind == k) for k in ("section", "note", "card", "table", "chart")},
             "tri_nho": None if not mem else {
                 "thu_muc": str(mem.path), "ky": period, "doc_dau": len(told), "tra_loi_san": len(bank),

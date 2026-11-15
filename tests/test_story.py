@@ -108,7 +108,7 @@ def test_the_owner_pre_flight_is_in_the_result_and_never_on_the_page(report):
     assert "khoảng 3,9 tỷ" in bound["noi"] and "4 tỷ" not in bound["noi"]   # 30 × 92,3 / 712 = 3,89, never rounded up to 4
     assert bound["noi"] == ("Em tính theo chi phí bình quân một người ở khối Bán hàng: kể cả giãn trọn năm, 30 vị trí "
                             "cũng chỉ tiết kiệm khoảng 3,9 tỷ, chưa bằng một nửa mức cần giảm.")   # 8,9 said twice at most (round 12)
-    assert bound["so_tinh"] == ["3,9 = 30 × 92,3 / 712"] and bound["bat"] == "có" and bound["xac_nhan"] == ["8,9"]
+    assert bound["so_tinh"] == ["3,9 = 30 × 92,3 / 712"] and bound["bat"] == "có" and bound["cho_khac"] == ["8,9"]
     assert "anh không muốn thì ghi bat: 'chưa'" in gap
     page = Path(rep["out"]).read_text(encoding="utf-8")
     assert "Hai phần ba" not in page.split('id="clicky-data"')[1] and "43%" not in page
@@ -235,7 +235,7 @@ def test_next_months_report_works_the_computed_figure_out_again(report):
     # the stake line ("… tức vượt trần 8,9 tỷ") keeps its lock on the tile that still prints 8,9: month 2 builds
     stake = [c for c in lines(rep) if "vượt trần" in c["noi"]]
     # round 10: the opening says the stakes too, locked the same way
-    assert [c["vai"] for c in stake] == ["mo_rui_ro"] and all(c["xac_nhan"] == ["8,9"] for c in stake)   # round 12: once up front
+    assert [c["vai"] for c in stake] == ["mo_rui_ro"] and all(c["cho_khac"] == ["8,9"] for c in stake)   # round 12: once up front
     assert "8,9 tỷ" in report.read_text(encoding="utf-8")
     assert kiem_bien_ban.verify(rep["out"], str(report))["ok"]
 
@@ -304,7 +304,7 @@ def test_a_report_whose_script_draws_its_table_is_told_from_the_page_as_drawn(dr
     why = next(k for k, c in enumerate(said) if c["noi"] == "Vì sao cần quyết?")   # the question alone, a breath
     assert said[why]["vai"] == "cau_hoi" and said[why]["dung"] == 0.8
     assert any(c["noi"] == "Vì doanh thu chỉ tăng 8,0%, chưa bằng một nửa tốc độ tăng của chi phí."   # holds under 17,3 and 18,0; 19,0 said once
-               and c["xac_nhan"] == ["8,0"] and c["chi"] == next(x for x in said if x.get("vai") == "quy_mo")["chi"]
+               and c["cho_khac"] == ["8,0"] and c["chi"] == next(x for x in said if x.get("vai") == "quy_mo")["chi"]
                for c in said)
     ratio = next(c for c in said if c["noi"] == "Tức là chi phí tăng nhanh gấp khoảng 2,3 lần doanh thu.")
     assert ratio["bat"] == "chưa"
@@ -345,7 +345,7 @@ def test_the_talk_breathes_after_the_greeting_and_the_asks_and_rests_on_the_cap(
     assert said[-1]["vai"] == "moi_hoi" and said[-1]["dung"] == 2.0
     # the stakes in money are said up front (mo_rui_ro); the ratio line names the measure only (round 12: 8,9 four times)
     stakes = next(c for c in said if c.get("vai") == "neu_giu")
-    assert stakes["noi"].endswith("thay vì 2,40% như kế hoạch gốc.") and not stakes.get("xac_nhan")
+    assert stakes["noi"].endswith("thay vì 2,40% như kế hoạch gốc.") and not stakes.get("cho_khac")
 
 
 def test_words_of_degree_and_names_inside_a_sentence():
@@ -687,7 +687,8 @@ def test_board_questions_in_the_talks_own_words_get_the_asks_the_columns_and_hon
 def test_the_pre_flight_checks_head_the_script_and_hold_the_approval(report):
     rep = build(report)
     script = clicky_html.load_script(rep["kich_ban"])
-    assert len(script["kiem_tra"]) == len(rep["phan_bien"]) == 4
+    assert len(script["kiem_tra"]) == len(rep["phan_bien"]) == 5   # 4 findings, and the figures found elsewhere (TB11)
+    assert "em lấy ở chỗ khác" in script["kiem_tra"][-1]["muc"]
     assert all(k["da_xem"] == "chưa" for k in script["kiem_tra"])
     path = Path(rep["kich_ban"])
     path.write_text(re.sub(r"^(\s+da_xem:) 'chưa'", r"\1 'có'", path.read_text(encoding="utf-8"), count=1, flags=re.M),
@@ -704,7 +705,7 @@ def test_switching_on_a_proposed_line_settles_its_check_and_never_breaks_the_bui
     assert gap["ly_do_bo"] == "" and any("3,9" in c for c in gap["cau"])
     # the bound names 8,9, printed on another card: confirmed at draft time, so switching it on just works
     bound = next(c for s in script["canh"] for c in s["cau"] if c.get("vai") == "uoc_tiet_kiem")
-    assert bound["xac_nhan"] == ["8,9"]
+    assert bound["cho_khac"] == ["8,9"]
     text = path.read_text(encoding="utf-8").replace("da_xem: 'chưa'", "da_xem: 'có'").replace("bat: 'chưa'", "bat: 'có'")
     text = text.replace("da_duyet: 'chưa'", "da_duyet: 'có'")
     path.write_text(text, encoding="utf-8")
@@ -1192,7 +1193,7 @@ def test_round_fourteen_frames_hold_the_figure_said_and_the_end_card_shows_every
     assert stake["chi"] == next(c for c in lines(repA) if c["noi"].startswith("Tức là phải giảm 8,9"))["chi"]
     # B's why line ("Vì doanh thu chỉ tăng 8,0%") stays on the total: the note printing 8,0% holds the doubted 18,0%
     why = next(c for c in lines(repB) if c["noi"].startswith("Vì doanh thu chỉ tăng 8,0%"))
-    assert why["chi"] == next(c for c in lines(repB) if c.get("vai") == "quy_mo")["chi"] and why["xac_nhan"] == ["8,0"]
+    assert why["chi"] == next(c for c in lines(repB) if c.get("vai") == "quy_mo")["chi"] and why["cho_khac"] == ["8,0"]
     # every line of the talk, played at 1366x768 and 911x512: the frame holds the figure said, the hat sits on no
     # words, a framed row shows its table header
     for out in (outA, outB):
@@ -1861,4 +1862,59 @@ def test_pictures_are_drawn_from_locked_figures_with_a_source_and_never_on_the_p
                     else:
                         assert h < 600, (out, w, vai)   # only a short screen lets the place win over its picture
                 pg.close()
+        browser.close()
+
+
+def test_grader_rerun_two_gap_questions_opinions_absent_basis_one_family_and_owner_only_confirms(tmp_path, monkeypatch):
+    # independent grader, gate 2 rerun on caa9e92 (our own synthetic copies of the shapes): «X hụt / vượt kế hoạch bao
+    # nhiêu» gave the plan's figure (TB7); «đạt bao nhiêu % kế hoạch», a cost element and a department were parked
+    # though their cells are on the page (TB5); «<row> vượt kế hoạch, có đáng lo?» got the talk's total line (TB12);
+    # last year's month went to the «bỏ … ra» what-if over a revenue row and the cost total (TB6); a figure found by
+    # code elsewhere was summed up as «anh đã xác nhận» (TB11); the rest's fall was said without its one-off note
+    # (TB4); a department's answer left out what its plan also covers (TB9); «Xem …» offered a hidden unused table (TB8)
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    src = tmp_path / "thang10.html"
+    shutil.copyfile(Path(__file__).parent / "fixtures" / "bao_cao_thang_kh_tru_th.html", src)
+    rep = build(src)
+    script = yaml.safe_load(Path(rep["kich_ban"]).read_text(encoding="utf-8"))
+    cau = [c for s in script["canh"] for c in s["cau"]]
+    assert not any(c.get("xac_nhan") for c in cau) and any(c.get("cho_khac") for c in cau)   # only the owner confirms
+    assert any("em lấy ở chỗ khác" in k["muc"] for k in script["kiem_tra"])
+    assert not any("anh đã xác nhận" in n for n in rep["canh_bao"])
+    assert rep["record"]["em_do_cho_khac"] >= 1 and rep["record"]["cho_khac_trong_bao_cao"] == 0
+    q = tmp_path / "quy.html"
+    shutil.copyfile(Path(__file__).parent / "fixtures" / "bao_cao_quy_mot_lan.html", q)
+    rq = build(q)
+    said = [c["noi"] for s in yaml.safe_load(Path(rq["kich_ban"]).read_text(encoding="utf-8"))["canh"] for c in s["cau"]]
+    rest = next(k for k, x in enumerate(said) if x.startswith("Bỏ Bán hàng MT ra"))
+    assert said[rest + 1] == "Riêng Kho vận giảm 40,0 tỷ, báo cáo ghi là do dời thuê kho mới sang quý 4, một lần, không lặp lại."
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 768})
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(700)
+        hoi = lambda q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        assert "thấp hơn kế hoạch 7,5 tỷ" in hoi("Doanh thu hụt kế hoạch bao nhiêu?")
+        assert "Lãi gộp, % TH/KH: 91,7%" in hoi("Lãi gộp đạt bao nhiêu % kế hoạch?")
+        assert "cao hơn kế hoạch 1,8 tỷ" in hoi("Chi phí bán hàng vượt kế hoạch bao nhiêu?")
+        assert "cao hơn kế hoạch 0,4 tỷ" in hoi("Marketing vượt kế hoạch bao nhiêu?")
+        assert "cao hơn kế hoạch 2,1 tỷ" in hoi("Khối Kinh doanh vượt kế hoạch bao nhiêu?")
+        assert "thấp hơn kế hoạch 0,6 tỷ" in hoi("Kho vận vượt kế hoạch bao nhiêu?")
+        x = hoi("Chi phí bán hàng vượt kế hoạch, có đáng lo không?")
+        assert "cao hơn kế hoạch 1,8 tỷ" in x and "không đánh giá có đáng lo" in x and "37,2" not in x, x
+        x = hoi("Doanh thu tháng 10 so với cùng kỳ năm ngoái thế nào?")
+        assert "không có số «cùng kỳ năm ngoái»" in x and "Bỏ" not in x, x
+        assert "Bỏ" not in hoi("Doanh thu năm ngoái là bao nhiêu?")
+        assert "Bỏ" not in hoi("Bỏ Doanh thu thuần ra thì các dòng còn lại tăng bao nhiêu?")   # no family under one total
+        pg.goto(Path(rq["out"]).as_uri())
+        pg.wait_for_timeout(700)
+        assert "gồm cả ngân sách trưng bày của Bán hàng GT" in hoi("Marketing vượt kế hoạch bao nhiêu?")
+        x = hoi("Chi phí thuê ngoài thực hiện bao nhiêu?")
+        assert "15,0" not in x and "Bỏ" not in x and "Bảng cũ" not in x, x
+        assert "12,9%" in hoi("Ngoài Bán hàng MT ra thì phần còn lại tăng hay giảm?")
         browser.close()

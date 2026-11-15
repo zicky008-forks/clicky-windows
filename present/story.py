@@ -534,6 +534,23 @@ def _reframe(lines: list, places: dict) -> None:
                 break
 
 
+def row_note(row, items: list, flags: list) -> Optional[tuple]:
+    """The report's own note on a row, «… do <cause>» (timing, one-off), as speech; with the item that prints it.
+    None when no note names the row, or the note is a sentence in doubt."""
+    key = jfold(_short(row.label))
+    if not key:
+        return None
+    for it2 in items:
+        if getattr(it2, "kind", "") not in ("note", "text", "para", "card") or not it2.text:
+            continue
+        for x in re.split(r"(?<=[.;])\s+", it2.text):
+            m_ = re.search(r",?\s+do\s+(kế hoạch|việc|tuyển|thuê|tăng|giảm|mở|chi|chạy|đẩy|dời|lùi|ghi nhận|trích|hoàn nhập|"
+                           r"phát sinh|thanh toán|mua|nhập|chuyển|thanh lý|bán)\b(.+?)[.;]?$", x)   # the row's own note: timing, one-off (F01 TB4)
+            if m_ and key in jfold(x) and not any(jfold(fl.get("sai", "")) and jfold(fl["sai"]) in jfold(x) for fl in flags):
+                return re.sub(r"\s*\(([^()]+)\)", r", \1", (m_.group(1) + m_.group(2)).strip()), it2   # «(lệch thời điểm …)» is said
+    return None
+
+
 def story(items: list, places: dict, owner: str, en: bool = False, hidden: frozenset = frozenset()) -> Optional[dict]:
     """The talk as scenes of lines (the script format clicky_html builds and checks), plus "phan_bien": what
     the owner should look at before the Board sees it. None when the report has no table to tell a story from.
@@ -713,21 +730,11 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         lines.append(("Phần tăng nằm ở đâu", Line(text, top.id, so_tinh=st, vai="dong_luc",
                                                  xac_nhan=[tdelta[0]] if over_all and not tdelta[2] else [])))
         if not why:
-            key = jfold(_short(top.label))
-            for it2 in items:
-                if getattr(it2, "kind", "") not in ("note", "text", "para", "card") or not it2.text:
-                    continue
-                hit = None
-                for x in re.split(r"(?<=[.;])\s+", it2.text):
-                    m_ = re.search(r",?\s+do\s+(kế hoạch|việc|tuyển|thuê|tăng|mở|chi|chạy|đẩy|dời|lùi|ghi nhận|trích|"
-                                   r"phát sinh|thanh toán|mua|nhập|chuyển)\b(.+?)[.;]?$", x)   # the row's own note: timing, one-off (F01 TB4)
-                    if m_ and key and key in jfold(x) and not any(jfold(fl.get("sai", "")) and jfold(fl["sai"]) in jfold(x) for fl in flags):
-                        hit = re.sub(r"\s*\(([^()]+)\)", r", \1", (m_.group(1) + m_.group(2)).strip())   # «(lệch thời điểm …)» is said
-                        break
-                if hit:
-                    figs_ = [g.tok for g in C.figures(hit)] if C.figures(hit) else []
-                    lines.append(("Phần tăng nằm ở đâu", Line(f"Báo cáo ghi lý do là {hit}.", cid(it2), xac_nhan=figs_, vai="nguyen_nhan")))
-                    break
+            got_note = row_note(top, items, flags)
+            if got_note:
+                hit, it2 = got_note
+                figs_ = [g.tok for g in C.figures(hit)] if C.figures(hit) else []
+                lines.append(("Phần tăng nằm ở đâu", Line(f"Báo cáo ghi lý do là {hit}.", cid(it2), xac_nhan=figs_, vai="nguyen_nhan")))
         tp, ta = _num(top, t.plan, en), _num(top, t.actual, en)
         if tp and ta and abs(share) >= Decimal("0.4") and len(same) + len([m for m in moves if m[1]]) > 2:
             num = f"({tdelta[0]} - {top_tok})" if not (tdelta[2] or top_f) else \
@@ -753,10 +760,22 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                     how = "chỉ tăng" if rest_v < whole else "tăng"
                     if rev_v is not None:
                         tail = ", không nhanh hơn doanh thu"
+                # a row of the rest that moves it and has its own note (one-off, timing) is named with that note:
+                # «the rest fell» is never said as if the fall were lasting (F01 TB4, grader rerun 2)
                 # framed on the total the rest is worked out from, never on the row it leaves out (round 15)
                 lines.append(("Phần tăng nằm ở đâu", Line(f"Bỏ {_short(top.label)} ra, {others} {how} khoảng {rest_tok}%{tail}.",
                                                      t.total.id, so_tinh=[f"{rest_tok} = {expr}"], vai="phan_con_lai",
                                                      xac_nhan=[con[2].tok] if con is not None and con[2].tok in tail else [])))
+                noted = sorted(((r, d) for r, d in moves if r is not top and d and d[1] and (d[1] > 0) == (rest_v > 0)),
+                               key=lambda x: -abs(x[1][1]))
+                for r, d in noted:
+                    got_note = row_note(r, items, flags)
+                    if got_note:                   # framed on its own row, the pointer moves there
+                        lines.append(("Phần tăng nằm ở đâu", Line(
+                            f"Riêng {_short(r.label)} {'tăng' if d[1] > 0 else 'giảm'} {d[0]} {unit}, báo cáo ghi là do {got_note[0]}."
+                            .replace("  ", " ").replace(" .", "."), r.id, so_tinh=[f"{d[0]} = {d[2]}"] if d[2] else [],
+                            xac_nhan=[g.tok for g in C.figures(got_note[0])], vai="nguyen_nhan")))
+                        break
     bridge = headcount_bridge(places, t, en)
     if bridge is not None:                         # proposed: it may contradict the report's own words
         lines.append(("Phần tăng nằm ở đâu", Line(bridge[0], bridge[1], so_tinh=[bridge[2]], bat=False, vai="cau_noi")))
@@ -905,8 +924,8 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             c["so_tinh"] = ln.so_tinh
         if ln.dung:
             c["dung"] = ln.dung
-        if ln.xac_nhan:
-            c["xac_nhan"] = ln.xac_nhan
+        if ln.xac_nhan:                            # found by code at another place: never the owner's confirmation (TB11)
+            c["cho_khac"] = ln.xac_nhan
         if not ln.bat:
             c["bat"] = "chưa"
         elif ln.so_tinh:                           # a figure code worked out: said, and the owner can switch it off
@@ -916,6 +935,12 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         if ln.thay:
             c["thay"] = ln.thay
         scenes[-1]["cau"].append(c)
+    elsewhere = [(t, c["noi"]) for sc in scenes for c in sc["cau"] if c.get("bat") != "chưa" for t in c.get("cho_khac") or []]
+    if elsewhere:                                  # the owner looks at each figure taken from another place (TB11)
+        flags = list(flags) + [{"xem": f"{len(elsewhere)} số em lấy ở chỗ khác trong báo cáo, không phải chỗ khoanh: "
+                                       + "; ".join(f"{t} trong câu «{C.clip(n, 50)}»" for t, n in elsewhere[:4])
+                                       + (" …" if len(elsewhere) > 4 else "")
+                                       + ". Anh xem số đó đúng ý câu nói chưa."}]
     checks = []
     for fl in flags:                               # each finding names the lines it governs and the sentence it doubts
         k = {"muc": fl["xem"]}
