@@ -2276,7 +2276,7 @@ function whyAnswer(Q, scope, entity, strict) {   // strict: a tile's label, ever
 // Board questions the report answers in words, not in a cell (gate 2 grader TB17): where the figures come from, what is unusual
 const NOTE_ASK = [
   {q: / (lay tu|lay o|nguon( so| du lieu| so lieu)?|so lieu (tu|o) dau|tu ban nao|ban nao|phien ban|version|chot so|khoa so|cap nhat (luc|ngay|khi) nao|du lieu (tu|o) dau) /,
-   s: / (nguon|lay tu|so cai|khoa so|phien ban|ban (khoa|chot|cap nhat)|cap nhat|trich tu|du lieu tu|chot so) /},
+   s: / (nguon|lay tu|so cai|khoa so|phien ban|ban (khoa|chot|cap nhat|duyet|dieu chinh|goc)|cap nhat|trich tu|du lieu tu|chot so|nghi quyet|phe duyet|duoc duyet|duyet ngay|quyet dinh|version|v\d+|theo (ke hoach|ngan sach|aop|aopr|bp)) /},
   {q: / (bat thuong|dot bien|can (luu y|chu y)|diem (dang )?(chu y|luu y)|dang chu y|co gi la|co gi dac biet) /,
    s: / (bat thuong|dot bien|luu y|chu y|dac biet|canh bao) /}];
 const NOTE_FILL = /^(co|lam|mat|anh|huong|thiet|hai|ton|bat|thuong|dot|bien|gi|lay|tu|ban|nguon|phai|nao|dau|lieu|luu|chu|dac|biet|phien|version|chot|khoa|cap|nhat|bang|ra|mot|het|tat)$/;
@@ -2301,7 +2301,9 @@ function noteAnswer(q, fallback) {   // fallback: the page found no figure; a se
   if (!cue && !fallback) return false;
   const subj = Q.w0.filter(w => !UNITW.has(w) && !NOTE_FILL.test(w)), many = /\b(bao nhieu|may)\b/.test(Q.f);
   const hits = [];
-  for (const it of noteSents()) { const fs = " " + fold(it.s) + " ", w = words(widen(fold(it.s + " " + (it.head || "")))), hit = subj.filter(x => w.includes(x)).length;   // a table's foot note is also about its heading («Cả năm»)
+  const PLANW = /^(ke|hoach|kh|aop|aopr|ngan|sach|ns|budget|bp|chi|tieu|muc|tieu)$/;   // «kế hoạch» asked, «AOP», «ngân sách» written
+  for (const it of noteSents()) { const fs = " " + fold(it.s) + " ", w = words(widen(fold(it.s + " " + (it.head || "")))), planIn = / (ke hoach|kh|aop|aopr|ngan sach|budget|bp|chi tieu|muc tieu) /.test(fs);
+    const hit = subj.filter(x => w.includes(x) || (planIn && PLANW.test(x))).length;   // a table's foot note is also about its heading («Cả năm»)
     const ok = cue ? cue.s.test(fs) && (!subj.length || hit >= Math.ceil(subj.length / 2)) : subj.length >= 2 && hit === subj.length && (!many || /\d[\d.,]*\s*(tỷ|triệu|nghìn|đồng|%)/.test(it.s));
     if (ok && !doubted(it.s)) hits.push({it, sc: hit + (/\d/.test(it.s) ? 0.5 : 0)}); }
   if (!hits.length) return false;
@@ -2871,8 +2873,26 @@ function effectAsk(q, scope) {   // a product named by its description (kind + s
   answer(row.label + (code ? " (" + code + ")" : "") + ": " + parts.join("; ") + ".", row.cells[cols[0]], {src: "Lấy từ báo cáo «" + TITLE + "», bảng «" + (m.heading || m.cap || "") + "»"});
   return true;
 }
-function rowFocus(q, scope) {
-  if (/\d[.,]\d|\d\s*(%|tỷ|triệu)/.test(q)) return false;   // a claim with a figure is checked by rowClaim
+function figNotes(p, typed) {   // the report's sentences that print this row's own amount (its gap, its actual) or the figure typed
+  const toks = new Set();
+  const add = t => { const x = String(t || "").replace(/[()\s−-]/g, "").replace(/%$/, ""); if (/\d[.,]\d/.test(x)) toks.add(x); };
+  (p.ro || []).forEach(x => { if ((x.role === "var" || x.role === "act") && p.row.cells[x.c]) add(cellText(p.row.cells[x.c])); });
+  (typed || []).forEach(add);
+  if (!toks.size) return [];
+  const all_ = noteSents(), out = [];
+  all_.forEach((it, k) => { if (it.row || doubted(it.s)) return;
+    const n = all_[k + 1], s = n && n.b === it.b && /^(đây|đó|khoản này|việc này|điều này|phần này|số này)\b/i.test(n.s.trim()) ? it.s.trim() + " " + n.s.trim() : it.s;
+    const has = [...toks].some(t => new RegExp("(^|[^\\d.,])" + t.replace(/[.,]/g, "\\$&") + "(?![\\d]|[.,]\\d)").test(s));
+    if (has && (CAUSE.test(s) || / (lech thoi diem|mot lan|khong lap lai|bat thuong|tam thoi|hoan|doi|lui|chuyen|ngan sach|ke hoach|ghi nhan|tre|som|phat sinh|tra truoc) /.test(" " + fold(s) + " ")))
+      out.push({b: it.b, s}); });
+  return out;
+}
+function rowFocus(q0, scope) {
+  const NAT_Q = / (co phai|phai la|phai khong|that khong|that su|thuc su|bat thuong|dot bien|lech thoi diem|mot lan|tiet kiem|vuot ngan sach|trong ngan sach) /;
+  const figs0 = q0.match(/\d[\d.,]*\d(?:\s*%)?|\d(?:\s*%)?/g) || [];
+  if (/\d[.,]\d|\d\s*(%|tỷ|triệu)/.test(q0) && !NAT_Q.test(" " + fold(q0).replace(/[?.!,;:]+/g, " ").replace(/\s+/g, " ") + " ")) return false;   // a claim with a figure is checked by rowClaim
+  // «Sửa chữa thấp hơn 1,2 tỷ, có phải tiết kiệm không?»: the figure only points at the row; the question is its nature (TB17)
+  const q = q0.replace(/(thấp hơn|cao hơn|tăng|giảm|vượt|hụt|lệch|chênh)?\s*\(?-?\d[\d.,]*\)?\s*(%|tỷ|triệu)?/gi, " ").replace(/\s+/g, " ").replace(/\s+([,?.!])/g, "$1");
   const Q = qinfo(q), f = " " + Q.f.replace(/[?.!,;:]+/g, " ").replace(/\s+/g, " ") + " ";
   const why = Q.why;
   const nature = / (co phai|phai la|phai khong|that khong|that a|that su|thuc su|bat thuong|dot bien|co gi (la|dac biet|bat thuong|dang chu y)|lech thoi diem|mot lan|tiet kiem|vuot ngan sach) /.test(f);
@@ -2916,7 +2936,8 @@ function rowFocus(q, scope) {
   const g = rfGap(p, Q, p.m.en);
   if (!g) return false;
   if (nature) {
-    const ns = notes.slice(0, 2);
+    let ns = notes.slice(0, 2);
+    if (!ns.length) ns = figNotes(p, figs0).slice(0, 2);   // a note tied to the row by its amount, not its name (TB17)
     if (ns.length) { answer("Báo cáo ghi: " + quoteNotes(ns) + " " + esc("Số trên bảng: " + g.text.charAt(0).toLowerCase() + g.text.slice(1)), ns[0].b.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"}); return true; }
     answer(g.text + " Báo cáo không ghi riêng khoản này là gì (lệch thời điểm, một lần hay thay đổi thật).", g.target, {cls: "park", extra: parkNote(q), src: "Lấy từ báo cáo «" + TITLE + "»"}); return true;
   }

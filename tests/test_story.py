@@ -2277,3 +2277,65 @@ def test_a_product_named_by_its_description_answers_from_its_own_effect_column(t
         assert "Ảnh hưởng sản lượng làm giảm 1,8 tỷ" in hoi("Toner 100ml mất bao nhiêu do sản lượng?")
         assert "LN-KD50):" not in hoi("Kem dưỡng 150ml làm mất bao nhiêu?")   # no row of that size
         browser.close()
+
+
+def test_rerun_five_numbered_asks_sources_are_not_asks_the_voice_and_typed_nature_questions(tmp_path, monkeypatch):
+    # independent grader, gate 2 rerun 5 (our own synthetic shapes): one paragraph «(1) …; (2) …; (3) …» gave only the
+    # first ask (TB25); the plan's source note under the asks was said as an ask (TB24); the voice read «-496,8»,
+    # «T10 TH» and «Đề xuất Hội đồng: (1)» as written (TB26); a nature question that carries the row's gap
+    # («… thấp hơn 1,2 tỷ, có phải tiết kiệm không?») and a note tied to the row by its amount, or a source note
+    # with no «lấy từ», were never found (TB17, TB21). Asked as a reader does: typed into the box, Enter.
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    fx = (Path(__file__).parent / "fixtures" / "bao_cao_ns_linh_hoat.html").read_text(encoding="utf-8")
+    a = fx.index("<h2>5. Đề nghị Hội đồng quyết</h2>")
+    b = fx.index("</ol>", a) + 5
+    fx = (fx[:a] + "<h2>5. Đề xuất</h2>\n<p>Đề xuất Hội đồng: (1) duyệt chuyển 2,0 tỷ ngân sách khuyến mãi tháng 11 sang tháng 10; "
+          "(2) duyệt hoãn bảo dưỡng dây chuyền sang tháng 12; (3) giao Khối Kinh doanh nộp kế hoạch bù sản lượng trước ngày 05/11.</p>\n"
+          "<p>Kế hoạch: AOP 2026 theo Nghị quyết HĐQT số 12/2025.</p>" + fx[b:])
+    fx = fx.replace("<li>Số kế hoạch lấy từ AOP 2026 bản Hội đồng duyệt ngày 18/12/2025, không dùng bản điều chỉnh tháng 6.</li>", "")
+    fx = fx.replace("<li>Quảng cáo có một hóa đơn của tháng 9 ghi nhận trễ vào tháng 10, là khoản bất thường.</li>",
+                    "<li>Khoản 0,9 tỷ là hóa đơn truyền hình của tháng 9 ghi nhận trễ vào tháng 10.</li>")
+    fx = fx.replace("<li>Khuyến mãi và chiết khấu tăng do chương trình tri ân nhà phân phối chạy sớm từ tháng 11 sang tháng 10. Đây là lệch thời điểm, cả năm không vượt ngân sách.</li>",
+                    "<li>Khoản 2,6 tỷ là chương trình tri ân nhà phân phối của tháng 11 chạy sớm, lệch thời điểm.</li>")
+    src = tmp_path / "de_xuat.html"
+    src.write_text(fx, encoding="utf-8")
+    rep = build(src)
+    said = [c["noi"] for s in yaml.safe_load(Path(rep["kich_ban"]).read_text(encoding="utf-8"))["canh"] for c in s["cau"]]
+    assert "Anh Tuấn xin anh chị quyết ba việc." in said
+    assert "Ba là giao Khối Kinh doanh nộp kế hoạch bù sản lượng trước ngày 05/11." in said
+    assert not any("Nghị quyết" in x or "(1)" in x or "Đề xuất Hội đồng" in x for x in said)
+    # the biggest rise's note names its amount, not its row: still its nature
+    assert any(x.startswith("Về khuyến mãi và chiết khấu, báo cáo ghi rằng khoản 2,6 tỷ là chương trình tri ân") for x in said), said
+    v = clicky_html.for_voice
+    assert v("Chi phí giảm -496,8 triệu.") == "Chi phí giảm 496,8 triệu." and v("Biến động -496,8 triệu") == "Biến động âm 496,8 triệu"
+    assert v("Cột T10 TH ghi 37,2 tỷ.") == "Cột thực hiện tháng 10 ghi 37,2 tỷ."
+    assert v("Trần 120,0 tỷ: doanh thu tăng 8,0%.") == "Trần 120 tỷ, doanh thu tăng 8%."
+    assert v("Giai đoạn 2025-2026, T11–T12 ước 12,05 tỷ, lúc 9:30.") == "Giai đoạn 2025-2026, T11–T12 ước 12,05 tỷ, lúc 9:30."
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 900})
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+
+        def typed(q):                          # the reader's way: Escape, skip the talk, type in «Hỏi Vera», Enter
+            pg.keyboard.press("Escape")
+            pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const e = r.getElementById('clicky-skip') || document.getElementById('clicky-skip'); if (e) e.click(); }")
+            pg.wait_for_timeout(300)
+            box = pg.locator("#clicky-host #q")
+            box.fill(q)
+            box.press("Enter")
+            pg.wait_for_timeout(900)
+            return pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const b = r.getElementById('bub'); "
+                               "return ((b && !b.classList.contains('hidden')) ? r.getElementById('ba') : r.getElementById('a')).innerText; }")
+        x = typed("Sửa chữa và bảo trì thấp hơn 1,2 tỷ, có phải tiết kiệm không?")
+        assert "không phải khoản tiết kiệm" in x, x
+        x = typed("Quảng cáo cao hơn kế hoạch 0,9 tỷ, có phải vượt ngân sách không?")
+        assert "hóa đơn truyền hình của tháng 9 ghi nhận trễ" in x, x
+        x = typed("Số kế hoạch lấy từ bản nào?")
+        assert "AOP 2026 theo Nghị quyết HĐQT số 12/2025" in x, x
+        browser.close()

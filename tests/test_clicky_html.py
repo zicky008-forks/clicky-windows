@@ -651,7 +651,7 @@ def test_brackets_are_negative_only_where_a_reader_reads_them_so():
     assert F("Đề xuất: (1) tăng ngân sách") == []                                       # a list marker
     # the voice reads brackets with the very same rule
     v = clicky_html.for_voice
-    assert v("Lợi nhuận: (9,870) tỷ.") == "Lợi nhuận: âm 9,870 tỷ."
+    assert v("Lợi nhuận: (9,870) tỷ.") == "Lợi nhuận, âm 9,870 tỷ."   # a «:» is a breath (round 22 §7)
     assert v("Chi phí 186,4 tỷ (12,6%) so với AOP.") == "Chi phí 186,4 tỷ, 12,6%, so với AOP."
 
 

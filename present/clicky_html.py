@@ -1368,7 +1368,7 @@ SKIP_ROW = re.compile(r"^\s*(tổng|total|cộng|grand)|lợi nhuận|ebitda|\be
 SUB_ROW = re.compile(r"\b(sub|total|subtotal|tong|sum)\b", re.I)
 KEY_HEAD = re.compile(r"key message|thông điệp|tóm tắt|summary|highlight|điểm chính|executive|kết luận", re.I)
 RECO_HEAD = re.compile(r"đề xuất|kiến nghị|đề nghị|recommend|hành động|action|next step|giải pháp", re.I)
-RECO_START = re.compile(r"^\s*(đề xuất|kiến nghị|đề nghị|recommendations?)\s*(của [^:]{1,30})?\s*:\s*", re.I)
+RECO_START = re.compile(r"^\s*(đề xuất|kiến nghị|đề nghị|recommendations?)\s*(của [^:]{1,30}|(?:với |lên |gửi )?(?:hội đồng|hđqt|ban giám đốc|bgđ|bod|ban điều hành)[^:]{0,24})?\s*:\s*", re.I)
 KEY_START = re.compile(r"^\s*(thông điệp chính|thông điệp|key messages?|kết luận|tóm tắt|nhận xét|điểm chính|insight|"
                        r"takeaway|summary)\s*:\s*", re.I)
 KEY_CLASS = re.compile(r"message|thong-?diep|key|summary|takeaway|insight|conclusion|ket-?luan", re.I)
@@ -2956,6 +2956,18 @@ def for_voice(sentence: str, en: bool = False) -> str:
                 return m.group(0)
             return tok.replace(".", "/") + m.group(0)[len(tok):]
         t = NUM_TOKEN.sub(slash, t)
+        # said as the report's author says it (gate 2 rerun 5, TB26; round 22 §7): «giảm -496,8» is «giảm 496,8», a bare
+        # «-496,8» is «âm 496,8», «120,0 tỷ» is «120 tỷ», «T10 TH» is «thực hiện tháng 10», a «:» is a breath
+        t = re.sub(r"(?<!\w)(giảm|thấp hơn|hụt|lỗ|kém|sụt|tiết kiệm)\s+[-−–]\s?(?=\d)", r"\1 ", t, flags=re.I)
+        t = re.sub(r"(?:(?<=\s)|^)[-−](?=\d)", "âm ", t)
+        t = re.sub(r"(?<![\d.,])(\d[\d.]*),0(?=\s*(?:tỷ|triệu|nghìn|%|người|lần)(?!\w))", r"\1", t)
+        from present import story as _st
+
+        def col(m):
+            said = _st.col_said(m.group(0))
+            return said or m.group(0)
+        t = re.sub(r"(?<!\w)(?:T\d{1,2}\s+(?:TH|KH)|(?:TH|KH)\s+T\d{1,2}|LK\s?\d{1,2})(?!\w)", col, t)
+        t = re.sub(r"(?<=\D):\s+", ", ", t)
     return re.sub(r"(?<!\w)vs\.?(?=\s|$)", "so với", t)
 
 

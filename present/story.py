@@ -505,7 +505,13 @@ def reco(items: list, places: dict) -> tuple:
     ask per note (its bold title); else a note that starts "Đề xuất:" gives the asks in its own sentences."""
     sec = next((i for i, s in enumerate(items) if s.kind == "section" and DECIDE_HEAD.search(s.text)), None)
     if sec is not None:
-        notes = [n for n in items if n.kind == "note" and n.section == sec]
+        # a source or a note under the asks is never an ask (gate 2 rerun 5, TB24)
+        notes = [n for n in items if n.kind == "note" and n.section == sec and not NOT_ASK.search(_title(n))]
+        listed = [(n, x) for n in notes for x in numbered(n.text)]   # «(1) …; (2) …; (3) …» in one paragraph (TB25)
+        if listed:
+            cards = [places[c.node.attrs["data-clicky"]] for c in items
+                     if c.kind == "card" and c.section == sec and c.node.attrs.get("data-clicky") in places]
+            return listed[0][0], cards, listed
         titled = [n for n in notes if ACTION.search(_title(n)) or len(notes) <= 6]
         if titled:
             cards = [places[c.node.attrs["data-clicky"]] for c in items
@@ -522,11 +528,31 @@ def reco(items: list, places: dict) -> tuple:
     return note, cards, [(note, a) for a in asks(note)]
 
 
+NOT_ASK = re.compile(r"^\s*(nguồn|ghi chú|lưu ý|chú thích|số liệu|dữ liệu|source|note)\b|\b(lấy từ|theo nghị quyết|nghị quyết số|"
+                     r"phiên bản|bản (khóa|chốt|duyệt) ngày|đơn vị tính)\b", re.I)
+NUM_MARK = re.compile(r"(?:^|(?<=[\s;:.]))\(?(\d{1,2})\)\s+")
+
+
+def numbered(text: str) -> list:
+    """«Đề xuất Hội đồng: (1) duyệt …; (2) giao …; (3) …»: each numbered item, its marker and the lead-in dropped,
+    when the paragraph holds at least two; [] otherwise."""
+    body = C.RECO_START.sub("", text or "").strip()
+    marks = list(NUM_MARK.finditer(body))
+    if len(marks) < 2 or [int(m.group(1)) for m in marks[:2]] != [1, 2]:
+        return []
+    out = []
+    for k, m in enumerate(marks):
+        part = body[m.end():marks[k + 1].start() if k + 1 < len(marks) else len(body)].strip().rstrip(".;, ")
+        if part and not NOT_ASK.search(part):
+            out.append(_cap(part))
+    return out
+
+
 def asks(note) -> list:
     """The things the owner asks the Board to decide, in his words, as (clause, money): "giữ tỷ lệ … ở 2,40%" with
     "trần 177,5 tỷ" from the "tức …" that follows. Only sentences that ask for an action ("giữ…", "giãn…")."""
     body = C.RECO_START.sub("", note.text).strip().rstrip(".")
-    parts = [p.strip() for p in re.split(r";|\.\s", body) if p.strip()]
+    parts = [re.sub(r"^\(?\d{1,2}\)\s*", "", p.strip()) for p in re.split(r";|\.\s", body) if p.strip()]   # «(1) giữ …»
     out = []
     for p in parts:
         m = re.search(r",?\s+(?:tức|nghĩa là|tương đương)\b\s*", p)
@@ -593,7 +619,7 @@ def _reframe(lines: list, places: dict) -> None:
                 break
 
 
-def row_note(row, items: list, flags: list) -> Optional[tuple]:
+def row_note(row, items: list, flags: list, toks: tuple = ()) -> Optional[tuple]:
     """The report's own note on a row, «… do <cause>» (timing, one-off), as speech; with the item that prints it.
     None when no note names the row, or the note is a sentence in doubt."""
     key = jfold(_short(row.label))
@@ -640,8 +666,11 @@ def row_note(row, items: list, flags: list) -> Optional[tuple]:
             nxt = parts[k + 1].strip() if k + 1 < len(parts) else ""
             if re.match(r"(đây|đó|khoản này|việc này|điều này)\b", nxt, re.I):
                 x = x.rstrip(".;") + ", " + nxt[:1].lower() + nxt[1:]
-            fx = " " + jfold(re.sub(r"^\s*(trong|về|ở|tại)\s[^,]{1,40},\s*", "", x, flags=re.I)) + " "
-            if f" {lead} " not in fx or not NATURE.search(fx) or len(x.split()) > 32 or ACTION.match(x):
+            fx = " " + re.sub(r"[^\w]+", " ", jfold(re.sub(r"^\s*(trong|về|ở|tại)\s[^,]{1,40},\s*", "", x, flags=re.I))).strip() + " "
+            # tied to the row by its name, or by its own amount («Khoản 2,6 tỷ là …») (gate 2 rerun 5)
+            by_amount = any(re.search(r"(?<![\d.,])" + re.escape(tk) + r"(?![\d]|[.,]\d)", x) for tk in toks if tk and re.search(r"\d[.,]\d", tk))
+            if (f" {lead} " not in fx and not by_amount) or not (NATURE.search(fx) or (by_amount and re.search(r"\s(do|vì|bởi)\s", x))) \
+                    or len(x.split()) > 32 or ACTION.match(x):
                 continue
             if any(jfold(fl.get("sai", "")) and jfold(fl["sai"]) in jfold(x) for fl in flags):
                 continue
@@ -1325,7 +1354,7 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         lines.append(("Phần tăng nằm ở đâu", Line(text, top.id, so_tinh=st, vai="dong_luc",
                                                  xac_nhan=[tdelta[0]] if over_all and not tdelta[2] else [])))
         if not why:
-            got_note = row_note(top, items, flags)
+            got_note = row_note(top, items, flags, (top_tok,))
             if got_note:
                 hit, it2 = got_note[:2]
                 figs_ = [g.tok for g in C.figures(hit)] if C.figures(hit) else []
@@ -1365,7 +1394,7 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                 noted = sorted(((r, d) for r, d in moves if r is not top and d and d[1] and (d[1] > 0) == (rest_v > 0)),
                                key=lambda x: -abs(x[1][1]))
                 for r, d in noted:
-                    got_note = row_note(r, items, flags)
+                    got_note = row_note(r, items, flags, (d[0],))
                     if got_note:                   # framed on its own row, the pointer moves there
                         lines.append(("Phần tăng nằm ở đâu", Line(
                             f"Riêng {_short(r.label)} {'tăng' if d[1] > 0 else 'giảm'} {d[0]} {unit}, "
