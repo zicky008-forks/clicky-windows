@@ -2561,3 +2561,54 @@ def test_rerun_nine_split_department_shared_plan_abbreviations_and_how_much_need
             x = typed(q)
             assert x.startswith("LN-KD50 – Kem dưỡng ẩm hũ 50ml: Hiệu ứng giá làm giảm 1,4 tỷ"), (q, x)
         browser.close()
+
+
+def test_rerun_ten_blank_child_plans_abbreviated_labels_and_never_against_the_reports_own_sentence(tmp_path, monkeypatch):
+    # independent grader, gate 2 rerun 10 (our own synthetic shapes): a child row with blank plan cells, its name a label
+    # «Thương mại điện tử (TMĐT)» and the notes saying only «TMĐT», still left the parent's to-date gap said alone (TB9);
+    # «Kênh hiện đại (gồm TMĐT) lũy kế …» found nothing; the parent's own figure ran against the report's own sentence on
+    # the same row and span; «TMĐT» was cut to «TM» as an unexplained abbreviation, and «là gì» quoted an ask (TB29).
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    fx = Path(__file__).parent / "fixtures"
+    reps = {}
+    for name in ("bao_cao_kenh_tach", "bao_cao_kenh_loi_binh"):
+        src = tmp_path / (name + ".html")
+        src.write_text((fx / (name + ".html")).read_text(encoding="utf-8"), encoding="utf-8")
+        reps[name] = build(src)
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 900})
+
+        def typed(q):                          # the reader's way: Escape, skip the talk, type in «Hỏi Vera», Enter
+            pg.keyboard.press("Escape")
+            pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const e = r.getElementById('clicky-skip') || document.getElementById('clicky-skip'); if (e) e.click(); }")
+            pg.wait_for_timeout(300)
+            box = pg.locator("#clicky-host #q")
+            box.fill(q)
+            box.press("Enter")
+            pg.wait_for_timeout(900)
+            return pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const b = r.getElementById('bub'); "
+                               "return ((b && !b.classList.contains('hidden')) ? r.getElementById('ba') : r.getElementById('a')).innerText; }")
+        pg.goto(Path(reps["bao_cao_kenh_tach"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        for q in ("Kênh hiện đại lũy kế chênh lệch bao nhiêu so với kế hoạch?", "Kênh hiện đại (gồm TMĐT) lũy kế vượt bao nhiêu?"):
+            x = typed(q)
+            assert x.startswith("Kế hoạch của Kênh hiện đại được lập gộp với Thương mại điện tử (TMĐT)"), (q, x)
+            assert "cao hơn kế hoạch lũy kế 10 tháng 729,0 triệu" in x, (q, x)
+        for q in ("Bộ phận TMĐT là gì?", "TMĐT là bộ phận gì?", "TMĐT là gì, sao không có trong kế hoạch?"):
+            x = typed(q)
+            assert x.startswith("Báo cáo ghi: «TMĐT bán hàng qua sàn trực tuyến, tách khỏi kênh hiện đại từ tháng 7/2026.» «Kế hoạch năm vẫn tính trong kế hoạch kênh hiện đại.»"), (q, x)
+            assert "thực hiện tháng 10 820,0 triệu" in x and "thực hiện lũy kế 10 tháng 3.240,0 triệu" in x and "duyệt" not in x and "«TM»" not in x, (q, x)
+        pg.goto(Path(reps["bao_cao_kenh_loi_binh"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        x = typed("Kênh hiện đại lũy kế chênh lệch bao nhiêu so với kế hoạch?")
+        assert x.startswith("Báo cáo ghi: «Lũy kế 10 tháng, kênh hiện đại vượt kế hoạch 729 triệu.» Số trên bảng của riêng dòng Kênh hiện đại thì ngược chiều"), x
+        assert "Hai chỗ này lệch nhau" in x, x
+        x = typed("Kênh hiện đại tháng 10 thấp hơn kế hoạch bao nhiêu?")
+        assert x.startswith("Kênh hiện đại so với kế hoạch tháng 10, thấp hơn 550,0 triệu"), x
+        browser.close()
