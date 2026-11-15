@@ -2612,3 +2612,56 @@ def test_rerun_ten_blank_child_plans_abbreviated_labels_and_never_against_the_re
         x = typed("Kênh hiện đại tháng 10 thấp hơn kế hoạch bao nhiêu?")
         assert x.startswith("Kênh hiện đại so với kế hoạch tháng 10, thấp hơn 550,0 triệu"), x
         browser.close()
+
+
+def test_rerun_eleven_a_row_with_its_own_plan_is_never_merged_and_the_reports_other_figure_leads(tmp_path, monkeypatch):
+    # independent grader, gate 2 rerun 11 (our own synthetic shapes): the shared-plan merge took in a row whose note never
+    # named it a child (a cost row with its own plan) and mixed the month's and the to-date rows; a report sentence giving
+    # another figure for the same row and span did not lead; «là gì» gave no to-date actual; a yes/no answer quoted the asks.
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    fx = Path(__file__).parent / "fixtures"
+    src = tmp_path / "bao_cao_kenh_thang_luy_ke.html"
+    src.write_text((fx / "bao_cao_kenh_thang_luy_ke.html").read_text(encoding="utf-8"), encoding="utf-8")
+    rep = build(src)
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 900})
+
+        def typed(q):                          # the reader's way: Escape, skip the talk, type in «Hỏi Vera», Enter
+            pg.keyboard.press("Escape")
+            pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const e = r.getElementById('clicky-skip') || document.getElementById('clicky-skip'); if (e) e.click(); }")
+            pg.wait_for_timeout(300)
+            box = pg.locator("#clicky-host #q")
+            box.fill(q)
+            box.press("Enter")
+            pg.wait_for_timeout(900)
+            return pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const b = r.getElementById('bub'); "
+                               "return ((b && !b.classList.contains('hidden')) ? r.getElementById('ba') : r.getElementById('a')).innerText; }")
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        lead = "Kế hoạch của Kênh hiện đại được lập gộp với Thương mại điện tử (TMĐT): "
+        x = typed("Kênh hiện đại lũy kế chênh lệch bao nhiêu so với kế hoạch?")   # to date: the to-date rows only
+        assert x.startswith(lead + "kế hoạch 41.000,0 triệu cho cả 2 dòng"), x
+        assert "(em tính: 38.489,0 + 3.240,0)" in x and "cao hơn kế hoạch 729,0 triệu" in x and "280,0" not in x, x
+        x = typed("Kênh hiện đại tháng 10 chênh lệch bao nhiêu so với kế hoạch?")   # the month: the month's rows only
+        assert x.startswith(lead + "kế hoạch 4.200,0 triệu cho cả 2 dòng"), x
+        assert "(em tính: 3.650,0 + 820,0)" in x and "cao hơn kế hoạch 270,0 triệu" in x and "3.240" not in x, x
+        x = typed("Chi phí vận chuyển theo sản lượng chênh lệch bao nhiêu so với kế hoạch?")   # its own plan: never merged
+        assert x.startswith("Chi phí vận chuyển theo sản lượng thấp hơn kế hoạch 20,0 triệu"), x
+        assert "gộp" not in x and "em tính" not in x, x
+        x = typed("Bộ phận TMĐT là gì?")
+        assert x.startswith("Báo cáo ghi: «TMĐT bán hàng qua sàn trực tuyến, tách khỏi kênh hiện đại từ tháng 7/2026.» «Kế hoạch năm vẫn tính trong kế hoạch kênh hiện đại.»"), x
+        assert "thực hiện tháng 10 820,0 triệu" in x and "thực hiện lũy kế 10 tháng 3.240,0 triệu" in x and "duyệt" not in x, x
+        x = typed("Kênh hiện đại có vượt ngân sách không?")   # never the asks; the table's period said when the note's differs
+        assert "Đề xuất" not in x and "duyệt" not in x and "Số trên bảng (tháng 10):" in x, x
+        x = typed("Kênh truyền thống lũy kế chênh lệch bao nhiêu so với kế hoạch?")   # the report's own other figure leads
+        assert x.startswith("Báo cáo ghi: «Lũy kế 10 tháng, kênh truyền thống vượt kế hoạch 1.200 triệu.» Số trên bảng của riêng dòng Kênh truyền thống thì khác:"), x
+        assert "ngược chiều" not in x and "900,0" in x, x
+        x = typed("Kênh truyền thống tháng 10 chênh lệch bao nhiêu so với kế hoạch?")
+        assert x.startswith("Kênh truyền thống cao hơn kế hoạch 150,0 triệu"), x
+        browser.close()
