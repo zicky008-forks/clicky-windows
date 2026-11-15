@@ -876,6 +876,7 @@ def _plan_files_not_chosen(m, also_used=()) -> dict:
               if p is not None}
     if not chosen:
         return {}
+    from engine import roles
     first = next(p for p in (getattr(m.costs, "plan", None), getattr(m.sales, "plan", None)) if p is not None)
     versions = {}
     for r in list(m.bundle.plans) + list(getattr(m.bundle, "sku_plans", [])):
@@ -884,7 +885,14 @@ def _plan_files_not_chosen(m, also_used=()) -> dict:
     for f, vs in versions.items():
         if f in also_used or any((f, key(v)) in chosen for v in vs):
             continue
-        named = ", ".join(sorted(v for v in vs if v)) or "không ghi phiên bản"
+        if roles.is_estimate(Path(f).stem) or any(roles.is_estimate(v) for v in vs if v):
+            out[f] = "file ước tính (LE): dùng cho dự báo, không phải bản so sánh"      # R13: never an internal key
+            continue
+        named = ", ".join(sorted(v for v in vs if v and key(v) not in fpa.NOT_PLAN_VERSIONS))
+        if not named and any(v and key(v) in fpa.NOT_PLAN_VERSIONS for v in vs):
+            out[f] = "số thực tế ghi trong file: đọc, không dùng, số thực tế lấy từ sổ"
+            continue
+        named = named or "không ghi phiên bản"
         out[f] = (f"cùng tên bản {first.version} nhưng không phải file được chọn; báo cáo so với file {first.file}"
                   if key(named) == key(first.version) else
                   f"bản {named}: không phải bản so sánh, báo cáo so với bản {first.version}")

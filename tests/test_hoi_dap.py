@@ -671,3 +671,12 @@ def test_a_sku_with_the_same_price_shows_no_price_crumb():
     fpa_report.write_sku_rows(ws, SimpleNamespace(by_sku=[p]), {"SP01": "Trà"})
     row = [c.value for c in ws[ws.max_row]]
     assert row[4] == row[5] and row[9] == 0 and row[10] == 0 and row[8] == 1000 and row[11] == 1000
+
+
+def test_an_estimate_file_in_the_audit_source_says_estimate_never_an_internal_key(tmp_path):
+    """R13: the estimate file was said as '(bản thuc te: không phải bản so sánh…)'."""
+    d = case(tmp_path)
+    fs.write_csv(d / "Uoc tinh LE 9+3 2026.csv", fs.plan_rows("Thực tế"))
+    said = fpa_report.sources_said(fpa_report.compute(d))
+    assert "Uoc tinh LE 9+3 2026.csv (file ước tính (LE): dùng cho dự báo, không phải bản so sánh)" in said
+    assert "thuc te" not in said
