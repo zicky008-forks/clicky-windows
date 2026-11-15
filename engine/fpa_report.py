@@ -805,3 +805,31 @@ def write_sku_rows(ws, br, names: dict) -> None:
         ws.append([p.sku, names.get(p.sku, ""), p.qty_plan, p.qty_actual, r(p.price_plan), r(p.price_actual),
                    r(p.cost_plan), r(p.cost_actual), r(p.mix), r(p.price), r(p.cost),
                    r(p.mix) + r(p.price) + r(p.cost)])       # the row adds up on screen
+
+
+def understood(m: Month) -> list:
+    """What Clicky understood of the folder, one plain line each, for the 'Em hiểu thế này, đúng chưa?' card that
+    the user confirms before the report is written: the month, where the actual comes from, the plan it is held
+    against, the files used and not used, and how many points wait on the user. At most five lines, under a minute
+    to read."""
+    month = _month_text(m.period)
+    out = [f"Báo cáo tháng {month}" + (f", năm tài chính bắt đầu từ tháng {m.fy}" if m.fy and m.fy != 1 else "") + "."]
+    tb_file = getattr(m.tb, "file", None) if m.tb is not None and m.tb_not_used is None else None
+    out.append(f"Số thực tế lấy từ {actual_source(m)}" + (f" ({tb_file})" if tb_file else "") + ".")
+    basis = (m.costs.basis if m.costs is not None and m.costs.basis else "") or \
+        (m.sales.basis if m.sales is not None and m.sales.basis else "")
+    if basis:
+        basis = re.sub(r"^\s*Kế hoạch:\s*", "", basis)
+        out.append(f"So với kế hoạch: {basis}.")
+    else:
+        out.append("Thư mục chưa có kế hoạch để so: em chỉ làm được số thực hiện.")
+    rows = file_rows(m)[1:]
+    unused = [r[0] for r in rows if r[1] == "Không dùng" or NOT_COMPARED in str(r[1])]
+    line = f"Em đọc {len(rows)} file, dùng {len(rows) - len(unused)}"
+    if unused:
+        line += f"; không lấy số từ {', '.join(unused[:3])}" + (f" và {len(unused) - 3} file khác" if len(unused) > 3 else "")
+    out.append(line + ".")
+    left = (m.costs.left_out() if m.costs is not None else []) + (m.sales.left_out() if m.sales is not None else [])
+    if left:
+        out.append(f"Có {len(left)} điều em chưa tính vào số hoặc cần chị cho biết, em ghi trong Phiếu nhận file.")
+    return out

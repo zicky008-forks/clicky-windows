@@ -1,6 +1,7 @@
 """The FP&A month report on one synthetic folder (cost detail, opex plan, sales ledger, plan by SKU, catalogue, trial
 balance): the month's P&L figures come from the books and the ledgers only split them; the receipt says the books
 against each ledger in one sentence; every variance is classified; the saved file is reopened and checked."""
+import asyncio
 from decimal import Decimal
 from pathlib import Path
 
@@ -235,3 +236,30 @@ def test_the_chat_words_the_robot_flag_and_the_beats(tmp_path, monkeypatch):
     assert texts[3] == "MKT · QC: vượt kế hoạch 90.000.000 đ."
     assert texts[-1].endswith("File của chị em không sửa gì.") and "SƠ BỘ" in texts[-1]
     assert [e for e, _d in logged] == ["fpa_start", "fpa_report"] and str(d) not in repr(logged)
+
+
+def test_typed_in_the_chat_it_first_asks_em_hieu_the_nay_then_writes_on_dung_roi(tmp_path, monkeypatch):
+    """The chat path shows one screen of what Clicky understood (month, actual, plan, files) with two buttons; nothing
+    is written until 'Đúng rồi'. A file changed after the question asks again; 'Sửa trước' says how to correct."""
+    from office import fpa_skill, month_close
+    played, logged = [], []
+
+    async def play(manager, beats, **k):
+        played.extend(beats)
+    monkeypatch.setattr(month_close, "play", play)
+    monkeypatch.setattr(fpa_skill.scene_log, "record", lambda event, **data: logged.append(event))
+    d = case(tmp_path)
+    asyncio.run(fpa_skill.run(object(), d, "làm báo cáo FP&A tháng", confirm=True))
+    beat = played[-1]
+    assert beat.text.startswith(fpa_skill.CONFIRM_TITLE) and beat.choices == (fpa_skill.CONFIRM_YES, fpa_skill.CONFIRM_FIX)
+    assert "tháng 10/2026" in beat.text and "bảng cân đối số phát sinh" in beat.text and "AOP" in beat.text
+    assert not any(p.name.startswith(fpa_report.OUT_PREFIX) for p in d.iterdir())
+    assert len(fpa_report.understood(fpa_report.compute(d))) <= 5
+    (d / "ghi-chu.txt").write_text("mới", encoding="utf-8")              # the folder changed: ask again
+    asyncio.run(fpa_skill.run(object(), d, fpa_skill.CONFIRM_YES, confirm=True))
+    assert played[-1].text.startswith(fpa_skill.CONFIRM_TITLE)
+    asyncio.run(fpa_skill.run(object(), d, fpa_skill.CONFIRM_YES, confirm=True))
+    assert played[-1].text.endswith("File của chị em không sửa gì.")
+    assert any(p.name.startswith(fpa_report.OUT_PREFIX) for p in d.iterdir()) and "fpa_confirmed" in logged
+    asyncio.run(fpa_skill.run(object(), d, fpa_skill.CONFIRM_FIX, confirm=True))
+    assert played[-1].text == fpa_skill.FIX_HINT
