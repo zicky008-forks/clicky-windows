@@ -276,8 +276,9 @@ def delta(t: Table, r, en: bool) -> Optional[tuple]:
     else actual minus plan worked out by code (both printed, both positive)."""
     if t.var is not None:
         got = _num(r, t.var, en)
-        if got:
-            return got[0], got[1], ""
+        if got:                                    # «Chênh lệch (KH − TH)»: a bracket is a rise (gate-2 F01, TB1)
+            flip = t.var < len(r.cols or []) and getattr(r.cols[t.var], "flip", False)
+            return got[0], -got[1] if flip else got[1], ""
     a, p = _num(r, t.actual, en), _num(r, t.plan, en)
     if not a or not p or a[1] < 0 or p[1] < 0:
         return None
@@ -313,6 +314,8 @@ def group_rows(t: Table, en: bool) -> set:
 
 def share_words(r: Decimal) -> Optional[str]:
     """Words of degree, chosen from a computed share (never by an AI)."""
+    if r > 1:                                      # more than the whole change: other rows went the other way
+        return None
     if r >= Decimal("0.9"):
         return "gần như toàn bộ"
     if Decimal("0.70") < r < Decimal("0.9"):
@@ -692,8 +695,12 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                     and c.text.strip() and not re.search(r"\d", c.text) and len(c.text.split()) <= 8), None)
         # the row's own printed reason; said as speech, never «:» or «giải trình ghi:» read aloud (round 18 voice lint)
         cause = f", theo giải trình là do {_lc(why.text.strip().rstrip('.'))}" if why else ""
+        over_all = ""
+        if abs(share) > 1:                         # 1,4 of a 1,2 rise: other rows went down (synthetic F01 shape)
+            opp = "giảm" if up else "tăng"
+            over_all = f", nhiều hơn cả mức {verb} chung {tdelta[0]} {unit}, vì có {noun if t.what else 'chỗ'} {opp}"
         text = (f"{name} chiếm {sw} phần {verb}: {top_tok} {unit}{cause}." if sw
-                else f"Lớn nhất là {_short(top.label)}: {verb} {top_tok} {unit}{cause}.").replace(" .", ".").replace(" ,", ",")
+                else f"Lớn nhất là {_short(top.label)}: {verb} {top_tok} {unit}{over_all}{cause}.").replace("  ", " ").replace(" .", ".").replace(" ,", ",")
         st = [f"{top_tok} = {top_f}"] if top_f else []
         if sw and sw.endswith("%"):                # the share said as a figure: its own formula, checked like any other
             st.append(f"{sw.split()[1].rstrip('%')} = {top_tok} / {tdelta[0]} × 100")
@@ -701,7 +708,10 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             num = f"({top_f})" if top_f else top_tok          # a worked-out change is shown from the printed figures
             den = f"({tdelta[2]})" if tdelta[2] else tdelta[0]
             st.append(f"{say(abs(share) * HUNDRED, 0, en)} = {num} / {den} × 100")
-        lines.append(("Phần tăng nằm ở đâu", Line(text, top.id, so_tinh=st, vai="dong_luc")))
+        if over_all and tdelta[2]:
+            st.append(f"{tdelta[0]} = {tdelta[2]}")
+        lines.append(("Phần tăng nằm ở đâu", Line(text, top.id, so_tinh=st, vai="dong_luc",
+                                                 xac_nhan=[tdelta[0]] if over_all and not tdelta[2] else [])))
         if not why:
             key = jfold(_short(top.label))
             for it2 in items:
@@ -709,9 +719,10 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                     continue
                 hit = None
                 for x in re.split(r"(?<=[.;])\s+", it2.text):
-                    m_ = re.search(r",?\s+do\s+(kế hoạch|việc|tuyển|thuê|tăng|mở|chi)\b(.+?)[.;]?$", x)
+                    m_ = re.search(r",?\s+do\s+(kế hoạch|việc|tuyển|thuê|tăng|mở|chi|chạy|đẩy|dời|lùi|ghi nhận|trích|"
+                                   r"phát sinh|thanh toán|mua|nhập|chuyển)\b(.+?)[.;]?$", x)   # the row's own note: timing, one-off (F01 TB4)
                     if m_ and key and key in jfold(x) and not any(jfold(fl.get("sai", "")) and jfold(fl["sai"]) in jfold(x) for fl in flags):
-                        hit = (m_.group(1) + m_.group(2)).strip()
+                        hit = re.sub(r"\s*\(([^()]+)\)", r", \1", (m_.group(1) + m_.group(2)).strip())   # «(lệch thời điểm …)» is said
                         break
                 if hit:
                     figs_ = [g.tok for g in C.figures(hit)] if C.figures(hit) else []

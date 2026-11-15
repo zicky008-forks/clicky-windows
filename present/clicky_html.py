@@ -743,6 +743,7 @@ class Col:
     unit: Optional[str]    # from the cell, the header, the table's money unit, or "Đơn vị:" on the page
     kind: str              # label | value | var | pct | pctvar
     name: str = ""         # the lowest header cell ("AOP" under "Kế hoạch so Thực hiện"): how a person names it
+    flip: bool = False     # a variance written plan minus actual ("Chênh lệch (KH − TH)"): a bracket means it went up
 
 
 @dataclass
@@ -869,7 +870,8 @@ def row_places(trs: list, section: Optional[str], page_figs: list, en: bool, dec
     for r in trs:
         cols = [Col(hc[i] if i < len(hc) else "", x,
                     [] if i < len(hc) and code_column(hc[i]) else figures(x), units[i] if i < len(units) else None,
-                    kinds[i] if i < len(kinds) else "value", names[i] if i < len(names) else "")
+                    kinds[i] if i < len(kinds) else "value", names[i] if i < len(names) else "",
+                    i < len(hc) and i < len(kinds) and kinds[i] in ("var", "pctvar") and bool(PLAN_MINUS_ACTUAL.search(hc[i])))
                 for i, x in enumerate(r.cells)]
         vals = [g for c in cols if c.kind == "value" for g in c.figs]
         neg_book = bool(vals) and sum(1 for g in vals if _cell_sign(g) == "-") > len(vals) / 2
@@ -900,7 +902,8 @@ def _directions(rows: list, en: bool) -> None:
         if var is not None and len(values) >= 2:
             g = one(var)
             places = len(g.tok.split("," if not en else ".")[1]) if ("," if not en else ".") in g.tok else 0
-            table.append((p, _signed_value(g, en), dict(values), Decimal(1).scaleb(-places) * Decimal("1.01")))
+            sv = _signed_value(g, en)
+            table.append((p, -sv if var.flip and sv is not None else sv, dict(values), Decimal(1).scaleb(-places) * Decimal("1.01")))
     if not table:
         return
     pairs: dict = {}
@@ -997,15 +1000,16 @@ def check_row(f: Fig, place: Place, en: bool) -> Optional[str]:
     for c, g in hits:
         raw = _cell_sign(g)
         change = c.kind in ("var", "pctvar")
+        moved = ("-" if raw == "+" else "+") if change and c.flip else raw   # «(1,2)» under «KH − TH» went up
         # is the amount bigger or smaller: from its two amounts when known; a row written in brackets can not
         # be read from the sign alone (its variance and its percent may follow different habits)
-        size = row_size(place, raw)
+        size = row_size(place, moved)
         if f.how == "word" and c.kind == "value" and verb_before(f):
             why = why or (f"số {f.tok} là mức ở cột «{c.name or c.header}», không phải mức {verb_before(f).lower()}; "
                           f"anh nói «{c.name or c.header} là {f.tok}» hoặc dùng số ở cột chênh lệch")
             continue
         if f.sign is None:
-            if raw == "-" and not (place.neg_book and not change):
+            if moved == "-" and not (place.neg_book and not change):
                 why = why or f"cột «{c.header}» ghi số âm ({c.text.strip()}), câu nói thiếu chữ «giảm» hoặc «âm»"
                 continue
         elif f.how == "word" and change and size is None:
@@ -1231,8 +1235,8 @@ def table_columns(places: dict) -> dict:
         if table in out and not out[table][1]:
             continue
         has = any(c.figs for c in p.cols)
-        out[table] = ([{"i": i, "ten": c.name or c.header, "loai": c.kind, "don_vi": c.unit or "",
-                        "cot_nhan": c.kind == "label"} for i, c in enumerate(p.cols)], not has)
+        out[table] = ([dict({"i": i, "ten": c.name or c.header, "loai": c.kind, "don_vi": c.unit or "",
+                             "cot_nhan": c.kind == "label"}, **({"dao": True} if c.flip else {})) for i, c in enumerate(p.cols)], not has)
     return {k: v[0] for k, v in out.items()}
 
 
@@ -1355,6 +1359,9 @@ def reanchor(script: dict, places: dict) -> list:
 
 # --- the draft: a talk to the Board -------------------------------------------------------------------------
 
+# "Chênh lệch (KH − TH)", "Plan - Actual": the variance is the plan minus the actual, the opposite of the usual habit
+PLAN_MINUS_ACTUAL = re.compile(r"(?<![\w])(kh|kế hoạch|plan|budget|bud|aop|ns|ngân sách|dt)\s*[−–-]\s*(th|tt|thực hiện|thực tế|"
+                               r"actual|act|ước|ut)(?![\w])", re.I)
 VAR_HEAD = re.compile(r"chênh|lệch|\bvar\b|variance|\bdiff|Δ|delta|\+/-", re.I)
 SKIP_ROW = re.compile(r"^\s*(tổng|total|cộng|grand)|lợi nhuận|ebitda|\bebit\b|lntt|lnst|\blãi\b|net income|"
                       r"gross profit", re.I)
@@ -2506,6 +2513,32 @@ def from_to_issue(noi: str, en: bool) -> Optional[tuple]:
     return None
 
 
+def group_row_ids(rows: list, en: bool) -> set:
+    """Rows that add up a run of rows next to them in every amount column: a group heading («Khối Kinh doanh»
+    above its indented members, no «Tổng» in its name) or a subtotal. Never a peer in a «lớn nhất» rank."""
+    def amounts(q):
+        out = [_signed_value(c.figs[0], en) for c in q.cols if c.kind == "value" and c.unit != "người" and len(c.figs) == 1]
+        return out if len(out) >= 2 and None not in out else None
+    vals = [amounts(q) for q in rows]
+    found = set()
+    for i, v in enumerate(vals):
+        if v is None:
+            continue
+        for run in (range(i + 1, len(vals)), range(i - 1, -1, -1)):
+            sums, n = [Decimal(0)] * len(v), 0
+            for j in run:
+                if vals[j] is None or len(vals[j]) != len(v):
+                    break
+                sums, n = [a + b for a, b in zip(sums, vals[j])], n + 1
+                tol = Decimal("0.05") * (n + 1)
+                if n >= 2 and all(abs(a - b) <= tol for a, b in zip(sums, v)):
+                    found.add(rows[i].id)
+                    break
+            if rows[i].id in found:
+                break
+    return found
+
+
 def superlative_issue(noi: str, chi: str, places: dict, en: bool) -> Optional[tuple]:
     """"khối Marketing tăng nhanh nhất, 12,0%" while another row has 18,0% in that column: the rank is checked
     against the column the figure comes from, over the table's body rows (not its totals)."""
@@ -2516,6 +2549,10 @@ def superlative_issue(noi: str, chi: str, places: dict, en: bool) -> Optional[tu
     table = chi.rsplit("r", 1)[0] + "r"
     peers = [q for q in places.values() if q.kind == "row" and q.cols and q.id.startswith(table)
              and re.fullmatch(r"\d+", q.id[len(table):]) and q.label and not SKIP_ROW.search(q.label)]
+    groups = group_row_ids(sorted(peers, key=lambda q: int(q.id[len(table):])), en)   # gate-2 F01 TB2
+    if chi in groups:
+        return None                                # a group named as the biggest is ranked among groups by the reader
+    peers = [q for q in peers if q.id not in groups]
     word = (up or down).group(1).lower()
     # "tăng nhanh nhất": the biggest rise; "giảm mạnh nhất": the biggest fall; "cao/thấp nhất": the level itself;
     # "lớn nhất" without a direction: the biggest in size
@@ -2533,6 +2570,8 @@ def superlative_issue(noi: str, chi: str, places: dict, en: bool) -> Optional[tu
             if i >= len(q.cols) or len(q.cols[i].figs) != 1:
                 return None
             x = _signed_value(q.cols[i].figs[0], en)
+            if x is not None and q.cols[i].flip:   # «(1,4)» under «KH − TH» is a rise of 1,4
+                x = -x
             return None if x is None else (x * turn if turn else abs(x))
         mine = at(p)
         others = [(at(q), q) for q in peers if q.id != chi and at(q) is not None]

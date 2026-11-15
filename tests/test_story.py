@@ -1491,7 +1491,7 @@ def test_round_eighteen_row_claims_match_at_the_readers_precision_and_the_queue_
             assert x.startswith(start) and has in x and (pg is A or ("18,0" not in x and "17,3" not in x)), (q, x)   # B's 18,0 is doubted
             assert "CÂU HỎI" not in thu(pg) and "tôi có các câu hỏi" not in thu(pg), q
         # a doubted figure keeps its own answer
-        assert "Anh Tuấn đang kiểm lại hai số này" in hoi(B, "Tổng tăng 18% đúng không?")
+        assert "Anh Tuấn đang kiểm lại số 18,0%" in hoi(B, "Tổng tăng 18% đúng không?")
         # A's «không duyệt» says what a no means from the talk's own lines
         for q in ("Nếu chúng tôi không duyệt thì sao?", "Nếu không duyệt trần thì sao?"):
             x = hoi(A, q)
@@ -1560,7 +1560,7 @@ def test_round_nineteen_row_claims_judge_the_named_or_tapped_row_and_every_figur
             assert x.startswith(start), (q, scope, x)
             if start.startswith(("Không", "Số này khớp")):
                 assert not x.startswith("Đúng"), x
-        assert "Anh Tuấn đang kiểm lại hai số này" in hoi(B, "Tổng tăng 18% đúng không?")   # a doubted figure keeps its own answer
+        assert "Anh Tuấn đang kiểm lại số 18,0%" in hoi(B, "Tổng tăng 18% đúng không?")   # a doubted figure keeps its own answer
     finally:
         browser.close()
         pw.stop()
@@ -1624,7 +1624,7 @@ def test_round_twenty_one_spoken_and_printed_claims_shares_sums_and_tapped_rows(
                 (A, "Bán hàng chiếm khoảng một nửa tổng chi phí đúng không?", None, "Đúng ạ, khoảng một nửa: Khối Bán hàng chiếm 49,5% tổng AOPR (em tính: 92,3 ÷ 186,4 × 100)"),
                 (A, "Bán hàng chiếm 67% tổng chi phí đúng không?", None, "Không ạ, Khối Bán hàng chiếm 49,5% tổng AOPR"),
                 (A, "Khối Bán hàng và Khối Marketing tăng 15,6 tỷ đúng không?", None, "Đúng theo bảng: Khối Bán hàng và Khối Marketing tăng 15,6 tỷ (em tính: 14,1 + 1,5)"),
-                (A, "Doanh thu tăng khoảng 7% đúng không?", None, "Đúng ạ, gần đúng. Báo cáo ghi: «Thông điệp chính: Chi phí nhân sự AOPR tăng 12,6% trong khi doanh thu chỉ tăng 7,2%.»"),
+                (A, "Doanh thu tăng khoảng 7% đúng không?", None, "Đúng ạ, gần đúng."),   # the spoken or printed 7,2% (round 22: the line Clicky said comes first)
                 (B, "Doanh thu tăng 12 tỷ đúng không?", None, "Báo cáo không ghi «Doanh thu tăng 12 tỷ»."),
                 (B, "Doanh thu tăng 12 tỷ đúng không?", tapB, "Báo cáo không ghi «Doanh thu tăng 12 tỷ»."),
                 (B, "Marketing tăng 12 tỷ đúng không?", tapB, "Báo cáo này không có dòng hay mục «Marketing»; anh chị đang chọn dòng Logistics"),
@@ -1642,6 +1642,38 @@ def test_round_twenty_one_spoken_and_printed_claims_shares_sums_and_tapped_rows(
             assert x.startswith("Đúng ạ"), (q, x)   # a line worked or printed is never denied
         x = hoi(B, "Nếu giữ nguyên, chi phí vượt trần 8,9 tỷ đúng không?")   # not spoken on this page, and no row's change
         assert x.startswith("Báo cáo không ghi 8,9"), x
+    finally:
+        browser.close()
+        pw.stop()
+
+
+def test_round_twenty_two_tiles_conditions_shortfalls_and_tapped_other_subjects(report, drawn_report):
+    # round-22 panel: «tỷ lệ … khoảng 2,5%» and «mỗi người tăng 7%» were judged against the table's total (12,6%);
+    # «Headcount tăng 64 người» had no answer; «đạt 90% thì … 6,4%» was denied twice with «Theo bảng»; «hụt 10%»
+    # and «bù bằng gì» were parked; a tapped Logistics cell answered «Doanh thu tăng bao nhiêu?» about Logistics
+    pw, browser, pages = _ghi_pages(report, drawn_report)
+    try:
+        A, B = pages["A"], pages["B"]
+        hoi = lambda pg, q, s=None: pg.evaluate("([q, s]) => window.__clickyHoi(q, s)", [q, s])   # noqa: E731
+        tapB, tapA = "#t tbody tr:nth-of-type(2) td:nth-of-type(3)", "table tbody tr:nth-of-type(1) td:nth-of-type(4)"
+        for pg, q, scope, start in (
+                (A, "Tỷ lệ chi phí nhân sự lên khoảng 2,5% phải không?", None, "Đúng ạ, gần đúng. Báo cáo ghi: «Tỷ lệ chi phí nhân sự/DTT: 2,52%"),
+                (A, "Tỷ lệ chi phí nhân sự lên khoảng 2,5% phải không?", tapA, "Đúng ạ, gần đúng. Báo cáo ghi: «Tỷ lệ chi phí nhân sự/DTT: 2,52%"),
+                (A, "Tỷ lệ 2,52% thay vì 2,40% à?", None, "Đúng ạ, báo cáo ghi: «Tỷ lệ chi phí nhân sự/DTT: 2,52%, AOP gốc 2,40%»"),
+                (A, "Headcount tăng 64 người phải không?", None, "Đúng ạ, báo cáo ghi: «Headcount bình quân: 1.248 người"),
+                (A, "Headcount tăng 60 người phải không?", None, "Không ạ, báo cáo ghi: «Headcount bình quân: 1.248 người"),
+                (A, "Chi phí mỗi người tăng 7% đúng không?", None, "Báo cáo ghi 6,7%"),
+                (A, "Chi phí mỗi người tăng 7,2% đúng không?", tapA, "Báo cáo ghi 6,7%"),
+                (A, "Còn 5 tỷ bù bằng gì?", None, "Phần còn thiếu khoảng 5,0 tỷ (em tính: 8,9 − 3,9)"),
+                (A, "Doanh thu tăng bao nhiêu?", tapA, "Báo cáo viết: «Thông điệp chính"),
+                (B, "Doanh thu chỉ đạt 90% kế hoạch thì tỷ lệ chi phí lên 6,4% đúng không?", None, "Đúng ạ, báo cáo ghi: «Nếu doanh thu chỉ đạt 90% kế hoạch"),
+                (B, "Doanh thu chỉ đạt 90% kế hoạch thì tỷ lệ chi phí lên 7% đúng không?", None, "Không ạ, báo cáo ghi: «Nếu doanh thu chỉ đạt 90% kế hoạch"),
+                (B, "Nếu doanh thu hụt 10% thì sao?", None, "Báo cáo ghi: «Nếu doanh thu chỉ đạt 90% kế hoạch"),
+                (B, "Doanh thu hụt 20% thì sao?", None, "Báo cáo chỉ tính một trường hợp")):
+            x = hoi(pg, q, scope)
+            assert x.startswith(start), (q, scope, x)
+            assert "Tổng 12,6%" not in x and "Theo bảng" not in x, (q, x)
+        assert "hai số này" not in hoi(A, "Chi phí mỗi người tăng 7% đúng không?")   # the doubted figure is named
     finally:
         browser.close()
         pw.stop()
@@ -1731,3 +1763,47 @@ def test_round_twenty_consent_questions_out_of_range_exceptions_and_quoted_noes(
     finally:
         browser.close()
         pw.stop()
+
+
+def test_gate_two_plan_minus_actual_variance_group_rows_row_notes_and_no_rate_on_a_negative_base(tmp_path, monkeypatch):
+    # independent grader, gate 2 (F01 shape, our own synthetic copy): «Chênh lệch (KH − TH)» with brackets was read
+    # the wrong way round (a correct «cao hơn kế hoạch» blocked, a department under plan said to «tăng»); a «Khối …»
+    # group row above its members made «lớn nhất là …» fail; the driver's own note (timing) was left out
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    src = tmp_path / "thang10.html"
+    shutil.copyfile(Path(__file__).parent / "fixtures" / "bao_cao_thang_kh_tru_th.html", src)
+    rep = build(src)
+    said = [c["noi"] for s in yaml.safe_load(Path(rep["kich_ban"]).read_text(encoding="utf-8"))["canh"] for c in s["cau"]]
+    assert "Theo thực hiện, tổng là 37,2 tỷ, cao hơn Kế hoạch 1,2 tỷ." in said
+    drv = next(x for x in said if "Bán hàng MT" in x and "1,4" in x and "Duyệt" not in x)
+    assert drv.startswith("Lớn nhất là Bán hàng MT: tăng 1,4 tỷ, nhiều hơn cả mức tăng chung 1,2 tỷ"), drv
+    assert not any("Kho vận" in x for x in said)       # under plan: never a driver of the rise
+    assert any("lệch thời điểm" in x for x in said)    # the row's own note: a timing difference
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 768})
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(700)
+        hoi = lambda q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        assert "Kho vận (Khối Vận hành) thấp hơn kế hoạch 0,6 tỷ" in hoi("Kho vận tăng bao nhiêu?")
+        x = hoi("Bán hàng MT tăng 1,4 tỷ đúng không?")
+        assert "cao hơn kế hoạch 1,4 tỷ" in x and "khớp" in x and ", lệch" not in x, x
+        assert hoi("Tổng giảm 1,2 tỷ đúng không?").startswith("Không ạ: Tổng tăng chứ không giảm")
+        assert "thấp hơn kế hoạch 0,6 tỷ" in hoi("Chi phí quản lý tăng bao nhiêu?")
+        browser.close()
+    # the lock reads «(0,6)» and «0,6» under «KH − TH» the right way round
+    yml = Path(rep["kich_ban"])
+    script = yaml.safe_load(yml.read_text(encoding="utf-8"))
+    for s in script["canh"]:
+        for c in s["cau"]:
+            if c.get("vai") == "dong_luc":
+                head, n = c["chi"].rsplit("r", 1)
+                c["noi"], c["chi"], c["neo"] = "Kho vận tăng 0,6 tỷ.", f"{head}r{int(n) + 4}", "Kho vận"   # Bán hàng MT + 4 rows
+    yml.write_text(yaml.safe_dump(script, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    with pytest.raises(clicky_html.PackError, match=r"0,6.*giảm.*tăng"):
+        build(src)

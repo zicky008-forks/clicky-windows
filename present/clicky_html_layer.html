@@ -1081,6 +1081,9 @@ function model(el, grid) {
              heading: headingFor(el), cap: cellText(el.querySelector && el.querySelector("caption"))};
   m.units = units(m);
   if (cot) m.units = m.units.map((u, c) => { const k = cotAt(c); return c < lc ? "" : k && k.don_vi && u !== "%" ? k.don_vi : u; });   // the builder's unit for each column
+  // «Chênh lệch (KH − TH)»: plan minus actual, so «(1,4)» is a rise (gate-2 F01, TB1)
+  m.flip = new Set(head.map((h, c) => c).filter(c => (cot && cotAt(c) && cotAt(c).dao) ||
+    /(^|[^a-z])(kh|ke hoach|plan|budget|aop|ngan sach)\s*[-−–]\s*(th|tt|thuc hien|thuc te|actual)([^a-z]|$)/.test(fold(head[c] || "").replace(/[−–]/g, "-"))));
   return m;
 }
 function units(m) {   // unit of each column: its header, then the table's or page's "Đơn vị", then the same figure written with a unit
@@ -1979,7 +1982,7 @@ function diffOf(m, row, df, pct) {   // actual − plan of one row (or its % cha
   const p = row.cells[df[0]], a = row.cells[df[1]]; if (!p || !a || !isNum(cellText(p)) || !isNum(cellText(a))) return null;
   const x = decimal(cellText(p), m.en), y = decimal(cellText(a), m.en); if (!x || !y) return null;
   const d = Math.max(x.d, y.d), xa = x.n * 10 ** (d - x.d), yb = y.n * 10 ** (d - y.d);
-  if (pct) { if (!xa) return null; const k = Math.round((yb - xa) * 1000 / Math.abs(xa)); return {k, d: 1, s: vn(k, 1), x: a, p, a}; }
+  if (pct) { if (!(xa > 0) || !(yb >= 0)) return null; const k = Math.round((yb - xa) * 1000 / xa); return {k, d: 1, s: vn(k, 1), x: a, p, a}; }   // never a rate over a negative base (gate-2 F01, TB6)
   return {k: yb - xa, d, s: vn(yb - xa, d), x: a, p, a};
 }
 function measureOf(Q, m, rows, scope) {   // the column a ranking uses: only one whose header says what the question measures
@@ -2328,14 +2331,23 @@ function resolve(q, scope) {
   if (one.card && !one.wider && rowsNamed.length) { const r = rowsNamed.sort((a, b) => b.score - a.score)[0]; if (!words(one.card.text).some(w => core(r.row.label).includes(w))) one.wider = rowName(r.row); }
   return {kind: "one", b: one, rest: one.rest, Q};
 }
+function flipSaid(m, row, k) {   // «(1,4)» under «Chênh lệch (KH − TH)»: «cao hơn kế hoạch 1,4 tỷ (KH − TH ghi (1,4))»
+  if (!m.flip || !m.flip.has(k) || !row.cells[k]) return "";
+  const v = cellText(row.cells[k]), neg = /^\s*[-−(]/.test(v), bare = v.replace(/[()\s]/g, "").replace(/^[-−+]/, "");
+  return (!/[1-9]/.test(bare) ? "bằng kế hoạch" : (neg ? "cao hơn" : "thấp hơn") + " kế hoạch " + withUnit(bare, uOf(m, row, k))) + " (" + colName(m, k) + " ghi " + v + ")";
+}
 function cellAnswer(m, row, c, cols) {   // "Khối Bán hàng, AOPR: 92,3 tỷ."; never "undefined", never an empty figure
   if (cols && cols.length > 1) {
-    const parts = cols.filter(k => row.cells[k] && isNum(cellText(row.cells[k]))).map(k => colName(m, k) + " " + withUnit(cellText(row.cells[k]), uOf(m, row, k)));
+    const parts = cols.filter(k => row.cells[k] && isNum(cellText(row.cells[k]))).map(k => flipSaid(m, row, k) || colName(m, k) + " " + withUnit(cellText(row.cells[k]), uOf(m, row, k)));
     if (parts.length) return {text: rowName(row) + ": " + parts.join("; ") + ".", target: row.cells[cols[0]] || row.r};
   }
   const x = c >= 0 ? row.cells[c] : null, v = x ? cellText(x) : "";
+  if (x && v && isNum(v) && m.flip && m.flip.has(c)) {   // a plan-minus-actual variance said as what happened, never as a bare «0,6»
+    const neg = /^\s*[-−(]/.test(v), bare = v.replace(/[()\s]/g, "").replace(/^[-−+]/, ""), zero = !/[1-9]/.test(bare);
+    return {text: rowName(row) + (zero ? " bằng kế hoạch" : (neg ? " cao hơn" : " thấp hơn") + " kế hoạch " + withUnit(bare, uOf(m, row, c))) +
+      " (cột «" + colName(m, c) + "» ghi " + v + ", tức kế hoạch trừ thực hiện).", target: x}; }
   if (x && v && isNum(v)) return {text: rowName(row) + ", " + colName(m, c) + ": " + withUnit(v, uOf(m, row, c)) + ".", target: x};
-  const parts = numCols(m, row).slice(0, 5).map(k => colName(m, k) + " " + withUnit(cellText(row.cells[k]), uOf(m, row, k)));
+  const parts = numCols(m, row).slice(0, 5).map(k => flipSaid(m, row, k) || colName(m, k) + " " + withUnit(cellText(row.cells[k]), uOf(m, row, k)));
   return {text: rowName(row) + ": " + (parts.length ? parts.join("; ") : "dòng này không có số") + ".", target: row.r};
 }
 function rowAnswer(m, row, c, extra, opts, cols) { const a = cellAnswer(m, row, c, cols); answer(a.text, a.target, Object.assign({extra}, opts || {})); }
@@ -2398,6 +2410,7 @@ function tinhFig(tinh) {   // "tính từ bảng (129,0 − 110,0) ÷ 110,0 × 1
   return m ? {tok: m[3], u: m[4] || "", how: m[2].trim() + " ≈ " + m[3] + (m[4] === "%" ? "%" : m[4] ? " " + m[4] : "")} : null;
 }
 function vnNum(x) { return parseFloat(String(x).replace(/\./g, "").replace(",", ".")); }
+function fmtVn(x) { return (Math.round(x * 100) / 100).toString().replace(".", ","); }
 function sameMeasure(text, it) {   // "17% à?" answered 17,27: the table's own working of a doubted figure, never shown bare (round 9)
   const w = tinhFig(it.tinh); if (!w) return false;
   const v = vnNum(w.tok);
@@ -2569,7 +2582,7 @@ function answerDoubt(q, o) {   // one wording per state of a doubted figure; the
     const said = work ? (own ? work.charAt(0).toUpperCase() + work.slice(1) : "Theo bảng: " + work) + ". Báo cáo đang ghi " + sh + "; " + OWNER + " đã xác nhận đây là chỗ báo cáo cần sửa"
       : "Báo cáo có viết: «" + whole(o.s) + "» " + Own + " đã xác nhận câu này cần sửa";
     answer((work ? esc(said) : said) + esc("; bản trình bày đang là SƠ BỘ." + noi), o.el, {html: true, src: work ? "Em tính từ các số trên báo cáo «" + TITLE + "»" : "Lấy từ báo cáo «" + TITLE + "»"}); return; }
-  if (!it.xong) { answer((sh ? "Báo cáo ghi " + sh + (it.tinh ? "; " + it.tinh : "") + ". " + Own + " đang kiểm lại " + (it.tinh ? "hai số này" : "số này")
+  if (!it.xong) { answer((sh ? "Báo cáo ghi " + sh + (it.tinh ? "; " + it.tinh : "") + ". " + Own + " đang kiểm lại " + (sh ? "số " + sh : "số này")
         : "Câu «" + clip60(o.s) + "» " + OWNER + " đang kiểm lại" + (it.tinh ? " (" + it.tinh + ")" : "")) + ", em chưa trả lời thay ạ.", null,
       {cls: "park", extra: parkNote(q), src: ""}); return; }
   // kept: the owner's words for the Board replace "em ghi lại"; "em ghi lại" only when the question is really queued
@@ -2691,7 +2704,8 @@ function saveAsk(q, scope) {   // "giãn 30 vị trí có đủ bù 8,9 tỷ kh�
   if (scope && !here) return false;   // a click elsewhere: that place answers
   const f = " " + fold(q) + " ";
   const near = !!est && (LAST_ANS.includes(est.tok + " tỷ") || lastSaid.includes(est.tok + " tỷ") || LAST_ANS.includes(est.tok + " triệu") || lastSaid.includes(est.tok + " triệu"));
-  const short = !!est && (/ (con thieu|thieu bao nhieu|con lai bao nhieu|phan con lai|con lai (lay o dau|lay dau|thi sao|ai lo|bu the nao|bu sao|o dau ra|tinh sao)) /.test(f) || (near && /^ *(vay )?(co )?du (bu )?(khong|chua)( a| em)? *$/.test(f.replace(/[?!.]/g, " "))));   // "còn thiếu bao nhiêu?", "đủ không?" right after the bound
+  const bu = / bu (bang gi|the nao|o dau|bang cach nao|sao|tu dau|vao dau) | lay (gi|dau|tien dau)( ra)? (de |ma )?bu /.test(f);   // «Còn 5 tỷ bù bằng gì?» (round 22)
+  const short = !!est && (bu || / (con thieu|thieu bao nhieu|con lai bao nhieu|phan con lai|con lai (lay o dau|lay dau|thi sao|ai lo|bu the nao|bu sao|o dau ra|tinh sao)) /.test(f) || (near && /^ *(vay )?(co )?du (bu )?(khong|chua)( a| em)? *$/.test(f.replace(/[?!.]/g, " "))));   // "còn thiếu bao nhiêu?", "đủ không?" right after the bound
   if (!short && !/ (du bu|bu du|bu duoc|tiet kiem|giam duoc|bot duoc|du de|du (giam|cat)|du khong|la du|du ve|du roi) /.test(f)) return false;
   const qw = new Set(words(q).filter(w => w.length > 1 && !ECHO_NOT.has(w)));
   const ask = QUYET.map(t => ({t, n: words(t).filter(w => qw.has(w)).length})).filter(x => x.n >= 2 && !/\d[\d.,]*\s*(tỷ|triệu|tr|đồng)/i.test(x.t)).sort((a, b) => b.n - a.n)[0];
@@ -2712,7 +2726,7 @@ function saveAsk(q, scope) {   // "giãn 30 vị trí có đủ bù 8,9 tỷ kh�
     if (need && got && how && / (du|bu|thieu|con lai|con) /.test(f)) {
       const D2 = Math.max(need.d, got.d), x = need.n * 10 ** (D2 - need.d) - got.n * 10 ** (D2 - got.d);
       const gap = "khoảng " + withUnit(vn(x, D2), cf.u) + " (em tính: " + cf.v + " − " + est.tok + ")";
-      const t = x > 0 && !/ du /.test(f) && / (con lai|con thieu) /.test(f) ? "Phần còn thiếu " + gap + " so với " + withUnit(cf.v, cf.u) + " cần giảm; giãn tuyển trọn năm chỉ khoảng " + withUnit(est.tok, cf.u) + ". Báo cáo chưa nêu cách bù phần này."
+      const t = x > 0 && !/ du /.test(f) && (/ (con lai|con thieu) /.test(f) || bu) ? "Phần còn thiếu " + gap + " so với " + withUnit(cf.v, cf.u) + " cần giảm; giãn tuyển trọn năm chỉ khoảng " + withUnit(est.tok, cf.u) + ". Báo cáo chưa nêu cách bù phần này."
         : x > 0 ? "Chưa đủ: giãn trọn năm cũng chỉ tiết kiệm khoảng " + withUnit(est.tok, cf.u) + " (em tính: " + how + "), còn thiếu " + gap +
           " so với " + withUnit(cf.v, cf.u) + " cần giảm. Báo cáo chưa ghi số tiết kiệm này và chưa nêu cách bù phần còn thiếu."
         : "Đủ: giãn trọn năm tiết kiệm khoảng " + withUnit(est.tok, cf.u) + " (em tính: " + how + "), bằng hoặc hơn " + withUnit(cf.v, cf.u) + " cần giảm.";
@@ -2770,10 +2784,18 @@ function condAsk(q) {   // "nếu doanh thu chỉ đạt 90% thì phải cắt b
   const open = /^\s*(sao|the nao|ra sao)\b/.test(m[3]);   // "… thì sao": the report's own sentence with that condition
   const ask = open ? [] : words(m[3]).filter(w => w.length > 2 && !ECHO_NOT.has(w) && !/^(thi|se|phai|can|chi_phi|doanh|thu|loi|nhuan|tong)$/.test(w));   // what is asked, not whose
   if (!open && !ask.length) return false;
+  // «hụt 10%» is the report's «chỉ đạt 90%»: the same scenario said from the other side (round 22)
+  const short = /\b(hut|thieu|giam|mat)\b/.test(m[1]), alt = short ? figs.map(g => /%$/.test(g) && vnNum(g.replace(/%$/, "")) < 100 ? fmtVn(100 - vnNum(g.replace(/%$/, ""))) + "%" : g) : figs;
+  const hasFig = (fx, gs) => gs.every(g => new RegExp("(^|[^\\d,])" + fold(g).replace(/%$/, "").replace(/[.,]/g, "\\$&") + "(,0)?(?![\\d]|,\\d)").test(fx));
   for (const b of blocks()) for (const x of splitSent(b.text)) { const fx = " " + joined(fold(x)) + " ";
     if (doubted(x)) continue;   // a doubted sentence is never the scenario's answer
-    if (figs.every(g => fx.includes(fold(g).replace(/%$/, ""))) && (open || ask.some(w => fx.includes(" " + w + " ")))) {
+    if ((hasFig(fx, figs) || (short && hasFig(fx, alt) && /\b(dat|chi dat)\b/.test(fx))) && (open || ask.some(w => fx.includes(" " + w + " ")))) {
       answer("Báo cáo ghi: «" + whole(x) + "»", b.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"}); return true; } }
+  const risk = FACTS.find(x => x.k === "neu_hut");
+  const rf = risk ? " " + joined(fold(risk.a)) + " " : "";
+  if (risk && /\b(doanh thu|doanh so|ban hang)\b/.test(m[1]) && !hasFig(rf, figs) && !(short && hasFig(rf, alt))) {   // another shortfall than the one computed: say which one the report has
+    answer("Báo cáo chỉ tính một trường hợp: «" + String(risk.a).replace(/\.?$/, ".") + "» Mức hụt khác em không tự tính.", risk.chi ? el(risk.chi) : null,
+      {cls: "park", extra: parkNote(q), src: DRAFT ? "Theo kịch bản nháp của " + OWNER + " (chưa duyệt)" : "Theo lời " + OWNER + " đã duyệt cho bài trình bày"}); return true; }
   answer("Báo cáo không tính kịch bản này, nên em không đưa số.", null, {cls: "park", extra: parkNote(q)});
   return true;
 }
@@ -3007,8 +3029,9 @@ function cellCheck(m, row, c) {   // a printed figure worked out again from its 
     if (base.length === 2) {
       const pct = u === "%", d = diffOf(m, row, base, pct); if (!d) return null;
       const p = cellText(row.cells[base[0]]), a = cellText(row.cells[base[1]]);
-      const how = pct ? "(" + a + " − " + p + ") ÷ " + p + " × 100 ≈ " + d.s + "%" : a + " − " + p + " = " + withUnit(d.s, u);
-      const got = d.k / 10 ** d.d, want = toNum(t, m.en), ok = want !== null && Math.abs(got - want) < (pct ? 0.051 : 1e-9);
+      const fl = !pct && m.flip && m.flip.has(c);   // «KH − TH»: plan minus actual, checked that way round
+      const how = pct ? "(" + a + " − " + p + ") ÷ " + p + " × 100 ≈ " + d.s + "%" : fl ? p + " − " + a + " = " + withUnit(vn(-d.k, d.d), u) : a + " − " + p + " = " + withUnit(d.s, u);
+      const got = (fl ? -1 : 1) * d.k / 10 ** d.d, want = toNum(t, m.en), ok = want !== null && Math.abs(got - want) < (pct ? 0.051 : 1e-9);
       return {ok, text: "Em tính lại từ dòng này: " + how + (ok ? ", khớp." : "; báo cáo ghi " + withUnit(t, u) + ", lệch.")};
     }
   }
@@ -3036,11 +3059,21 @@ function placesOf(tok) {   // every place the report prints one figure: cells, t
   const t = tok.replace(/%$/, ""), pc = /%$/.test(tok), z = /[.,]/.test(t) ? "" : "(?:,0)?";   // "18%" is the printed 18,0%
   const re = new RegExp("(^|[^\\d.,])" + t.replace(/[.,]/g, "\\$&") + z + (pc ? "\\s?%" : "(?![\\d]|[.,]\\d)"));
   const same = v => v === t || (z && v === t + ",0");
-  const cells = []; tables().forEach(m => m.rows.forEach(row => numCols(m, row).forEach(c => { const v = cellText(row.cells[c]);
+  const cells = []; tables().forEach(m => m.rows.forEach(row => numCols(m, row).forEach(c => { const v = cellText(row.cells[c]).replace(/^\((.*)\)$/, "$1");
     if (same(v.replace(/%$/, "")) && (!pc || /%$/.test(v) || colUnit(m, c) === "%")) cells.push({m, row, c}); })));
   const cards = allCards().filter(c => re.test(c.text));
   const sents = []; blocks().forEach(b => splitSent(b.text).forEach(x => { if (re.test(x)) sents.push({el: b.el, s: x}); }));
   return {cells, cards, sents, n: cells.length + cards.length + sents.length};
+}
+function subjectWords(q) {   // the words before «tăng / giảm / chiếm …»: what the question is about, generic words left out
+  const sm = fold(q).match(/^(.*?)\b(tang|giam|chiem|la|bang|dat|vuot|hut|lech|thay doi|bien dong)\b/);
+  return sm ? sm[1].split(/[^a-z0-9]+/).filter(w => w.length > 1 && !/^\d/.test(w) && !FILLER.has(w) && !ECHO_NOT.has(w) &&
+    !/^(dong|khoan|muc|so|chi|phi|khoi|phong|ban|ben|no|anh|em|toi|minh|ca|nam|thang|ke|hoach|aopr|aop|tren|bao|cao|bang|chinh|dieu|thuc|te|hang|phan|tong|giai|trinh|ly|nguyen|nhan|cot|o|nay|day|vay|sao|tai|vi)$/.test(w)) : [];
+}
+function subjectIsRow(q, row) {   // «Doanh thu tăng bao nhiêu?» with Logistics tapped is not about Logistics (round 22)
+  const sw = subjectWords(q); if (!sw.length) return true;
+  const own = new Set(fold(rowName(row) + " " + row.label + " " + (row.cells || []).map(c => cellText(c)).join(" ")).split(/[^a-z0-9]+/));
+  return sw.every(w => own.has(w));
 }
 function tapRow(scope) {   // the table row a tapped place sits in, its total row included
   if (!scope) return null; if (scope.m && scope.row && scope.row.cells) return {m: scope.m, row: scope.row};
@@ -3061,7 +3094,7 @@ function saidOrPrinted(q, toks) {   // a claim that repeats a line Clicky spoke 
     return new RegExp("(^|[^\\d.,])" + t.replace(/[.,]/g, "\\$&") + z + "(?![\\d]|[.,]\\d)" + (/%$/.test(tok) ? "\\s?%" : "(?!\\s?%)")).test(s); };
   const cut = t => String(t || "").split(/[;,]\s+|\.\s+|\?\s*/);
   // each figure with the words of its own clause: «Nếu giữ nguyên, chi phí vượt trần 8,9 tỷ» is checked as «chi phí vượt trần 8,9 tỷ»
-  const want = toks.map(t => ({t, cw: words(fold(cut(q).find(c => has(c, t)) || q).replace(tag, " "))}));
+  const want = toks.map(t => ({t, cw: words(fold(cut(q).find(c => has(c, t)) || q).replace(tag, " ")).filter(w => !/^(khoang|gan|tam|chung|xap|xi|co|kem|tron|len|xuong|muc|vao)$/.test(w))}));   // «lên khoảng» is how, not what (round 22)
   if (want.some(x => x.cw.length < 2)) return false;
   const fits = text => want.every(x => cut(text).some(cl => has(cl, x.t) && (ws => x.cw.filter(w => ws.has(w)).length >= Math.max(2, Math.ceil(x.cw.length * 0.75)))(new Set(words(cl)))));
   const f = FACTS.find(x => x.a && fits(x.a));
@@ -3074,6 +3107,19 @@ function saidOrPrinted(q, toks) {   // a claim that repeats a line Clicky spoke 
   const pl = placesOf(toks[0]);
   const card = pl.cards.find(c => fits(c.text)); if (card) { answer("Đúng ạ, báo cáo ghi: «" + card.text.replace(/\.?$/, "") + "».", card.el, {src: "Lấy từ báo cáo «" + TITLE + "»"}); return true; }
   const sn = pl.sents.find(x => !doubted(x.s) && fits(x.s)); if (sn) { answer("Đúng ạ, báo cáo ghi: «" + whole(sn.s) + "»", sn.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"}); return true; }
+  // «Tỷ lệ … lên khoảng 2,5%» of a spoken or printed 2,52%: the same clause, the figure rounded or within a tenth (round 22)
+  const approx = /\b(khoang|gan|tam|chung|xap xi|co|hon kem|tron)\b/.test(fold(q));
+  const near = (s, tok) => { const t = vnNum(tok.replace(/%$/, "")), d = ((tok.replace(/%$/, "").split(",")[1]) || "").length, pc = /%$/.test(tok);
+    return [...String(s).matchAll(/(\d[\d.]*(?:,\d+)?)\s?(%)?/g)].some(m => !!m[2] === pc && ((v => Math.round(v * 10 ** d) / 10 ** d === t && v !== t ||
+      approx && Math.abs(v - t) <= 0.1 * Math.abs(v))(vnNum(m[1])))); };
+  const fitsNear = text => want.every(x => cut(text).some(cl => near(cl, x.t) && (ws => x.cw.filter(w => ws.has(w)).length >= Math.max(2, Math.ceil(x.cw.length * 0.75)))(new Set(words(cl)))));
+  const said = DRAFT ? "Theo kịch bản nháp của " + OWNER + " (chưa duyệt)" : "Theo lời " + OWNER + " đã duyệt cho bài trình bày";
+  for (const sc of D.scenes || []) { const t = String(sc.line || (sc.sentences || []).join(" ")); if (!fitsNear(t)) continue;
+    const one = splitSent(t).find(fitsNear) || t; if (doubted(one)) continue;
+    answer("Đúng ạ, gần đúng. Em đã nói: «" + one.trim() + "»", null, {src: said}); return true; }
+  const nc = allCards().find(c => fitsNear(c.text) && !doubted(c.text)); if (nc) { answer("Đúng ạ, gần đúng. Báo cáo ghi: «" + nc.text.replace(/\.?$/, "") + "».", nc.el, {src: "Lấy từ báo cáo «" + TITLE + "»"}); return true; }
+  let ns = null; blocks().forEach(b => splitSent(b.text).forEach(x => { if (!ns && !doubted(x) && fitsNear(x)) ns = {el: b.el, s: x}; }));
+  if (ns) { answer("Đúng ạ, gần đúng. Báo cáo ghi: «" + whole(ns.s) + "»", ns.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"}); return true; }
   return otherFigure(q, toks);
 }
 function otherFigure(q, toks) {   // «Doanh thu tăng 12 tỷ?» where the report says «doanh thu chỉ tăng 8,0%»: the printed figure, never a nearby line about another subject (round 21)
@@ -3121,6 +3167,45 @@ function namedRowRewrite(q) {   // «Tài chính tăng bao nhiêu?»: the row's 
   const tail = (h.toks[h.j].match(/[?.!,;:…]+$/) || [""])[0];
   return h.toks.slice(0, h.a).concat([h.row.label + tail], h.toks.slice(h.j + 1)).join(" ");
 }
+function condClaim(q, toks) {   // «Doanh thu chỉ đạt 90% thì tỷ lệ lên 6,4%?»: the condition figure finds the sentence, the result is checked against it (round 22)
+  const f = fold(q), m = f.match(/^(.*?\b(?:neu|khi|gia su|chi dat|hut)\b.*?)(?:\bthi\b|,)(.*)$/); if (!m || toks.length < 2) return false;
+  const has = (s, t) => new RegExp("(^|[^\\d.,])" + t.replace(/%$/, "").replace(/[.,]/g, "\\$&") + "(,0)?(?![\\d]|[.,]\\d)").test(s);
+  const cond = toks.filter(t => has(m[1], t)), res = toks.filter(t => !cond.includes(t)); if (!cond.length || !res.length) return false;
+  const cands = []; blocks().forEach(b => splitSent(b.text).forEach(x => cands.push({s: x, el: b.el, printed: true})));
+  (D.scenes || []).forEach(sc => splitSent(String(sc.line || (sc.sentences || []).join(" "))).forEach(x => cands.push({s: x, el: null})));
+  const qw = new Set(words(f)), hit = cands.find(x => !doubted(x.s) && cond.every(t => has(x.s, t)) && /\b(neu|khi|gia su|chi dat)\b/.test(fold(x.s)) &&
+    words(fold(x.s)).filter(w => w.length > 2 && qw.has(w)).length >= 2);
+  if (!hit) return false;
+  const src = hit.printed ? {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"} : {src: DRAFT ? "Theo kịch bản nháp của " + OWNER + " (chưa duyệt)" : "Theo lời " + OWNER + " đã duyệt cho bài trình bày"};
+  const quote = hit.printed ? "báo cáo ghi: «" + whole(hit.s) + "»" : "em đã nói: «" + hit.s.trim() + "»";
+  answer((res.every(t => has(hit.s, t)) ? "Đúng ạ, " : "Không ạ, ") + quote, hit.el, src);
+  return true;
+}
+function tileClaim(q, parts) {   // «Chi phí mỗi người tăng 7%?», «Tỷ lệ … khoảng 2,5%?»: the tile the words name answers, never the table's total (round 22)
+  const GEN = /^(chi|phi|tong|so|voi|cua|va|la|tren|nam|thang|goc|aop|aopr|khdc|bao|cao|muc|o|ty|trieu|nguoi|tang|giam)$/;
+  const lab = c => c.text.split(":")[0], cw = c => words(fold(lab(c))).filter(w => w.length > 1 && !GEN.test(w) && !/^\d/.test(w));
+  const fq = new Set(words(fold(q))), tiles = allCards().filter(c => c.text.includes(":") && /\d/.test(c.text));
+  const sc = tiles.map(c => ({c, w: cw(c), n: cw(c).filter(w => fq.has(w)).length})).filter(x => x.n);
+  if (!sc.length) return false;
+  const top = Math.max(...sc.map(x => x.n)), best = sc.filter(x => x.n === top);
+  if (best.length !== 1) return false;
+  const {c, w} = best[0], own = w.filter(x => fq.has(x) && !sc.some(o => o !== best[0] && o.w.includes(x)));
+  if (top < 2 && !own.length) return false;   // one shared word («bình quân») names no tile
+  const figs = [...c.text.matchAll(/([+−-]?)(\d[\d.]*(?:,\d+)?)\s?(%|tỷ|triệu|người)?/g)].map(m => ({t: m[2], v: vnNum(m[2]), u: m[3] || ""}));
+  const unit = p => p.pc ? "%" : p.tu || "";
+  const res = parts.map(p => { const fs = figs.filter(f => f.u === unit(p)); if (!fs.length) return null;
+    const dec = (p.tok.replace(/%$/, "").split(",")[1] || "").length, f = fs.slice().sort((a, b) => Math.abs(a.v - p.v) - Math.abs(b.v - p.v))[0];
+    const st = Math.abs(f.v - p.v) < 1e-9 ? "exact" : Math.round(f.v * 10 ** dec) / 10 ** dec === p.v || (p.approx && Math.abs(f.v - p.v) <= 0.1 * Math.abs(f.v)) ? "near" : "off";
+    return {p, f, st}; });
+  if (res.some(x => !x)) return false;   // a figure in another unit than the tile's: another route
+  const it = (D.nghi || []).find(it => !it.ma && (it.so || []).some(x => res.some(r => String(x).replace(/%$/, "") === r.f.t)));
+  if (it && !it.xong) { const o = {it, s: c.text, el: c.el}; answerDoubt(q, o); return true; }
+  const src = {src: "Lấy từ báo cáo «" + TITLE + "»"}, quote = "báo cáo ghi: «" + c.text.replace(/\.?$/, "") + "»";
+  if (res.every(r => r.st === "exact")) answer("Đúng ạ, " + quote + ".", c.el, src);
+  else if (res.every(r => r.st !== "off")) answer("Đúng ạ, gần đúng. " + quote.charAt(0).toUpperCase() + quote.slice(1) + ".", c.el, src);
+  else answer("Không ạ, " + quote + ", không phải " + res.filter(r => r.st === "off").map(r => r.p.said || r.p.tok).join(", ") + ".", c.el, src);
+  return true;
+}
 function rowClaim(q, scope, force) {   // a claim about a row («Tổng tăng 19 tỷ, tức 17%?»), each figure judged against its own row (rounds 18–20)
   const fq = " " + fold(q).replace(/[?.!…]+/g, " ").replace(/\s+/g, " ").trim() + " ";
   if (!force && !/ (dung khong|phai khong|a|ha|chu|that khong|dung chua|dung ko|phai ko|sai khong) $/.test(fq)) return false;
@@ -3151,6 +3236,8 @@ function rowClaim(q, scope, force) {   // a claim about a row («Tổng tăng 19
   const pcOnly = x => { const t = String(x).replace(/[.,]/g, "\\$&"); return new RegExp(t + "\\s?%").test(pageText()) && !new RegExp(t + "\\s*(tỷ|triệu|người)").test(pageText()); };
   if ((D.nghi || []).some(it => (it.so || []).some(x => parts.some(p => Math.abs(num(x) - p.v) < 1e-9 && !(p.tu && !p.pc && pcOnly(x)))))) return false;   // a doubted figure keeps its own answer; «18 tỷ» is not the doubted 18,0% (round 21)
   if (parts.length === 1 && nghiSents().some(x => new RegExp("(^|[^\\d.,])" + parts[0].tok.replace(/%$/, "").replace(/[.,]/g, "\\$&") + "(?![\\d]|[.,]\\d)").test(x.it.tinh || ""))) return false;
+  if (condClaim(q, parts.map(p => p.tok))) return true;
+  if (!parts.some(p => p.share) && !/\b(neu|khi|gia su|chi dat)\b/.test(fq) && tileClaim(q, parts)) return true;
   const tap = tapRow(scope); let prev = null, chgPrev = false;
   const totals = []; tables().forEach(m => { const t = m.rows.find(r => r.total); if (t && numCols(m, t).length) totals.push({m, row: t}); });
   for (const p of parts) {   // a part with no row of its own is about the row before it, else the tapped row (a named row beats the tap)
@@ -3161,10 +3248,7 @@ function rowClaim(q, scope, force) {   // a claim about a row («Tổng tăng 19
       p.rows = named; r = named[0]; }
     if (!r && !prev && !tap && /\b(chi phi|tong|ke hoach dieu chinh|aopr)\b/.test(p.f) && totals.length === 1) r = totals[0];   // «Chi phí tăng 13%»: the total
     if (!r && !prev && tap) {   // «Marketing tăng 12 tỷ?» with Logistics tapped: a subject that is not the tapped row never binds to it (round 21)
-      const sm = fold(p.raw).match(/^(.*?)\b(tang|giam|chiem|la|bang|dat|vuot|hut|lech)\b/), own = fold(rowName(tap.row) + " " + tap.row.label).split(/[^a-z0-9]+/);
-      const sw = sm ? sm[1].split(/[^a-z0-9]+/).filter(w => w.length > 1 && !/^\d/.test(w) && !FILLER.has(w) && !ECHO_NOT.has(w) &&
-        !/^(dong|khoan|muc|so|chi|phi|khoi|phong|ban|ben|no|anh|em|toi|minh|ca|nam|thang|ke|hoach|aopr|aop|tren|bao|cao|bang|chinh|dieu|thuc|te|hang|phan|tong)$/.test(w)) : [];
-      if (sw.length && !sw.every(w => own.includes(w))) return saidOrPrinted(q, parts.map(x => x.tok)); }
+      if (!subjectIsRow(p.raw, tap.row)) return saidOrPrinted(q, parts.map(x => x.tok)); }
     p.weak = !r || (r === totals[0] && !claimRow(p.raw));   // bound by the tap, the part before or the word «chi phí»: the spoken and printed guard may answer instead
     p.at = r || prev || tap; if (!p.at) return saidOrPrinted(q, parts.map(x => x.tok)); prev = p.at;
     p.chg = p.share || /\b(tang|giam|chenh|lech|them|bot)\b/.test(p.f) || (chgPrev && !r && (p.pc || /\btuc\b/.test(p.f))); chgPrev = p.chg;
@@ -3173,8 +3257,8 @@ function rowClaim(q, scope, force) {   // a claim about a row («Tổng tăng 19
   const facts = new Map();
   const cands = at => { if (facts.has(at.row)) return facts.get(at.row);
     const {m, row} = at, out = [], isPc = c => colUnit(m, c) === "%" || /%$/.test(cellText(row.cells[c]));
-    numCols(m, row).forEach(c => { const t = cellText(row.cells[c]); out.push({v: t.replace(/%$/, "").replace(/^[-−]/, ""), pc: isPc(c), c, u: isPc(c) ? "%" : uOf(m, row, c),
-      chg: /\b(chenh|lech|tang|giam|bien dong|so voi)\b/.test(fold(colName(m, c))), k: /^[-−]/.test(t) ? -1 : 1}); });
+    numCols(m, row).forEach(c => { const t = cellText(row.cells[c]); out.push({v: t.replace(/%$/, "").replace(/^\((.*)\)$/, "$1").replace(/^[-−]/, ""), pc: isPc(c), c, u: isPc(c) ? "%" : uOf(m, row, c),
+      chg: /\b(chenh|lech|tang|giam|bien dong|so voi)\b/.test(fold(colName(m, c))), k: (/^[-−(]/.test(t) ? -1 : 1) * (m.flip && m.flip.has(c) ? -1 : 1)}); });
     const rc = rowChange(qinfo(rowName(row) + " tăng"), {m, row});
     if (rc && rc.row === row) { const ab = diffOf(rc.m, rc.row, rc.df, false), pr = diffOf(rc.m, rc.row, rc.df, true), a = cellText(rc.d.a), p = cellText(rc.d.p), k = rc.d.k < 0 ? -1 : 1;
       if (ab) out.push({v: ab.s.replace(/^-/, ""), pc: false, how: a + " − " + p, u: uOf(rc.m, rc.row, rc.df[1]), chg: true, k, el: rc.d.a});
@@ -3352,10 +3436,12 @@ function ask(q, scope) {
   if (QUYET.some(t => /(^|\s)trần\s/i.test(t)) && /^\s*(?:nếu\s+)?(?:(?:chúng\s+tôi|tôi|anh\s+chị|ban\s+giám\s+đốc|hđqt|bod)\s+)?không\s+(?:duyệt|đồng\s+ý)(?:\s+(?:đề\s+nghị|đề\s+xuất|kế\s+hoạch\s+này|cái\s+này|việc\s+này))?\s*(?:thì\s+)?(?:sao|thế\s+nào|ra\s+sao|có\s+sao\s+không|hậu\s+quả\s+(?:là\s+)?gì)\s*\??\s*$/i.test(q)) q = "Nếu không duyệt trần thì sao?";
   if (/(?<![\p{L}\p{M}])(sa\s+thải|cho\s+nghỉ\s+việc|cắt\s+(?:giảm\s+)?(?:người|nhân\s+sự)|giảm\s+người)(?![\p{L}\p{M}])/iu.test(q) && !/\d/.test(q)) q = "Cắt bao nhiêu người?";
   q = namedRowRewrite(q);
+  let tapAway = null;
   { const tp = tapRow(scope);   // a tapped cell, then «CNTT tăng bao nhiêu?»: the row named wins, asked as from the panel (round 21)
     if (tp) { const Q = qinfo(q), hit = []; tables().forEach(m => m.rows.forEach(r => { if (numCols(m, r).length && rowMatch(Q, r)) hit.push(r); }));
       const own = hit.filter(r => !r.total);
-      if ((own.length ? own : hit).length && !(own.length ? own : hit).includes(tp.row)) scope = null; } }
+      if ((own.length ? own : hit).length && !(own.length ? own : hit).includes(tp.row)) scope = null;
+      else if (!subjectIsRow(q, tp.row)) { tapAway = tp; scope = null; } } }   // «Doanh thu tăng bao nhiêu?» with Logistics tapped: asked of the page (round 22)
   q = q.replace(/^\s*(?:nếu\s+)?bỏ\s+(?:khối\s+)?\S+(?:\s+\S+)?\s+ra\s*,?\s*(?=(?:thì\s+)?(?:phần|các khối|mấy khối)\s+còn\s+lại)/i, "").replace(/^thì\s+/i, "");   // «Bỏ Logistics ra, phần còn lại …» (round 21)
   REWROTE = q !== TYPED ? {from: TYPED, to: q} : null;   // the queue keeps what the reader typed, never the routing form (round 18)
   q = planWords(q);
@@ -3390,7 +3476,7 @@ function ask(q, scope) {
     if (subj && subj.length > 2 && subj.split(" ").length <= 4 && words(mm[1]).length && !fold(mm[1]).split(" ").some(w => FILLER.has(w) || ECHO_NOT.has(w) || /^(no|cai|ay|gi|ai|em|anh|chi|toi|minh|ben|phan)$/.test(w)) &&
         !(" " + fold(pageText()).replace(/[^a-z0-9]+/g, " ") + " ").includes(" " + subj.replace(/[^a-z0-9]+/g, " ").trim() + " ")) {
       const labs = []; tables().forEach(m => m.rows.forEach(r => { if (numCols(m, r).length && !r.total && labs.length < 8) labs.push(r.label); }));
-      const tp = tapRow(scope);
+      const tp = tapRow(scope) || tapAway;
       answer("Báo cáo này không có dòng hay mục «" + mm[1].trim() + "»" + (tp ? "; anh chị đang chọn dòng " + rowName(tp.row) : labs.length ? "; các dòng trong bảng là: " + labs.join(", ") : "") + ".", null, {cls: "park", extra: parkNote(q)}); return; } }
   if (rowClaim(q, scope)) return;   // «Bán hàng tăng 14 tỷ đúng không?»: the named row first, else the tapped row; never another row's doubt (rounds 18–19)   // «Bán hàng tăng 14 tỷ đúng không?»: the named row first, never another row's doubt (round 18)
   { const o = doubtHit(q, scope); if (o && (!tr || doubtHit(rowQ, scope))) { answerDoubt(q, o); return; } }
