@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__ · Clicky trình bày</title>
+<style>
+:root{--bg:#f6f4ef;--panel:#fff;--ink:#1d2421;--muted:#5d6b66;--line:#e2ddd2;--accent:#1f7a5a;--accent-ink:#fff;--frame:#e8a33d;--warn:#9a5b00;--chip:#eef4f0}
+@media (prefers-color-scheme:dark){:root{--bg:#141816;--panel:#1d2321;--ink:#e9eeec;--muted:#9fb0aa;--line:#2f3835;--accent:#3fae84;--accent-ink:#08130e;--chip:#22302a;--warn:#f0b35a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Segoe UI",system-ui,-apple-system,Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+header h1{font-size:17px;margin:0;font-weight:600;flex:1 1 260px}
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:13px;padding:3px 10px;border-radius:99px;background:var(--chip);color:var(--ink)}
+.badge.label{background:#fff3dc;color:#7a4a00}
+main{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px;padding:16px;max-width:1400px;margin:0 auto}
+@media (max-width:900px){main{grid-template-columns:1fr;padding:12px}}
+.stage{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.15)}
+.stage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#fff}
+.stage svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.frame{fill:none;stroke:var(--frame);stroke-width:4;vector-effect:non-scaling-stroke;stroke-dasharray:1;stroke-dashoffset:1;animation:draw .5s ease-out forwards}
+@keyframes draw{to{stroke-dashoffset:0}}
+.pointer{position:absolute;width:34px;height:34px;transform:translate(-30%,10%);transition:left .55s cubic-bezier(.3,.7,.2,1),top .55s cubic-bezier(.3,.7,.2,1);pointer-events:none;opacity:0}
+.pointer.on{opacity:1}
+.start{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:rgba(12,20,17,.55);color:#fff;text-align:center;padding:16px}
+.start button{font-size:18px;padding:12px 22px}
+.caption{min-height:3.2em;margin:10px 2px 0;font-size:17px}
+.caption small{display:block;color:var(--muted);font-size:13px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;padding:7px 12px;cursor:pointer}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+button:focus-visible,input:focus-visible{outline:3px solid var(--frame);outline-offset:2px}
+.count{color:var(--muted);font-size:14px;margin-left:auto}
+.dots{display:flex;gap:4px;margin-top:10px;flex-wrap:wrap}
+.dots i{width:14px;height:6px;border-radius:3px;background:var(--line);cursor:pointer}
+.dots i.done{background:var(--accent);opacity:.45}.dots i.now{background:var(--accent)}
+aside{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:12px;align-self:start}
+aside h2{font-size:16px;margin:0}
+.ask{display:flex;gap:6px}
+.ask input{flex:1;min-width:0;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips button{background:var(--chip);border:0;font-size:14px;text-align:left}
+.answer{border-left:4px solid var(--accent);padding:8px 10px;background:var(--chip);border-radius:6px}
+.answer .src{color:var(--muted);font-size:13px;margin-top:4px}
+.answer.park{border-color:var(--frame)}
+.treo li{margin-bottom:4px}
+.foot{color:var(--muted);font-size:12.5px;padding:0 16px 20px;max-width:1400px;margin:0 auto}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <span class="badge" title="Trình bày do trợ lý AI thực hiện">
+    <svg width="18" height="18" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4 L29 22 Q16 27 3 22 Z" fill="#2f8a5f"/><path d="M3 22 Q16 27 29 22" stroke="#1b5a3d" stroke-width="2" fill="none"/></svg>
+    <span id="who"></span>
+  </span>
+  <h1 id="title"></h1>
+  <span class="badge label hidden" id="label"></span>
+</header>
+<main>
+  <section>
+    <div class="stage" id="stage">
+      <img id="slide" alt="">
+      <svg id="ink" viewBox="0 0 1 1" preserveAspectRatio="none"></svg>
+      <div class="pointer" id="pointer" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="34" height="34"><path d="M16 3 L30 22 Q16 28 2 22 Z" fill="#2f8a5f" stroke="#fff" stroke-width="1.5"/><path d="M2 22 Q16 28 30 22" stroke="#174d34" stroke-width="2" fill="none"/></svg>
+      </div>
+      <div class="start" id="start">
+        <div id="startText"></div>
+        <button class="primary" id="go">▶ Nghe Clicky trình bày</button>
+        <button id="askFirst">Hỏi Clicky ngay</button>
+      </div>
+    </div>
+    <div class="caption" id="caption" aria-live="polite"></div>
+    <div class="bar">
+      <button id="prev" aria-label="Slide trước">⏮</button>
+      <button class="primary" id="play" aria-label="Phát hoặc tạm dừng">⏸ Tạm dừng</button>
+      <button id="next" aria-label="Slide sau">⏭</button>
+      <button id="speed" aria-label="Tốc độ đọc">1×</button>
+      <button id="cc" aria-pressed="true">Phụ đề: bật</button>
+      <button id="resume" class="hidden">↩ Tiếp tục trình bày</button>
+      <span class="count" id="count"></span>
+    </div>
+    <div class="dots" id="dots"></div>
+  </section>
+  <aside id="askPanel">
+    <h2>Hỏi Clicky</h2>
+    <form class="ask" id="askForm"><input id="q" placeholder="Gõ câu hỏi, ví dụ: Marketing tăng vì sao?" autocomplete="off"><button class="primary">Hỏi</button></form>
+    <div class="chips" id="chips"></div>
+    <div id="answer" class="hidden"></div>
+    <div id="treoBox" class="hidden">
+      <h2>Câu hỏi đang chờ <span id="ownerName"></span> trả lời</h2>
+      <ol class="treo" id="treo"></ol>
+      <button class="primary" id="send">Gửi các câu này qua email</button>
+    </div>
+  </aside>
+</main>
+<p class="foot" id="foot"></p>
+<audio id="voice" preload="auto"></audio>
+<script id="data" type="application/json">__DATA__</script>
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById("data").textContent);
+const $ = id => document.getElementById(id);
+const M = D.meta, S = D.scenes, QA = D.qa;
+const audio = $("voice");
+let idx = 0, playing = false, shown = new Set(), captions = true, speedIx = 0, asideMode = false;
+const SPEEDS = [1, 1.15, 1.3, 0.9];
+const treoKey = "clicky-treo-" + M.pack_id;
+
+$("who").textContent = "Trợ lý AI của " + M.owner + " · giọng máy";
+$("title").textContent = M.title;
+$("ownerName").textContent = M.owner;
+if (M.label) { $("label").textContent = M.label; $("label").classList.remove("hidden"); }
+$("startText").innerHTML = "<strong>Clicky là trợ lý AI của " + esc(M.owner) + ".</strong><br>Em trình bày khoảng " +
+  String(M.minutes).replace(".", ",") + " phút. Anh chị có thể dừng bất cứ lúc nào để hỏi.";
+$("foot").textContent = "Mọi con số lấy từ file " + M.workbook + " (mã kiểm " + M.workbook_sha256.slice(0, 12) +
+  "), đóng gói lúc " + M.built + ". Trang này chạy hoàn toàn trên máy anh chị, không gửi dữ liệu đi đâu và không dùng AI để tạo câu trả lời: Clicky chỉ trả lời từ bộ câu hỏi " +
+  M.owner + " đã duyệt. Câu chưa có sẵn được ghi lại để " + M.owner + " trả lời.";
+
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c])); }
+
+// --- slides and drawing ---
+S.forEach((s, i) => { const d = document.createElement("i"); d.title = "Slide " + s.slide; d.onclick = () => go(i, playing); $("dots").appendChild(d); });
+function showSlide(no) { $("slide").src = "data:image/jpeg;base64," + D.slides[no - 1]; $("slide").alt = "Slide " + no; clearInk(); }
+function clearInk() { $("ink").innerHTML = ""; $("pointer").classList.remove("on"); shown = new Set(); }
+function frame(box) {
+  const [x, y, w, h] = box, px = 0.006, py = 0.01;
+  const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  r.setAttribute("x", Math.max(0, x - px)); r.setAttribute("y", Math.max(0, y - py));
+  r.setAttribute("width", w + 2 * px); r.setAttribute("height", h + 2 * py);
+  r.setAttribute("rx", 0.006); r.setAttribute("pathLength", 1); r.setAttribute("class", "frame");
+  $("ink").appendChild(r);
+  const p = $("pointer");   // under the frame, at its lower-left corner: never over the number
+  p.style.left = (x * 100) + "%"; p.style.top = Math.min(92, (y + h + py) * 100) + "%"; p.classList.add("on");
+}
+function render() {
+  const s = S[idx];
+  $("count").textContent = "Slide " + s.slide + " · " + (idx + 1) + "/" + S.length;
+  [...$("dots").children].forEach((d, i) => d.className = i < idx ? "done" : i === idx ? "now" : "");
+  caption(0);
+}
+// One sentence at a time, following the voice: the screen never fills with text.
+function sentences(line) { return line.split(/(?<=[.!?])\s+(?=\S)/); }
+function caption(t) {
+  const s = S[idx];
+  if (!captions) { $("caption").innerHTML = ""; return; }
+  const parts = sentences(s.line), total = s.line.length || 1;
+  let acc = 0, k = 0;
+  for (; k < parts.length - 1; k++) { acc += parts[k].length + 1; if (acc / total * s.secs > t) break; }
+  $("caption").innerHTML = esc(parts[k]) + "<small>" + esc(s.point || "") + "</small>";
+}
+function go(i, autoplay) {
+  idx = Math.max(0, Math.min(S.length - 1, i));
+  asideMode = false; $("resume").classList.add("hidden");
+  showSlide(S[idx].slide); render();
+  audio.src = "data:" + (S[idx].mime || "audio/mpeg") + ";base64," + S[idx].audio; audio.playbackRate = SPEEDS[speedIx];
+  if (autoplay) play(); else setPlaying(false);
+}
+function play() { $("start").classList.add("hidden"); audio.play().then(() => setPlaying(true)).catch(() => setPlaying(false)); }
+function setPlaying(v) { playing = v; $("play").textContent = v ? "⏸ Tạm dừng" : "▶ Phát"; }
+audio.addEventListener("timeupdate", () => {
+  if (asideMode) return;
+  const s = S[idx], t = audio.currentTime;
+  caption(t);
+  s.points.forEach((p, k) => { if (!shown.has(k) && t >= p.at * s.secs) { shown.add(k); frame(p.box); } });
+});
+audio.addEventListener("ended", () => {
+  if (asideMode) { setPlaying(false); return; }
+  S[idx].points.forEach((p, k) => { if (!shown.has(k)) { shown.add(k); frame(p.box); } });
+  if (idx < S.length - 1) setTimeout(() => { if (playing && !asideMode) go(idx + 1, true); }, (S[idx].pause || 1.5) * 1000);
+  else setPlaying(false);
+});
+$("go").onclick = () => go(0, true);
+$("play").onclick = () => {
+  if (asideMode) { resume(); return; }
+  if (playing) { audio.pause(); setPlaying(false); } else play();
+};
+$("prev").onclick = () => go(idx - 1, playing);
+$("next").onclick = () => go(idx + 1, playing);
+$("speed").onclick = () => { speedIx = (speedIx + 1) % SPEEDS.length; audio.playbackRate = SPEEDS[speedIx]; $("speed").textContent = String(SPEEDS[speedIx]).replace(".", ",") + "×"; };
+$("cc").onclick = () => { captions = !captions; $("cc").textContent = "Phụ đề: " + (captions ? "bật" : "tắt"); $("cc").setAttribute("aria-pressed", captions); render(); };
+$("askFirst").onclick = () => { $("start").classList.add("hidden"); $("q").focus(); };
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") return;
+  if (e.key === " ") { e.preventDefault(); $("play").click(); }
+  if (e.key === "ArrowRight") $("next").click();
+  if (e.key === "ArrowLeft") $("prev").click();
+});
+
+// --- questions: the approved bank only, same rules as present/qa.py ---
+function fold(s) {
+  return String(s || "").normalize("NFD").replace(/đ/g, "d").replace(/Đ/g, "D").replace(/[̀-ͯ]/g, "")
+    .toLowerCase().replace(/[^a-z0-9%,.\-+ ]+/g, " ").replace(/\s+/g, " ").trim();
+}
+function has(t, phrase) {
+  const p = fold(phrase).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp("(?<![a-z0-9])" + p + "(?![a-z0-9])").test(t);
+}
+function score(t, e) {
+  if (!e.groups.length) return 0;
+  let sc = 0;
+  for (const g of e.groups) {
+    const hits = g.filter(p => has(t, p));
+    if (!hits.length) return 0;
+    sc += Math.max(...hits.map(p => fold(p).length));
+  }
+  return sc * e.groups.length;
+}
+const STOP = new Set("phong ban khoi xin bao nhieu cat bi duoc con the nao sao cua chi phi tang giam nam nay truoc khong may lam voi".split(" "));
+function depts(t, e) {
+  const exact = e.depts.filter(d => d.key && has(t, d.key));
+  if (exact.length) return exact;
+  const words = t.split(" ").filter(w => w.length >= 3 && !STOP.has(w));
+  const part = e.depts.filter(d => words.some(w => has(fold(d.name), w)));
+  return part.length < e.depts.length ? part : [];
+}
+QA.entries.filter(e => e.ask).slice(0, 8).forEach(e => {
+  const b = document.createElement("button"); b.type = "button"; b.textContent = e.ask; b.onclick = () => ask(e.ask); $("chips").appendChild(b);
+});
+$("askForm").onsubmit = ev => { ev.preventDefault(); const q = $("q").value.trim(); if (q) ask(q); };
+
+function say(clip) {
+  if (!asideMode) { asideMode = true; $("resume").classList.remove("hidden"); }
+  audio.pause(); audio.src = "data:" + (clip.mime || "audio/mpeg") + ";base64," + clip.audio; audio.playbackRate = SPEEDS[speedIx];
+  audio.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+  $("start").classList.add("hidden");
+}
+function resume() { go(idx, true); }
+$("resume").onclick = resume;
+
+function showAnswer(text, source, slide, cls, extra) {
+  const a = $("answer"); a.className = "answer " + (cls || ""); a.innerHTML = "";
+  const p = document.createElement("div"); p.textContent = text; a.appendChild(p);
+  if (source) { const s = document.createElement("div"); s.className = "src"; s.textContent = "Nguồn: " + source + " · " + M.workbook; a.appendChild(s); }
+  if (slide) { const b = document.createElement("button"); b.type = "button"; b.textContent = "Xem slide " + slide; b.style.marginTop = "6px";
+    b.onclick = () => { asideMode = true; $("resume").classList.remove("hidden"); showSlide(slide); }; a.appendChild(b); }
+  if (extra) a.appendChild(extra);
+}
+function ask(q) {
+  const t = fold(q);
+  const scored = QA.entries.map((e, i) => [score(t, e), i, e]).filter(x => x[0] > 0).sort((a, b) => b[0] - a[0] || a[1] - b[1]);
+  if (!scored.length) { park(q); showAnswer(QA.fallback, "", null, "park"); say(QA.fallback_clip); return; }
+  const top = scored.filter(x => x[0] === scored[0][0]).map(x => x[2]);
+  if (top.length > 1) {   // two entries fit equally well: the asker picks, Clicky never guesses
+    const box = document.createElement("div"); box.className = "chips"; box.style.marginTop = "6px";
+    top.forEach(e => { const b = document.createElement("button"); b.type = "button"; b.textContent = e.ask; b.onclick = () => answer(e, q); box.appendChild(b); });
+    showAnswer("Anh chị muốn hỏi ý nào ạ?", "", null, "", box); return;
+  }
+  answer(top[0], q);
+}
+function answer(e, q) {
+  if (e.kind === "park") { park(q); showAnswer(e.text, "", null, "park"); say(e); return; }
+  if (e.kind === "dept") {
+    const hit = depts(fold(q), e);
+    if (hit.length === 1) { const d = hit[0]; showAnswer(d.text, d.source, e.slide); say(d); return; }
+    const box = document.createElement("div"); box.className = "chips"; box.style.marginTop = "6px";
+    (hit.length ? hit : e.depts).forEach(d => { const b = document.createElement("button"); b.type = "button"; b.textContent = d.name;
+      b.onclick = () => { showAnswer(d.text, d.source, e.slide); say(d); }; box.appendChild(b); });
+    showAnswer(QA.which_dept, "", null, "", box); say(QA.which_dept_clip); return;
+  }
+  showAnswer(e.text, e.source, e.slide); say(e);
+}
+
+// --- parked questions ("câu treo"): kept on this device, sent only when the reader presses Send ---
+function loadTreo() { try { return JSON.parse(localStorage.getItem(treoKey) || "[]"); } catch (_) { return memTreo; } }
+let memTreo = [];
+function saveTreo(list) { memTreo = list; try { localStorage.setItem(treoKey, JSON.stringify(list)); } catch (_) {} }
+function park(q) {
+  const list = loadTreo(); list.push({q, slide: S[idx].slide, at: new Date().toLocaleString("vi-VN")}); saveTreo(list); drawTreo();
+}
+function drawTreo() {
+  const list = loadTreo(); $("treoBox").classList.toggle("hidden", !list.length);
+  $("treo").innerHTML = list.map(x => "<li>" + esc(x.q) + " <small>(slide " + x.slide + ")</small></li>").join("");
+}
+$("send").onclick = () => {
+  const list = loadTreo();
+  const body = "Chào " + M.owner + ",\n\nKhi xem bài trình bày \"" + M.title + "\", tôi có các câu hỏi sau:\n\n" +
+    list.map((x, i) => (i + 1) + ". " + x.q + " (đang xem slide " + x.slide + ")").join("\n") +
+    "\n\n(Gửi từ trang Clicky trình bày, gói " + M.pack_id + ")";
+  location.href = "mailto:" + encodeURIComponent(M.contact || "") + "?subject=" + encodeURIComponent("Câu hỏi về " + M.title) + "&body=" + encodeURIComponent(body);
+};
+drawTreo();
+showSlide(S[0].slide); render(); setPlaying(false);
+</script>
+</body>
+</html>
