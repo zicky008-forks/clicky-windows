@@ -3084,6 +3084,18 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     from present import story as _story
     draft = _story.story(items, places, owner, en) if tell else None     # the story; else the report in page order
     drawn = None
+    has_year = lambda d: any(c.get("vai") == "ca_nam" for sc in (d or {}).get("canh") or [] for c in sc.get("cau") or [])   # noqa: E731
+    if draft is not None and tell and not has_year(draft) and re.search(r"<script\b", source, re.I):
+        # the year table may be one the report's script draws (gate 2 grader TB15): the talk from the page as drawn,
+        # only when that page tells where the year lands and the printed one does not
+        progress("Đang mở báo cáo trong trình duyệt ẩn để đọc các bảng do báo cáo tự vẽ…")
+        seen = drawn_places(src_path, en, declared)
+        told = _story.story(seen["items"], seen["places"], owner, en, hidden=seen["hidden"]) if seen is not None else None
+        if told is not None and has_year(told):
+            draft, drawn = told, seen
+            places = {**places, **drawn["places"]}
+            known |= set(drawn["places"])
+            page_text += " " + drawn["text"]
     if draft is None and tell and re.search(r"<script\b", source, re.I):
         # a dashboard whose script draws its tables: tell the story from the page as the Board will see it
         progress("Đang mở báo cáo trong trình duyệt ẩn để đọc các bảng do báo cáo tự vẽ…")

@@ -827,7 +827,7 @@ def test_round2_questions_rank_by_the_readers_words(page):
     # the tile that covers the question's own words wins: "bình quân" is the cost tile, never the Headcount tile
     assert _ask(pg, "Chi phí bình quân tăng bao nhiêu?").startswith("Chi phí bình quân mỗi người: 149,4 triệu/năm")
     # "tăng bao nhiêu (so với AOP gốc)" reads the difference and % columns, not "AOP gốc"
-    assert _ask(pg, "So với AOP gốc tăng bao nhiêu?").startswith("Tổng: Chênh lệch 20,9 tỷ; % tăng 12,6%.")
+    assert _ask(pg, "So với AOP gốc tăng bao nhiêu?").startswith("Tổng: cao hơn AOP gốc 20,9 tỷ (cột «Chênh lệch» ghi 20,9); % tăng 12,6%.")
     # a share of the total is computed from two figures of the table, and said so
     a = _ask(pg, "Khối Bán hàng chiếm bao nhiêu phần trăm tổng AOPR?")
     assert a.startswith("Khối Bán hàng chiếm 49,5% tổng AOPR (em tính: 92,3 tỷ ÷ 186,4 tỷ).") and "báo cáo không ghi sẵn số này" in a
@@ -1134,9 +1134,9 @@ def test_round3_clicked_tile_answers_change_from_its_own_text(page):
 def test_round3_clicked_row_so_voi_reads_the_same_row(page):
     pg, errors = page
     row = "tbody tr:nth-child(%d) td:nth-child(%d)"
-    cases = [((1, 6), "Khối Bán hàng: AOP gốc 78,2 tỷ; AOPR 92,3 tỷ; Chênh lệch 14,1 tỷ; % tăng 18,0%."),
-             ((2, 3), "Khối Marketing: AOP gốc 12,5 tỷ; AOPR 14,0 tỷ; Chênh lệch 1,5 tỷ; % tăng 12,0%."),
-             ((6, 4), "Khối CNTT: AOP gốc 15,8 tỷ; AOPR 17,7 tỷ; Chênh lệch 1,9 tỷ; % tăng 12,0%.")]
+    cases = [((1, 6), "Khối Bán hàng: AOP gốc 78,2 tỷ; AOPR 92,3 tỷ; cao hơn AOP gốc 14,1 tỷ (cột «Chênh lệch» ghi 14,1); % tăng 18,0%."),
+             ((2, 3), "Khối Marketing: AOP gốc 12,5 tỷ; AOPR 14,0 tỷ; cao hơn AOP gốc 1,5 tỷ (cột «Chênh lệch» ghi 1,5); % tăng 12,0%."),
+             ((6, 4), "Khối CNTT: AOP gốc 15,8 tỷ; AOPR 17,7 tỷ; cao hơn AOP gốc 1,9 tỷ (cột «Chênh lệch» ghi 1,9); % tăng 12,0%.")]
     for (r, c), want in cases:
         a = _r3(pg, "So với AOP gốc?", row % (r, c))
         assert a.startswith(want) and "chưa tách" not in a and "186,4" not in a
@@ -1426,7 +1426,7 @@ def test_a_figure_checked_says_where_it_is_printed_and_the_sum_behind_it(page):
     assert _r3(pg, "18% đúng không?").startswith("Khối Bán hàng, % tăng: 18,0%.")          # "18%" is the printed 18,0%
     a = _r3(pg, "14,1 có đúng không?")                                                     # three places, each named
     assert a.startswith("Báo cáo ghi 14,1 ở 3 chỗ:") and "92,3 − 78,2 = 14,1 tỷ, khớp." in a
-    assert _r3(pg, "Số này có đúng không?", row1 % 4).startswith("Khối Bán hàng, Chênh lệch: 14,1 tỷ. Em tính lại từ dòng này: 92,3 − 78,2 = 14,1 tỷ, khớp.")
+    assert _r3(pg, "Số này có đúng không?", row1 % 4).startswith("Khối Bán hàng cao hơn AOP gốc 14,1 tỷ (cột «Chênh lệch» ghi 14,1). Em tính lại từ dòng này: 92,3 − 78,2 = 14,1 tỷ, khớp.")
     assert "(92,3 − 78,2) ÷ 78,2 × 100 ≈ 18,0%, khớp." in _r3(pg, "Số này nghĩa là gì?", row1 % 5)
     assert "Em cộng 6 dòng cột AOPR ra 186,4 tỷ, khớp dòng Tổng 186,4 tỷ." in _r3(pg, "Có chắc không?", "table tbody tr:last-child td:nth-child(3)")
     assert _r3(pg, "8,9 có đúng không?").startswith("Báo cáo ghi 8,9 ở 1 chỗ: «Cần giảm so với AOPR: 8,9 tỷ». Em tính lại: 8,9 tỷ = 186,4 − 177,5, khớp.")
@@ -1677,15 +1677,15 @@ def _mp_checks(pg, which):
     if which == "mp4":   # English headers
         assert _r3(pg, "YTD revenue").startswith("Net revenue: YTD Actual 3,871.4")
         assert "YTD Budget 3,950.0" in _r3(pg, "YTD revenue")
-        assert _r3(pg, "Net revenue variance").startswith("Net revenue, Var: (14.3)")
+        assert _r3(pg, "Net revenue variance").startswith("Net revenue so với Budget Oct-26, thấp hơn 14.3 tỷ (cột «Var» ghi (14.3))")
     if which == "mp6":
         a = _click_ask(pg, "01", "Bao nhiêu?")
         assert "01 tỷ" not in a and "4.120,5 tỷ" in a, a
     if which == "mp7":   # "(người)" columns and a headcount table are in people, never tỷ
         assert _click_ask(pg, "718", "Số này?").startswith("Bán hàng, Thực hiện (người): 718 người.")
-        assert _click_ask(pg, "18", "Tăng bao nhiêu?").startswith("Bán hàng, Chênh lệch: 18 người.")
+        assert _click_ask(pg, "18", "Tăng bao nhiêu?").startswith("Bán hàng cao hơn kế hoạch 18 người (cột «Chênh lệch» ghi 18).")
         assert _r3(pg, "Headcount T10 khối quản lý").startswith("Quản lý, T10: 161 người.")
-        assert _click_ask(pg, "5,8", "Tăng bao nhiêu?").startswith("Bán hàng, Chênh lệch: 5,8 tỷ.")
+        assert _click_ask(pg, "5,8", "Tăng bao nhiêu?").startswith("Bán hàng cao hơn kế hoạch 5,8 tỷ (cột «Chênh lệch» ghi 5,8).")
     if which == "dupes":   # the child row under the parent the reader names, in the company named
         assert _r3(pg, "Lương khối văn phòng công ty B").startswith("Lương: AOP 7,7; Thực hiện 7,9.")
         assert _r3(pg, "Lương công ty B").startswith("Anh chị muốn hỏi chỗ nào ạ?")

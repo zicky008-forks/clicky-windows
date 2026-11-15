@@ -202,6 +202,23 @@ def visuals(items: list, places: dict, en: bool = False, doubted: frozenset = fr
                     "nguon": _src(places, y, "dòng Thực hiện, Dự báo, " + _clip(re.sub(r'^[\W_]+', '', y.plan.label), 24)) + "; em cộng dồn từng tháng",
                     "tinh": True})
 
+    # ca_nam by column (TB15): to date (actual), the year (forecast, hatched «dự báo») and the approved plan
+    yc = S.year_cols_table(places, en) if y is None else None
+    if yc is not None:
+        row = next((g[0] for g in yc.rows if g[1]), None) or next(g[0] for g in yc.rows if g[2])
+        f = S.year_cols_figures(yc, row, en)
+        if not any(f[k][0] in doubted for k in ("ytd", "year", "plan")):
+            pn = _clip(yc.heads[yc.plan], 22)
+            out.append({"vai": "ca_nam", "cung": ["ca_nam_khoang_cach"], "kieu": "cot",
+                        "tieu_de": f"{_cap_first(row.label)}: cả năm ước so với {pn[:1].lower() + pn[1:]}", "don_vi": yc.unit or "",
+                        "cot": [_bar("Lũy kế", f["ytd"][0], f["ytd"][1], "thuc_te"),
+                                _bar("Cả năm ước", f["year"][0], f["year"][1], "du_bao"),
+                                _bar("Kế hoạch năm", f["plan"][0], f["plan"][1], "ke_hoach", day_du=yc.heads[yc.plan])],
+                        "chenh": {"so": f["gap"][0], "dau": "−" if f["gap"][1] < 0 else "+",
+                                  "cong_thuc": f"cả năm ước {f['year'][0]} − {f['plan'][0]}"},
+                        "nguon": _src(places, yc, "dòng " + _clip(row.label, 24)) + "; cả năm ước = lũy kế + dự báo, em cộng lại khớp",
+                        "tinh": bool(f["gap"][2])})
+
     # tran: the actual total against the proposed cap, the cut between them (both printed, never a doubted cap)
     note, cards, _pairs = S.reco(items, places)
     cut = next((c for c in cards if c.figs and any(f.sign == "-" for f in c.figs)), None)

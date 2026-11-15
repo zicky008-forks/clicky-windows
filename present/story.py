@@ -368,7 +368,62 @@ def plan_said(name: str) -> str:
     """A column's name as the talk says it, one plain name per plan ("AOPR" is "kế hoạch điều chỉnh" in every line,
     never "AOPR" here and "bản điều chỉnh" there). A name the list does not know is said as printed."""
     n = re.sub(r"\s+", " ", str(name or "")).strip()
-    return next((said for pat, said in PLAN_SAID if pat.match(n)), n)
+    n = n[:1].lower() + n[1:] if re.match(r"(Kế hoạch|Ngân sách|Thực hiện|Thực tế|Dự báo)(\s|$)", n) else n
+    return next((said for pat, said in PLAN_SAID if pat.match(n)), None) or col_said(n) or n
+
+
+KIND_SAID = {"kh": "kế hoạch", "aop": "kế hoạch", "th": "thực hiện", "tt": "thực tế", "act": "thực hiện",
+             "actual": "thực hiện", "bp": "ngân sách", "budget": "ngân sách", "fc": "dự báo", "le": "dự báo",
+             "aopr": "kế hoạch điều chỉnh", "ck": "cùng kỳ"}
+PERIOD_SAID = [(re.compile(r"^(?:t|th|tháng|thg|m)\.?0?(\d{1,2})$", re.I), lambda m: f"tháng {int(m.group(1))}"),
+               (re.compile(r"^q\.?([1-4])$", re.I), lambda m: f"quý {m.group(1)}"),
+               (re.compile(r"^(?:lk|ytd)$", re.I), lambda m: "lũy kế"),
+               (re.compile(r"^(?:fy|năm)$", re.I), lambda m: "cả năm")]
+
+
+def _vs(word: str, name: str, amount: str) -> str:
+    """«thấp hơn kế hoạch 5,7 tỷ»; a name that ends in a period comes first: «so với kế hoạch tháng 10, thấp hơn
+    5,7 tỷ», never «tháng 10 5,7 tỷ» heard as one number (the same rule as the driver lines)."""
+    if re.search(r"\d\s*$", name or ""):
+        return f"so với {name}, {word} {amount}"
+    return f"{word} {name} {amount}"
+
+
+def col_said(name: str) -> Optional[str]:
+    """A short column code as an FP&A person says it (TB14): «T10 KH» is «kế hoạch tháng 10», «Q3 TH» is «thực hiện
+    quý 3», «LK TH» is «thực hiện lũy kế». None unless every part is one kind and periods the list knows."""
+    parts = [x for x in re.split(r"[\s_\-/.]+", name or "") if x]
+    kinds = [x for x in parts if x.lower() in KIND_SAID]
+    periods = [x for x in parts if x not in kinds]
+    if len(kinds) != 1 or not periods:
+        return None
+    said = []
+    for x in periods:
+        m = next(((pat.match(x), f) for pat, f in PERIOD_SAID if pat.match(x)), None)
+        if m is None:
+            return None
+        said.append(m[1](m[0]))
+    return KIND_SAID[kinds[0].lower()] + " " + " ".join(said)
+
+
+def pct_meaning(t, row, en: bool) -> Optional[tuple]:
+    """What the row's printed «%» is (TB13): ("dat", tok, formula) when it is actual over plan × 100, ("chenh", tok,
+    formula) when it is the change over plan × 100 (either sign convention), None when the figures say neither.
+    The column's name is never trusted alone: «%» beside «Chênh lệch» is the change, not how much was reached."""
+    if t.pct is None:
+        return None
+    got, a, p = _num(row, t.pct, en), _num(row, t.actual, en), _num(row, t.plan, en)
+    if not got or not a or not p or not p[1]:
+        return None
+    tok, v = got
+    tol = Decimal(1).scaleb(-decimals(tok, en)) / 2 + Decimal("0.0001")
+    dat = a[1] / p[1] * HUNDRED
+    chg = (a[1] - p[1]) / p[1] * HUNDRED
+    if abs(v - dat) <= tol and abs(v - chg) > tol:
+        return "dat", tok, f"{a[0]} / {p[0]} × 100"
+    if abs(v - chg) <= tol or abs(v + chg) <= tol:
+        return "chenh", tok, f"({a[0]} - {p[0]}) / {p[0]} × 100"
+    return None
 
 
 RATIO_SAID = {"DTT": "doanh thu thuần", "DT": "doanh thu", "LNG": "lợi nhuận gộp", "LNTT": "lợi nhuận trước thuế",
@@ -551,7 +606,9 @@ def row_note(row, items: list, flags: list) -> Optional[tuple]:
     return None
 
 
-PROFIT = re.compile(r"lợi nhuận|lãi (thuần|ròng|trước thuế|sau thuế)|\bebitda?\b|\bprofit\b|\blntt\b|\blnst\b", re.I)
+PROFIT = re.compile(r"lợi nhuận|lãi (thuần|ròng|trước thuế|sau thuế)|\bebit(da)?\b|\bprofit\b|\blntt\b|\blnst\b", re.I)
+ACT_COL = re.compile(r"thực hiện|thực tế|\bactual\b|\bact\b|\bth\b", re.I)
+SPAN_COL = re.compile(r"lũy kế|luỹ kế|\bytd\b|\blk\d*\b|cả năm|\bfy\b|dự báo|forecast|\bfc\b|\bước\b|còn lại", re.I)
 GROSS = re.compile(r"lãi gộp|lợi nhuận gộp|gross", re.I)
 
 
@@ -567,9 +624,11 @@ def pl_table(places: dict, en: bool, skip: str = "") -> Optional[Table]:
             continue
         head = rows[0].cols
         money = [i for i, c in enumerate(head) if c.kind == "value" and (c.unit in C.MONEY or c.unit is None)
-                 and not C.HEAD_PEOPLE.search(c.header)]
+                 and not C.HEAD_PEOPLE.search(c.header) and not SPAN_COL.search(c.header or "")]
+        # to date, forecast, the year are the year scene, never «the month» (TB15): only the month's own columns
         plan = next((i for i in money if PLAN_WORD.search(head[i].header)), None)
-        actual = next((i for i in money if i != plan), None)
+        actual = next((i for i in money if i != plan and ACT_COL.search(head[i].header or "")),
+                      next((i for i in money if i != plan), None))
         if plan is None or actual is None:
             continue
         body = [r for r in rows if r.label and _num(r, plan, en) and _num(r, actual, en)]
@@ -578,8 +637,9 @@ def pl_table(places: dict, en: bool, skip: str = "") -> Optional[Table]:
         if rev is None or not profits:
             continue
         prof = next((r for r in profits if re.search(r"trước thuế|\blntt\b|before tax|\bpbt\b", r.label, re.I)), profits[-1])
-        var = next((i for i, c in enumerate(head) if c.kind == "var"), None)
-        pct = next((i for i, c in enumerate(head) if c.kind == "pctvar" or (c.unit == "%" and i not in money)), None)
+        span = lambda i: bool(SPAN_COL.search(head[i].header or ""))     # noqa: E731  «Chênh lệch LK» is the year's
+        var = next((i for i, c in enumerate(head) if c.kind == "var" and not span(i)), None)
+        pct = next((i for i, c in enumerate(head) if (c.kind == "pctvar" or (c.unit == "%" and c.kind != "value")) and not span(i)), None)
         unit = head[actual].unit
         if unit is None:
             sec = places.get(tid).section if places.get(tid) else None
@@ -704,12 +764,132 @@ def year_figures(y: Year, en: bool) -> dict:
     return {"ytd": ytd, "fc": fc, "year": yr, "plan": plan, "gap": gap}
 
 
+YTD_COL = re.compile(r"lũy kế|luỹ kế|\bytd\b|\blk\d*\b", re.I)
+FC_COL = re.compile(r"dự báo|forecast|\bfc\b|\bước\b|còn lại|\ble\b|outlook", re.I)
+FY_COL = re.compile(r"cả năm|\bfy\b|full year|(?<![\d,.])(?:[1-9]|1[01])\s*\+\s*(?:[1-9]|1[01])(?![\d,.])", re.I)   # «10+2»: ten months done, two forecast
+WORD_N = ["", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín", "mười", "mười một", "mười hai"]
+
+
+@dataclass
+class YearCols:
+    """A year table with the metrics as rows (TB15): to date, the forecast for the months left, the year (to date
+    plus forecast), the approved plan for the year and the gap, one column each."""
+    id: str
+    ytd: int
+    fc: int
+    year: int
+    plan: int
+    gap: Optional[int]
+    heads: dict           # column index -> header as printed
+    rows: list            # (row Place, is revenue, is profit) whose to date + forecast = year exactly
+    unit: Optional[str]
+    revised: bool         # the plan column is a revised plan: the owner says which target
+
+
+def year_cols_table(places: dict, en: bool) -> Optional[YearCols]:
+    """The year table laid out by column, as the page prints it (scripts run first). None unless a revenue or a
+    profit row adds up: to date plus forecast is the year, exactly, from printed figures."""
+    by_table: dict = {}
+    for p in places.values():
+        if p.kind == "row" and p.cols:
+            by_table.setdefault(re.sub(r"r\d+$", "", p.id), []).append(p)
+    for tid, rows in by_table.items():
+        head = rows[0].cols
+        h = lambda i: head[i].header or ""                                   # noqa: E731
+        money = [i for i, c in enumerate(head) if c.kind == "value" and (c.unit in C.MONEY or c.unit is None)]
+        ytd = next((i for i in money if YTD_COL.search(h(i)) and not FC_COL.search(h(i))), None)
+        plus = lambda t: (lambda m: m is None or int(m.group(1)) + int(m.group(2)) == 12)(re.search(r"(\d{1,2})\s*\+\s*(\d{1,2})", t))   # noqa: E731
+        year = next((i for i in money if FY_COL.search(h(i)) and plus(h(i)) and not PLAN_WORD.search(h(i))), None)
+        fc = next((i for i in money if FC_COL.search(h(i)) and i != year and not FY_COL.search(h(i))), None)
+        plan = next((i for i in money if PLAN_WORD.search(h(i)) and not FC_COL.search(h(i)) and i not in (ytd, fc, year)), None)
+        if None in (ytd, fc, year, plan):
+            continue
+        gap = next((i for i, c in enumerate(head) if c.kind == "var"), None)
+        good = []
+        for r in rows[1:]:
+            lab = r.label or ""
+            is_rev, is_prof = bool(REVENUE.search(lab) and not PROFIT.search(lab)), bool(PROFIT.search(lab) and not GROSS.search(lab))
+            vals = [_num(r, i, en) for i in (ytd, fc, year, plan)]
+            if (is_rev or is_prof) and all(vals) and vals[0][1] + vals[1][1] == vals[2][1]:
+                good.append((r, is_rev, is_prof))
+        if not any(g[1] for g in good) and not any(g[2] for g in good):
+            continue
+        unit = head[year].unit
+        if unit is None:
+            m = re.search(r"đơn vị\s*:?\s*(nghìn tỷ|tỷ|triệu|nghìn)", " ".join(p.text for p in places.values() if p.kind in ("text", "note", "para")), re.I)
+            unit = m.group(1).lower() if m else None
+        return YearCols(tid, ytd, fc, year, plan, gap, {i: h(i) for i in range(len(head))}, good, unit,
+                        bool(REV_ROW.search(h(plan))))
+    return None
+
+
+def _span_said(header: str, what: str) -> str:
+    """«Lũy kế 10 tháng» or «LK10» said «lũy kế mười tháng», «Ước 2 tháng còn lại» or «Ước T11–T12» said «dự báo hai
+    tháng còn lại»: a count of months in words, never a figure the lock reads, the forecast always called «dự báo»."""
+    h = header or ""
+    m = re.search(r"(\d{1,2})\s*tháng", h, re.I) or (re.search(r"\b(?:lk|ytd)\s*(\d{1,2})\b", h, re.I) if what == "ytd" else None)
+    k = int(m.group(1)) if m else 0
+    r = re.search(r"\bt\s*(\d{1,2})\s*[–-]\s*t?\s*(\d{1,2})\b", h, re.I) if not m and what != "ytd" else None
+    if r and 0 < int(r.group(2)) - int(r.group(1)) + 1 <= 12:
+        k = int(r.group(2)) - int(r.group(1)) + 1
+    n = WORD_N[k] if 0 < k <= 12 else ""
+    if what == "ytd":
+        return f"lũy kế {n} tháng" if n else "lũy kế"
+    return f"dự báo {n} tháng còn lại" if n else "dự báo các tháng còn lại"
+
+
+def year_cols_figures(y: YearCols, r, en: bool) -> dict:
+    ytd, fc, yr, plan = (_num(r, i, en) for i in (y.ytd, y.fc, y.year, y.plan))
+    gv = yr[1] - plan[1]
+    printed = _num(r, y.gap, en) if y.gap is not None else None
+    if printed and abs(printed[1]) == abs(gv):
+        gap = printed[0], gv, ""
+    else:
+        gap = say(abs(gv), max(decimals(yr[0], en), decimals(plan[0], en)), en), gv, f"{yr[0]} - {plan[0]}"
+    return {"ytd": ytd, "fc": fc, "year": yr, "plan": plan, "gap": gap}
+
+
+def year_cols_lines(places: dict, en: bool) -> tuple:
+    """«Cả năm sẽ về đâu» from a year table by column: the revenue row to date, plus the forecast, the year; then
+    the year against the approved plan; then the profit row in one line. At most three figures a line."""
+    y = year_cols_table(places, en)
+    if y is None:
+        return [], []
+    unit = y.unit or ""
+    pname = _lc(re.sub(r"\s+", " ", y.heads[y.plan]).strip()) or "kế hoạch năm"
+    rev = next((g[0] for g in y.rows if g[1]), None)
+    prof = next((g[0] for g in sorted(y.rows, key=lambda g: not re.search(r"trước thuế|\blntt\b|\bebit\b", g[0].label or "", re.I)) if g[2]), None)
+    first = rev or prof
+    f = year_cols_figures(y, first, en)
+    out = [("Cả năm sẽ về đâu", Line(f"Cả năm sẽ về đâu? {_cap(first.label)} {_span_said(y.heads[y.ytd], 'ytd')} {f['ytd'][0]} {unit}, "
+                                     f"cộng {_span_said(y.heads[y.fc], 'fc')} {f['fc'][0]} {unit}, cả năm ước {f['year'][0]} {unit}."
+                                     .replace("  ", " ").replace(" ,", ",").replace(" .", "."), first.id,
+                                     so_tinh=[f"{f['year'][0]} = {f['ytd'][0]} + {f['fc'][0]}"], dung=0.6, vai="ca_nam"))]
+    if f["gap"][1]:
+        word = "thấp hơn" if f["gap"][1] < 0 else "cao hơn"
+        out.append(("Cả năm sẽ về đâu", Line(f"So với {pname} {f['plan'][0]} {unit}, {word} {f['gap'][0]} {unit}."
+                                            .replace("  ", " ").replace(" .", "."), first.id,
+                                            so_tinh=[f"{f['gap'][0]} = {f['gap'][2]}"] if f["gap"][2] else [], vai="ca_nam_khoang_cach")))
+    if prof is not None and prof is not first:
+        g = year_cols_figures(y, prof, en)
+        if g["gap"][1]:
+            word = "thấp hơn" if g["gap"][1] < 0 else "cao hơn"
+            out.append(("Cả năm sẽ về đâu", Line(f"{_cap(prof.label)} cả năm ước {g['year'][0]} {unit}, {word} {pname} {g['gap'][0]} {unit}."
+                                                .replace("  ", " ").replace(" ,", ",").replace(" .", "."), prof.id,
+                                                so_tinh=[f"{g['gap'][0]} = {g['gap'][2]}"] if g["gap"][2] else [], vai="ca_nam_loi_nhuan")))
+    flags = []
+    if y.revised:
+        flags.append({"xem": f"Bảng cả năm so với «{y.heads[y.plan]}». Mục tiêu của buổi họp là kế hoạch gốc (AOP) hay kế hoạch "
+                             "điều chỉnh? Anh xem lại trước khi gửi."})
+    return out, flags
+
+
 def year_lines(places: dict, en: bool) -> tuple:
     """«Cả năm sẽ về đâu»: actual to date, the forecast said as a forecast, the year against the plan (AOP), and
     the gap; every sum worked out by code from the monthly figures. (lines, flags)"""
     y = year_table(places, en)
     if y is None:
-        return [], []
+        return year_cols_lines(places, en)      # the year laid out by column: to date, forecast, year, plan (TB15)
     f = year_figures(y, en)
     unit = y.unit or ""
     subj = y.subject or "kết quả"
@@ -748,12 +928,13 @@ def pl_lines(places: dict, t: Table, en: bool) -> list:
     pd_ = delta(pt, prof, en)
     if not pd_ or not pd_[1]:
         return []
-    ppct = _num(prof, pt.pct, en) if pt.pct is not None else None
+    pm = pct_meaning(pt, prof, en)                 # «%» beside «Chênh lệch» is the change, never «đạt» (TB13)
     hi = "cao" if pd_[1] > 0 else "thấp"
-    reach = f"đạt {ppct[0]}% {pname}, " if ppct else ""
-    st = [f"{pd_[0]} = {pd_[2]}"] if pd_[2] else []
-    out.append(("Kết quả kinh doanh", Line(f"Trước hết là kết quả kinh doanh: {_lc(prof.label)} {reach}{hi} hơn {pname} {pd_[0]} {unit}."
-                                         .replace("  ", " ").replace(" .", "."), prof.id, so_tinh=st, vai="kq_loi_nhuan")))
+    reach = f"đạt {pm[1].lstrip('-')}% {pname}, " if pm and pm[0] == "dat" else ""
+    rate = f", tức {hi} hơn {pm[1].lstrip('-')}%" if pm and pm[0] == "chenh" else ""
+    st = [f"{pd_[0]} = {pd_[2]}"] if pd_[2] else []     # the reached % is printed; pct_meaning worked it out to say it
+    out.append(("Kết quả kinh doanh", Line(f"Trước hết là kết quả kinh doanh: {_lc(prof.label)} {reach}{hi + ' hơn ' + pd_[0] + ' ' + unit if reach else _vs(hi + ' hơn', pname, pd_[0] + ' ' + unit)}{rate}."
+                                         .replace("  ", " ").replace(" .", ".").replace(" ,", ","), prof.id, so_tinh=st, vai="kq_loi_nhuan")))
     rev = next((r for r in pt.rows if REVENUE.search(r.label) and not PROFIT.search(r.label)), None)
     gp = next((r for r in pt.rows if GROSS.search(r.label)), None)
     rd = delta(pt, rev, en) if rev is not None else None
@@ -762,7 +943,7 @@ def pl_lines(places: dict, t: Table, en: bool) -> list:
         gd = delta(pt, gp, en) if gp is not None and not (steps and len(steps) >= 2) else None   # the bridge says it next
         pull = (f", kéo {_lc(gp.label)} {'cao' if gd[1] > 0 else 'thấp'} hơn {gd[0]} {unit}"
                 if gd and gd[1] and (gd[1] > 0) == (rd[1] > 0) else "")
-        out.append(("Kết quả kinh doanh", Line(f"{_cap(rev.label)} {'cao' if rd[1] > 0 else 'thấp'} hơn {pname} {rd[0]} {unit}{pull}."
+        out.append(("Kết quả kinh doanh", Line(f"{_cap(rev.label)} {_vs(('cao' if rd[1] > 0 else 'thấp') + ' hơn', pname, rd[0] + ' ' + unit)}{pull}."
                                              .replace("  ", " ").replace(" .", ".").replace(" ,", ","), rev.id,
                                              so_tinh=([f"{rd[0]} = {rd[2]}"] if rd[2] else []) + ([f"{gd[0]} = {gd[2]}"] if pull and gd[2] else []),
                                              xac_nhan=[gd[0]] if pull and not gd[2] else [], vai="kq_doanh_thu")))
@@ -780,7 +961,37 @@ def pl_lines(places: dict, t: Table, en: bool) -> list:
         out.append(("Kết quả kinh doanh", Line(f"{_cap(prof.label)} {verb} {pname} vì: " + ", ".join(parts) + more + ".",
                                              prof.id, so_tinh=[f"{d[0]} = {d[2]}" for _r, _t, _e, d in said_ if d[2]],
                                              xac_nhan=[tok for _r, tok, _e, d in said_ if not d[2]], vai="kq_cau")))
+    yl = ytd_line(prof, en, unit)
+    if yl:
+        out.append(("Kết quả kinh doanh", yl))
     return out
+
+
+def ytd_line(prof, en: bool, unit: str) -> Optional[Line]:
+    """«Lũy kế mười tháng, EBIT thấp hơn kế hoạch 29,6 tỷ»: the to-date columns of the month's result table, said
+    once on the profit row (gate 2 grader P4); the printed to-date variance, else actual minus plan worked out."""
+    cols = prof.cols or []
+    ytd = [i for i, c in enumerate(cols) if YTD_COL.search(c.header or "") and not FC_COL.search(c.header or "")]
+    yp = next((i for i in ytd if cols[i].kind == "value" and PLAN_WORD.search(cols[i].header)), None)
+    ya = next((i for i in ytd if cols[i].kind == "value" and ACT_COL.search(cols[i].header)), None)
+    yv = next((i for i in ytd if cols[i].kind == "var"), None)
+    if yp is None or ya is None:
+        return None
+    got = _num(prof, yv, en) if yv is not None else None
+    if got:
+        tok, v, st = got[0], (-got[1] if getattr(cols[yv], "flip", False) else got[1]), []
+    else:
+        a, p_ = _num(prof, ya, en), _num(prof, yp, en)
+        if not a or not p_:
+            return None
+        v = a[1] - p_[1]
+        tok = say(abs(v), max(decimals(a[0], en), decimals(p_[0], en)), en)
+        st = [f"{tok} = {a[0]} - {p_[0]}"]
+    if not v:
+        return None
+    word = "cao hơn" if v > 0 else "thấp hơn"
+    return Line(f"{_cap(_span_said(cols[ya].header, 'ytd'))}, {prof.label} {word} kế hoạch {tok} {unit}."
+                .replace("  ", " ").replace(" .", "."), prof.id, so_tinh=st, vai="kq_luy_ke")
 
 
 def story(items: list, places: dict, owner: str, en: bool = False, hidden: frozenset = frozenset()) -> Optional[dict]:
@@ -806,6 +1017,8 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
     unit = t.unit or ""
     tdelta = delta(t, t.total, en)
     tpct = _num(t.total, t.pct, en) if t.pct is not None else None
+    if tpct and (pct_meaning(t, t.total, en) or ('dat',))[0] == 'dat':
+        tpct = None                                # «tức N%» is the change: a reached-% column is worked out instead (TB13)
     lines: list = []
     flags: list = []
     note, cards, ask_pairs = reco(items, places)
@@ -944,9 +1157,12 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
             sw = f"khoảng {pct}%"
         name = _cap(_short(top.label))
         why = next((c for c in (top.cols or []) if re.search(r"giải trình|lý do|nguyên nhân|diễn giải|ghi chú", c.header, re.I)
-                    and c.text.strip() and not re.search(r"\d", c.text) and len(c.text.split()) <= 8), None)
-        # the row's own printed reason; said as speech, never «:» or «giải trình ghi:» read aloud (round 18 voice lint)
-        cause = f", theo giải trình là do {_lc(why.text.strip().rstrip('.'))}" if why else ""
+                    and c.text.strip() and not re.search(r"\d", c.text) and len(c.text.split()) <= 14), None)
+        # the row's own printed reason; said as speech, never «:» or «giải trình ghi:» read aloud (round 18 voice lint);
+        # «(lệch thời điểm)» is said as «, lệch thời điểm» (gate 2 grader P4: the timing note in a «Ghi chú» column)
+        said_h = (re.search(r"giải trình|lý do|nguyên nhân|diễn giải|ghi chú", why.header, re.I).group(0).lower() if why else "")
+        cause = (f", theo {said_h} là do {_lc(re.sub(r'\s*\(([^()]+)\)', r', \1', why.text.strip()).rstrip('.'))}"
+                 if why else "")
         over_all = ""
         if abs(share) > 1:                         # 1,4 of a 1,2 rise: other rows went down (synthetic F01 shape)
             opp = "giảm" if up else "tăng"

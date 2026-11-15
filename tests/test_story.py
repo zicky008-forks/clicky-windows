@@ -1556,7 +1556,7 @@ def test_round_nineteen_row_claims_judge_the_named_or_tapped_row_and_every_figur
                 (A, "Khối Marketing tăng 2 tỷ đúng không?", None, "Không hẳn ạ: Khối Marketing 1,5 tỷ"),
                 (A, "Khối Bán hàng tăng 92 tỷ đúng không?", None, "Không ạ, dòng Khối Bán hàng không có số 92 tỷ."),
                 (A, "Khối Bán hàng giảm 14 tỷ à?", None, "Không ạ: Khối Bán hàng tăng chứ không giảm: 14,1 tỷ"),
-                (A, "Tài chính tăng 0,6 tỷ đúng không?", None, "Khối Tài chính - Kế toán, Chênh lệch: 0,6 tỷ.")):
+                (A, "Tài chính tăng 0,6 tỷ đúng không?", None, "Khối Tài chính - Kế toán cao hơn AOP gốc 0,6 tỷ (cột «Chênh lệch» ghi 0,6).")):
             x = hoi(pg, q, scope)
             assert x.startswith(start), (q, scope, x)
             if start.startswith(("Không", "Số này khớp")):
@@ -1590,9 +1590,9 @@ def test_round_twenty_approximate_share_unit_claims_and_short_row_names(report, 
                 (A, "Bán hàng chiếm 67% phần tăng đúng không?", None, "Đúng ạ, khoảng 67%: Khối Bán hàng chiếm 67,5% phần tăng (em tính: 14,1 ÷ 20,9 × 100)"),
                 (A, "Marketing tăng gần 2 tỷ đúng không?", None, "Không hẳn ạ: Khối Marketing 1,5 tỷ"),
                 (A, "Chi phí tăng 13% đúng không?", None, "Đúng ạ, khoảng 13%: Tổng 12,6%"),
-                (A, "Tài chính tăng bao nhiêu?", None, "Khối Tài chính - Kế toán: Chênh lệch 0,6 tỷ"),
-                (A, "Khối Tài chính tăng bao nhiêu?", None, "Khối Tài chính - Kế toán: Chênh lệch 0,6 tỷ"),
-                (A, "Nhân sự tăng bao nhiêu?", None, "Khối Nhân sự - Hành chính: Chênh lệch 0,7 tỷ"),
+                (A, "Tài chính tăng bao nhiêu?", None, "Khối Tài chính - Kế toán: cao hơn AOP gốc 0,6 tỷ"),
+                (A, "Khối Tài chính tăng bao nhiêu?", None, "Khối Tài chính - Kế toán: cao hơn AOP gốc 0,6 tỷ"),
+                (A, "Nhân sự tăng bao nhiêu?", None, "Khối Nhân sự - Hành chính: cao hơn AOP gốc 0,7 tỷ"),
                 (A, "Logistics tăng 12 tỷ đúng không?", None, "Báo cáo này không có dòng hay mục «Logistics»")):
             x = hoi(pg, q, scope)
             assert x.startswith(start), (q, x)
@@ -1632,7 +1632,7 @@ def test_round_twenty_one_spoken_and_printed_claims_shares_sums_and_tapped_rows(
                 (B, "CNTT tăng bao nhiêu?", tapB, "CNTT tăng 2,5 tỷ"),
                 (B, "Tăng 12 tỷ đúng không?", tapB, "Đúng ạ: Logistics tăng 12,0 tỷ"),
                 (A, "Logistics tăng 14 tỷ đúng không?", tapA, "Báo cáo này không có dòng hay mục «Logistics»; anh chị đang chọn dòng Khối Bán hàng"),
-                (A, "Tài chính tăng bao nhiêu?", tapA, "Khối Tài chính - Kế toán: Chênh lệch 0,6 tỷ"),
+                (A, "Tài chính tăng bao nhiêu?", tapA, "Khối Tài chính - Kế toán: cao hơn AOP gốc 0,6 tỷ"),
                 (A, "Tăng 14 tỷ đúng không?", tapA, "Đúng ạ, khoảng 14 tỷ: Khối Bán hàng 14,1 tỷ")):
             x = hoi(pg, q, scope)
             assert x.startswith(start), (q, scope, x)
@@ -1775,7 +1775,7 @@ def test_gate_two_plan_minus_actual_variance_group_rows_row_notes_and_no_rate_on
     shutil.copyfile(Path(__file__).parent / "fixtures" / "bao_cao_thang_kh_tru_th.html", src)
     rep = build(src)
     said = [c["noi"] for s in yaml.safe_load(Path(rep["kich_ban"]).read_text(encoding="utf-8"))["canh"] for c in s["cau"]]
-    assert "Theo thực hiện, tổng là 37,2 tỷ, cao hơn Kế hoạch 1,2 tỷ." in said
+    assert "Theo thực hiện, tổng là 37,2 tỷ, cao hơn kế hoạch 1,2 tỷ." in said
     drv = next(x for x in said if "Bán hàng MT" in x and "1,4" in x and "Duyệt" not in x)
     assert drv.startswith("Lớn nhất là Bán hàng MT: tăng 1,4 tỷ, nhiều hơn cả mức tăng chung 1,2 tỷ"), drv
     assert not any("Kho vận" in x for x in said)       # under plan: never a driver of the rise
@@ -1930,7 +1930,7 @@ def test_the_month_result_and_where_the_year_lands_are_told_and_drawn(tmp_path, 
     rep = build(src)
     cau = [c for s in yaml.safe_load(Path(rep["kich_ban"]).read_text(encoding="utf-8"))["canh"] for c in s["cau"]]
     by = {c.get("vai"): c for c in cau}
-    assert by["kq_loi_nhuan"]["noi"] == "Trước hết là kết quả kinh doanh: lợi nhuận trước thuế đạt 68,3% kế hoạch, thấp hơn kế hoạch 5,7 tỷ."
+    assert by["kq_loi_nhuan"]["noi"] == "Trước hết là kết quả kinh doanh: lợi nhuận trước thuế đạt 68,3% kế hoạch, thấp hơn 5,7 tỷ."
     assert by["kq_doanh_thu"]["noi"] == "Doanh thu thuần thấp hơn kế hoạch 7,5 tỷ."
     assert by["kq_cau"]["noi"] == ("Lợi nhuận trước thuế thấp hơn kế hoạch vì: lãi gộp thiếu 4,5 tỷ, chi phí bán hàng vượt 1,8 tỷ, "
                                    "bù lại chi phí quản lý thấp hơn kế hoạch 0,6 tỷ.")
@@ -1962,3 +1962,101 @@ def test_the_month_result_and_where_the_year_lands_are_told_and_drawn(tmp_path, 
     said2 = [c["noi"] for s in yaml.safe_load(Path(rep2["kich_ban"]).read_text(encoding="utf-8"))["canh"] for c in s["cau"]]
     assert "So với AOP cả năm 1.440,0 tỷ, thấp hơn 25,5 tỷ." in said2
     assert any("anh xem mục tiêu nào đúng" in x for x in rep2["phan_bien"])
+
+
+def test_a_change_percent_short_column_codes_and_a_year_table_by_column(tmp_path, monkeypatch):
+    # gate 2 grader TB13: «%» beside «Chênh lệch» is the change over plan, never «đạt N%»; TB14: «T10 KH» is said
+    # «kế hoạch tháng 10»; TB15: a year table with the metrics as rows (to date, forecast, year, approved plan, gap)
+    # still gets «cả năm sẽ về đâu», a picture with the forecast hatched, and counts of months said as words
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    src = tmp_path / "cot.html"
+    shutil.copyfile(Path(__file__).parent / "fixtures" / "bao_cao_ca_nam_theo_cot.html", src)
+    rep = build(src)
+    cau = [c for s in yaml.safe_load(Path(rep["kich_ban"]).read_text(encoding="utf-8"))["canh"] for c in s["cau"]]
+    by = {c.get("vai"): c for c in cau}
+    said = " ".join(c["noi"] for c in cau)
+    assert "đạt" not in by["kq_loi_nhuan"]["noi"] and "T10" not in said and " KH" not in said
+    assert by["kq_loi_nhuan"]["noi"] == "Trước hết là kết quả kinh doanh: EBIT so với kế hoạch tháng 10, thấp hơn 5,7 tỷ, tức thấp hơn 31,7%."
+    assert by["kq_doanh_thu"]["noi"] == "Doanh thu thuần so với kế hoạch tháng 10, thấp hơn 7,5 tỷ."
+    assert by["ca_nam"]["noi"] == ("Cả năm sẽ về đâu? Doanh thu thuần lũy kế mười tháng 1.154,5 tỷ, cộng dự báo hai tháng còn lại "
+                                   "260,0 tỷ, cả năm ước 1.414,5 tỷ.")
+    assert by["ca_nam"]["so_tinh"] == ["1.414,5 = 1.154,5 + 260,0"]
+    assert by["ca_nam_khoang_cach"]["noi"] == "So với kế hoạch năm đã duyệt 1.440,0 tỷ, thấp hơn 25,5 tỷ."
+    assert by["ca_nam_loi_nhuan"]["noi"] == "EBIT cả năm ước 198,4 tỷ, thấp hơn kế hoạch năm đã duyệt 17,6 tỷ."
+    page = Path(rep["out"]).read_text(encoding="utf-8")
+    data = json.loads(re.search(r'<script[^>]*id="clicky-data"[^>]*>(.*?)</script>', page, re.S).group(1))
+    yr = {h["vai"]: h for h in data["hinh"]}["ca_nam"]
+    assert yr["kieu"] == "cot" and [(b["ten"], b["so"], b["loai"]) for b in yr["cot"]] == [
+        ("Lũy kế", "1.154,5", "thuc_te"), ("Cả năm ước", "1.414,5", "du_bao"), ("Kế hoạch năm", "1.440,0", "ke_hoach")]
+    assert yr["chenh"] == {"so": "25,5", "dau": "−", "cong_thuc": "cả năm ước 1.414,5 − 1.440,0"} and not yr["tinh"]
+    r = kiem_hinh.check(rep["out"])
+    if not r.get("skipped"):
+        assert r["ok"], r["problems"]
+        # the check sees labels inside a picture running into each other (a long name drawn without cutting)
+        bad = Path(rep["out"]).with_name("bad_Clicky.html")
+        bad.write_text(page.replace("Math.floor((bw + gap) / 6.6)", "999", 1)
+                       .replace('"ten":"Lũy kế"', '"ten":"Lũy kế mười tháng đầu năm tài chính"', 1), encoding="utf-8")
+        assert any("chữ trong hình đè lên nhau" in x for x in kiem_hinh.check(str(bad))["problems"])
+    # the same table with «% TH/KH» figures: the reached % is said, checked against the two amounts
+    html = src.read_text(encoding="utf-8")
+    for a, b in (("-6,3%", "93,8%"), ("-4,5%", "95,5%"), ("-8,3%", "91,7%"), ("7,5%</td></tr>\n<tr><td>Chi phí quản lý", "107,5%</td></tr>\n<tr><td>Chi phí quản lý"),
+                 ("-5,0%", "95,0%"), ("-31,7%", "68,3%")):
+        html = html.replace(a, b, 1)
+    src.write_text(html, encoding="utf-8")
+    rep2 = build(src)
+    said2 = [c["noi"] for s in yaml.safe_load(Path(rep2["kich_ban"]).read_text(encoding="utf-8"))["canh"] for c in s["cau"]]
+    assert "Trước hết là kết quả kinh doanh: EBIT đạt 68,3% kế hoạch tháng 10, thấp hơn 5,7 tỷ." in said2
+
+
+def test_column_codes_are_said_the_fpa_way_and_a_percent_is_read_from_its_figures():
+    assert story.plan_said("T10 KH") == "kế hoạch tháng 10"
+    assert story.plan_said("TH T9") == "thực hiện tháng 9"
+    assert story.plan_said("Q3 TH") == "thực hiện quý 3"
+    assert story.plan_said("LK TH") == "thực hiện lũy kế"
+    assert story.plan_said("Kế hoạch") == "kế hoạch" and story.plan_said("AOPR") == "kế hoạch điều chỉnh"
+    assert story.plan_said("Mã KH") == "Mã KH"                   # a customer code, not a plan
+    assert story.PROFIT.search("EBIT") and story.PROFIT.search("EBITDA")
+
+
+def test_board_questions_find_spans_notes_and_the_drawn_year(tmp_path, monkeypatch):
+    # gate 2 grader on 6eb3177 (our own synthetic copy of the shapes): periods asked in words («tháng 10», «lũy kế
+    # 10 tháng», «cả năm») never met short headers («T10», «LK10», «10+2») (TB16); Board questions the report answers
+    # in a note, a «Ghi chú» cell, a footnote or a conclusion box were parked (TB17); a gap was answered with the
+    # plan, or «lợi nhuận gộp» with another row (TB7); the talk left out the to-date result, the year table a script
+    # draws and the timing note (P4)
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    src = tmp_path / "hdqt.html"
+    shutil.copyfile(Path(__file__).parent / "fixtures" / "bao_cao_hoi_hdqt.html", src)
+    rep = build(src)
+    by = {c.get("vai"): c["noi"] for s in yaml.safe_load(Path(rep["kich_ban"]).read_text(encoding="utf-8"))["canh"] for c in s["cau"]}
+    assert by["kq_luy_ke"] == "Lũy kế mười tháng, EBIT thấp hơn kế hoạch 29,6 tỷ."
+    assert by["dong_luc"].endswith("theo ghi chú là do khuyến mãi Tết chạy sớm một tháng, lệch thời điểm.")
+    assert by["ca_nam"] == ("Cả năm sẽ về đâu? Doanh thu thuần lũy kế mười tháng 1.154,5 tỷ, cộng dự báo hai tháng còn lại "
+                            "260,0 tỷ, cả năm ước 1.414,5 tỷ.")
+    assert by["ca_nam_khoang_cach"] == "So với AOP năm 1.440,0 tỷ, thấp hơn 25,5 tỷ."
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 768})
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(700)
+        hoi = lambda q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        x = hoi("Doanh thu tháng 10 hụt kế hoạch bao nhiêu?")
+        assert "so với kế hoạch tháng 10, thấp hơn 7,5 tỷ" in x and "120,0" not in x, x
+        assert "1.154,5" in hoi("Doanh thu lũy kế 10 tháng là bao nhiêu?")
+        x = hoi("Cả năm ước đạt bao nhiêu?")
+        assert "Doanh thu thuần 1.414,5 tỷ" in x and "EBIT 198,4 tỷ" in x and "1.440,0" not in x, x
+        assert "1.414,5" in hoi("Doanh thu cả năm ước bao nhiêu?")
+        x = hoi("Chi phí marketing có phải vượt ngân sách không?")
+        assert "cao hơn ngân sách 1,2 tỷ" in x and "gồm cả 1,0 tỷ ngân sách trưng bày" in x, x   # the plan's scope said with it (TB9)
+        assert "sổ cái khóa sổ lần 2" in hoi("Số thực hiện lấy từ bản nào?")
+        assert "làm chi phí tháng 10 tăng 1,2 tỷ" in hoi("Khuyến mãi Tết chạy sớm làm mất bao nhiêu?")
+        assert "Điểm bất thường" in hoi("Có gì bất thường không?")
+        assert "Lãi gộp so với kế hoạch tháng 10, thấp hơn 4,5 tỷ" in hoi("Lợi nhuận gộp chênh lệch bao nhiêu?")
+        x = hoi("EBIT lũy kế hụt kế hoạch bao nhiêu?")
+        assert "thấp hơn 29,6 tỷ" in x and "5,7" not in x, x
+        browser.close()
