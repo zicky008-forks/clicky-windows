@@ -584,7 +584,11 @@ class ExcelBridge:
             app.DisplayAlerts = False
             try:
                 if has_file and _same_path(before, target):
-                    wb.Save()
+                    # SaveAs onto its own name, never Save: when Excel cannot replace the file (held by another
+                    # program or Excel instance, blocked folder), Save opens the modal Save As window even with
+                    # alerts off, and every later COM call is rejected (robot, 9114deb, Case 01). SaveAs raises.
+                    fmt = getattr(wb, "FileFormat", None)
+                    wb.SaveAs(Filename=before, FileFormat=fmt if isinstance(fmt, int) else XL_OPEN_XML_WORKBOOK)
                 else:
                     wb.SaveAs(Filename=target, FileFormat=XL_OPEN_XML_WORKBOOK)
             finally:

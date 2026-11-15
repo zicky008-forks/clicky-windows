@@ -220,14 +220,18 @@ class SavingBook:
         self.app, self.FullName, self.Path, self.ReadOnly = app, full, path, read_only
         self.renames_to, self.saves, self.alerts_seen = renames_to, 0, []
 
-    def Save(self):
-        self.saves += 1
-        self.alerts_seen.append(self.app.DisplayAlerts)
-        if self.renames_to:                      # Excel could not replace the file and kept a temp copy
-            self.FullName, self.Path = self.renames_to, ""
+    FileFormat = 51
+
+    def Save(self):                              # opens the modal Save As when Excel cannot replace the file
+        raise AssertionError("Workbook.Save must never be called")
 
     def SaveAs(self, Filename, FileFormat):
+        self.saves += 1
+        self.alerts_seen.append(self.app.DisplayAlerts)
         self.saved_as = (Filename, FileFormat, self.app.DisplayAlerts)
+        if self.renames_to:                      # Excel could not replace the file and kept a temp copy
+            self.FullName, self.Path = self.renames_to, ""
+            return
         self.FullName, self.Path, self.ReadOnly = Filename, Filename.rsplit("\\", 1)[0], False
 
 
@@ -266,7 +270,7 @@ def test_a_workbook_with_no_file_is_saved_as_the_exact_file_clicky_made():
     app = _saving_app(full="65302810", path="")
     assert ExcelBridge(app=app).save(target) is True
     book = app.ActiveWorkbook
-    assert book.saves == 0 and book.saved_as == (target, 51, False) and app.DisplayAlerts is True
+    assert book.saves == 1 and book.saved_as == (target, 51, False) and app.DisplayAlerts is True
     app = _saving_app(full=target, path=target.rsplit("\\", 1)[0])
     assert ExcelBridge(app=app).save(target) is True and app.ActiveWorkbook.saves == 1
 
@@ -285,7 +289,7 @@ def test_save_logs_never_carry_a_workbook_name_or_folder(caplog):
     def boom(*a, **k):
         raise PermissionError(13, "Permission denied", secret)
     app = _saving_app(full=secret, path="C:\\Users\\chi\\Documents\\AgriS")
-    app.ActiveWorkbook.Save = boom
+    app.ActiveWorkbook.SaveAs = boom
     ExcelBridge(app=app).save()
     ExcelBridge(app=app).save_copy(secret.replace(".xlsx", "_ban-goc.xlsx"))
     text = caplog.text
@@ -306,3 +310,12 @@ def test_the_original_is_copied_from_disk_when_excel_has_nothing_unsaved(tmp_pat
     wb.Saved = False                                  # unsaved changes: only Excel has the workbook as it is now
     other = tmp_path / "again.xlsx"
     assert ExcelBridge(app=app).save_copy(str(other)) and asked == [str(other)] and not other.exists()
+
+
+def test_the_users_own_file_is_saved_as_itself_never_through_save():
+    """Robot on 9114deb: Workbook.Save opened Windows' Save As over Case 01 and Excel stopped answering. The
+    user's file is saved with SaveAs onto its own name and format, so a failure is an error, never a window."""
+    app = _saving_app(full="C:\\Case01\\BaoCao_T10.xlsm", path="C:\\Case01")
+    app.ActiveWorkbook.FileFormat = 52
+    assert ExcelBridge(app=app).save() is True
+    assert app.ActiveWorkbook.saved_as == ("C:\\Case01\\BaoCao_T10.xlsm", 52, False) and app.DisplayAlerts is True
