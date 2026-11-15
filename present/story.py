@@ -820,7 +820,7 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
     early_risk = False
     who = owner[:1].upper() + owner[1:]
     first = ask_pairs[0][0] if ask_pairs else None
-    lines.append(("Mở đầu", Line(f"Thưa anh chị, em là trợ lý AI của {owner}.", cid(first) if first else "", vai="chao")))
+    lines.append(("Mở đầu", Line(f"Thưa anh chị, em là Vera, trợ lý AI của {owner}.", cid(first) if first else "", vai="chao")))
 
     names = {str(getattr(r, "label", "") or "").split(" ")[0] for r in t.rows} - {""}
 

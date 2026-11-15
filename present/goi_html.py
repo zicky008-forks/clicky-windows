@@ -363,14 +363,14 @@ def build(deck: str, script: str, bank: str, workbook: str, out_html: str, owner
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Đóng gói bài thuyết trình có Clicky thành một file HTML.")
+    ap = argparse.ArgumentParser(description="Đóng gói bài thuyết trình có Vera thành một file HTML.")
     ap.add_argument("--deck", required=True)
     ap.add_argument("--kich-ban", required=True)
     ap.add_argument("--hoi-dap", required=True)
     ap.add_argument("--so-lieu", required=True)
     ap.add_argument("--ra", required=True, help="file .html sẽ tạo")
     ap.add_argument("--mp4", help="thêm bản video dự phòng")
-    ap.add_argument("--chu", default="anh Tuấn", help="người chịu trách nhiệm, Clicky xưng là trợ lý của người này")
+    ap.add_argument("--chu", default="anh Tuấn", help="người chịu trách nhiệm, Vera xưng là trợ lý của người này")
     ap.add_argument("--email", default="", help="địa chỉ nhận câu hỏi treo")
     ap.add_argument("--nhan", default="", help="nhãn hiện trên trang, ví dụ 'SỐ GIẢ LẬP'")
     ap.add_argument("--tieu-de", default="", help="tên bài trình bày hiện trên trang")

@@ -62,7 +62,7 @@ def test_draft_speaks_only_numbers_that_are_on_the_page(report):
     assert "Nguyên nhân là kế hoạch tuyển thêm 48 nhân viên bán hàng kênh MT và HRC+KA." in lines
     assert not any(re.search(r"\bPhần \d|Phần hai", x) for x in lines)
     first = [c["noi"] for s in draft["canh"] for c in s["cau"]]
-    assert first[0] == ("Em kính chào anh chị ạ. Em là trợ lý AI của anh Tuấn, xin trình bày AOP Revised "
+    assert first[0] == ("Em kính chào anh chị ạ. Em là Vera, trợ lý AI của anh Tuấn, xin trình bày AOP Revised "
                         "FY2026–2027: Chi phí nhân sự quản trị.")
     assert first[-1] == "Em xin cảm ơn anh chị đã lắng nghe."
 
@@ -72,10 +72,10 @@ def test_output_tags_targets_and_adds_one_layer(report):
     out = Path(rep["out"]).read_text(encoding="utf-8")
     assert out.count('data-clicky-layer="1"') == 1
     assert 'data-clicky="c1"' in out and re.search(r'<tr data-clicky="c\d+r1">', out)
-    assert "Trợ lý AI của" in out
+    assert "trợ lý AI của" in out
     # the layer goes before </body>, so the report's own scripts still run first
     assert out.index('id="clicky-host"') < out.lower().rindex("</body>")
-    with pytest.raises(goi_html.PackError, match="đã có Clicky"):
+    with pytest.raises(goi_html.PackError, match="đã có Vera"):
         clicky_html.build(rep["out"], voice=voice)
 
 
@@ -324,7 +324,7 @@ def test_the_lock_checks_direction_unit_and_place(report, tmp_path):
     card = _id(report, "Tổng chi phí nhân sự AOPR")
     cases = [("Tổng chi phí nhân sự AOPR là 186,4 tỷ, giảm 12,6% so với AOP gốc.", "tăng, câu nói lại là giảm"),
              ("Tổng chi phí nhân sự AOPR là 186,4 triệu.", "«tỷ», câu nói lại là «triệu»"),
-             ("Tổng chi phí nhân sự AOPR là 186,4 tỷ, tăng 12,0%.", "không ở chỗ Clicky khoanh")]
+             ("Tổng chi phí nhân sự AOPR là 186,4 tỷ, tăng 12,0%.", "không ở chỗ Vera khoanh")]
     for noi, why in cases:
         with pytest.raises(goi_html.PackError, match=re.escape(why)):
             clicky_html.build(str(report), script_path=_script(tmp_path, [{"noi": noi, "chi": card}]), voice=voice)

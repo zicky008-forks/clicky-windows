@@ -43,7 +43,7 @@ def test_the_story_asks_first_then_tells_one_driver_and_never_reads_the_page_in_
     said = lines(rep)
     # the AI says it is an AI, then the decisions come first, one short sentence each, in the owner's own words
     assert [c["noi"] for c in said[:4]] == [
-        "Thưa anh chị, em là trợ lý AI của anh Tuấn.", "Anh Tuấn xin anh chị quyết hai việc.",
+        "Thưa anh chị, em là Vera, trợ lý AI của anh Tuấn.", "Anh Tuấn xin anh chị quyết hai việc.",
         "Một là giữ tỷ lệ chi phí nhân sự trên doanh thu thuần ở 2,40%, tức trần 177,5 tỷ.",
         "Hai là giãn tuyển 30 vị trí bán hàng sang quý 3 và gắn với doanh thu trên mỗi người."]
     text = " ".join(c["noi"] for c in said)

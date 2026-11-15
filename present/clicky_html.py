@@ -1347,7 +1347,7 @@ def reanchor(script: dict, places: dict) -> list:
                     min(len(k), len(key)) >= 0.8 * max(len(k), len(key)) and (k.startswith(key) or key.startswith(k))]
             if not found:
                 raise PackError(f"Kịch bản trỏ tới chỗ «{neo}» ('{chi}') nhưng báo cáo không còn chỗ đó. Anh sửa câu "
-                                f"«{clip(c.get('noi'), 60)}» hoặc xóa file kịch bản để Clicky soạn lại.")
+                                f"«{clip(c.get('noi'), 60)}» hoặc xóa file kịch bản để Vera soạn lại.")
             kind = places[chi].kind if chi in places else ("row" if "r" in chi[1:] else None)
             same = [p for p in found if (p.kind == "row") == (kind == "row")] or found
             new = next((p for p in same if p.id == chi), same[0]).id
@@ -1782,7 +1782,7 @@ def draft_script(items: list, rows: list, places: dict, owner: str, en: bool = F
     scenes = []
     name = say_clean(title.text if title else (doc_title if doc_title and not figures(doc_title) else ""))
     name = name if re.search(r"[^\W\d_]{2}", name) else "báo cáo này"
-    opening = f"Em kính chào anh chị ạ. Em là trợ lý AI của {owner}, xin trình bày {name.rstrip('. ')}."
+    opening = f"Em kính chào anh chị ạ. Em là Vera, trợ lý AI của {owner}, xin trình bày {name.rstrip('. ')}."
     scenes.append({"muc": "Mở đầu", "cau": [line(opening, cid(title) if title else "")]})
     if memo:
         scenes.append(memo)
@@ -2017,7 +2017,7 @@ SCRIPT_HEAD = """# Kịch bản Clicky cho «{report}».
 #   Mục nghi một câu hay một con số trong báo cáo (có ma_cau hoặc ma_so): ghi quyet: 'giữ câu' nếu số báo cáo đúng, hoặc quyet: 'báo cáo sai'
 #   (khi đó anh sửa báo cáo rồi kéo thả lại). ly_do_bo là ghi chú riêng của anh, Ban Giám đốc không thấy; câu duy
 #   nhất Ban Giám đốc thấy về điểm này là noi_voi_BOD (để trống thì em dùng câu chuẩn).
-# Đọc và sửa xong: đổi da_duyet: 'chưa' thành da_duyet: 'có', rồi kéo thả báo cáo vào Clicky lần nữa.
+# Đọc và sửa xong: đổi da_duyet: 'chưa' thành da_duyet: 'có', rồi kéo thả báo cáo vào Numvera lần nữa.
 # Khi đó bản trình bày hết chữ SƠ BỘ.
 """
 
@@ -2087,7 +2087,7 @@ def dump_script(script: dict, report: str, snap: Optional[dict] = None, draft: b
                                                          width=4096) + dump_snap(snap)
 
 
-SNAP_HEAD = "# Số ở từng chỗ khoanh lúc soạn hoặc duyệt (Clicky tự ghi, anh không cần sửa):\n"
+SNAP_HEAD = "# Số ở từng chỗ khoanh lúc soạn hoặc duyệt (Vera tự ghi, anh không cần sửa):\n"
 
 
 def dump_snap(snap: Optional[dict]) -> str:
@@ -2674,7 +2674,7 @@ def make_record(script: dict, places: dict, page_text: str, meta: dict, en: bool
                                         "bằng chữ số, ví dụ «12,6%»"))
             other = other_row(noi, chi, places)
             if other and figures(noi):
-                bad.append((noi, figures(noi)[0].tok, f"câu nói về «{other}» nhưng Clicky khoanh dòng "
+                bad.append((noi, figures(noi)[0].tok, f"câu nói về «{other}» nhưng Vera khoanh dòng "
                                                        f"«{places[chi].label}». Sửa chi cho đúng dòng"))
                 rows.append({"canh": s.get("muc", ""), "noi": noi, "chi": chi, "so": []})
                 continue
@@ -2710,7 +2710,7 @@ def make_record(script: dict, places: dict, page_text: str, meta: dict, en: bool
                     bad.append((noi, f.tok, f"là số kỳ trước ở chỗ «{clip(places[chi].anchor, 40)}», ghi so_rieng cũng "
                                             f"không được; báo cáo bây giờ ghi {clip(now, 40)}. Anh sửa câu theo số mới"))
                 elif level_now:
-                    bad.append((noi, f.tok, f"chỗ Clicky khoanh đang ghi {level_now[0].tok}"
+                    bad.append((noi, f.tok, f"chỗ Vera khoanh đang ghi {level_now[0].tok}"
                                             f"{'%' if f.unit == '%' else ' ' + (f.unit or '')}".rstrip()
                                 + ", số anh tự thêm không được khác số đó. Anh sửa câu theo báo cáo"))
                 elif v in own:                       # declared by the owner: his, even if the page has it too
@@ -2729,7 +2729,7 @@ def make_record(script: dict, places: dict, page_text: str, meta: dict, en: bool
                 elif v in on_page and v in found_by_code:     # printed elsewhere, found by code: listed as such (TB11)
                     found.append(dict(entry, nguon="cho_khac"))
                 elif v in on_page:
-                    where = f"chỗ Clicky khoanh («{clip(places[chi].anchor, 40)}»)" if chi in places else "câu này"
+                    where = f"chỗ Vera khoanh («{clip(places[chi].anchor, 40)}»)" if chi in places else "câu này"
                     bad.append((noi, f.tok, f"có trong báo cáo nhưng không ở {where}. Sửa chi cho đúng chỗ, hoặc "
                                             f"nếu anh chắc chắn thì ghi xac_nhan: ['{f.tok}']"))
                 else:
@@ -3012,8 +3012,8 @@ def _nothing_to_say(source: str, items: list, why: str) -> PackError:
     if JS_RENDER.search(scripts):
         return PackError(seen + " Báo cáo này vẽ bảng và số bằng JavaScript lúc mở, nên trong file chưa có số để em "
                                 "đọc. Anh mở báo cáo trong Edge, bấm Ctrl+S, chọn «Trang web, hoàn chỉnh», rồi kéo "
-                                "thả file vừa lưu vào Clicky.")
-    return PackError(seen + " Clicky cần báo cáo có số nằm sẵn trong file: thẻ số, bảng, hoặc đoạn nhận xét có số.")
+                                "thả file vừa lưu vào Numvera.")
+    return PackError(seen + " Vera cần báo cáo có số nằm sẵn trong file: thẻ số, bảng, hoặc đoạn nhận xét có số.")
 
 
 def _first_caption(root) -> str:
@@ -3053,10 +3053,10 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     raw = src_path.read_bytes()
     source, encoding = decode_report(raw)
     if 'data-clicky-layer="1"' in source:
-        raise PackError("File này đã có Clicky. Hãy chạy trên file báo cáo gốc.")
+        raise PackError("File này đã có Vera trình bày. Hãy chạy trên file báo cáo gốc.")
     if FRAMESET.search(source):
         raise PackError(f"Đây là báo cáo Excel nhiều sheet lưu dạng trang web: số nằm trong thư mục «{src_path.stem}_files». "
-                        "Anh kéo thả từng file sheet trong thư mục đó (ví dụ sheet001.htm) vào Clicky.")
+                        "Anh kéo thả từng file sheet trong thư mục đó (ví dụ sheet001.htm) vào Numvera.")
     source = utf8_meta(source)
     root = parse(source)
     tagged, items, rows = tag_targets(source, root)
@@ -3315,10 +3315,10 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
                      "Anh xem lại chữ quanh dấu � trên bản trình bày.")
     if re.search(r"<meta[^>]+http-equiv\s*=\s*[\"']?content-security-policy", source, re.I):
         notes.append("Báo cáo có thẻ Content-Security-Policy chặn mã trong trang: em bỏ thẻ đó trong bản trình bày "
-                     "để Clicky chạy được (file gốc giữ nguyên).")
+                     "để Vera chạy được (file gốc giữ nguyên).")
     if net_chart:
         notes.append("Biểu đồ trong báo cáo tải thư viện vẽ từ Internet: người xem không có mạng sẽ thấy ô trống, nên "
-                     "Clicky không nói về biểu đồ.")
+                     "Vera không nói về biểu đồ.")
     if record["tong"]["cho_khac_trong_bao_cao"]:
         notes.append(f"{record['tong']['cho_khac_trong_bao_cao']} con số anh đã xác nhận nằm ở chỗ khác chỗ khoanh.")
     if record["tong"].get("em_do_cho_khac"):
@@ -3424,10 +3424,10 @@ def todo_list(rep: dict) -> list:
         return todo
     first = 1 if todo and todo[0].startswith(("Đây là báo cáo kỳ mới", "Báo cáo đã đổi số", "Sửa câu «")) else 0
     if rep.get("da_duyet"):               # already approved: fix the named sentence, nothing to re-approve
-        todo.insert(first, f"Sửa trong «{Path(rep['kich_ban']).name}» rồi kéo thả báo cáo vào Clicky lần nữa.")
+        todo.insert(first, f"Sửa trong «{Path(rep['kich_ban']).name}» rồi kéo thả báo cáo vào Numvera lần nữa.")
     else:
         todo.insert(first, f"Đọc và sửa lời trong «{Path(rep['kich_ban']).name}», đổi da_duyet thành 'có', rồi kéo "
-                           "thả báo cáo vào Clicky lần nữa.")
+                           "thả báo cáo vào Numvera lần nữa.")
     return todo
 
 
@@ -3488,7 +3488,7 @@ def run_drop(argv=None, cmdline: Optional[str] = None, ask=input, opener=None, l
     kb = next((a for a in paths if a.lower().endswith((".yaml", ".yml"))), None)
     report = next((a for a in paths if not a.lower().endswith((".yaml", ".yml"))), None)
     if not report:
-        print("KHÔNG ĐẠT: chưa có file báo cáo.\nCần làm: kéo thả file báo cáo .html vào biểu tượng Clicky (có thể "
+        print("KHÔNG ĐẠT: chưa có file báo cáo.\nCần làm: kéo thả file báo cáo .html vào biểu tượng Numvera (có thể "
               "kéo kèm file kịch bản .yaml đã sửa).\nFile: chưa có.")
         return 1
     if not Path(report).is_file():
@@ -3515,7 +3515,7 @@ def run_drop(argv=None, cmdline: Optional[str] = None, ask=input, opener=None, l
 
     global progress
     progress = show
-    show("Clicky đang làm, anh chờ vài phút và đừng tắt cửa sổ này…")
+    show("Vera đang làm, anh chờ vài phút và đừng tắt cửa sổ này…")
     log.write(f"Clicky {dt.datetime.now():%d/%m/%Y %H:%M}\nBáo cáo: {src}\nTrí nhớ: {tri_nho.folder(mem)}\n"
               f"Người chịu trách nhiệm: {name} <{mail}>\n\n")
 
@@ -3574,7 +3574,7 @@ def run_drop(argv=None, cmdline: Optional[str] = None, ask=input, opener=None, l
             if code == 1:
                 found = (getattr(kiem_hinh.main, "last", None) or {}).get("problems") or []
                 return fail(f"Kiểm hình: {len(found)} chỗ chưa ổn: " + kiem_hinh.kinds(found) + "."
-                            if found else "Kiểm hình: Clicky che số hoặc khoanh sai chỗ trên một số màn hình (xem nhật ký).")
+                            if found else "Kiểm hình: Vera che số hoặc khoanh sai chỗ trên một số màn hình (xem nhật ký).")
             seen = "đã kiểm hình" if code == 0 else "chưa kiểm hình được, anh mở file xem vài chỗ khoanh"
         try:
             os.replace(work, out)          # same name as before: a link to it keeps working
@@ -3600,7 +3600,7 @@ def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["--tu-bat"]:
         return run_drop(argv[1:])
-    ap = argparse.ArgumentParser(description="Gắn Clicky vào báo cáo HTML: trình bày bằng giọng, khoanh đúng chỗ, hỏi–đáp.")
+    ap = argparse.ArgumentParser(description="Gắn Vera (Numvera) vào báo cáo HTML: trình bày bằng giọng, khoanh đúng chỗ, hỏi–đáp.")
     ap.add_argument("bao_cao", help="file báo cáo .html (không bị sửa)")
     ap.add_argument("--ra", help="file kết quả, mặc định <tên>_Clicky.html")
     ap.add_argument("--kich-ban", help="kịch bản đã sửa (YAML); bỏ trống thì dùng <tên>_kich_ban_Clicky.yaml nếu có")
@@ -3617,7 +3617,7 @@ def main(argv=None) -> int:
         src = Path(a.bao_cao)
         old_note = old_copy_note(Path(a.ra) if a.ra else src.with_name(src.stem + "_Clicky.html"))
         print(f"KHÔNG ĐẠT. {exc}", file=sys.stderr)
-        print("Chưa ghi file trình bày mới. Sửa chỗ trên rồi kéo thả báo cáo vào Clicky lần nữa."
+        print("Chưa ghi file trình bày mới. Sửa chỗ trên rồi kéo thả báo cáo vào Numvera lần nữa."
               + (" " + old_note if old_note else ""), file=sys.stderr)
         return 2
     print(summary(rep))

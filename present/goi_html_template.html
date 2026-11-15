@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>__TITLE__ · Clicky trình bày</title>
+<title>__TITLE__ · Vera trình bày</title>
 <style>
 :root{--bg:#f6f4ef;--panel:#fff;--ink:#1d2421;--muted:#5d6b66;--line:#e2ddd2;--accent:#1f7a5a;--accent-ink:#fff;--frame:#e8a33d;--warn:#9a5b00;--chip:#eef4f0}
 @media (prefers-color-scheme:dark){:root{--bg:#141816;--panel:#1d2321;--ink:#e9eeec;--muted:#9fb0aa;--line:#2f3835;--accent:#3fae84;--accent-ink:#08130e;--chip:#22302a;--warn:#f0b35a}}
@@ -67,8 +67,8 @@ aside h2{font-size:16px;margin:0}
       </div>
       <div class="start" id="start">
         <div id="startText"></div>
-        <button class="primary" id="go">▶ Nghe Clicky trình bày</button>
-        <button id="askFirst">Hỏi Clicky ngay</button>
+        <button class="primary" id="go">▶ Nghe Vera trình bày</button>
+        <button id="askFirst">Hỏi Vera ngay</button>
       </div>
     </div>
     <div class="caption" id="caption" aria-live="polite"></div>
@@ -84,7 +84,7 @@ aside h2{font-size:16px;margin:0}
     <div class="dots" id="dots"></div>
   </section>
   <aside id="askPanel">
-    <h2>Hỏi Clicky</h2>
+    <h2>Hỏi Vera</h2>
     <form class="ask" id="askForm"><input id="q" placeholder="Gõ câu hỏi, ví dụ: Marketing tăng vì sao?" autocomplete="off"><button class="primary">Hỏi</button></form>
     <div class="chips" id="chips"></div>
     <div id="answer" class="hidden"></div>
@@ -108,14 +108,14 @@ let idx = 0, playing = false, shown = new Set(), captions = true, speedIx = 0, a
 const SPEEDS = [1, 1.15, 1.3, 0.9];
 const treoKey = "clicky-treo-" + M.pack_id;
 
-$("who").textContent = "Trợ lý AI của " + M.owner + " · giọng máy";
+$("who").textContent = "Vera, trợ lý AI của " + M.owner + " · giọng máy";
 $("title").textContent = M.title;
 $("ownerName").textContent = M.owner;
 if (M.label) { $("label").textContent = M.label; $("label").classList.remove("hidden"); }
-$("startText").innerHTML = "<strong>Clicky là trợ lý AI của " + esc(M.owner) + ".</strong><br>Em trình bày khoảng " +
+$("startText").innerHTML = "<strong>Vera là trợ lý AI của " + esc(M.owner) + ".</strong><br>Em trình bày khoảng " +
   String(M.minutes).replace(".", ",") + " phút. Anh chị có thể dừng bất cứ lúc nào để hỏi.";
 $("foot").textContent = "Mọi con số lấy từ file " + M.workbook + " (mã kiểm " + M.workbook_sha256.slice(0, 12) +
-  "), đóng gói lúc " + M.built + ". Trang này chạy hoàn toàn trên máy anh chị, không gửi dữ liệu đi đâu và không dùng AI để tạo câu trả lời: Clicky chỉ trả lời từ bộ câu hỏi " +
+  "), đóng gói lúc " + M.built + ". Trang này chạy hoàn toàn trên máy anh chị, không gửi dữ liệu đi đâu và không dùng AI để tạo câu trả lời: Vera chỉ trả lời từ bộ câu hỏi " +
   M.owner + " đã duyệt. Câu chưa có sẵn được ghi lại để " + M.owner + " trả lời.";
 
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c])); }

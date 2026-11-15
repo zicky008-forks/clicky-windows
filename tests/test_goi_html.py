@@ -101,7 +101,7 @@ def test_pack_speaks_only_checked_figures(files, monkeypatch):
     assert s1["points"][1]["at"] > s1["points"][0]["at"]
     assert not any("{" in t for t in spoken)
     assert data["meta"]["label"] == "SỐ GIẢ LẬP" and len(data["meta"]["workbook_sha256"]) == 64
-    assert "Trợ lý AI của" in page
+    assert "trợ lý AI của" in page
 
 
 def test_bank_answers_are_filled_and_what_if_is_parked(files, monkeypatch):

@@ -63,7 +63,7 @@ def _why_not(page, errors, blocked=()) -> str:
     """Why Clicky's layer did not start: the page's security policy, a script error, broken embedded data, or a
     report too big to read in time. Each says what it is; none is guessed."""
     if blocked:
-        return "trang có chính sách bảo mật (Content-Security-Policy) chặn mã chạy trong trang, nên Clicky không chạy được"
+        return "trang có chính sách bảo mật (Content-Security-Policy) chặn mã chạy trong trang, nên Vera không chạy được"
     if errors:
         return "; ".join(errors)
     try:
@@ -73,11 +73,11 @@ def _why_not(page, errors, blocked=()) -> str:
     except Exception:
         return "báo cáo quá lớn hoặc quá chậm: trang không trả lời"
     if not d["data"] or not d["json"]:
-        return "lớp Clicky không khởi động; dữ liệu nhúng có thể đã làm hỏng thẻ script"
+        return "lớp Vera không khởi động; dữ liệu nhúng có thể đã làm hỏng thẻ script"
     if d["cells"] >= BIG:
-        return (f"báo cáo quá lớn hoặc quá chậm: Clicky chưa sẵn sàng sau 15 giây ({d['cells']:,} ô bảng)"
+        return (f"báo cáo quá lớn hoặc quá chậm: Vera chưa sẵn sàng sau 15 giây ({d['cells']:,} ô bảng)"
                 .replace(",", "."))
-    return "lớp Clicky không khởi động mà trang không báo lỗi; mở file bằng trình duyệt để xem"
+    return "lớp Vera không khởi động mà trang không báo lỗi; mở file bằng trình duyệt để xem"
 
 
 def check(packed: str, sizes=SIZES, timeout_ms: int = 60000, questions: Optional[list] = None,
@@ -121,7 +121,7 @@ def check(packed: str, sizes=SIZES, timeout_ms: int = 60000, questions: Optional
                     page.wait_for_function("typeof window.__clickyKiemHinh === 'function'",
                                            timeout=min(timeout_ms, 15000))
                 except Exception:  # the layer never started: say why, never a traceback
-                    problems.append(f"màn {w}x{h}: Clicky không chạy trên trang này ({_why_not(page, errors, blocked)})")
+                    problems.append(f"màn {w}x{h}: Vera không chạy trên trang này ({_why_not(page, errors, blocked)})")
                     ctx.close()
                     break
                 if questions and not tried:
@@ -148,7 +148,7 @@ def check(packed: str, sizes=SIZES, timeout_ms: int = 60000, questions: Optional
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Kiểm bằng trình duyệt: Clicky không che số, khoanh đúng chỗ.")
+    ap = argparse.ArgumentParser(description="Kiểm bằng trình duyệt: Vera không che số, khoanh đúng chỗ.")
     ap.add_argument("file", help="file <tên>_Clicky.html")
     ap.add_argument("--tri-nho", default=os.environ.get("CLICKY_TRI_NHO") or None,
                     help="thư mục trí nhớ: thử luôn các câu các sếp hay hỏi (SEP_HAY_HOI.md)")
@@ -181,8 +181,8 @@ def main(argv=None) -> int:
 
 def kinds(problems: list, top: int = 3) -> str:
     """What went wrong, by kind and count, without the cell text: safe to show on the console of a real report.
-    "màn 1366x768: c3r2 ô 1 «12,4», khi mở bảng hỏi: thanh hoặc bảng hỏi của Clicky che số" counts as
-    "thanh hoặc bảng hỏi của Clicky che số"."""
+    "màn 1366x768: c3r2 ô 1 «12,4», khi mở bảng hỏi: thanh hoặc bảng hỏi của Vera che số" counts as
+    "thanh hoặc bảng hỏi của Vera che số"."""
     count, screens = {}, {}
     for p in problems:
         size = re.match(r"(?:màn|điện thoại) (\d+x\d+): ", p)

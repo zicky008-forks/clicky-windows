@@ -1492,14 +1492,14 @@ def test_nods_junk_and_say_again_never_reach_the_owner_and_plan_names_explain_th
     pg, errors = page
     # round-8 panel: the desktop's first screen says the asks with their money too, never only how to use the page
     first = pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('cap').innerText")
-    assert first.startswith("Em là trợ lý AI của anh Tuấn. Anh Tuấn xin anh chị quyết: duyệt trần 177,5 tỷ (giảm 8,9 tỷ); "
+    assert first.startswith("Em là Vera, trợ lý AI của anh Tuấn. Anh Tuấn xin anh chị quyết: duyệt trần 177,5 tỷ (giảm 8,9 tỷ); "
                             "giãn tuyển 30 vị trí bán hàng. Bấm ▶ để nghe vì sao"), first
     # round-7 panel: these were queued and mailed under CÂU HỎI, or lost the real question
     for q in ("asdf qwe", "asdfgh"):
         assert _r3(pg, q) == "Em chưa hiểu câu hỏi, anh chị nói lại giúp em ạ."
     for q in ("hmm ???", "Đúng.", "Chuẩn rồi.", "Cảm ơn em, vậy thôi.", "Được, tiếp đi.", "hmm, ok.."):
         assert _r3(pg, q) == "Dạ.", q
-    assert _r3(pg, "Em vừa nói gì?").startswith("Thưa anh chị, em là trợ lý AI của anh Tuấn.")   # nothing played yet: the first line
+    assert _r3(pg, "Em vừa nói gì?").startswith("Thưa anh chị, em là Vera, trợ lý AI của anh Tuấn.")   # nothing played yet: the first line
     assert _r3(pg, "Em nói lại phần đề nghị").startswith("Giữ 2,40% như kế hoạch gốc thì trần là 177,5 tỷ.")   # never "Vì vậy … đề xuất"
     assert _r3(pg, "Ý chính là gì?").startswith("Anh Tuấn xin anh chị duyệt trần 177,5 tỷ (giảm 8,9 tỷ)")
     assert _r3(pg, "Theo em có nên duyệt không?").startswith("Em không khuyên thay anh chị.")
@@ -1835,7 +1835,7 @@ def test_round4_phone_ask_button_and_play_width(built):
     with sync_playwright() as pw:
         browser, pg, errors = _open(pw, built, 390, 844, is_mobile=True, has_touch=True)
         ask = pg.evaluate(f"(() => {{ const b = {SR}.getElementById('askb'); return [b.scrollWidth, b.clientWidth, b.getBoundingClientRect().height, b.getAttribute('aria-label')]; }})()")
-        assert ask[0] <= ask[1] + 1 and ask[2] <= 48 and ask[3] == "Hỏi em", ask   # one line, never cut
+        assert ask[0] <= ask[1] + 1 and ask[2] <= 48 and ask[3] == "Hỏi Vera", ask   # one line, never cut
         pg.evaluate(f"{SR}.getElementById('askb').click()")
         pg.evaluate(f"(() => {{ {SR}.getElementById('q').value = 'Headcount khối CNTT?'; {SR}.getElementById('f').requestSubmit(); }})()")
         pg.wait_for_timeout(1200)

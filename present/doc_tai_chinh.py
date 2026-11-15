@@ -65,7 +65,7 @@ ENGLISH = {"aop revised": "ây-ô-pi điều chỉnh", "revised": "điều chỉ
            "forecast": "dự báo", "budget": "ngân sách", "actual": "thực tế", "actuals": "số thực tế",
            "variance": "chênh lệch", "gap": "chênh lệch", "bridge": "cầu chênh lệch", "run-rate": "tốc độ hiện tại",
            "run rate": "tốc độ hiện tại", "target": "mục tiêu", "baseline": "mức gốc", "outlook": "triển vọng",
-           "margin": "biên lợi nhuận", "vs": "so với", "clicky": "Cờ-lích-ki", "logistics": "lô-gít-tích",
+           "margin": "biên lợi nhuận", "vs": "so với", "clicky": "Cờ-lích-ki", "numvera": "Num-ve-ra", "vera": "Vê-ra", "logistics": "lô-gít-tích",
            "working capital": "vốn lưu động", "cash conversion cycle": "chu kỳ chuyển đổi tiền mặt",
            "cash flow": "dòng tiền", "sales": "bán hàng",
            # HR and FP&A words the team writes in English

@@ -40,12 +40,12 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
     errors: list = []
     record, data = _embedded(page, "clicky-bien-ban"), _embedded(page, "clicky-data")
     if record is None or data is None:
-        return {"ok": False, "errors": ["File này không có biên bản của Clicky."], "tong": {}}
+        return {"ok": False, "errors": ["File này không có biên bản của Vera."], "tong": {}}
     if seal(record) != record.get("ma_bam"):
         errors.append("Biên bản đã bị sửa sau khi lập (mã băm không khớp).")
     spoken = [s for scene in data.get("scenes", []) for s in scene.get("sentences", [])]
     if spoken != [r["noi"] for r in record.get("cau", [])]:
-        errors.append("Lời Clicky sẽ nói khác với lời ghi trong biên bản.")
+        errors.append("Lời Vera sẽ nói khác với lời ghi trong biên bản.")
     if original:
         if hashlib.sha256(Path(original).read_bytes()).hexdigest() != record.get("sha256"):
             errors.append("File gốc đưa vào không phải là báo cáo mà biên bản này được lập từ đó.")
@@ -86,7 +86,7 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
             errors.append(f"Câu «{clip(row['noi'])}» có số viết bằng chữ, không đối chiếu được.")
         other = other_row(row["noi"], row.get("chi", ""), places)
         if other and spoken:
-            errors.append(f"Câu «{clip(row['noi'])}» nói về «{other}» nhưng Clicky khoanh dòng khác.")
+            errors.append(f"Câu «{clip(row['noi'])}» nói về «{other}» nhưng Vera khoanh dòng khác.")
         for tok, why in sentence_issues(row["noi"], row.get("chi", ""), places, en):
             errors.append(f"Số {tok}: {why} (câu «{clip(row['noi'])}»).")
         for f, x in zip(spoken, row["so"]):
@@ -113,9 +113,9 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
                 else:
                     why = check_figure(f, figures(texts.get(where, "")), en, unit)
                 if why == "missing":
-                    errors.append(f"Số {tok} không có ở chỗ Clicky khoanh ({where}) (câu «{clip(row['noi'])}»).")
+                    errors.append(f"Số {tok} không có ở chỗ Vera khoanh ({where}) (câu «{clip(row['noi'])}»).")
                 elif why:
-                    errors.append(f"Số {tok} ở chỗ Clicky khoanh ({where}): {why} (câu «{clip(row['noi'])}»).")
+                    errors.append(f"Số {tok} ở chỗ Vera khoanh ({where}): {why} (câu «{clip(row['noi'])}»).")
     # ready answers from the owner's memory: the page must hold exactly the recorded answers
     bank = record.get("tra_loi_san", [])
     if [(b.get("q"), b.get("a")) for b in data.get("bank", [])] != [(b["cau"], b["tra_loi"]) for b in bank]:
@@ -160,14 +160,14 @@ def verify(packed: str, original: Optional[str] = None) -> dict:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Kiểm lại: mọi con số Clicky nói có thật sự nằm trong báo cáo không.")
+    ap = argparse.ArgumentParser(description="Kiểm lại: mọi con số Vera nói có thật sự nằm trong báo cáo không.")
     ap.add_argument("file_clicky", help="file <tên>_Clicky.html")
     ap.add_argument("--goc", help="file báo cáo gốc, để kiểm đúng là lập từ file này")
     a = ap.parse_args(argv)
     rep = verify(a.file_clicky, a.goc)
     t = rep["tong"]
     if rep["ok"]:
-        print(f"ĐẠT. {t['so']} con số trong {t['cau']} câu: {t['dung_cho_khoanh']} ở đúng chỗ Clicky khoanh, "
+        print(f"ĐẠT. {t['so']} con số trong {t['cau']} câu: {t['dung_cho_khoanh']} ở đúng chỗ Vera khoanh, "
               f"{t['cho_khac_trong_bao_cao']} ở chỗ khác trong báo cáo, "
               + (f"{t['em_do_cho_khac']} em dò thấy ở chỗ khác (chưa ai xác nhận), " if t.get("em_do_cho_khac") else "")
               + (f"{t['em_tinh']} em tính lại từ số trên báo cáo, " if t.get("em_tinh") else "")

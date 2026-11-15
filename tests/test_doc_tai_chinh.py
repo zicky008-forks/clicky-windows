@@ -765,3 +765,9 @@ def test_the_proposal_breathes_before_tuc_only_when_too_long():
     assert LONG == 120
     assert pieces("Thứ nhất, khối Bán hàng vượt AOP gốc 14,1 tỷ, tức 18,0%.") == [
         "Thứ nhất, khối Bán hàng vượt AOP gốc 14,1 tỷ, tức 18,0%."]
+
+
+def test_the_new_names_are_read_the_vietnamese_way():
+    # product renamed (user, 2026-11-15): the brand Numvera and the assistant Vera, never read with English sounds
+    assert doc("Em là Vera, trợ lý AI của anh Tuấn.") == "Em là Vê-ra, trợ lý ây-ai của anh Tuấn."
+    assert doc("Numvera") == "Num-ve-ra"
