@@ -1900,7 +1900,7 @@ def test_grader_rerun_two_gap_questions_opinions_absent_basis_one_family_and_own
         pg.wait_for_timeout(700)
         hoi = lambda q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
         assert "thấp hơn kế hoạch 7,5 tỷ" in hoi("Doanh thu hụt kế hoạch bao nhiêu?")
-        assert "Lãi gộp, % TH/KH: 91,7%" in hoi("Lãi gộp đạt bao nhiêu % kế hoạch?")
+        assert "Lãi gộp đạt 91,7% kế hoạch (cột «% TH/KH»)" in hoi("Lãi gộp đạt bao nhiêu % kế hoạch?")
         assert "cao hơn kế hoạch 1,8 tỷ" in hoi("Chi phí bán hàng vượt kế hoạch bao nhiêu?")
         assert "cao hơn kế hoạch 0,4 tỷ" in hoi("Marketing vượt kế hoạch bao nhiêu?")
         assert "cao hơn kế hoạch 2,1 tỷ" in hoi("Khối Kinh doanh vượt kế hoạch bao nhiêu?")
@@ -2059,4 +2059,100 @@ def test_board_questions_find_spans_notes_and_the_drawn_year(tmp_path, monkeypat
         assert "Lãi gộp so với kế hoạch tháng 10, thấp hơn 4,5 tỷ" in hoi("Lợi nhuận gộp chênh lệch bao nhiêu?")
         x = hoi("EBIT lũy kế hụt kế hoạch bao nhiêu?")
         assert "thấp hơn 29,6 tỷ" in x and "5,7" not in x, x
+        x = hoi("Lãi gộp vì sao thấp?")   # no sentence gives the reason: the two rows that make it, never the cost total (TB7)
+        assert "vì doanh thu thuần thấp hơn 7,5 tỷ" in x and "giá vốn hàng bán thấp hơn 3,0 tỷ" in x and "25,8" not in x, x
         browser.close()
+
+
+def test_flexible_budget_bridge_shared_plan_notes_and_a_loss(tmp_path, monkeypatch):
+    # gate 2 grader on e735818 (our own synthetic copy of the shapes): the gap to a flexible budget was said as the gap
+    # to the original plan (TB18); a Board question that names a row never reached that row's notes (TB17); «hụt bao
+    # nhiêu» gave the bridge's first figure, «lợi nhuận gộp vì sao» the profit conclusion (TB7); one plan for two rows
+    # gave each its own gap (TB9); the year asked «so với kế hoạch» was parked (TB16); a loss was «thấp hơn 260%»
+    # (TB19); the talk left out the gross-profit bridge, the nature of the biggest rise and two of three asks (P4)
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    src = tmp_path / "ns.html"
+    shutil.copyfile(Path(__file__).parent / "fixtures" / "bao_cao_ns_linh_hoat.html", src)
+    rep = build(src)
+    canh = yaml.safe_load(Path(rep["kich_ban"]).read_text(encoding="utf-8"))["canh"]
+    by = {c.get("vai"): c["noi"] for s in canh for c in s["cau"]}
+    assert by["kq_loi_nhuan"] == "Trước hết là kết quả kinh doanh: lợi nhuận trước thuế đạt 55,7% kế hoạch gốc, thấp hơn 10,2 tỷ."
+    assert by["kq_doanh_thu"].startswith("Doanh thu thuần thấp hơn kế hoạch gốc 9,0 tỷ")
+    assert by["kq_cau_gop"] == "Lãi gộp hụt vì: sản lượng làm giảm 5,4 tỷ, giá vốn làm giảm 4,2 tỷ, bù lại giá bán làm tăng 3,0 tỷ."
+    assert "lệch thời điểm, cả năm không vượt ngân sách" in by["nguyen_nhan"]
+    assert "Anh Tuấn xin anh chị quyết ba việc." in [c["noi"] for s in canh for c in s["cau"]]
+    assert next(s["muc"] for s in canh if any(c.get("vai") == "quy_mo" for c in s["cau"])) == "Chi phí bán hàng theo khoản mục"
+    assert rep["phan_bien"] == []
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 768})
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(700)
+        hoi = lambda q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        x = hoi("Lợi nhuận trước thuế thấp hơn kế hoạch bao nhiêu?")
+        assert "thấp hơn kế hoạch gốc 10,2 tỷ (em tính: 12,8 − 23,0)" in x and "So với ngân sách linh hoạt, thấp hơn 6,2 tỷ" in x, x
+        x = hoi("Doanh thu so với kế hoạch gốc thế nào?")
+        assert "thấp hơn kế hoạch gốc 9,0 tỷ" in x and "cao hơn" not in x, x
+        assert "cao hơn ngân sách linh hoạt 3,0 tỷ" in hoi("Doanh thu so với ngân sách linh hoạt thế nào?")
+        assert "cả năm không vượt ngân sách" in hoi("Khuyến mãi có phải vượt ngân sách không?")
+        assert "không phải khoản tiết kiệm" in hoi("Chi phí sửa chữa giảm là tiết kiệm thật à?")
+        assert "là khoản bất thường" in hoi("Quảng cáo có gì bất thường không?")
+        assert "AOP 2026 bản Hội đồng duyệt" in hoi("Kế hoạch chi phí bán hàng lấy từ bản nào?")
+        x = hoi("Lãi gộp hụt bao nhiêu?")
+        assert "Lãi gộp thấp hơn kế hoạch gốc 6,6 tỷ" in x and "Giá trị" not in x, x
+        for q in ("Vì sao lãi gộp thấp hơn kế hoạch?", "Lợi nhuận gộp giảm vì sao?"):
+            x = hoi(q)
+            assert "sản lượng làm giảm 5,4 tỷ, giá vốn làm giảm 4,2 tỷ, giá bán làm tăng 3,0 tỷ" in x and "trước thuế" not in x, x
+        x = hoi("Chênh lệch vận chuyển bao nhiêu?")
+        assert "lập gộp với Thuê kho" in x and "không có chênh lệch riêng" in x and "5,0 tỷ (em tính: 3,1 + 1,9)" in x, x
+        x = hoi("Cả năm ước đạt bao nhiêu so với kế hoạch?")
+        assert "thấp hơn 60,0 tỷ" in x and "đạt 96,6%" in x and "209,0" in x and "T10" not in x, x
+        x = hoi("Lợi nhuận khác so với kế hoạch thế nào?")
+        assert x.startswith("Lợi nhuận khác lỗ 0,8 tỷ, kế hoạch gốc là lãi 0,5 tỷ") and "160" not in x, x
+        assert "Thực hiện lỗ 0,8 tỷ" in hoi("Lợi nhuận khác tháng này bao nhiêu?")
+        x = hoi("Khoản nào vượt kế hoạch nhiều nhất?")   # ranked by the gap, never by the plan column
+        assert x.startswith("Khuyến mãi và chiết khấu") and "Chênh lệch" in x, x
+        x = hoi("Chi phí bán hàng vì sao vượt?")   # no reason of its own: the table that breaks it down, with its notes
+        assert "tăng nhiều nhất là Khuyến mãi và chiết khấu 2,6 tỷ" in x and "lệch thời điểm" in x and "rồi Quảng cáo 0,9 tỷ" in x, x
+        assert "Lợi nhuận trước thuế ước cả năm 209,0 tỷ" in hoi("Cả năm lợi nhuận có đạt kế hoạch không?")
+        browser.close()
+
+
+def test_the_year_from_a_table_by_month(tmp_path, monkeypatch):
+    # gate 2 grader on e735818 (TB16, our own synthetic copy): «cả năm ước đạt bao nhiêu so với kế hoạch» on a table
+    # by month (T1 … T12, «Thực hiện», «Dự báo», «Kế hoạch (AOP)» with «Cả năm») answered «chưa thấy số T10»
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    src = tmp_path / "ytd.html"
+    shutil.copyfile(Path(__file__).parent / "fixtures" / "bao_cao_ytd_du_bao.html", src)
+    rep = build(src)
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 768})
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(700)
+        hoi = lambda q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        for q in ("Cả năm ước đạt bao nhiêu so với kế hoạch?", "Doanh thu cả năm ước bao nhiêu?"):
+            x = hoi(q)
+            assert ("mười tháng đã làm 1.154,5 tỷ" in x and "260,0 tỷ (em tính: 125,0 + 135,0)" in x and "cả năm ước 1.414,5 tỷ" in x
+                    and "thấp hơn kế hoạch (AOP) cả năm 1.440,0 tỷ là 25,5 tỷ" in x and "đạt 98,2% (em tính: 1.414,5 ÷ 1.440,0 × 100)" in x), x
+        x = hoi("Lũy kế T10 và cả năm ước đạt bao nhiêu so với kế hoạch?")
+        assert "T10" not in x.split("Theo bảng")[0] and "Lũy kế T1–T10 thấp hơn kế hoạch (AOP) cùng kỳ 45,5 tỷ (em tính: 1.154,5 − 1.200,0)" in x, x
+        browser.close()
+
+
+def test_a_variance_column_belongs_to_the_plan_its_header_names():
+    cols = [clicky_html.Col(h, "", [], "tỷ", k) for h, k in (("Chỉ tiêu", "label"), ("KH gốc", "value"), ("NS linh hoạt", "value"),
+            ("Thực hiện", "value"), ("Chênh lệch (TH − NS linh hoạt)", "var"), ("Chênh lệch (TH − KH gốc)", "var"))]
+    assert story.var_base(cols, 4) == 2 and story.var_base(cols, 5) == 1
+    plain = [clicky_html.Col(h, "", [], "tỷ", k) for h, k in (("Bộ phận", "label"), ("Kế hoạch", "value"), ("Thực hiện", "value"), ("Chênh lệch", "var"))]
+    assert story.var_base(plain, 3) is None

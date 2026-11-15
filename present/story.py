@@ -477,7 +477,9 @@ def ratio_card(places: dict, en: bool) -> Optional[tuple]:
     return None
 
 
-DECIDE_HEAD = re.compile(r"quyết định|cần quyết|xin ý kiến|phê duyệt|bod cần|hđqt cần|decisions?\b|asks?\b", re.I)
+DECIDE_HEAD = re.compile(r"quyết định|cần quyết|xin ý kiến|phê duyệt|bod cần|hđqt cần|decisions?\b|asks?\b|kính trình|"
+                         r"(đề nghị|đề xuất|xin)\s+(hội đồng|hđqt|ban giám đốc|bgđ|bod|ban điều hành)|"
+                         r"(hội đồng|hđqt|ban giám đốc|bgđ|bod)\s+(quyết|duyệt|phê duyệt|cho ý kiến)", re.I)   # «Đề nghị Hội đồng quyết» (P4)
 ACTION = re.compile(r"^\s*(giữ|duyệt|phê duyệt|cắt|giảm|giãn|dời|lùi|tạm dừng|tạm hoãn|hoãn|chuyển|gắn|bổ sung|yêu cầu|"
                     r"chấp thuận|thông qua|đồng ý|không duyệt|siết|khóa|đặt trần|áp trần|phân bổ|giải ngân|chi theo|"
                     r"[^:]{2,25}:\s*(phân bổ|chi theo|giữ|cắt|giãn|dời|hoãn))", re.I)
@@ -603,6 +605,25 @@ def row_note(row, items: list, flags: list) -> Optional[tuple]:
                            r"phát sinh|thanh toán|mua|nhập|chuyển|thanh lý|bán)\b(.+?)[.;]?$", x)   # the row's own note: timing, one-off (F01 TB4)
             if m_ and key in jfold(x) and not any(jfold(fl.get("sai", "")) and jfold(fl["sai"]) in jfold(x) for fl in flags):
                 return re.sub(r"\s*\(([^()]+)\)", r", \1", (m_.group(1) + m_.group(2)).strip()), it2   # «(lệch thời điểm …)» is said
+    # any note that names the row as its subject, says it moved, and gives a cause («… tăng do chương trình …»), with
+    # the sentence that goes on about it («Đây là lệch thời điểm, …»): the nature of the biggest move (gate 2 rerun 3, P4)
+    for it2 in items:
+        if getattr(it2, "kind", "") not in ("note", "text", "para", "card") or not it2.text:
+            continue
+        parts = re.split(r"(?<=[.;])\s+", it2.text)
+        for k, x in enumerate(parts):
+            fx = jfold(re.sub(r"^\s*(ghi chú|lưu ý|chú thích|\(?\d+[.)])\s*:?\s*", "", x, flags=re.I))
+            at = fx.find(key)
+            if at < 0 or at > 24 or not re.search(r"\b(tang|giam|vuot|cao hon|thap hon|hut|thieu)\b", fx[at:]):
+                continue
+            m_ = re.search(r"\s(?:do|vì|bởi vì|bởi)\s+(.+?)[.;]?$", x)
+            if not m_ or len(m_.group(1).split()) > 22 or any(jfold(fl.get("sai", "")) and jfold(fl["sai"]) in jfold(x) for fl in flags):
+                continue
+            said = re.sub(r"\s*\(([^()]+)\)", r", \1", m_.group(1).strip())
+            nxt = parts[k + 1].strip().rstrip(".;") if k + 1 < len(parts) else ""
+            if re.match(r"(đây|đó|khoản này|việc này|điều này)\b", nxt, re.I) and len(nxt.split()) <= 16:
+                said += ", " + nxt[:1].lower() + nxt[1:]
+            return said, it2
     return None
 
 
@@ -610,6 +631,24 @@ PROFIT = re.compile(r"lợi nhuận|lãi (thuần|ròng|trước thuế|sau thu�
 ACT_COL = re.compile(r"thực hiện|thực tế|\bactual\b|\bact\b|\bth\b", re.I)
 SPAN_COL = re.compile(r"lũy kế|luỹ kế|\bytd\b|\blk\d*\b|cả năm|\bfy\b|dự báo|forecast|\bfc\b|\bước\b|còn lại", re.I)
 GROSS = re.compile(r"lãi gộp|lợi nhuận gộp|gross", re.I)
+
+
+def _head_norm(text: str) -> str:
+    return " " + re.sub(r"[^\w%]+", " ", str(text or "").lower()).strip() + " "
+
+
+def var_base(head: list, i: int) -> Optional[int]:
+    """The value column a variance column is taken against, when its header names one: «Chênh lệch (TH − NS linh
+    hoạt)» beside «KH gốc», «NS linh hoạt», «Thực hiện» is the flexible budget's gap, never the plan's (TB18).
+    The longest name wins («kế hoạch điều chỉnh» before «kế hoạch»); None when it names no other column."""
+    h = _head_norm(head[i].header)
+    vals = sorted((j for j, c in enumerate(head) if c.kind == "value" and j != i and (c.name or c.header)),
+                  key=lambda j: -len(_head_norm(head[j].name or head[j].header)))
+    for j in vals:
+        n = _head_norm(head[j].name or head[j].header)
+        if len(n.strip()) >= 3 and n in h and not ACT_COL.fullmatch(n.strip()):
+            return j
+    return None
 
 
 def pl_table(places: dict, en: bool, skip: str = "") -> Optional[Table]:
@@ -638,7 +677,8 @@ def pl_table(places: dict, en: bool, skip: str = "") -> Optional[Table]:
             continue
         prof = next((r for r in profits if re.search(r"trước thuế|\blntt\b|before tax|\bpbt\b", r.label, re.I)), profits[-1])
         span = lambda i: bool(SPAN_COL.search(head[i].header or ""))     # noqa: E731  «Chênh lệch LK» is the year's
-        var = next((i for i, c in enumerate(head) if c.kind == "var" and not span(i)), None)
+        var = next((i for i, c in enumerate(head) if c.kind == "var" and not span(i)
+                    and var_base(head, i) in (None, plan)), None)   # «TH − NS linh hoạt» is not the plan's gap (TB18)
         pct = next((i for i, c in enumerate(head) if (c.kind == "pctvar" or (c.unit == "%" and c.kind != "value")) and not span(i)), None)
         unit = head[actual].unit
         if unit is None:
@@ -651,6 +691,15 @@ def pl_table(places: dict, en: bool, skip: str = "") -> Optional[Table]:
         return Table(tid, [r for r in body if r is not prof], prof, plan, actual, var, pct,
                      head[plan].name or head[plan].header, head[actual].name or head[actual].header, unit, "")
     return None
+
+
+def _table_title(places: dict, t: Table) -> str:
+    """The heading of the part a table sits in («3. Chi phí bán hàng theo khoản mục» → «Chi phí bán hàng theo khoản
+    mục»): a scene's title says what is on screen, never «Vì sao cần quyết» over a total (gate 2 rerun 3, P4)."""
+    tp = places.get(t.id)
+    sec = places.get(tp.section) if tp is not None and tp.section else None
+    text = re.sub(r"^\s*([IVXLC]+|\d+(\.\d+)*|[A-Z])[.)]\s+", "", sec.text.strip()) if sec is not None else ""
+    return text[:60] if 3 <= len(text) <= 60 else "Quy mô"
 
 
 def pl_bridge(pt: Table, en: bool) -> Optional[list]:
@@ -914,6 +963,45 @@ def year_lines(places: dict, en: bool) -> tuple:
     return out, flags
 
 
+STEP_LEAD = re.compile(r"^(ảnh hưởng|tác động|do|yếu tố|chênh lệch)\s+(của\s+|từ\s+)?", re.I)
+
+
+def bridge_lines(places: dict, row, unit: str, en: bool) -> Optional[Line]:
+    """«Lãi gộp hụt vì: sản lượng làm giảm 5,4 tỷ, giá vốn làm giảm 4,2 tỷ, bù lại giá bán làm tăng 3,0 tỷ.»: a
+    bridge table whose first and last rows are this row's plan and actual, and whose steps add up to the gap exactly
+    (gate 2 rerun 3, P4: the «why» of gross profit). Framed on the bridge; at most three steps said."""
+    key = jfold(_short(row.label))
+    by_table: dict = {}
+    for p in places.values():
+        if p.kind == "row" and p.cols:
+            by_table.setdefault(re.sub(r"r\d+$", "", p.id), []).append(p)
+    for tid, rows in by_table.items():
+        vals = []
+        for r in [r for r in rows if any(c.figs for c in r.cols)]:      # the header row has no figure
+            got = [i for i, c in enumerate(r.cols) if c.kind != "label" and _num(r, i, en)]
+            if len(got) != 1:
+                break
+            vals.append((r, _num(r, got[0], en)))
+        else:
+            if len(vals) < 4 or key not in jfold(vals[0][0].label) or key not in jfold(vals[-1][0].label):
+                continue
+            start, end = vals[0][1][1], vals[-1][1][1]
+            steps = vals[1:-1]
+            if sum((v for _r, (_t, v) in steps), start) != end or start == end:
+                continue
+            down = end < start
+            big = sorted(steps, key=lambda x: -abs(x[1][1]))[:3]
+            parts = []
+            for r, (tok, v) in big:
+                what = STEP_LEAD.sub("", r.label).strip()
+                lead = "bù lại " if (v > 0) == down and v else ""
+                parts.append(f"{lead}{what[:1].lower() + what[1:]} làm {'giảm' if v < 0 else 'tăng'} {tok} {unit}".replace("  ", " ").strip())
+            more = f", và {len(steps) - len(big)} yếu tố khác" if len(steps) > len(big) else ""
+            word = "hụt" if down else "vượt"
+            return Line(f"{_cap(_short(row.label))} {word} vì: " + ", ".join(parts) + more + ".", tid, vai="kq_cau_gop")
+    return None
+
+
 def pl_lines(places: dict, t: Table, en: bool) -> list:
     """The profit and loss scene: profit against plan, revenue and gross profit, then the steps that moved profit
     (at most three figures a line, each framed on the row that prints it or carried as a figure from another row)."""
@@ -947,6 +1035,9 @@ def pl_lines(places: dict, t: Table, en: bool) -> list:
                                              .replace("  ", " ").replace(" .", ".").replace(" ,", ","), rev.id,
                                              so_tinh=([f"{rd[0]} = {rd[2]}"] if rd[2] else []) + ([f"{gd[0]} = {gd[2]}"] if pull and gd[2] else []),
                                              xac_nhan=[gd[0]] if pull and not gd[2] else [], vai="kq_doanh_thu")))
+    gb = bridge_lines(places, gp, unit, en) if gp is not None else None
+    if gb is not None:                             # the report's own bridge says why gross profit moved (P4)
+        out.append(("Kết quả kinh doanh", gb))
     if steps and len(steps) >= 2:
         big = sorted(steps, key=lambda x: -abs(x[2]))
         said_, rest = big[:3], big[3:]
@@ -1095,7 +1186,7 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                 f"{tdelta[0]} {unit}").replace("  ", " ")
         # the note's own cost growth is said next: never a second rate for the same change
         size += (f", tức khoảng {pct}%." if pct_expr else f", tức {pct}%.") if pct and con is None and not con_doubt else "."
-        lines.append(("Vì sao cần quyết", Line(size.replace(" ,", ","), t.total.id, vai="quy_mo",
+        lines.append(("Vì sao cần quyết" if con is not None else _table_title(places, t), Line(size.replace(" ,", ","), t.total.id, vai="quy_mo",
                                         so_tinh=[x for x in (f"{tdelta[0]} = {tdelta[2]}" if tdelta[2] else "",
                                                              f"{pct} = {pct_expr}" if pct_expr and pct else "") if x])))
     if con is not None:
@@ -1161,8 +1252,8 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
         # the row's own printed reason; said as speech, never «:» or «giải trình ghi:» read aloud (round 18 voice lint);
         # «(lệch thời điểm)» is said as «, lệch thời điểm» (gate 2 grader P4: the timing note in a «Ghi chú» column)
         said_h = (re.search(r"giải trình|lý do|nguyên nhân|diễn giải|ghi chú", why.header, re.I).group(0).lower() if why else "")
-        cause = (f", theo {said_h} là do {_lc(re.sub(r'\s*\(([^()]+)\)', r', \1', why.text.strip()).rstrip('.'))}"
-                 if why else "")
+        why_txt = re.sub(r"\s*\(([^()]+)\)", r", \1", why.text.strip()).rstrip(".") if why else ""
+        cause = f", theo {said_h} là do {_lc(why_txt)}" if why else ""   # no backslash inside an f-string (CI runs 3.11)
         over_all = ""
         if abs(share) > 1:                         # 1,4 of a 1,2 rise: other rows went down (synthetic F01 shape)
             opp = "giảm" if up else "tăng"
