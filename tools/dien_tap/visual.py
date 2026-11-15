@@ -129,6 +129,125 @@ def frame_offsets(img, rect, rgb, search: int = 10, samples: int = 9):
     return len(offsets) / tried, sum(offsets) / len(offsets)
 
 
+# ── Is Excel really what a person sees at the cell? ───────────────────────────
+# A frame Clicky draws at the right Excel coordinates proves nothing when another app sits on top of
+# Excel: the frame then circles that app (seen on the user's PC, 15/11). So at every scene the robot
+# asks Windows which top-level window a person sees at the cell, and runs one cover test per lap.
+
+COVER_TITLE = "Robot dien tap - thu che Excel"
+WHITE_TOL = 40          # a pixel this close to white counts as the cover's own background
+MAX_LEAK = 0.03         # share of non-white pixels allowed where the card or pointer would be on the cover
+
+
+def probe_points(rect, inset: float = 3.0) -> list:
+    """The cell's middle and four inner corners."""
+    l, t, r, b = rect
+    inset = min(inset, max((r - l) / 4, 0), max((b - t) / 4, 0))
+    return [((l + r) / 2, (t + b) / 2), (l + inset, t + inset), (r - inset, t + inset),
+            (l + inset, b - inset), (r - inset, b - inset)]
+
+
+def window_at(windows: list, x: float, y: float, skip_pids=()) -> dict | None:
+    """First window, in Z-order top→bottom, that a person sees at (x, y).
+
+    windows: [{"hwnd", "pid", "rect", "exe", "visible", "cloaked", "minimized", "click_through"}]. Clicky's own
+    windows (skip_pids) and click-through overlays are skipped: they are what is being checked, not a cover."""
+    for w in windows:
+        if not w.get("visible", True) or w.get("cloaked") or w.get("minimized") or w.get("click_through"):
+            continue
+        if w.get("pid") in skip_pids:
+            continue
+        l, t, r, b = w["rect"]
+        if r - l <= 0 or b - t <= 0:
+            continue
+        if l <= x < r and t <= y < b:
+            return w
+    return None
+
+
+def excel_shown(windows: list, rect, excel_hwnd: int, skip_pids=()) -> tuple:
+    """(ok, detail): at every probe point of the cell a person sees Excel's own window.
+
+    The detail names the covering program by its file name only, never a window title (titles can carry
+    the user's own file or chat names)."""
+    for x, y in probe_points(rect):
+        w = window_at(windows, x, y, skip_pids)
+        if w is None:
+            return False, "ô nằm ngoài mọi cửa sổ (Excel thu nhỏ hoặc ô ngoài màn hình)"
+        if w.get("hwnd") != excel_hwnd:
+            return False, f"Excel bị cửa sổ {w.get('exe') or 'khác'} che ở ô này"
+    return True, "Excel hiện rõ ở ô"
+
+
+def leak_share(img, rect, clip, step: int = 3) -> float | None:
+    """Share of non-white pixels of `rect` inside `clip` (screenshot pixels); None when they do not meet."""
+    l, t = max(rect[0], clip[0]), max(rect[1], clip[1])
+    r, b = min(rect[2], clip[2]), min(rect[3], clip[3])
+    w, h = img.size
+    l, t, r, b = max(int(l), 0), max(int(t), 0), min(int(r), w), min(int(b), h)
+    if r - l < 4 or b - t < 4:
+        return None
+    total = bad = 0
+    for y in range(t, b, step):
+        for x in range(l, r, step):
+            total += 1
+            if not _near(img.getpixel((x, y)), (255, 255, 255), WHITE_TOL):
+                bad += 1
+    return bad / total if total else None
+
+
+def grade_cover(events: list, cap: "Capture", beat_idx: int, m, open_image) -> list:
+    """Rows for the cover test: while the robot's plain window sits on top of Excel, nothing of Clicky shows."""
+    rows = []
+    cov = cap.cover
+    ref = events[beat_idx].get("ref") or ""
+    if cov.get("error") or not cov.get("shot"):
+        rows.append(("Che Excel bằng cửa sổ khác: Clicky ẩn thẻ, khung, con trỏ", False,
+                     f"{ref}: robot không làm được bài che ({cov.get('error') or 'không có ảnh'})", True,
+                     cap.beat_no, {}))
+        return rows
+    img = open_image(cov["shot"])
+    ox, oy = cov.get("origin", (0, 0))
+    clip = [cov["rect"][0] - ox, cov["rect"][1] - oy, cov["rect"][2] - ox, cov["rect"][3] - oy]
+    robot = cap.robot_rect
+    leaks = []
+    pad = FRAME_PAD * m[0]
+    want = [robot[0] - pad - ox, robot[1] - pad - oy, robot[2] + pad - ox, robot[3] + pad - oy]
+    for tone in TONE_RGB.values():
+        found, _ = frame_offsets(img, want, tone)
+        if found >= 0.3:
+            leaks.append(f"khung vẫn hiện ({found:.0%} cạnh)")
+            break
+    card = _after(events, beat_idx, "card")
+    if card and card.get("rect"):
+        c = to_physical(card["rect"], m)
+        share = leak_share(img, [c[0] - ox, c[1] - oy, c[2] - ox, c[3] - oy], clip)
+        if share is not None and share > MAX_LEAK:
+            leaks.append(f"thẻ vẫn hiện ({share:.0%} điểm ảnh)")
+    point = _after(events, beat_idx, "point")
+    if point:
+        px, py = point_physical(point["x"], point["y"], m)
+        rad = RING_R * m[0]
+        share = leak_share(img, [px - rad - ox, py - rad - oy, px + rad - ox, py + rad - oy], clip)
+        if share is not None and share > MAX_LEAK:
+            leaks.append(f"con trỏ vẫn hiện ({share:.0%} điểm ảnh)")
+    rows.append(("Che Excel bằng cửa sổ khác: Clicky ẩn thẻ, khung, con trỏ", not leaks,
+                 f"{ref}: " + ("; ".join(leaks) if leaks else "không còn gì của Clicky trên cửa sổ che"),
+                 True, cap.beat_no, {"cell": robot}))
+    hid = any(e.get("event") == "overlay_hidden" for e in events)
+    rows.append(("Clicky ghi nhận bị che (overlay_hidden)", hid,
+                 "có" if hid else "nhật ký cảnh không có overlay_hidden", False, cap.beat_no, {}))
+    if cov.get("after_shot"):
+        after = open_image(cov["after_shot"])
+        found = max(frame_offsets(after, want, tone)[0] for tone in TONE_RGB.values())
+        stamp = {e.get("event") for e in events}
+        back = found >= 0.5 or "overlay_shown" in stamp
+        rows.append(("Mở lại Excel: Clicky hiện lại và chạy tiếp", back,
+                     f"{ref}: " + ("hiện lại" if back else "không thấy khung hay overlay_shown sau khi bỏ che"),
+                     False, cap.beat_no, {"cell": robot}))
+    return rows
+
+
 # ── Grading ───────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -140,6 +259,9 @@ class Capture:
     cells: list = field(default_factory=list)        # [(addr, rect, value)] physical px
     screen: list = field(default_factory=list)       # monitor holding the cell, physical px
     error: str = ""
+    shown: bool | None = None          # Excel's own window is the one a person sees at the cell (None = not read)
+    shown_detail: str = ""
+    cover: dict = field(default_factory=dict)        # the robot's cover test: {shot, origin, rect, after_shot, error}
 
 
 def _after(events, start, kind):
@@ -172,6 +294,17 @@ def grade(events: list, captures: list, open_image=None):
         err = rect_error(robot, loc["excel_rect"])
         rows.append(("Clicky tính đúng vị trí ô (so với robot tự hỏi Excel)", err <= MAX_RECT_ERR,
                      f"{ref}: lệch {err:.1f} px", True, cap.beat_no, {"cell": robot}))
+        if cap.cover and open_image:
+            rows += grade_cover(events, cap, idx, m, open_image)
+        if cap.shown is None:
+            rows.append(("Excel thật sự hiện ở ô đang chỉ (không bị cửa sổ khác che)", False,
+                         f"{ref}: robot không đọc được cửa sổ nào đang hiện ({cap.shown_detail or 'không rõ'})",
+                         True, cap.beat_no, {"cell": robot}))
+            continue
+        rows.append(("Excel thật sự hiện ở ô đang chỉ (không bị cửa sổ khác che)", cap.shown,
+                     f"{ref}: {cap.shown_detail}", True, cap.beat_no, {"cell": robot}))
+        if not cap.shown:
+            continue    # a frame "on the cell" over another app proves nothing: the scene is not graded further
 
         # A sticky-notes scene lights no range on purpose (plain graphic): there is no frame to find.
         plain = (beat.get("graphic") or {}).get("kind") == "notes"
@@ -268,10 +401,13 @@ def annotate(shot: str, origin, marks: dict, out: Path) -> None:
 class Watcher(threading.Thread):
     """Follows the scene log; ~1 s after each new beat, screenshots and reads Excel itself."""
 
-    def __init__(self, log: Path, out: Path, settle: float = 1.0):
+    def __init__(self, log: Path, out: Path, settle: float = 1.0, cover_beat: int | None = 1,
+                 cover_seconds: float = 2.5):
         super().__init__(daemon=True)
         self.log, self.out, self.settle = log, out, settle
+        self.cover_beat, self.cover_seconds = cover_beat, cover_seconds
         self.captures: list = []
+        self._framed = 0
         self._halt = threading.Event()
 
     def stop(self):
@@ -288,7 +424,11 @@ class Watcher(threading.Thread):
                     beat = beats[seen]
                     if beat.get("box") and beat.get("ref"):
                         time.sleep(self.settle)
-                        self.captures.append(self._capture(seen, beat["ref"]))
+                        cap = self._capture(seen, beat["ref"])
+                        if self.cover_beat is not None and self._framed == self.cover_beat and cap.shown:
+                            cap.cover = self._cover(seen)
+                        self._framed += 1
+                        self.captures.append(cap)
                     seen += 1
                 time.sleep(0.25)
         finally:
@@ -310,7 +450,168 @@ class Watcher(threading.Thread):
             cap.screen = monitor_of(cap.robot_rect)
         except Exception as exc:
             cap.error = (cap.error + "; " if cap.error else "") + f"không đọc được Excel: {exc}"
+        if cap.robot_rect:
+            try:
+                cap.shown, cap.shown_detail = excel_shown(zorder_windows(), cap.robot_rect, excel_hwnd(),
+                                                          skip_pids=clicky_pids())
+            except Exception as exc:
+                cap.shown, cap.shown_detail = None, f"{exc}"
         return cap
+
+    def _cover(self, n: int) -> dict:
+        """Put a plain window of the robot's own over Excel, as a person switching apps would; shoot; take it away."""
+        import subprocess
+        import sys
+        from PIL import ImageGrab
+        import win32api
+        res: dict = {}
+        proc = None
+        try:
+            rect = window_rect(excel_hwnd())
+            res["rect"] = rect
+            l, t, r, b = (int(v) for v in rect)
+            proc = subprocess.Popen([sys.executable, "-c", COVER_SCRIPT, str(l), str(t), str(r - l), str(b - t)])
+            time.sleep(self.cover_seconds)
+            res["origin"] = (win32api.GetSystemMetrics(76), win32api.GetSystemMetrics(77))
+            path = self.out / f"che-{n:02d}.png"
+            ImageGrab.grab(all_screens=True).save(path)
+            res["shot"] = str(path)
+            fg = foreground_exe()
+            if fg and fg.lower() not in ("python.exe", "pythonw.exe", "py.exe"):
+                res["error"] = f"cửa sổ che không lên trước được (đang trước: {fg})"
+        except Exception as exc:
+            res["error"] = f"{exc}"
+        finally:
+            if proc is not None:
+                proc.kill()
+                proc.wait(timeout=10)
+        try:
+            bring_to_front(excel_hwnd())
+            time.sleep(2.0)
+            path = self.out / f"che-{n:02d}-sau.png"
+            ImageGrab.grab(all_screens=True).save(path)
+            res["after_shot"] = str(path)
+        except Exception as exc:
+            res.setdefault("error", f"không đưa Excel lên lại được: {exc}")
+        return res
+
+
+# A plain white window, DPI-aware so its geometry is in physical pixels like Excel's. Brought to the front
+# once (topmost for a moment, as Windows lets a new window take the front), then an ordinary window.
+COVER_SCRIPT = (
+    "import ctypes,sys,tkinter as tk\n"
+    "try: ctypes.windll.shcore.SetProcessDpiAwareness(2)\n"
+    "except Exception: pass\n"
+    "l,t,w,h=(int(v) for v in sys.argv[1:5])\n"
+    "root=tk.Tk(); root.title(%r); root.configure(bg='white')\n"
+    "root.geometry(f'{w}x{h}+{l}+{t}')\n"
+    "root.attributes('-topmost',True); root.lift(); root.focus_force()\n"
+    "root.after(400,lambda: root.attributes('-topmost',False))\n"
+    "root.after(600,root.focus_force)\n"
+    "root.mainloop()\n" % COVER_TITLE)
+
+
+def _per_monitor_dpi():
+    """Make this thread DPI-aware so window rects come in physical pixels, like Excel's cell rects."""
+    import ctypes
+    try:
+        return ctypes.windll.user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))   # PER_MONITOR_AWARE_V2
+    except Exception:
+        return None
+
+
+def _exe_of(pid: int) -> str:
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.windll.kernel32
+    h = k32.OpenProcess(0x1000, False, pid)              # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return ""
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        size = wintypes.DWORD(1024)
+        if k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+            return Path(buf.value).name
+        return ""
+    finally:
+        k32.CloseHandle(h)
+
+
+def window_rect(hwnd: int) -> list:
+    """Visible bounds of a top-level window in physical pixels (DWM frame bounds, no drop shadow)."""
+    import ctypes
+    from ctypes import wintypes
+    _per_monitor_dpi()
+    r = wintypes.RECT()
+    if ctypes.windll.dwmapi.DwmGetWindowAttribute(wintypes.HWND(hwnd), 9, ctypes.byref(r), ctypes.sizeof(r)) == 0:
+        return [float(r.left), float(r.top), float(r.right), float(r.bottom)]
+    import win32gui
+    return [float(v) for v in win32gui.GetWindowRect(hwnd)]
+
+
+def zorder_windows() -> list:
+    """Every top-level window, top of the Z-order first, as window_at() reads them."""
+    import ctypes
+    from ctypes import wintypes
+    import win32con
+    import win32gui
+    import win32process
+    _per_monitor_dpi()
+    out = []
+
+    def one(h, _):
+        if not win32gui.IsWindowVisible(h):
+            return True
+        cloaked = ctypes.c_int(0)
+        ctypes.windll.dwmapi.DwmGetWindowAttribute(wintypes.HWND(h), 14, ctypes.byref(cloaked), ctypes.sizeof(cloaked))
+        ex = win32gui.GetWindowLong(h, win32con.GWL_EXSTYLE)
+        _, pid = win32process.GetWindowThreadProcessId(h)
+        out.append({"hwnd": h, "pid": pid, "rect": window_rect(h), "exe": _exe_of(pid), "visible": True,
+                    "cloaked": bool(cloaked.value), "minimized": bool(win32gui.IsIconic(h)),
+                    "click_through": bool(ex & win32con.WS_EX_TRANSPARENT and ex & win32con.WS_EX_LAYERED)})
+        return True
+    win32gui.EnumWindows(one, None)
+    return out
+
+
+def excel_hwnd() -> int:
+    import win32com.client
+    return int(win32com.client.GetActiveObject("Excel.Application").Hwnd)
+
+
+def clicky_pids() -> set:
+    from drivers import pids_of
+    return set(pids_of("Clicky.exe"))
+
+
+def foreground_exe() -> str:
+    import win32gui
+    import win32process
+    h = win32gui.GetForegroundWindow()
+    if not h:
+        return ""
+    _, pid = win32process.GetWindowThreadProcessId(h)
+    return _exe_of(pid)
+
+
+def bring_to_front(hwnd: int) -> bool:
+    """Put a window in front the way a person's click would. Windows only lets the foreground process hand
+    the front over, so a tap on Alt first (the documented way a background process may take it)."""
+    import win32api
+    import win32con
+    import win32gui
+    if win32gui.GetForegroundWindow() == hwnd and not win32gui.IsIconic(hwnd):
+        return True                     # never tap Alt on Excel itself: it would light the ribbon key tips
+    if win32gui.IsIconic(hwnd):
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+    win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+    win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
+    try:
+        win32gui.SetForegroundWindow(hwnd)
+    except Exception:
+        pass
+    time.sleep(0.3)
+    return win32gui.GetForegroundWindow() == hwnd
 
 
 def _read(path: Path) -> list:

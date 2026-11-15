@@ -376,6 +376,9 @@ def _main(argv=None) -> int:
     ap.add_argument("--chat-shortcut", default="ctrl+alt+t", help="Phím tắt mở khung chat Clicky")
     ap.add_argument("--zoom", type=int, default=None, help="Độ phóng Excel cho lần chạy (ví dụ 85, 100, 130)")
     ap.add_argument("--no-visual", action="store_true", help="Bỏ phần chụp màn hình và chấm bằng ảnh")
+    ap.add_argument("--khong-che", action="store_true",
+                    help="Bỏ bài che Excel (mặc định: ở cảnh có khung thứ hai, robot đặt một cửa sổ trắng của robot "
+                         "lên trên Excel; Clicky phải ẩn thẻ, khung, con trỏ và dừng nói cho tới khi Excel quay lại)")
     ap.add_argument("--local-only", action="store_true",
                     help="Bật chế độ 'Chỉ chạy trên máy, không gửi gì' (CLICKY_LOCAL_ONLY=1) và chấm không có lần gửi nào")
     ap.add_argument("--auto-press", action="append", default=None,
@@ -454,7 +457,7 @@ def _main(argv=None) -> int:
     if not args.no_visual:
         shots = out / "anh"
         shots.mkdir(exist_ok=True)
-        watcher = visual.Watcher(log, shots)
+        watcher = visual.Watcher(log, shots, cover_beat=None if args.khong_che else 1)
         watcher.start()
     driver = None
     if args.driver in ("auto", "agent-desktop"):
@@ -478,6 +481,14 @@ def _main(argv=None) -> int:
     say(f"3/6 Gõ lệnh: {args.command}")
     driver.set_text(COMPOSER, args.command)
     driver.press(SEND)
+    if wb is not None:
+        # A person types to Clicky, then looks back at Excel. Clicky only draws while Excel is in front,
+        # and every scene is checked for that, so the robot puts Excel in front the same way.
+        try:
+            if not visual.bring_to_front(int(excel.Hwnd)):
+                say("   Không đưa được Excel lên trước; các cảnh sẽ bị chấm là Excel bị che.")
+        except Exception as exc:
+            say(f"   Không đưa được Excel lên trước: {exc}")
     untouched = None
     # The sample plays with no clicks at all: the robot keeps its hands off unless told otherwise.
     auto = args.auto_press if args.auto_press is not None else (
