@@ -1776,7 +1776,9 @@ def test_gate_two_plan_minus_actual_variance_group_rows_row_notes_and_no_rate_on
     rep = build(src)
     said = [c["noi"] for s in yaml.safe_load(Path(rep["kich_ban"]).read_text(encoding="utf-8"))["canh"] for c in s["cau"]]
     assert "Theo thực hiện, tổng là 37,2 tỷ, cao hơn kế hoạch 1,2 tỷ." in said
-    drv = next(x for x in said if "Bán hàng MT" in x and "1,4" in x and "Duyệt" not in x)
+    # a «Kiến nghị» section holds the Board asks (gate 2 rerun 4, P4): said first, the driver after them
+    assert "Anh Tuấn xin anh chị quyết hai việc." in said and "Một là duyệt dời 1,4 tỷ ngân sách khuyến mãi tháng 11 sang tháng 10 cho Bán hàng MT." in said
+    drv = next(x for x in said if "Bán hàng MT" in x and "1,4" in x and "duyệt" not in x.lower())
     assert drv.startswith("Lớn nhất là Bán hàng MT: tăng 1,4 tỷ, nhiều hơn cả mức tăng chung 1,2 tỷ"), drv
     assert not any("Kho vận" in x for x in said)       # under plan: never a driver of the rise
     assert any("lệch thời điểm" in x for x in said)    # the row's own note: a timing difference
@@ -2031,6 +2033,7 @@ def test_board_questions_find_spans_notes_and_the_drawn_year(tmp_path, monkeypat
     by = {c.get("vai"): c["noi"] for s in yaml.safe_load(Path(rep["kich_ban"]).read_text(encoding="utf-8"))["canh"] for c in s["cau"]}
     assert by["kq_luy_ke"] == "Lũy kế mười tháng, EBIT thấp hơn kế hoạch 29,6 tỷ."
     assert by["dong_luc"].endswith("theo ghi chú là do khuyến mãi Tết chạy sớm một tháng, lệch thời điểm.")
+    pytest.importorskip("playwright")          # the year table is one the report's script draws: it needs a browser
     assert by["ca_nam"] == ("Cả năm sẽ về đâu? Doanh thu thuần lũy kế mười tháng 1.154,5 tỷ, cộng dự báo hai tháng còn lại "
                             "260,0 tỷ, cả năm ước 1.414,5 tỷ.")
     assert by["ca_nam_khoang_cach"] == "So với AOP năm 1.440,0 tỷ, thấp hơn 25,5 tỷ."
@@ -2078,7 +2081,9 @@ def test_flexible_budget_bridge_shared_plan_notes_and_a_loss(tmp_path, monkeypat
     by = {c.get("vai"): c["noi"] for s in canh for c in s["cau"]}
     assert by["kq_loi_nhuan"] == "Trước hết là kết quả kinh doanh: lợi nhuận trước thuế đạt 55,7% kế hoạch gốc, thấp hơn 10,2 tỷ."
     assert by["kq_doanh_thu"].startswith("Doanh thu thuần thấp hơn kế hoạch gốc 9,0 tỷ")
-    assert by["kq_cau_gop"] == "Lãi gộp hụt vì: sản lượng làm giảm 5,4 tỷ, giá vốn làm giảm 4,2 tỷ, bù lại giá bán làm tăng 3,0 tỷ."
+    # TB20: the gap first (worked out, with its formula), every step said straight, never «và 1 yếu tố khác»
+    assert by["kq_cau_gop"] == "Lãi gộp thấp hơn kế hoạch 6,6 tỷ, vì sản lượng làm giảm 5,4 tỷ, giá vốn làm giảm 4,2 tỷ, giá bán làm tăng 3,0 tỷ."
+    assert not any(re.search(r"\d+ yếu tố", t) for t in by.values())
     assert "lệch thời điểm, cả năm không vượt ngân sách" in by["nguyen_nhan"]
     assert "Anh Tuấn xin anh chị quyết ba việc." in [c["noi"] for s in canh for c in s["cau"]]
     assert next(s["muc"] for s in canh if any(c.get("vai") == "quy_mo" for c in s["cau"])) == "Chi phí bán hàng theo khoản mục"
@@ -2156,3 +2161,119 @@ def test_a_variance_column_belongs_to_the_plan_its_header_names():
     assert story.var_base(cols, 4) == 2 and story.var_base(cols, 5) == 1
     plain = [clicky_html.Col(h, "", [], "tỷ", k) for h, k in (("Bộ phận", "label"), ("Kế hoạch", "value"), ("Thực hiện", "value"), ("Chênh lệch", "var"))]
     assert story.var_base(plain, 3) is None
+
+
+def test_new_proposals_are_merged_into_the_owners_script_after_the_line_they_replace(drawn_report):
+    # round 22 (Owner): a rebuild over a script he already edited never showed the new soft close; it is written into his
+    # file right after the firm close, still off, every line he wrote kept, and the note says what was added
+    pytest.importorskip("playwright")
+    rep = build(drawn_report)
+    path = Path(rep["kich_ban"])
+    script = clicky_html.load_script(path)
+    for sc in script["canh"]:
+        sc["cau"] = [c for c in sc["cau"] if c.get("thay") != "chot"]
+    first = script["canh"][0]["cau"][0]
+    first["noi"] = first["noi"].replace("Thưa anh chị", "Kính thưa anh chị")
+    path.write_text(clicky_html.dump_script(script, drawn_report.name, draft=False), encoding="utf-8")
+    soft = lambda: len(re.findall(r"^ +thay: 'chot'", path.read_text(encoding="utf-8"), re.M))   # noqa: E731
+    assert soft() == 0
+    rep = build(drawn_report)
+    text = path.read_text(encoding="utf-8")
+    assert "Kính thưa anh chị" in text and soft() == 1
+    said = [c for s in clicky_html.load_script(path)["canh"] for c in s["cau"]]
+    k = next(i for i, c in enumerate(said) if c.get("thay") == "chot")
+    assert said[k - 1].get("vai") == "chot" and not said[k - 1].get("thay") and said[k]["bat"] == "chưa"
+    assert any(n.startswith("Đề xuất mới (1 câu)") for n in rep["canh_bao"]), rep["canh_bao"]
+    rep = build(drawn_report)                  # once in: never added twice
+    assert soft() == 1
+    assert not any(n.startswith("Đề xuất mới") for n in rep["canh_bao"])
+    assert "thay:" in clicky_html.SCRIPT_HEAD
+
+
+def test_rerun_four_loss_talk_nature_notes_sources_and_yes_no_nature(tmp_path, monkeypatch):
+    # independent grader, gate 2 rerun 4 (our own synthetic copy of the shapes): a profit that is a loss was said as
+    # «thấp hơn 101,5%» (TB19); a note that names the biggest rise without «do …» was never said (P4); «… có phải
+    # vượt ngân sách / tiết kiệm không» about an item with no row of its own was searched word for word (TB17); the
+    # source of a figure in a table's foot note was not found (TB21); «Kế hoạch lấy từ …» was read as a row (TB21)
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    fx = (Path(__file__).parent / "fixtures" / "bao_cao_ns_linh_hoat.html").read_text(encoding="utf-8")
+    loss = tmp_path / "lo.html"
+    loss.write_text(fx.replace("<td>Lợi nhuận trước thuế</td><td>23,0</td><td>19,0</td><td>12,8</td><td>(6,2)</td><td>55,7%</td>",
+                               "<td>Lợi nhuận trước thuế</td><td>23,0</td><td>19,0</td><td>(0,3)</td><td>(19,3)</td><td>-1,3%</td>")
+                    .replace("Khuyến mãi và chiết khấu tăng do chương trình tri ân nhà phân phối chạy sớm từ tháng 11 sang tháng 10.",
+                             "Chương trình khuyến mãi tri ân nhà phân phối của tháng 11 chạy sớm trong tháng 10.")
+                    .replace("<tr><td>Doanh thu thuần</td><td>1.380,0</td>",
+                             "<tr><td>Giá vốn hàng bán</td><td>760,0</td><td>170,0</td><td>930,0</td><td>960,0</td></tr>\n"
+                             "<tr><td>Doanh thu thuần</td><td>1.380,0</td>")
+                    .replace('<tr><td>Thuê kho</td><td rowspan="2">4,5</td><td>3,1</td><td rowspan="2">0,5</td></tr>\n<tr><td>Vận chuyển</td><td>1,9</td></tr>',
+                             "<tr><td>Thuê kho</td><td>4,5</td><td>3,1</td><td>(1,4)</td></tr>\n<tr><td>Vận chuyển</td><td>–</td><td>1,9</td><td>–</td></tr>")
+                    .replace("<td>209,0</td><td>230,0</td></tr>",
+                             "<td>209,0</td><td>230,0</td></tr>\n<tr><td>Lợi nhuận sau thuế</td><td>134,4</td><td>32,8</td><td>167,2</td><td>184,0</td></tr>"),
+                    encoding="utf-8")
+    rep = build(loss)
+    cau = [c for s in yaml.safe_load(Path(rep["kich_ban"]).read_text(encoding="utf-8"))["canh"] for c in s["cau"]]
+    by = {c.get("vai"): c for c in cau}
+    assert by["kq_loi_nhuan"]["noi"] == ("Trước hết là kết quả kinh doanh: lợi nhuận trước thuế thực hiện lỗ ở mức 0,3 tỷ, "
+                                         "kế hoạch gốc là lãi 23,0 tỷ; thấp hơn kế hoạch gốc 23,3 tỷ.")
+    assert by["kq_loi_nhuan"]["so_tinh"] == ["23,3 = 23,0 + 0,3"] and "%" not in by["kq_loi_nhuan"]["noi"]
+    assert by["nguyen_nhan"]["noi"].startswith("Về khuyến mãi và chiết khấu, báo cáo ghi rằng chương trình khuyến mãi tri ân")
+    assert "đây là lệch thời điểm, cả năm không vượt ngân sách" in by["nguyen_nhan"]["noi"]
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 768})
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(700)
+        hoi = lambda q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        x = hoi("Chương trình tri ân nhà phân phối có phải vượt ngân sách không?")
+        assert x.startswith("Báo cáo ghi: «Chương trình khuyến mãi tri ân") and "cả năm không vượt ngân sách" in x, x
+        x = hoi("Thưởng doanh số quý 3 có trong ngân sách không?")
+        assert "đã có trong ngân sách năm" in x, x
+        x = hoi("Lương và thưởng đội bán có phải vượt ngân sách không?")
+        assert "đã có trong ngân sách năm" in x and "cao hơn kế hoạch gốc 0,4 tỷ" in x, x
+        x = hoi("Bảo dưỡng dây chuyền có phải tiết kiệm không?")
+        assert "không phải khoản tiết kiệm" in x and "Duyệt hoãn" not in x, x
+        x = hoi("Kế hoạch lấy từ phiên bản nào?")
+        assert "AOP 2026 bản Hội đồng duyệt" in x, x
+        x = hoi("Số thực hiện lấy từ đâu?")
+        assert "«Nguồn: thực hiện từ sổ cái khóa ngày 05/11/2026; ước T11–T12 theo bản dự báo tháng 11.»" in x, x
+        assert "sổ cái khóa ngày 05/11/2026" in hoi("Số ước cả năm lấy từ bản nào?")
+        x = hoi("Thuê kho thấp hơn kế hoạch bao nhiêu?")   # TB9: one plan on one row, a note says two rows share it
+        assert "Kế hoạch của Thuê kho được lập gộp với Vận chuyển" in x and "Gộp lại, thực hiện 5,0 tỷ (em tính: 3,1 + 1,9), cao hơn kế hoạch gốc 0,5 tỷ" in x, x
+        x = hoi("Vận chuyển vượt kế hoạch bao nhiêu?")
+        assert "Kế hoạch của Vận chuyển được lập gộp với Thuê kho" in x and "4,5 tỷ cho cả 2 dòng" in x, x
+        x = hoi("Cả năm ước đạt bao nhiêu so với kế hoạch?")   # TB23: no metric named, the headline first
+        assert x.startswith("Doanh thu thuần ước cả năm 1.690,0 tỷ") and "Lợi nhuận sau thuế ước cả năm 167,2 tỷ" in x and "Giá vốn" not in x, x
+        browser.close()
+
+
+def test_a_product_named_by_its_description_answers_from_its_own_effect_column(tmp_path, monkeypatch):
+    # independent grader, gate 2 rerun 4 (TB22, our own synthetic shape): «<kind + size> làm mất bao nhiêu» never matched
+    # the row whose first cell is the item code, and the answer was a page-wide note; the row's own effect column answers
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    src = tmp_path / "ma_hang.html"
+    shutil.copyfile(Path(__file__).parent / "fixtures" / "bao_cao_ma_hang.html", src)
+    rep = build(src)
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 768})
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(700)
+        hoi = lambda q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
+        x = hoi("Giá của kem dưỡng ẩm hũ 50ml làm mất bao nhiêu?")
+        assert x.startswith("Kem dưỡng ẩm hũ 50ml (LN-KD50): Ảnh hưởng giá làm giảm 1,4 tỷ") and "Ảnh hưởng sản lượng" not in x and "1,5%" not in x, x
+        x = hoi("Kem dưỡng ẩm 50ml làm mất bao nhiêu?")
+        assert "Ảnh hưởng sản lượng làm giảm 2,1 tỷ" in x and "Ảnh hưởng giá làm giảm 1,4 tỷ" in x, x
+        assert "Ảnh hưởng giá làm tăng 0,6 tỷ" in hoi("Sữa rửa mặt 150ml ảnh hưởng giá bao nhiêu?")
+        assert "Ảnh hưởng sản lượng làm giảm 1,8 tỷ" in hoi("Toner 100ml mất bao nhiêu do sản lượng?")
+        assert "LN-KD50):" not in hoi("Kem dưỡng 150ml làm mất bao nhiêu?")   # no row of that size
+        browser.close()

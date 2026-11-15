@@ -2010,6 +2010,8 @@ SCRIPT_HEAD = """# Kịch bản Clicky cho «{report}».
 # Câu có bat: 'chưa' là câu em đề xuất nhưng chưa nói. Anh đọc, thấy đúng thì đổi thành bat: 'có'.
 # dung: 1.5 là số giây em dừng lại sau câu đó (sau một câu hỏi để người nghe kịp nghĩ).
 # vai: cho biết câu đó trả lời loại câu hỏi nào khi người nghe hỏi lại (anh không cần sửa).
+# thay: câu đề xuất có dòng này, khi anh bật (bat: 'có'), sẽ được nói thay cho câu cùng vai (ví dụ thay: 'chot' là thay câu
+#   kết). Anh không cần xoá câu cũ: em tự bỏ qua nó khi trình bày.
 # kiem_tra: những điểm em thấy cần anh xem trước khi gửi (Ban Giám đốc không thấy). Xem xong mục nào, đổi da_xem: 'có'.
 #   Mục có dòng "cau" là các câu em đề xuất cho điểm đó: anh bật một câu (bat: 'có'), hoặc ghi vào ly_do_bo vì sao
 #   không nói (ví dụ ly_do_bo: 'Số báo cáo đúng, giữ nguyên câu'). Còn mục nào chưa xong thì bản trình bày vẫn là
@@ -2050,6 +2052,76 @@ def script_hash(canh) -> str:
     return hashlib.sha256(json.dumps(canh, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
 
 
+def _script_row(c: dict) -> dict:
+    """One line of the script as the owner reads it in the yaml."""
+    row = {"noi": _Q(c["noi"]), "chi": c.get("chi") or ""}
+    if c.get("neo"):
+        row["neo"] = _Q(c["neo"])
+    for k in ("so_rieng", "xac_nhan", "cho_khac", "so_tinh"):
+        if c.get(k):
+            row[k] = [_Q(str(x)) for x in c[k]]
+    if c.get("dung"):
+        row["dung"] = float(c["dung"])
+    if "bat" in c:
+        row["bat"] = _Q("có" if _on_raw(c) else "chưa")
+    if c.get("vai"):
+        row["vai"] = _Q(c["vai"])
+    if c.get("thay"):
+        row["thay"] = _Q(c["thay"])
+    return row
+
+
+def merge_proposals(path: Path, script: dict, draft: dict) -> list:
+    """The fresh draft's new proposals (off, with «thay») that the owner's script does not hold yet, written into his
+    file right after the line each would replace, still off; every line he wrote stays as it is (round 22, Owner).
+    Returns the sentences added."""
+    lines = [c for s in script.get("canh") or [] for c in s.get("cau") or [] if isinstance(c, dict)]
+    have = {str(c.get("thay")) for c in lines if c.get("thay")}
+    said = {str(c.get("noi") or "").strip() for c in lines}
+    new = [c for s in draft.get("canh") or [] for c in s.get("cau") or []
+           if c.get("thay") and not _on_raw(c) and str(c["thay"]) not in have and str(c["noi"]).strip() not in said]
+    if not new:
+        return []
+    text = tri_nho.read_text(path)
+    try:
+        root = yaml.compose(text)
+    except yaml.YAMLError:
+        return []
+    get = lambda node, key: next((v for k, v in node.value if getattr(k, "value", None) == key), None) \
+        if isinstance(node, yaml.MappingNode) else None   # noqa: E731
+    canh = get(root, "canh")
+    items = [it for sc in (canh.value if isinstance(canh, yaml.SequenceNode) else [])
+             for cau in [get(sc, "cau")] if isinstance(cau, yaml.SequenceNode) for it in cau.value]
+    inserts, added = [], []
+    for c in new:
+        beat = [it for it in items if isinstance(it, yaml.MappingNode) and getattr(get(it, "vai"), "value", None) == str(c["thay"])
+                and get(it, "thay") is None]
+        if not beat:                           # no line of that beat in his script: the draft file still has it
+            continue
+        it = beat[-1]
+        at = it.end_mark.index                 # where the next item (or the next key) starts
+        start = text.rfind("\n", 0, at) + 1
+        if text[start:at].strip() in ("", "-"):   # at the next «- noi:»: the line before it
+            at = start
+        else:                                  # inside the item's last line: after it
+            nl = text.find("\n", at)
+            at = len(text) if nl < 0 else nl + 1
+        pad = " " * max(0, it.start_mark.column - 2)
+        block = yaml.dump([_script_row(c)], Dumper=_Dumper, allow_unicode=True, sort_keys=False, width=4096)
+        inserts.append((at, "".join(pad + ln + "\n" for ln in block.splitlines())))
+        added.append(str(c["noi"]))
+    if not inserts:
+        return []
+    for at, block in sorted(inserts, key=lambda x: -x[0]):
+        text = text[:at] + ("" if at == 0 or text[at - 1] == "\n" else "\n") + block + text[at:]
+    try:
+        yaml.safe_load(text)
+    except yaml.YAMLError:                     # never leave his file unreadable
+        return []
+    path.write_text(text, encoding="utf-8")
+    return added
+
+
 def dump_script(script: dict, report: str, snap: Optional[dict] = None, draft: bool = True) -> str:
     """The script as the owner edits it. "ma_nhap" marks a draft nobody has touched; "so_cho" keeps the figures
     each framed place showed, so a report of the next month is recognised and its new figures put in place."""
@@ -2059,23 +2131,7 @@ def dump_script(script: dict, report: str, snap: Optional[dict] = None, draft: b
         sc = {"muc": _Q(s["muc"])}
         if s.get("tri_nho"):
             sc["tri_nho"] = True
-        sc["cau"] = []
-        for c in s["cau"]:
-            row = {"noi": _Q(c["noi"]), "chi": c.get("chi") or ""}
-            if c.get("neo"):
-                row["neo"] = _Q(c["neo"])
-            for k in ("so_rieng", "xac_nhan", "cho_khac", "so_tinh"):
-                if c.get(k):
-                    row[k] = [_Q(str(x)) for x in c[k]]
-            if c.get("dung"):
-                row["dung"] = float(c["dung"])
-            if "bat" in c:
-                row["bat"] = _Q("có" if _on_raw(c) else "chưa")
-            if c.get("vai"):
-                row["vai"] = _Q(c["vai"])
-            if c.get("thay"):
-                row["thay"] = _Q(c["thay"])
-            sc["cau"].append(row)
+        sc["cau"] = [_script_row(c) for c in s["cau"]]
         out.append(sc)
     body = {"bao_cao": _Q(report), "da_duyet": _Q("chưa"),
             "ma_nhap": script_hash(json.loads(json.dumps(out))) if draft else ""}
@@ -3244,6 +3300,13 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
             period_note += (f" {len(redo)} câu đổi nghĩa (tăng thành giảm, đổi thứ hạng hoặc đổi mức độ như «gần gấp đôi»), anh đọc lại: "
                             + "; ".join(f"«{clip(a, 50)}» → " + (f"«{clip(b, 60)}»" if b else "bỏ") for a, b in redo[:3]) + ".")
         notes.insert(0, period_note)
+    if kind == "chu" and used.suffix.lower() in (".yaml", ".yml"):
+        added = merge_proposals(used, script, draft)
+        if added:
+            script = load_script(used)
+            notes.append(f"Đề xuất mới ({len(added)} câu): em đã thêm vào kịch bản của anh, ngay sau câu mà nó sẽ nói thay, "
+                         "ở trạng thái bat: 'chưa' (chưa nói): " + "; ".join(f"«{clip(t, 70)}»" for t in added[:3])
+                         + ". Anh đọc, thấy đúng thì đổi thành bat: 'có'.")
     ranked = ranking_issues(script, rows, en)
     for c, want in ranked[:3]:
         d = by_chi.get(want.id)
