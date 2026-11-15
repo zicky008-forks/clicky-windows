@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Optional
 
@@ -736,6 +736,7 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
             expect[f"'{BRIDGE}'!B{bs.max_row}"] = r["gap"]
             if br.unplanned:
                 bs.append(["Mã bán ngoài kế hoạch: " + ", ".join(br.unplanned)])
+            write_sku_rows(bs, br, {l.sku: l.name for l in m.sales.month if l.name})
 
     rs = wb.create_sheet(RECEIPT)
     rs.append([f"Phiếu nhận file · tháng {month}"])
@@ -782,3 +783,25 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
     wb.save(path)
     ok, diffs = saved_check.check(saved_check.tamper_from_env(path), expect)
     return {"xlsx": path, "verified": ok, "diffs": diffs, "cells": len(expect)}
+
+
+SKU_HEADER = ["Mã hàng", "Tên hàng", "Sản lượng KH", "Sản lượng TH", "Giá bán KH /đv", "Giá bán TH /đv",
+              "Giá vốn KH /đv", "Giá vốn TH /đv", "Cơ cấu", "Giá bán", "Giá vốn", "Cộng 3 phần"]
+SKU_TITLE = "Theo từng mã hàng (sắp theo ảnh hưởng lớn nhất; phần sản lượng tính chung, không chia theo mã)"
+
+
+def write_sku_rows(ws, br, names: dict) -> None:
+    """Each SKU's own part of the bridge, so the Board's 'why' gets a SKU story (which SKU, its price and volume
+    against plan) read from the saved file. Per-unit figures and parts are shown to the đồng; the exact totals stay
+    in the rows above."""
+    parts = [p for p in br.by_sku if p.qty_plan or p.qty_actual]
+    if not parts:
+        return
+    r = lambda x: None if x is None else x.quantize(Decimal(1), rounding=ROUND_HALF_UP)
+    ws.append([])
+    ws.append([SKU_TITLE])
+    ws.append(SKU_HEADER)
+    for p in sorted(parts, key=lambda p: (-abs(p.total), p.sku)):
+        ws.append([p.sku, names.get(p.sku, ""), p.qty_plan, p.qty_actual, r(p.price_plan), r(p.price_actual),
+                   r(p.cost_plan), r(p.cost_actual), r(p.mix), r(p.price), r(p.cost),
+                   r(p.mix) + r(p.price) + r(p.cost)])       # the row adds up on screen

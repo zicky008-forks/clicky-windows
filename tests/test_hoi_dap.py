@@ -467,3 +467,55 @@ def test_the_month_is_compared_with_the_annual_plan_never_the_newer_approved_for
     assert hoi_dap.plan_version(hoi_dap.read(out["xlsx"])) == "AOP"
     named = fpa_report.compute(d, version="LE T09")                         # chosen by name it is still used
     assert named.costs.plan.version == "LE T09"
+
+
+# ── TB10 (grader, F01 Board questions): SKU story, one SKU's price, unknown code, one element's oddities ──────────
+
+def test_why_gross_profit_names_the_skus_behind_it_from_cells_of_the_report(book):
+    a = hoi_dap.answer(book, "Vì sao lợi nhuận gộp thấp hơn kế hoạch?")
+    assert a.status == hoi_dap.ANSWERED and "Phần lớn nhất là" in a.text
+    assert book.skus and book.skus[0]["sku"] in a.text and "Mã hàng tác động nhiều nhất" in a.text
+    _cells_hold(book, a)
+
+
+def test_the_price_effect_of_one_named_sku_is_its_own_row(book):
+    sku = book.skus[-1]
+    for said in (f"Ảnh hưởng giá bán của mã {sku['sku']}?", f"giá bán {sku['name']} ảnh hưởng thế nào?"):
+        a = hoi_dap.answer(book, said)
+        assert (a.query.intent, a.query.target, a.query.part) == ("sku_one", sku["sku"], "price"), said
+        assert sku["cells"]["price_part"].ref in [c["o"] for c in a.cites]
+        _cells_hold(book, a)
+
+
+def test_the_sku_table_adds_up_to_the_bridge(book):
+    total = sum(D(str(r["cells"]["total"].value)) for r in book.skus)
+    parts = sum(D(str(book.bridge[k].value)) for k in ("mix", "price", "cost"))
+    assert abs(total - parts) <= len(book.skus)            # each row rounded to the đồng
+
+
+def _with_unknown(book):
+    line = ("Mã bộ phận chưa có trong danh mục: D99; em vẫn tính theo mã, cần chị cho biết gán vào đâu "
+            "(file kế hoạch ghi: “Ngân sách dự án mới nằm ở khối Marketing”)")
+    costs = book.costs + [{"dept": "D99", "element": "QC", "verdict": "chờ chị gán mã",
+                           "cells": {"month": hoi_dap.Cell("'Chi phi theo bo phan'!C40", 5000000)}}]
+    return hoi_dap.Book(book.path, book.sha256, book.basis, book.pnl, costs, book.variances, book.bridge,
+                        book.bridge_said, [hoi_dap.Cell("'Phieu nhan file'!A9", line)], period=book.period)
+
+
+def test_an_unknown_department_code_is_answered_from_the_receipt(book):
+    b = _with_unknown(book)
+    for said in ("Mã bộ phận D99 là gì?", "Có mã bộ phận nào chưa có trong danh mục không?", "d99 gán vào đâu?"):
+        a = hoi_dap.answer(b, said)
+        assert a.status == hoi_dap.ANSWERED and a.query.intent == "unknown_code", said
+        assert "gán vào đâu" in a.text and "chờ chị gán mã" in a.text, said
+    assert "D99" in hoi_dap.answer(b, "Mã bộ phận D99 là gì?").text
+    a = hoi_dap.answer(book, "Có mã bộ phận nào chưa có trong danh mục không?")
+    assert a.status == hoi_dap.ANSWERED and "không ghi mã nào" in a.text
+
+
+def test_anything_unusual_about_one_element_answers_that_element(named):
+    for said in ("Có gì bất thường về công tác không?", "Khoản thuê văn phòng có gì bất thường?",
+                 "yếu tố khấu hao có vấn đề gì không?"):
+        a = hoi_dap.answer(named, said)
+        assert a.query.intent == "element", (said, a.query)
+    assert hoi_dap.answer(named, "5 khoản chi phí bất thường nhất tháng này").query.intent == "top"

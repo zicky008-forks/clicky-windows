@@ -166,7 +166,14 @@ def test_the_workbook_is_new_reopened_and_checked(tmp_path, monkeypatch):
                                                          "Chi phí hoạt động", "Lợi nhuận hoạt động"]
     assert D(str(pnl["B4"].value)) == m.row("revenue").actual
     bridge = [r for r in wb["Cau noi LNG"].iter_rows(values_only=True)]
-    assert bridge[-2][0].startswith("Tổng 4 phần") and D(str(bridge[-2][1])) == _ledger(m, "gp").variance
+    total = next(r for r in bridge if r[0] and str(r[0]).startswith("Tổng 4 phần"))
+    assert D(str(total[1])) == _ledger(m, "gp").variance
+    # each SKU's own part, so a 'why' on gross profit can name the SKU, its price and its volume
+    head = bridge.index(tuple(fpa_report.SKU_HEADER) + (None,) * (len(bridge[0]) - len(fpa_report.SKU_HEADER))) \
+        if len(bridge[0]) > len(fpa_report.SKU_HEADER) else bridge.index(tuple(fpa_report.SKU_HEADER))
+    skus = [r for r in bridge[head + 1:] if r[0]]
+    assert skus and all(r[11] == r[8] + r[9] + r[10] for r in skus)
+    assert [abs(r[11]) for r in skus] == sorted((abs(r[11]) for r in skus), reverse=True)
     receipt = [r for r in wb["Phieu nhan file"].iter_rows(values_only=True)]
     assert any(r[:2] == ("TB T10 2026.csv", "Bảng cân đối số phát sinh: số chính thức của tháng") for r in receipt)
     assert not any(r[1] == "Không dùng" and r[0] == "TB T10 2026.csv" for r in receipt)
