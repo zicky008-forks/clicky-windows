@@ -552,6 +552,33 @@ def test_keyboard_space_arrows_esc_and_resume(built):
         browser.close()
 
 
+def test_a_hidden_tab_stops_the_talk_at_the_end_of_the_line(built):
+    # grader rerun 7 (the release thread found frames drawn over another app on the PC): a hidden tab or window
+    # never talks on; the line being said ends, nothing moves on, and ▶ goes on from there.
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 768})
+        pg.add_init_script(STUB_AUDIO)
+        pg.goto(built.as_uri())
+        label = lambda: pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('play').getAttribute('aria-label')")
+        cap = lambda: pg.evaluate("document.getElementById('clicky-host').shadowRoot.getElementById('cap').innerText")
+        pg.keyboard.press("Space")
+        assert label() == "Tạm dừng"
+        part = cap().split("·")[0]
+        pg.evaluate("() => { Object.defineProperty(document, 'hidden', {configurable: true, get: () => true}); document.dispatchEvent(new Event('visibilitychange')); }")
+        pg.evaluate("() => window.__clickyAudio.dispatchEvent(new Event('ended'))")
+        pg.wait_for_timeout(1200)
+        assert label() == "Nghe tiếp" and cap().split("·")[0] == part
+        pg.evaluate("() => { Object.defineProperty(document, 'hidden', {configurable: true, get: () => false}); document.dispatchEvent(new Event('visibilitychange')); }")
+        pg.keyboard.press("Space")
+        assert label() == "Tạm dừng"
+        browser.close()
+
+
 def test_figures_take_focus_and_enter_asks(page):
     pg, errors = page
     pg.wait_for_timeout(300)                                             # tables are read just after the page shows

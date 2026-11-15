@@ -1054,10 +1054,17 @@ function pointEl(s, k, p) {   // a sentence that lists several asks ("một là 
   if (e && e.tagName === "LI" && /\bmot la\b/.test(x) && /\bhai la\b/.test(x) && e.parentElement && /^(OL|UL)$/.test(e.parentElement.tagName)) return e.parentElement;
   return e;
 }
+let hideAt = null;   // the sentence end the talk stops at once the tab or window is hidden (the release thread's covered-Excel fix, same idea)
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && playing && !aside && S[idx]) { const t = audio.currentTime, nx = (S[idx].starts || []).find(x => x > t + 0.05); hideAt = nx === undefined ? Infinity : nx; }
+  else if (!document.hidden) hideAt = null;
+});
+audio.addEventListener("timeupdate", () => { if (hideAt !== null && playing && audio.currentTime >= hideAt - 0.05) { hideAt = null; audio.pause(); setPlaying(false); } });
 audio.addEventListener("timeupdate", onTime);
 (function tick() { if (playing && !audio.paused) onTime(); requestAnimationFrame(tick); })();   // every frame, not every 250 ms
 audio.addEventListener("ended", () => {
   if (aside) { setPlaying(false); return; }
+  if (hideAt !== null || document.hidden) { hideAt = null; setPlaying(false); return; }   // hidden: stop at the line's end, the reader presses ▶ to go on
   if (idx < S.length - 1) setTimeout(() => { if (playing && !aside) go(idx + 1, true); }, 900);
   else { ended = true; started = false; clearFrames(); unforce(); setPlaying(false); hideHinh(); cardTimer = setTimeout(() => { cardTimer = 0; if (ended) decisionCard(); }, CARD_WAIT); }   // the end: no dim left over the report
 });
@@ -2281,8 +2288,12 @@ const NOTE_ASK = [
    s: / (bat thuong|dot bien|luu y|chu y|dac biet|canh bao) /}];
 const NOTE_FILL = /^(co|lam|mat|anh|huong|thiet|hai|ton|bat|thuong|dot|bien|gi|lay|tu|ban|nguon|phai|nao|dau|lieu|luu|chu|dac|biet|phien|version|chot|khoa|cap|nhat|bang|ra|mot|het|tat)$/;
 const SOURCE_LEAD = /^\s*(\*|¹|²|³|\(\d\)|nguồn|ghi chú|chú thích|lưu ý|số liệu|dữ liệu|phiên bản|cập nhật|source|note)/i;
+const FOLLOW_ON = /^(sau (khi )?(điều chỉnh|bù trừ|xử lý|hạch toán lại)|sau đó|tuy nhiên|nhưng|song|tính ròng|ròng|do đó|vì vậy|vì thế|nhờ vậy|bù lại)\b/i;
 function noteSents() {   // the report's own sentences, and the words a table writes in a cell (a «Ghi chú» column)
-  const out = []; blocks().forEach(b => splitSent(b.text).forEach(s => out.push({b, s})));
+  const out = []; blocks().forEach(b => { const ss = [];
+    // «…; sau điều chỉnh, ròng 0,0 tỷ» finishes the clause before it: one sentence, never its second half alone (TB17d)
+    splitSent(b.text).forEach(x => { if (ss.length && (/;$/.test(ss[ss.length - 1]) || FOLLOW_ON.test(x))) ss[ss.length - 1] += " " + x; else ss.push(x); });
+    ss.forEach(s => out.push({b, s})); });
   tables().forEach(m => m.rows.forEach(row => row.cells.forEach((x, c) => { const t = x && cellText(x);
     if (t && !isNum(t) && row.cells.indexOf(x) === c && !row.labelCells.includes(x) && (t.match(/[a-zA-ZÀ-ỹ]/g) || []).length >= 15) out.push({b: {el: x, text: t}, s: t, row, m}); })));
   // a table's own caption, foot and full-width note rows («Nguồn: AOP 2026 v3»): where a report names its sources (TB21)
@@ -2693,14 +2704,26 @@ function rfPick(Q, scope) {   // the one row the question names (a total too), w
   if (new Set(best.map(o => fold(o.h.row.label))).size > 1) return null;   // two different rows: the page's other routes ask which
   return best[0].x || {m: best[0].h.m, row: best[0].h.row, none: true};
 }
+function farMates(m, row, w, s) {   // «kế hoạch của B nằm trong ngân sách A», B's row in another table of the same span: its actual, read there (TB9)
+  if (!/ (nam trong|thuoc|tinh trong|da co trong) (ngan sach|ke hoach) /.test(" " + fold(s).replace(/[^a-z0-9]+/g, " ") + " ")) return [];
+  const sp = (rfRoles(m).find(x => x.role === "act") || {}).sp, out = [];
+  tables().forEach(m2 => { if (m2 === m) return; const ro = rfRoles(m2), a = ro.find(x => x.role === "act" && x.sp === sp), pl = ro.find(x => x.role === "plan" && x.sp === sp);
+    if (!a) return;
+    m2.rows.forEach(r => { if (r.total) return; const K = core(r.label).filter(x => x !== "va");
+      if (!K.length || !K.every(x => w.includes(x)) || core(row.label).every(x => K.includes(x))) return;
+      const pv = pl && r.cells[pl.c] && numOf(cellText(r.cells[pl.c]), m2.en); if (pv && pv.n) return;
+      const v = r.cells[a.c] && numOf(cellText(r.cells[a.c]), m2.en); if (v) out.push({label: r.label, cells: [], far: v}); }); });
+  return out;
+}
 function sharedPlanRows(m, row, c) {   // rows a note says share this row's plan, when exactly one of them has a plan figure
   const L = core(row.label).filter(w => w !== "va"); if (!L.length) return null;
   for (const it of noteSents()) { const f = " " + fold(it.s) + " ";
     if (!/ (gop|chung|bao gom|da gom|tinh ca|tinh chung|gop chung|nam trong (ngan sach|ke hoach)|thuoc (ngan sach|ke hoach)|tinh trong (ngan sach|ke hoach)|da co trong (ngan sach|ke hoach)) /.test(f.replace(/[^a-z0-9]+/g, " "))) continue;
     const w = words(widen(fold(it.s))); if (!L.every(x => w.includes(x))) continue;
     const others = m.rows.filter(r => r !== row && !r.total && numCols(m, r).length && (() => { const K = core(r.label).filter(x => x !== "va"); return K.length && K.every(x => w.includes(x)); })());
-    if (!others.length) continue;
-    const grp = [row].concat(others), withPlan = grp.filter(r => r.cells[c] && numOf(cellText(r.cells[c]), m.en));
+    if (!others.length) { const far = farMates(m, row, w, it.s); if (far.length) return far; continue; }
+    const hasPlan = r => { const v = r.cells[c] && numOf(cellText(r.cells[c]), m.en); return !!(v && v.n); };   // «0» or «–»: no plan of its own
+    const grp = [row].concat(others), withPlan = grp.filter(hasPlan);
     if (withPlan.length === 1) return others; }
   return null;
 }
@@ -2715,11 +2738,11 @@ function rfGap(p, Q, en) {   // → {text, target}: the row against the plan ask
     if (!mates.length) {   // a plan written on one row and a note saying the rows share it, the other row's plan blank (TB9)
       const sh = sharedPlanRows(m, row, base.c);
       if (sh) { const holder = [row].concat(sh).find(r => r.cells[base.c] && numOf(cellText(r.cells[base.c]), m.en));
-        if (holder) { mates = sh; bc = holder.cells[base.c]; b = numOf(cellText(bc), m.en); } } }
+        if (holder && holder.cells) { mates = sh; bc = holder.cells[base.c]; b = numOf(cellText(bc), m.en); } } }
     if (!b) return null;
     const name = baseSaid(m.head[base.c]);
     if (mates.length) {   // one plan for two rows («Thuê kho» and «Vận chuyển»): no gap of its own (TB9)
-      const grp = [row].concat(mates).sort((x, y) => m.rows.indexOf(x) - m.rows.indexOf(y)), xs = grp.map(r => numOf(cellText(r.cells[act.c]), m.en));
+      const grp = [row].concat(mates).sort((x, y) => (x.far ? 1e6 : m.rows.indexOf(x)) - (y.far ? 1e6 : m.rows.indexOf(y))), xs = grp.map(r => r.far || numOf(cellText(r.cells[act.c]), m.en));
       if (xs.some(x => !x)) return null;
       const tot = numAdd(xs), g = numSub(tot, b), v = ro.find(x => x.role === "var" && x.sp === base.sp && rfBase(m, ro, x) === base && row.cells[x.c] && mates.every(r => r.cells[x.c] === row.cells[x.c]));
       return "Kế hoạch của " + row.label + " được lập gộp với " + mates.map(r => r.label).join(", ") + ": " + name + " " + withUnit(cellText(bc), u) + " cho cả " + grp.length + " dòng, nên " + row.label +
@@ -2852,12 +2875,17 @@ const PERIOD_FILL = /^(thang|quy|nam|ky|luy|ke|lk|ytd|t\d+|q\d+|vua|qua|roi|truo
 const NAT_ASK = [["save", / (tiet kiem|tiet giam) /, "tiết kiệm"], ["time", / (lech thoi diem|tam thoi) /, "lệch thời điểm"], ["odd", / (bat thuong|dot bien|mot lan|khong lap lai|dac biet) /, "khoản bất thường"],
   ["in", / (trong|co trong|nam trong) (ngan sach|ke hoach|kh) /, "nằm trong ngân sách"], ["over", / vuot (ngan sach|ke hoach|kh) /, "vượt ngân sách"]];
 const NAT_TIME = / (lech thoi diem|hoan (?!nhap|tien|tra|thue|ung|thanh|tat)|tam hoan|doi sang|doi lich|lui sang|chuyen sang|keo sang|don sang|chay som|tra truoc|tra som|ghi nhan (tre|som|cham)|chua ghi nhan|tam thoi) /;
+const NAT_ONCE = / (mot lan|khong lap lai|bat thuong|dot bien|hoan nhap|ghi giam|giam tru|thu hoi|xoa no|xu ly ke toan|dieu chinh giam) /;   // a one-off is not a saving (TB17b)
+const NAT_SETTLED = / (sau (khi )?(dieu chinh|bu tru|xu ly|hach toan lai)|da (duoc )?(dieu chinh|bu tru|xu ly|hach toan lai)|rong .{0,40}(dung|bang) (ke hoach|ngan sach)|(dung|bang) (ke hoach|ngan sach)) /;   // an event already offset: «Không, vì đã điều chỉnh» (TB17d)
 const NAT_IN = / (khong vuot|trong ngan sach|co trong (ngan sach|ke hoach)|nam trong (ngan sach|ke hoach)|da tinh trong) /;
+// a one-off answers «có phải tiết kiệm» only when it is what made the cost lower: a reversal, or the gap said to come from it;
+// a one-off cost inside a row that is still under plan hides more of the underrun, so no «Không» then (TB17b)
+function natOnceGap(x) { return NAT_ONCE.test(x) && (/ (hoan nhap|ghi giam|giam tru|thu hoi|xoa no|dieu chinh giam) /.test(x) || / (chenh|thap hon|giam|tiet kiem) .{0,60}(do|vi|nho|den tu|la) /.test(x)); }
 function natVerdict(f, s) {
   const k = (NAT_ASK.find(([, re]) => re.test(f)) || [])[0]; if (!k) return "";
   const x = " " + fold(s).replace(/[^a-z0-9]+/g, " ") + " ";
-  if (k === "save") return / khong (phai )?(la )?(khoan )?tiet kiem /.test(x) || NAT_TIME.test(x) ? "Không" : / tiet kiem /.test(x) && !/ khong /.test(x) ? "Có" : "";
-  if (k === "odd") return / khong (phai |co gi |co khoan nao )?(la )?(khoan )?(bat thuong|dot bien) /.test(x) ? "Không" : / (bat thuong|dot bien|mot lan|khong lap lai|ghi nhan (tre|som|cham)) /.test(x) ? "Có" : "";
+  if (k === "save") return / khong (phai )?(la )?(khoan )?tiet kiem /.test(x) || NAT_TIME.test(x) || natOnceGap(x) ? "Không" : / tiet kiem /.test(x) && !/ khong /.test(x) ? "Có" : "";
+  if (k === "odd") return / khong (phai |co gi |co khoan nao )?(la )?(khoan )?(bat thuong|dot bien) /.test(x) || NAT_SETTLED.test(x) ? "Không" : / (bat thuong|dot bien|mot lan|khong lap lai|ghi nhan (tre|som|cham)) /.test(x) ? "Có" : "";
   if (k === "time") return NAT_TIME.test(x) ? "Có" : / (mot lan|khong lap lai|tiet kiem|thay doi that|vuot that) /.test(x) ? "Không" : "";
   if (k === "in") return NAT_IN.test(x) ? "Có" : / (ngoai (ngan sach|ke hoach)|vuot ngan sach|chua co trong) /.test(x) ? "Không" : "";
   if (k === "over") return NAT_IN.test(x) ? "Không" : / vuot (ngan sach|ke hoach) /.test(x) ? "Có" : "";
@@ -2872,22 +2900,26 @@ function natLead(f, ns) {   // «Không. » / «Có. », or what the report does
 function oneOffSaid(p, ns) {   // a one-off amount the report names for this row: the row without it, with its working (TB17b)
   const {m, row, act} = p, u = colUnit(m, act.c), a = numOf(cellText(row.cells[act.c]), m.en);
   if (!a || !u || u === "%") return "";
-  const own = new Set(row.cells.filter(Boolean).map(c => cellText(c).replace(/[()\s−-]/g, "")));
+  const main0 = rfMain(p.plans || []), own = new Set([act.c, main0 && main0.c].filter(c => c != null && row.cells[c]).map(c => cellText(row.cells[c]).replace(/[()\s−-]/g, "")));   // the gap itself may be the one-off (TB17b)
   const profit = RF_PROFIT.test(fold(row.label));
   for (const it of ns) { const x = " " + fold(it.s).replace(/[^a-z0-9]+/g, " ") + " ";
-    if (!/ (mot lan|khong lap lai|bat thuong|dot bien) /.test(x) || / khong (phai )?(la )?(khoan )?(bat thuong|mot lan|dot bien) /.test(x)) continue;
+    const once = NAT_ONCE.test(x) && !/ khong (phai )?(la )?(khoan )?(bat thuong|mot lan|dot bien) /.test(x), time = !once && NAT_TIME.test(x);
+    if (!once && !time) continue;
     const re = new RegExp("(\\d[\\d.,]*)\\s*" + u.replace(/\s+/g, "\\s*") + "(?![\\p{L}])", "gu");
     const xs = [...new Set([...it.s.matchAll(re)].map(mm => mm[1]).filter(t => !own.has(t)))];
     if (xs.length !== 1) continue;
     const v = numOf(xs[0], m.en); if (!v || v.n <= 0) continue;
     // a cost or revenue row holds the amount; a profit row was lowered by a one-off cost and raised by a one-off gain
-    const add = profit && / (chi phi|phi|phat|lo|xoa so|trich lap|du phong|boi thuong|ton that) /.test(x) && !/ (thu nhap|hoan nhap|thanh ly|lai tu|ban tai san) /.test(x);
+    // a reversal, or a cost pushed out of the month, is missing from the row: added back; a cost pulled in is taken out
+    const back = / (hoan nhap|ghi giam|giam tru|thu hoi|xoa no|dieu chinh giam) /.test(x) || (time && / (hoan (?!nhap|tien|tra|thue|ung|thanh|tat)|tam hoan|doi sang|lui sang|chuyen sang|chua ghi nhan|ghi nhan (tre|cham) sang) /.test(x));
+    const add = profit ? / (chi phi|phi|phat|lo|xoa so|trich lap|du phong|boi thuong|ton that) /.test(x) && !/ (thu nhap|hoan nhap|thanh ly|lai tu|ban tai san) /.test(x) : back;
     if (profit && !add && !/ (thu nhap|hoan nhap|thanh ly|lai tu|ban tai san) /.test(x)) continue;
     const a2 = add ? numAdd([a, v]) : numSub(a, v);
     if (!profit && a.n > 0 && a2.n < 0) continue;
-    const main = rfMain(p.plans || []), b = main && numOf(cellText(row.cells[main.c]), m.en);
+    const what = once ? "khoản một lần" : "phần lệch thời điểm";
+    const main = main0, b = main && numOf(cellText(row.cells[main.c]), m.en);
     const g2 = b && numSub(a2, b), name = main && baseSaid(m.head[main.c]);
-    return "Bỏ khoản một lần " + withUnit(xs[0], u) + " ra thì " + row.label + " là " + withUnit(numShow(a2), u) + " (em tính: " + numShow(a) + (add ? " + " : " − ") + xs[0] + ")" +
+    return "Bỏ " + what + " " + withUnit(xs[0], u) + " ra thì " + row.label + " là " + withUnit(numShow(a2), u) + " (em tính: " + numShow(a) + (add ? " + " : " − ") + xs[0] + ")" +
       (g2 ? ", " + (g2.n < 0 ? "thấp hơn " : g2.n > 0 ? "cao hơn " : "bằng ") + name + (g2.n ? " " + withUnit(numBare(g2), u) : "") + " (em tính: " + numShow(a2) + " − " + numShow(b) + ")" : "") + ".";
   }
   return "";
@@ -2906,7 +2938,7 @@ function effectAsk(q, scope) {   // a product named by its description (kind + s
     m.rows.forEach(row => { if (row.total) return;
       const txt = fold(row.labelCells.map(x => cellText(x)).join(" ") + " " + row.label), rt = new Set(txt.split(/[^a-z0-9]+/).filter(w => w.length >= 2));
       if (size.some(z => !txt.replace(/\s+/g, "").includes(z.replace(/\s+/g, "")))) return;
-      const hit = [...qt].filter(w => rt.has(w) && !/^(lam|mat|gia|bao|nhieu|san|luong|anh|huong|cua|do|vi|ke|hoach|goc|thuc|hien|kh|th|tong|chi|phi|loi|nhuan|doanh|thu|ngan|sach|vuot|thang|nam)$/.test(w)).length;
+      const hit = [...qt].filter(w => rt.has(w) && !/^(lam|mat|gia|bao|nhieu|san|luong|anh|huong|cua|do|vi|ke|hoach|goc|thuc|hien|kh|th|tong|chi|phi|loi|nhuan|doanh|thu|ngan|sach|vuot|thang|nam|viec|cho|tien|lai|gop|giam|tang)$/.test(w)).length;
       if (hit < 2) return;
       if (!best || hit > best.hit) { best = {m, row, eff, hit}; tie = false; } else if (hit === best.hit && best.row !== row) tie = true; }); });
   if (!best || tie) return false;
@@ -2934,6 +2966,24 @@ function figNotes(p, typed) {   // the report's sentences that print this row's 
       out.push({b: it.b, s}); });
   return out;
 }
+const ASK_LEAD = /^\s*(\(?\d+[.)]\s*)?(duyệt|giao|đề nghị|đề xuất|kiến nghị|xin|phê duyệt|chấp thuận)\b/i;
+function newItemAsk(q, scope) {   // «Sự kiện ra mắt là gì, sao không có trong kế hoạch?»: the note on it and where its plan sits, then its actual; never an ask
+  const f = " " + fold(q).replace(/[^a-z0-9]+/g, " ") + " ";
+  if (!/ (sao|tai sao|vi sao|the nao ma) (lai )?(khong|chua) (co )?((nam )?trong )?(ke hoach|ngan sach|kh|aop) | (khong|chua) co (ke hoach|ngan sach) | ngoai (ke hoach|ngan sach) /.test(f)) return false;
+  const Q = qinfo(q.replace(/(tại sao|vì sao|sao)(\s+lại)?|(không|chưa)\s+(có\s+)?((nằm\s+)?trong\s+)?(kế hoạch|ngân sách|KH|AOP)|ngoài\s+(kế hoạch|ngân sách)|là gì|[,;?]/gi, " ").replace(/\s+/g, " ").trim()), p = rfPick(Q, scope);
+  if (!p || !p.row || !p.m) return false;   // a row with no plan of its own is the point here: «none» is welcome
+  const act = p.act || rfRoles(p.m).find(x => x.role === "act"); if (!act) return false;
+  const L = core(p.row.label).filter(w => w !== "va"); if (!L.length) return false;
+  const ns = []; noteSents().forEach(it => { if (doubted(it.s) || ASK_LEAD.test(it.s) || ns.some(x => x.s === it.s)) return;
+    const w = words(widen(fold(it.s))), x = " " + fold(it.s).replace(/[^a-z0-9]+/g, " ") + " ";
+    if ((it.row === p.row || L.every(y => w.includes(y))) && / (ke hoach|ngan sach|aop|kh|moi|lan dau|phat sinh|chua co|nam trong|thuoc) /.test(x)) ns.push(it); });
+  if (!ns.length) return false;
+  ns.sort((a, b) => (/ (nam trong|thuoc|tinh trong|da co trong|chua co trong|ngoai) (ngan sach|ke hoach) /.test(" " + fold(b.s).replace(/[^a-z0-9]+/g, " ") + " ") ? 1 : 0) -
+    (/ (nam trong|thuoc|tinh trong|da co trong|chua co trong|ngoai) (ngan sach|ke hoach) /.test(" " + fold(a.s).replace(/[^a-z0-9]+/g, " ") + " ") ? 1 : 0));
+  const u = colUnit(p.m, act.c), cell = p.row.cells[act.c], all_ = noteSents().map(x => x.s), two = ns.slice(0, 2).sort((x, y) => all_.indexOf(x.s) - all_.indexOf(y.s));   // the report's own order
+  answer("Báo cáo ghi: " + quoteNotes(two) + (cell ? " " + esc(p.row.label + ", " + colSaid(colName(p.m, act.c)) + ": " + withUnit(cellText(cell), u) + " (cột «" + colName(p.m, act.c) + "»).") : ""), ns[0].b.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"});
+  return true;
+}
 function rowFocus(q0, scope) {
   const NAT_Q = / (co phai|phai la|phai khong|that khong|that su|thuc su|bat thuong|dot bien|lech thoi diem|mot lan|tiet kiem|vuot ngan sach|trong ngan sach) /;
   const figs0 = q0.match(/\d[\d.,]*\d(?:\s*%)?|\d(?:\s*%)?/g) || [];
@@ -2942,9 +2992,10 @@ function rowFocus(q0, scope) {
   const q = q0.replace(/(thấp hơn|cao hơn|tăng|giảm|vượt|hụt|lệch|chênh)?\s*\(?-?\d[\d.,]*\)?\s*(%|tỷ|triệu)?/gi, " ").replace(/\s+/g, " ").replace(/\s+([,?.!])/g, "$1");
   const Q = qinfo(q), f = " " + Q.f.replace(/[?.!,;:]+/g, " ").replace(/\s+/g, " ") + " ";
   const why = Q.why;
-  const nature = / (co phai|phai la|phai khong|that khong|that a|that su|thuc su|bat thuong|dot bien|co gi (la|dac biet|bat thuong|dang chu y)|lech thoi diem|mot lan|tiet kiem|vuot ngan sach) /.test(f);
+  const nature = / (co phai|phai la|phai khong|that khong|that a|that su|thuc su|bat thuong|dot bien|co gi (la|dac biet|bat thuong|dang chu y)|lech thoi diem|mot lan|tiet kiem|vuot ngan sach) /.test(f) &&
+    !(/ (bao nhieu|may) /.test(f) && !/ (co phai|phai khong|phai la|that khong|that a|bat thuong|dot bien) /.test(f));   // «tiết kiệm được bao nhiêu» asks the amount (TB9)
   const planw = / (ke hoach|kh|ngan sach|aop|aopr|muc tieu|chi tieu|budget|plan) /.test(f);   // «cả năm ước đạt bao nhiêu» asks the figure, not a gap
-  const gapw = (/ (vuot|hut|thieu|lech|chenh|cao hon|thap hon|so voi|kem|lo) /.test(f) || (/ (dat|tang|giam) /.test(f) && planw)) && (/ (bao nhieu|the nao|ra sao|khong|chua|may|sao) /.test(f) || / so voi /.test(f));
+  const gapw = (/ (vuot|hut|thieu|lech|chenh|cao hon|thap hon|so voi|kem|lo|tiet kiem) /.test(f) || (/ (dat|tang|giam) /.test(f) && planw)) && (/ (bao nhieu|the nao|ra sao|khong|chua|may|sao) /.test(f) || / so voi /.test(f) || /^ (muc )?chenh lech /.test(f));   // «Chênh lệch lũy kế của A?»
   if (Q.pk.has("fy") && / (uoc|du bao|ve dau|dat|bao nhieu|the nao|ra sao) /.test(f) && !Q.yoy && monthYear(Q)) return true;   // before the gap words: «cả năm ước bao nhiêu» too
   if (!why && !nature && !gapw) return false;
   const which = / (khoi|phong|bo phan|dong|khoan|muc|kenh|vung|nhom|chi nhanh|san pham) nao /.test(f) && !(nature && / (khoan|muc) nao /.test(f));   // «có khoản nào bất thường» asks the row's nature (TB17b)
@@ -2988,7 +3039,7 @@ function rowFocus(q0, scope) {
     if (!ns.length) ns = figNotes(p, figs0);   // a note tied to the row by its amount, not its name (TB17)
     ns = ns.map(it => Object.assign({}, it, {vd: natVerdict(f, it.s)})).sort((x, y) => (y.vd ? 1 : 0) - (x.vd ? 1 : 0)).slice(0, 2);   // the sentence that answers first
     if (ns.length) { const off = oneOffSaid(p, ns);
-      answer(esc(natLead(f, ns)) + "Báo cáo ghi: " + quoteNotes(ns) + " " + esc((off ? off + " " : "") + "Số trên bảng: " + g.text.charAt(0).toLowerCase() + g.text.slice(1)), ns[0].b.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»" + (off ? "; phần bỏ khoản một lần em tính" : "")}); return true; }
+      answer(esc(natLead(f, ns)) + "Báo cáo ghi: " + quoteNotes(ns) + " " + esc((off ? off + " " : "") + "Số trên bảng: " + g.text.charAt(0).toLowerCase() + g.text.slice(1)), ns[0].b.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»" + (off ? "; phần bỏ khoản đó ra em tính" : "")}); return true; }
     answer(g.text + " Báo cáo không ghi riêng khoản này là gì (lệch thời điểm, một lần hay thay đổi thật).", g.target, {cls: "park", extra: parkNote(q), src: "Lấy từ báo cáo «" + TITLE + "»"}); return true;
   }
   const sn = scopeNote(p.row), judge = Q.opinion ? " Báo cáo chỉ ghi số, không đánh giá có đáng lo hay không." : "";   // the judgement is the owner's (TB12)
@@ -4206,6 +4257,8 @@ function ask(q, scope) {
   if (!scope && !/\d/.test(q) && !CHECKQ.test(" " + fold(q) + " ") && !words(q).some(w => w.length > 1 && !ECHO_NOT.has(w) && !FILLER.has(w))) {   // "ờ thế còn cái kia thì sao nhỉ": nothing to answer or queue
     answer("Anh chị muốn hỏi về số hay đoạn nào ạ? Anh chị bấm vào chỗ đó trên báo cáo, hoặc gõ tên dòng hay con số.", null, {src: ""}); return; }
   if (doubtList(q)) return;   // with or without a place tapped (round 9: a tapped place broke it)
+  if (effectAsk(q, scope)) return;   // «Giảm giá kem dưỡng ẩm 50ml làm mất bao nhiêu doanh thu?»: that row's effect cell, before any gap or note (TB22)
+  if (newItemAsk(q, scope)) return;   // «<khoản> là gì, sao không có trong kế hoạch»: the note that says where its plan is, and its actual
   const tr = scopedRow(scope), rowQ = tr && !fold(q).includes(fold(tr.label)) ? tr.label + " " + q : q;   // a tapped Logistics row: "%" is Logistics' (round 11)
   if (tr && rowQ !== q && /( phan tram| %)/.test(" " + fold(q).replace(/(\d)%/g, "$1 %").replace(/%/g, " %")) && !/\d/.test(q)) { ask2(rowQ); return; }
   { const mm = (!scope || tapRow(scope)) && q.match(/^\s*(?:khối|phòng|bộ phận|mảng|đội)?\s*([^\d?.,!]+?)\s+(?:tăng|giảm|chiếm)\b/i), subj = mm && fold(mm[1]).trim();   // «Tài chính tăng bao nhiêu?» on a report with no such row (round 20)
@@ -4222,7 +4275,6 @@ function ask(q, scope) {
   { const m = q.match(/^\s*(\d[\d.,]*\d|\d)\s*(%|tỷ|triệu|lần|người)?\s*(à|hả|á|thật không|thật à|thật hả)\s*[?!.]*\s*$/i);   // "12,6% à?": a check of a printed figure
     if (m) q = m[1] + (m[2] === "%" ? "%" : m[2] ? " " + m[2] : "") + " có đúng không?"; }
   if (rowFocus(q, scope)) return;   // one named row: its gap against the plan asked, its notes, its bridge (gate 2 rerun 3)
-  if (effectAsk(q, scope)) return;   // «Kem dưỡng ẩm 50ml giảm giá làm mất bao nhiêu?»: that row's effect column, before any impact or note (TB22)
   if (saveAsk(q, scope)) return;   // before the checks: "tiết kiệm bao nhiêu" is not a check of the clicked figures
   if (ratioAsk(q)) return;
   { const o = pctAsk(q); if (o && (!tr || pctAsk(rowQ))) { answerDoubt(q, o); return; } }   // the ruling reaches this route too

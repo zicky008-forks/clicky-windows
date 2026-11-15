@@ -2404,3 +2404,61 @@ def test_rerun_six_yes_no_nature_one_off_shared_budget_footer_sources_and_codes(
         x = typed("Kem dưỡng ẩm hũ 50ml giảm giá làm mất bao nhiêu?")
         assert x.startswith("LN-KD50 – Kem dưỡng ẩm hũ 50ml: Ảnh hưởng giá làm giảm 1,4 tỷ (cột «Ảnh hưởng giá» ghi (1,4))."), x
         browser.close()
+
+
+def test_rerun_seven_one_off_settled_events_shared_budget_elsewhere_new_items_and_product_wording(tmp_path, monkeypatch):
+    # independent grader, gate 2 rerun 7 (our own synthetic shapes): a note that pins the gap on a one-off reversal
+    # still gave «không ghi rõ có phải tiết kiệm» instead of «Không» and the row without it (TB17b); «…; sau điều chỉnh,
+    # ròng bằng kế hoạch» lost its first clause, and an offset event was not «Không» for «có gì bất thường» (TB17d);
+    # a row whose plan sits in another row's budget, in another table, was said on its own (TB9); «<khoản> là gì, sao
+    # không có trong kế hoạch» got an ask, not the note and its actual; «giảm giá <hàng> làm mất bao nhiêu doanh thu»
+    # went to the revenue gap (TB22); «tiết kiệm được bao nhiêu» is an amount, not a yes/no.
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    fx = Path(__file__).parent / "fixtures"
+    reps = {}
+    for name in ("bao_cao_ban_chat_2", "bao_cao_ma_hang_mo_ta"):
+        src = tmp_path / (name + ".html")
+        src.write_text((fx / (name + ".html")).read_text(encoding="utf-8"), encoding="utf-8")
+        reps[name] = build(src)
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 900})
+
+        def typed(q):                          # the reader's way: Escape, skip the talk, type in «Hỏi Vera», Enter
+            pg.keyboard.press("Escape")
+            pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const e = r.getElementById('clicky-skip') || document.getElementById('clicky-skip'); if (e) e.click(); }")
+            pg.wait_for_timeout(300)
+            box = pg.locator("#clicky-host #q")
+            box.fill(q)
+            box.press("Enter")
+            pg.wait_for_timeout(900)
+            return pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const b = r.getElementById('bub'); "
+                               "return ((b && !b.classList.contains('hidden')) ? r.getElementById('ba') : r.getElementById('a')).innerText; }")
+        pg.goto(Path(reps["bao_cao_ban_chat_2"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        x = typed("Sửa chữa thấp hơn 1,2 tỷ, có phải tiết kiệm không?")
+        assert x.startswith("Không. Báo cáo ghi: «Khoản chênh 1,2 tỷ của sửa chữa và bảo trì là do hoàn nhập dự phòng"), x
+        assert "Bỏ khoản một lần 1,2 tỷ ra thì Sửa chữa và bảo trì là 2,5 tỷ (em tính: 1,3 + 1,2), bằng kế hoạch gốc" in x, x
+        x = typed("Lợi nhuận khác có gì bất thường không?")
+        assert x.startswith("Không. Báo cáo ghi: «Lợi nhuận khác có khoản phạt hợp đồng 0,5 tỷ của nhà cung cấp; sau điều chỉnh bù trừ"), x
+        x = typed("Khuyến mãi tăng 2,6 tỷ có phải lệch thời điểm không?")
+        assert x.startswith("Có. "), x
+        for q in ("Truyền thông số lũy kế thấp hơn kế hoạch bao nhiêu?", "Chênh lệch TH LK10 của truyền thông số?",
+                  "Truyền thông số lũy kế tiết kiệm được bao nhiêu so với kế hoạch?"):
+            x = typed(q)
+            assert x.startswith("Kế hoạch của Truyền thông số được lập gộp với Sự kiện ra mắt") and "Gộp lại, thực hiện 66,0 tỷ (em tính: 62,0 + 4,0)" in x, (q, x)
+        for q in ("Sự kiện ra mắt là gì, sao không có trong kế hoạch?", "Vì sao sự kiện ra mắt không có kế hoạch?"):
+            x = typed(q)
+            assert x.startswith("Báo cáo ghi: «Sự kiện ra mắt là chương trình giới thiệu dòng serum mới") and "nằm trong ngân sách truyền thông số" in x, (q, x)
+            assert "thực hiện lũy kế 10 tháng: 4,0 tỷ" in x and "Đề xuất duyệt" not in x, (q, x)
+        pg.goto(Path(reps["bao_cao_ma_hang_mo_ta"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        for q in ("Giảm giá kem dưỡng ẩm hũ 50ml làm mất bao nhiêu doanh thu?", "Việc giảm giá kem dưỡng 50ml làm mất bao nhiêu tiền?"):
+            x = typed(q)
+            assert x.startswith("LN-KD50 – Kem dưỡng ẩm hũ 50ml: Ảnh hưởng giá làm giảm 1,4 tỷ"), (q, x)
+        browser.close()
