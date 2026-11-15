@@ -3091,6 +3091,9 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
                 places = {**places, **drawn["places"]}
                 known |= set(drawn["places"])
                 page_text += " " + drawn["text"]
+    from present import hinh as _hinh             # the pictures: from the page's own figures, never from the script text
+    pics = _hinh.visuals(drawn["items"] if drawn else items, drawn["places"] if drawn else places, en,
+                         doubted=frozenset(x for k in (draft or {}).get("kiem_tra") or [] for x in k.get("ma_so") or [])) if tell else []
     if draft is not None and memo:
         draft["canh"].insert(1, memo)
     if draft is None:
@@ -3361,6 +3364,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
                            **({"tok": f["tok"]} if f["k"] == "t" else {}),
                            **({"vai": f["vai"]} if f.get("vai") == "uoc_tiet_kiem" else {})) for f in book],
             "quyet": story.decisions(script),
+            "hinh": pics,
             # the ask box's example names the row the talk is driven by (round 14: B said «headcount khối bán hàng?»)
             "vi_du": next((str(c.get("neo") or "") for s in script.get("canh") or [] for c in s.get("cau") or []
                            if c.get("vai") == "dong_luc" and c.get("neo")), ""),

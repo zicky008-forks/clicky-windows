@@ -169,6 +169,15 @@ button.on{background:var(--warnsoft);border-color:var(--warn)}
 #askb{white-space:nowrap}:host([data-small]) .bar #askb{padding:4px 5px}#askb.short .em{display:none}
 :host([data-small]) .bar #lassob{min-width:72px;padding:4px 3px;flex-grow:1.4;white-space:nowrap}
 :host([data-small]) .bubble{width:auto}
+.hinh{position:fixed;z-index:2147483000;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:12px;box-shadow:var(--sh);padding:8px 10px 6px;font-size:13px}
+.hinh .htit{font-weight:600;font-size:13.5px;margin-bottom:2px;line-height:1.3}.hinh .hsh{font-weight:400;color:var(--muted)}
+.hinh svg{display:block;overflow:visible}.hinh text{font-size:11.5px;fill:var(--fg);font-family:inherit}.hinh .hn{font-weight:700;font-size:12.5px}.hinh .hl{fill:var(--muted)}
+.hinh .htag{fill:var(--muted);font-style:italic;font-size:10.5px}.hinh .hg{font-weight:700;fill:var(--warn)}
+.hinh .ht{fill:var(--acc)}.hinh .hk{fill:var(--soft2);stroke:var(--line)}.hinh .hf{fill:url(#hp);stroke:var(--acc);stroke-dasharray:4 3}.hinh .hc{fill:none;stroke:var(--warn);stroke-width:2;stroke-dasharray:5 3}
+.hinh .hd{fill:#5b7db1}.hinh .hup{fill:var(--warn)}.hinh .hdn{fill:var(--acc)}.hinh .hbig{stroke:var(--fg);stroke-width:1.5}
+.hinh .hpb{fill:var(--bg)}.hinh .hpl{stroke:var(--acc);stroke-width:2.2}.hinh .hb{fill:none;stroke:var(--warn);stroke-width:1.5}.hinh .hz{fill:none;stroke:var(--bg);stroke-width:2.5}
+.hinh .hpa{fill:none;stroke:var(--acc);stroke-width:2.5}.hinh .hpf{fill:none;stroke:var(--acc);stroke-width:2.5;stroke-dasharray:6 4;opacity:.75}.hinh .hpk{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:2 3}
+.hinh .hsrc{font-size:11.5px;color:var(--muted);margin-top:2px}.hinh .hsrc b{color:var(--fg);font-weight:600}
 </style>
 <div class="panel hidden" id="panel" role="dialog" aria-label="Hỏi em về báo cáo">
   <div class="ph"><h3>Anh chị hỏi em</h3><button class="x" id="px" type="button" aria-label="Đóng" title="Đóng (Esc)">×</button></div>
@@ -188,6 +197,7 @@ button.on{background:var(--warnsoft);border-color:var(--warn)}
   </div>
 </div>
 <div class="lasso hidden" id="lasso"><div class="tip"><span id="ltip"></span><button type="button" id="lstop">Thôi</button></div><div class="r hidden" id="lr"></div></div>
+<div class="hinh hidden" id="hinh" role="figure" aria-live="off"></div>
 <div class="bar" id="bar" role="region" aria-label="Trợ lý trình bày báo cáo">
   <span class="who" title="Trình bày do trợ lý AI thực hiện">${HAT}<span>Trợ lý AI của ${esc(OWNER)}</span></span>
   <button class="p" id="play"></button>
@@ -419,7 +429,7 @@ function chartRects(zone) {   // charts count as figures too: a bubble or the ha
   return CHARTS.filter(c => c.isConnected).map(rect).filter(q => q.width >= 60 && q.height >= 40 && hit(q, zone));
 }
 function covers(withBubble) {
-  const l = [rect($("bar"))]; if (isOpen($("panel"))) l.push(rect($("panel")));
+  const l = [rect($("bar"))]; if (isOpen($("panel"))) l.push(rect($("panel"))); if (isOpen($("hinh"))) l.push(rect($("hinh")));
   if (withBubble && isOpen($("bub"))) l.push(rect($("bub")));
   return l;
 }
@@ -550,7 +560,7 @@ function placeHat(t) {   // first free spot next to the place that covers no fig
   hideHat(); return false;
 }
 let queued = false;
-function schedule() { if (queued) return; queued = true; requestAnimationFrame(() => { queued = false; redraw(); placeBubble(true); }); }
+function schedule() { if (queued) return; queued = true; requestAnimationFrame(() => { queued = false; redraw(); placeBubble(true); placeHinh(); }); }
 addEventListener("scroll", schedule, {passive: true, capture: true});
 addEventListener("resize", () => { fitBar(); placePanel(); schedule(); });
 if (window.visualViewport) { visualViewport.addEventListener("resize", () => { fitBar(); placePanel(); schedule(); }); visualViewport.addEventListener("scroll", () => { fitBar(); placePanel(); schedule(); }); }
@@ -705,6 +715,7 @@ function keepVisible(t) {   // the framed place is never under the bar, the pane
   const p = $("panel"), v = vp(), small = v.w <= 700;
   p._cap = 0; p.classList.remove("left", "top"); placePanel(); sheetRoom = 0;
   let r = rect(t), floor = rect($("bar")).top, ceil = Math.max(v.y, topCover(), stickyTops()), under = false;
+  if (isOpen($("hinh")) && v.h >= 600) { placeHinh(t); const q = rect($("hinh")); if (small || (q.left < r.right && r.left < q.right)) floor = Math.min(floor, q.top - 6); }   // the picture sits under the place, never on it; a short screen: placeHinh finds room
   const G = guards(t), heads = G.els.filter(stuckHead);
   const barTop = floor, gd = G.strong.filter((q, i) => !(G.els[i] && stuckHead(G.els[i])));   // a stuck header shows by itself
   if (isOpen(p) && !small) {   // the side that leaves the place, its row label and its header free and hides fewest figures
@@ -848,6 +859,132 @@ function caption(t) {   // the sentence being said now, from the voice's own tim
     "<small>Phần " + (idx + 1) + "/" + S.length + (s.title ? " · " + esc(s.title) : "") + "</small>";
   fitBar();
 }
+// ── pictures the talk draws (gate 1, item 18): kinds fixed per beat, every figure locked by the builder ──────────
+// D.hinh comes from present/hinh.py: printed figures, or figures worked out by code with their formula. The page
+// only draws them; it never computes a figure of its own here. Actual and forecast never look the same.
+const HINH = (D.hinh || []).filter(h => S.some(s => (s.vai || []).includes(h.vai)));
+let hinhOn = null, hinhKey = "";
+const LEAD_S = 0.5;   // the picture comes with the frame, half a second before the words (rule 1 of «Clicky sống động»)
+const SVGN = "http://www.w3.org/2000/svg";
+function hinhOf(vai) { return HINH.find(h => h.vai === vai) || null; }
+function nf(v, tok) {   // a figure counting up, written like the report writes it; the last frame is the token itself
+  const d = ((String(tok).split(",")[1]) || "").replace(/\D.*$/, "").length;
+  const s = Math.abs(v).toFixed(d).split("."); s[0] = s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return s.join(",");
+}
+const LOAI = {ke_hoach: "kế hoạch", dieu_chinh: "điều chỉnh", du_bao: "dự báo", thuc_te: "thực tế"};
+function hinhSvg(h, w) {   // the picture as SVG text; numbers in data-to so they can count up
+  const W = Math.round(w), H = h.kieu === "so_sanh" ? 34 * h.cot.length + 14 : 150, x = [];
+  const u = h.don_vi === "%" ? "%" : h.don_vi ? " " + h.don_vi : "";
+  const num = (v, tok, cls, X, Y, anchor) => '<text class="' + cls + '" x="' + X + '" y="' + Y + '" text-anchor="' + (anchor || "middle") + '" data-to="' + v + '" data-tok="' + esc(tok) + '">' + esc(tok) + '</text>';
+  const fill = l => l === "thuc_te" ? 'class="ht"' : l === "ke_hoach" ? 'class="hk"' : l === "tran" ? 'class="hc"' : l === "doanh_thu" ? 'class="hd"' : 'class="hf"';   // du_bao, dieu_chinh: hatched
+  x.push('<defs><pattern id="hp" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" class="hpb"/><line x1="0" y1="0" x2="0" y2="6" class="hpl"/></pattern></defs>');
+  if (h.kieu === "cot") {
+    const cols = h.cot, max = Math.max(...cols.map(c => Math.abs(c.v))) || 1, room = h.chenh ? 86 : 0, CW = W - room, bw = Math.min(64, CW / (cols.length * 2.2)), top = 26, bot = H - 30, gap = (CW - cols.length * bw) / (cols.length + 1);
+    cols.forEach((c, i) => { const X = gap + i * (bw + gap), hh = (bot - top) * Math.abs(c.v) / max, Y = bot - hh;
+      x.push('<rect ' + fill(c.loai) + ' x="' + X + '" y="' + Y + '" width="' + bw + '" height="' + hh + '" data-grow="' + i + '"/>');
+      x.push(num(c.v, c.so + (u === "%" ? "%" : ""), "hn", X + bw / 2, Y - 6));
+      x.push('<text class="hl" x="' + (X + bw / 2) + '" y="' + (bot + 14) + '" text-anchor="middle">' + esc(c.ten) + '</text>');
+      if (LOAI[c.loai] && c.loai !== "thuc_te" && c.loai !== "ke_hoach") x.push('<text class="htag" x="' + (X + bw / 2) + '" y="' + (bot + 26) + '" text-anchor="middle">' + LOAI[c.loai] + '</text>'); });
+    if (h.chenh && cols.length >= 2) { const a = cols[cols.length - 2], b = cols[cols.length - 1], ya = bot - (bot - top) * Math.abs(a.v) / max, yb = bot - (bot - top) * Math.abs(b.v) / max;
+      const X = CW - gap / 2 + 6; x.push('<path class="hb" d="M' + (X - 8) + ' ' + ya + ' H' + X + ' V' + yb + ' H' + (X - 8) + '"/>');
+      x.push('<text class="hg" x="' + (X + 5) + '" y="' + ((ya + yb) / 2 + 4) + '" text-anchor="start">' + (h.chenh.dau === "−" ? "−" : "+") + esc(h.chenh.so) + esc(u) + '</text>'); }
+  } else if (h.kieu === "so_sanh") {
+    const cols = h.cot, max = Math.max(...cols.map(c => Math.abs(c.v))) || 1, lw = Math.min(150, W * 0.42), bw = W - lw - 56;
+    cols.forEach((c, i) => { const Y = 8 + i * 34, len = bw * Math.abs(c.v) / max;
+      x.push('<text class="hl" x="' + (lw - 6) + '" y="' + (Y + 17) + '" text-anchor="end">' + esc(c.ten) + '</text>');
+      x.push('<rect ' + fill(c.loai) + ' x="' + lw + '" y="' + (Y + 4) + '" width="' + len + '" height="18" data-grow="' + i + '" data-dir="x"/>');
+      x.push(num(c.v, c.so + "%", "hn", lw + len + 6, Y + 18, "start")); });
+  } else if (h.kieu === "cau") {
+    const st = h.buoc, cum = [h.dau.v]; st.forEach(s => cum.push(cum[cum.length - 1] + s.v));
+    const lo = Math.min(...cum, h.cuoi.v), hi = Math.max(...cum, h.cuoi.v), pad = (hi - lo) * 0.35 || 1, a = lo - pad, b = hi + pad * 0.6;
+    const top = 22, bot = H - 34, Y = v => bot - (bot - top) * (v - a) / (b - a), n = st.length + 2, bw = Math.min(46, W / (n * 1.5)), gap = (W - n * bw) / (n + 1);
+    const col = (i, y1, y2, cls, k) => '<rect ' + cls + ' x="' + (gap + i * (bw + gap)) + '" y="' + Math.min(y1, y2) + '" width="' + bw + '" height="' + Math.max(2, Math.abs(y2 - y1)) + '" data-step="' + k + '"/>';
+    x.push(col(0, Y(h.dau.v), bot, fill(h.dau.loai), 0)); x.push('<path class="hz" d="M' + (gap - 3) + ' ' + (bot - 8) + ' l' + (bw + 6) + ' -5 M' + (gap - 3) + ' ' + (bot - 3) + ' l' + (bw + 6) + ' -5"/>');
+    st.forEach((s, i) => { const y1 = Y(cum[i]), y2 = Y(cum[i + 1]), cls = 'class="' + (s.v >= 0 ? (h.chi_phi === false ? "hdn" : "hup") : (h.chi_phi === false ? "hup" : "hdn")) + (i === h.noi_bat ? " hbig" : "") + '"';
+      x.push(col(i + 1, y1, y2, cls, i + 1));
+      const X = gap + (i + 1) * (bw + gap) + bw / 2;
+      x.push('<text class="hn hs" x="' + X + '" y="' + (Math.min(y1, y2) - 5) + '" text-anchor="middle" data-step="' + (i + 1) + '">' + (s.v >= 0 ? "+" : "−") + esc(s.so) + '</text>');
+      const fit = Math.max(4, Math.floor((bw + gap) / 6.2)), nm = s.ten.replace(/^(khối|phòng|ban|bộ phận|kênh)\s+/i, "");
+      x.push('<text class="hl hs" x="' + X + '" y="' + (bot + 14) + '" text-anchor="middle" data-step="' + (i + 1) + '"><title>' + esc(s.ten) + '</title>' + esc(nm.length > fit ? nm.slice(0, fit - 1) + "…" : nm) + '</text>'); });
+    const k = st.length + 1; x.push(col(k, Y(h.cuoi.v), bot, fill(h.cuoi.loai), k)); x.push('<path class="hz" d="M' + (gap + k * (bw + gap) - 3) + ' ' + (bot - 8) + ' l' + (bw + 6) + ' -5 M' + (gap + k * (bw + gap) - 3) + ' ' + (bot - 3) + ' l' + (bw + 6) + ' -5"/>');
+    [[0, h.dau], [k, h.cuoi]].forEach(([i, c]) => { const X = gap + i * (bw + gap) + bw / 2;
+      x.push('<text class="hn" x="' + X + '" y="' + (Y(c.v) - 5) + '" text-anchor="middle" data-step="' + i + '">' + esc(c.so) + '</text>');
+      x.push('<text class="hl" x="' + X + '" y="' + (bot + 14) + '" text-anchor="middle">' + esc(c.ten) + '</text>');
+      if (LOAI[c.loai] && c.loai !== "thuc_te" && c.loai !== "ke_hoach") x.push('<text class="htag" x="' + X + '" y="' + (bot + 26) + '" text-anchor="middle">' + LOAI[c.loai] + '</text>'); });
+  } else if (h.kieu === "duong") {
+    const all = h.thuc_te.concat(h.du_bao || []), months = h.thang, n = months.length, tgt = h.muc_tieu ? h.muc_tieu.v : null;
+    const vals = all.concat(h.ke_hoach || []).concat(tgt !== null ? [tgt] : []), lo = Math.min(0, ...vals), hi = Math.max(...vals) * 1.08 || 1;
+    const L = 8, R = W - 58, top = 18, bot = H - 26, X = i => L + (R - L) * i / Math.max(1, n - 1), Y = v => bot - (bot - top) * (v - lo) / (hi - lo);
+    if (h.ke_hoach && h.ke_hoach.length) x.push('<polyline class="hpk" points="' + h.ke_hoach.map((v, i) => X(i) + "," + Y(v)).join(" ") + '"/>');
+    if (tgt !== null) { x.push('<line class="hpk" x1="' + L + '" x2="' + R + '" y1="' + Y(tgt) + '" y2="' + Y(tgt) + '"/>'); x.push('<text class="hl" x="' + (R + 4) + '" y="' + (Y(tgt) + 4) + '">' + esc(h.muc_tieu.ten) + '</text>'); }
+    const na = h.thuc_te.length;
+    x.push('<polyline class="hpa" data-draw="1" points="' + h.thuc_te.map((v, i) => X(i) + "," + Y(v)).join(" ") + '"/>');
+    if ((h.du_bao || []).length) { x.push('<polyline class="hpf" data-draw="2" points="' + [h.thuc_te[na - 1]].concat(h.du_bao).map((v, i) => X(na - 1 + i) + "," + Y(v)).join(" ") + '"/>');
+      x.push('<text class="htag" x="' + X(n - 1) + '" y="' + (Y(all[n - 1]) - 8) + '" text-anchor="end">dự báo</text>'); }
+    x.push('<text class="hl" x="' + L + '" y="' + (H - 8) + '">' + esc(months[0]) + '</text><text class="hl" x="' + X(na - 1) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(months[na - 1]) + '</text><text class="hl" x="' + R + '" y="' + (H - 8) + '" text-anchor="end">' + esc(months[n - 1]) + '</text>');
+    if (h.cuoi) x.push(num(h.cuoi.v, h.cuoi.so, "hn", R + 4, Y(all[n - 1]) + 4, "start"));
+  }
+  return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="' + esc(h.tieu_de) + '">' + x.join("") + "</svg>";
+}
+function hinhChip(h) {   // the source of every figure in the picture, and «em tính» with the formulas when code worked any out
+  const how = [].concat(h.cot || [], h.buoc || []).filter(c => c.cong_thuc).map(c => c.ten + ": " + c.cong_thuc)
+    .concat(h.chenh && h.chenh.cong_thuc ? ["chênh: " + h.chenh.cong_thuc] : []).concat(h.ty_trong ? [h.ty_trong.cong_thuc] : []);
+  return '<div class="hsrc"' + (how.length ? ' title="' + esc(how.join("; ")) + '"' : "") + '>' + esc("Nguồn: " + h.nguon) + (h.tinh ? ' · <b>em tính</b>' : "") + "</div>";
+}
+function showHinh(h, dur) {   // draws the picture beside the bar; bars grow and figures count up in step with the sentence
+  const box = $("hinh"); if (!h) { hideHinh(); return; }
+  if (hinhOn === h && isOpen(box)) return;
+  hinhOn = h; box.classList.remove("hidden");
+  const v = vp(), small = v.w <= 700, w = small ? v.w - 16 : Math.min(360, v.w - 24);
+  box.style.width = w + "px";
+  box.innerHTML = '<div class="htit">' + esc(h.tieu_de) + (h.ty_trong ? ' <span class="hsh">' + esc(h.buoc[0].ten) + " ≈ " + esc(h.ty_trong.so) + "% phần " + (h.buoc[0].v >= 0 ? "tăng" : "giảm") + "</span>" : "") + "</div>" +
+    hinhSvg(h, w - 20) + hinhChip(h);
+  box.setAttribute("aria-label", h.tieu_de);
+  placeHinh();
+  const svg = box.querySelector("svg"); if (!svg || calm()) return;
+  const steps = [...svg.querySelectorAll("[data-step]")], n = Math.max(0, ...steps.map(e => +e.getAttribute("data-step")));
+  const span = Math.max(0.6, Math.min(4, (dur || 3) * 0.7)), each = n ? span / (n + 1) : 0;
+  steps.forEach(e => { const k = +e.getAttribute("data-step"); e.style.opacity = 0; e.style.transition = "opacity .35s ease"; setTimeout(() => { e.style.opacity = 1; }, k * each * 1000); });
+  svg.querySelectorAll("[data-grow]").forEach((e, i) => { const x = e.getAttribute("data-dir") === "x";
+    e.style.transformBox = "fill-box"; e.style.transformOrigin = x ? "left center" : "center bottom"; e.style.transform = x ? "scaleX(0)" : "scaleY(0)";
+    e.style.transition = "transform .7s cubic-bezier(.2,.7,.2,1) " + (i * 0.25) + "s"; requestAnimationFrame(() => requestAnimationFrame(() => { e.style.transform = "none"; })); });
+  svg.querySelectorAll("[data-draw]").forEach(e => { const L = e.getTotalLength ? e.getTotalLength() : 0; if (!L) return;
+    e.style.strokeDasharray = e.classList.contains("hpf") ? "" : L; e.style.strokeDashoffset = L; e.style.transition = "stroke-dashoffset 1s ease " + ((+e.getAttribute("data-draw") - 1) * 1.0) + "s";
+    requestAnimationFrame(() => requestAnimationFrame(() => { e.style.strokeDashoffset = 0; })); });
+  svg.querySelectorAll("[data-to]").forEach((e, i) => { const to = +e.getAttribute("data-to"), tok = e.getAttribute("data-tok"), t0 = performance.now() + i * 250;
+    const tick = now => { if (!e.isConnected) return; const p = Math.max(0, Math.min(1, (now - t0) / 700)); e.textContent = p >= 1 ? tok : nf(to * (1 - Math.pow(1 - p, 3)), tok) + (/%$/.test(tok) ? "%" : "");
+      if (p < 1) requestAnimationFrame(tick); }; requestAnimationFrame(tick); });
+}
+function hideHinh() { hinhOn = null; hinhKey = ""; const b = $("hinh"); if (b && !b.classList.contains("hidden")) { b.classList.add("hidden"); b.innerHTML = ""; b.style.visibility = ""; } }
+function placeHinh(t) {   // just above the bar, on the side away from the framed place; on a phone across the screen
+  const box = $("hinh"); if (!isOpen(box)) return;
+  const v = vp(), bar = rect($("bar")), small = v.w <= 700, w = box.offsetWidth, hgt = box.offsetHeight;
+  let left = small ? v.x + 8 : v.x + v.w - w - 12;
+  const tt = t || (frames[0] && frames[0].target), f = tt ? rect(tt) : null;
+  if (!small && f && f.width < v.w * 0.55 && (f.left + f.right) / 2 > v.x + v.w / 2) left = v.x + 12;   // the place is on the right: the picture goes left
+  let top = Math.max(v.y + 8, bar.top - 10 - hgt);
+  if (f && v.h < 600) {   // a short screen keeps the place and its header first: the picture takes the free spot that hides no part of them
+    const keep = [f].concat(guards(tt).strong), ceil = Math.max(v.y, topCover(), stickyTops()) + 6, xs = small ? [v.x + 8] : [v.x + v.w - w - 12, v.x + 12];
+    const figs = numberRects({left: v.x, right: v.x + v.w, top: v.y, bottom: v.y + v.h}, 0);
+    const area = (x, y, q) => Math.max(0, Math.min(x + w, q.right) - Math.max(x, q.left)) * Math.max(0, Math.min(y + hgt, q.bottom) - Math.max(y, q.top));
+    let best = null;
+    for (const x of xs) for (let y = bar.top - 10 - hgt; y >= ceil; y -= 20) {
+      const c = keep.reduce((n, q) => n + 1e6 * area(x, y, q), 0) + figs.reduce((n, q) => n + area(x, y, q), 0);
+      if (!best || c < best[2]) best = [x, y, c]; }
+    if (best) { left = best[0]; top = best[1]; }
+    box.style.visibility = best && best[2] >= 1e6 ? "hidden" : "";   // no room that leaves the place free: the place wins, the picture waits
+  } else box.style.visibility = "";
+  box.style.left = left + "px"; box.style.top = top + "px";
+}
+function hinhAt(t) {   // the sentence starting now: its picture, kept while the next sentences stay on the same beat
+  const s = S[idx]; if (!s || !HINH.length) return;
+  let k = 0; while (k < s.sentences.length - 1 && s.starts[k + 1] - LEAD_S <= t) k++;
+  const key = idx + ":" + k; if (key === hinhKey) return; hinhKey = key;
+  const vai = (s.vai || [])[k] || "", h = hinhOf(vai);
+  if (h) { const end = k + 1 < s.starts.length ? s.starts[k + 1] : s.secs; showHinh(h, end - s.starts[k]); }
+  else if (hinhOn && hinhOn.vai !== vai) hideHinh();
+}
 function talkLine() {   // while an answer is open the bar says one short line, never the talk's sentence
   $("cap").classList.remove("hidden");
   $("cap").innerHTML = "<span>Đang trả lời câu hỏi" + (resumeAt ? " · ↩ nghe tiếp phần " + (resumeAt.i + 1) + "/" + S.length : "") + "</span>"; fitBar();
@@ -876,7 +1013,7 @@ const sceneSrc = i => "data:" + (S[i].mime || "audio/mpeg") + ";base64," + S[i].
 function stopVoice() { try { window.speechSynthesis && speechSynthesis.cancel(); } catch (_) {} }
 function go(i, autoplay) {
   if (!S.length) return;
-  idx = Math.max(0, Math.min(S.length - 1, i)); aside = false; ended = false; resumeAt = null; shown = new Set(); clearFrames(); stopVoice();
+  idx = Math.max(0, Math.min(S.length - 1, i)); aside = false; ended = false; resumeAt = null; shown = new Set(); clearFrames(); stopVoice(); hideHinh();
   audio.src = sceneSrc(idx); caption(0);
   if (autoplay) { started = true; start(); } else setPlaying(false);
 }
@@ -898,7 +1035,7 @@ function setPlaying(v) {
 }
 function onTime() {
   if (aside || !S[idx]) return;
-  const s = S[idx], t = audio.currentTime; caption(t);
+  const s = S[idx], t = audio.currentTime; caption(t); hinhAt(t);
   s.points.forEach((p, k) => { if (!shown.has(k) && t >= p.t) { shown.add(k); frame(pointEl(s, k, p)); } });
   // a sentence that points at nothing («Phần này anh chị có thể hỏi…») lets the page go: no frame left from the line before (round 15)
   if (!s._bare) { const has = new Set(s.points.map((p, k) => p.k ?? k)); s._bare = (s.starts || []).map((_, k) => k).filter(k => !has.has(k)); }
@@ -914,7 +1051,7 @@ audio.addEventListener("timeupdate", onTime);
 audio.addEventListener("ended", () => {
   if (aside) { setPlaying(false); return; }
   if (idx < S.length - 1) setTimeout(() => { if (playing && !aside) go(idx + 1, true); }, 900);
-  else { ended = true; started = false; clearFrames(); unforce(); setPlaying(false); cardTimer = setTimeout(() => { cardTimer = 0; if (ended) decisionCard(); }, CARD_WAIT); }   // the end: no dim left over the report
+  else { ended = true; started = false; clearFrames(); unforce(); setPlaying(false); hideHinh(); cardTimer = setTimeout(() => { cardTimer = 0; if (ended) decisionCard(); }, CARD_WAIT); }   // the end: no dim left over the report
 });
 function resume() {   // back to the exact sentence the talk was at before the question
   const {i, t} = resumeAt; resumeAt = null; idx = i; aside = false; ended = false; closeBubble(); stopVoice();
@@ -923,6 +1060,7 @@ function resume() {   // back to the exact sentence the talk was at before the q
   if (audio.readyState >= 1) seek(); else audio.addEventListener("loadedmetadata", seek, {once: true});
   shown = new Set(); let last = null;
   S[i].points.forEach((p, k) => { if (p.t <= t) { shown.add(k); last = [p, k]; } });
+  hinhKey = ""; hinhAt(t);
   clearFrames(); if (last) frame(pointEl(S[i], last[1], last[0]));
   caption(t); start();
 }
@@ -2455,7 +2593,7 @@ function answer(text, target, o) {
   if (!o.clip && !viVoice && !toldNoVoice && text !== D.fallback) { toldNoVoice = true;   // said once, under the panel's own hint: never inside an answer
     const h = root.querySelector("#panel .hint"); if (h) { const n = document.createElement("span"); n.className = "novoice"; n.textContent = " Máy anh chị chưa có giọng tiếng Việt, em hiện chữ thôi ạ."; h.appendChild(n); } }
   if (!aside && started && !ended) resumeAt = {i: idx, t: audio.currentTime};
-  aside = true; audio.pause(); stopVoice(); setPlaying(false); talkLine();
+  aside = true; audio.pause(); stopVoice(); setPlaying(false); talkLine(); hideHinh();
   if (target) frame(target); else { clearFrames(); placePanel(); }
   if (o.clip) { audio.src = "data:" + (o.clip.mime || "audio/mpeg") + ";base64," + o.clip.audio; audio.play().catch(() => {}); }
   else speak(text);
@@ -4214,6 +4352,16 @@ window.__clickyHoi = function (q, sel) {   // ask as a reader would, on a place 
   if (t) { pick(t); $("bq").value = q; ask(q, scope); return cellText($("ba")); }
   closeBubble(); openPanel(); ask(q, null); return cellText($("a"));
 };
+window.__clickyHinh = function (vai) {   // the picture of one beat with its sentence's frame, as the talk shows it (tests, visual check)
+  FAST = true; const h = hinhOf(vai); if (!h) return null;
+  for (const [i, s] of S.entries()) { const k = (s.vai || []).indexOf(vai); if (k < 0) continue;
+    idx = i; closePanel(); closeBubble(); clearFrames(); hideHinh(); showHinh(h, 3);
+    const p = s.points.find(q => (q.k ?? -1) === k) || s.points[k], t = p ? pointEl(s, s.points.indexOf(p), p) : null;
+    if (t) frame(t); placeHinh(t); redraw();
+    const q = rect($("hinh")), r = t ? rect(t) : null, v = vp();
+    return {hinh: [q.left, q.top, q.right, q.bottom].map(Math.round), place: r ? [r.left, r.top, r.right, r.bottom].map(Math.round) : null, view: [v.x, v.y, v.w, v.h].map(Math.round)}; }
+  return null;
+};
 window.__clickyKiemHinh = async function () {
   FAST = true;
   const wait = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -4274,7 +4422,14 @@ window.__clickyKiemHinh = async function () {
   const has = (txt, tok) => new RegExp("(^|[^\\d.,])" + tok.replace(/[.,]/g, "\\$&") + "(?![\\d]|[.,]\\d)").test(txt);
   for (const [i, s] of S.entries()) for (const [k, p] of s.points.entries()) {
     const t0 = pointEl(s, k, p); if (!t0) continue;
-    clearFrames(); frame(t0); await wait(); redraw(); await wait(); n++;
+    const pic = hinhOf((s.vai || [])[p.k ?? k] || ""); if (pic) { hideHinh(); showHinh(pic, 3); } else hideHinh();
+    clearFrames(); frame(t0); await wait(); redraw(); placeHinh(t0); await wait(); n++;
+    if (pic) {   // the picture of this beat: on the screen, off the bar, never on the place, its row label or its header
+      const q = $("hinh").style.visibility === "hidden" ? {left: 0, right: 0, top: 0, bottom: 0} : rect($("hinh")), r = rect(t0), sayP = "hình «" + pic.tieu_de.slice(0, 40) + "»";
+      if (q.top < v.y - 1 || q.bottom > v.y + v.h + 1 || q.left < v.x - 1 || q.right > v.x + v.w + 1) problems.push(sayP + ": hình ra ngoài màn hình");
+      if (hit(q, rect($("bar")))) problems.push(sayP + ": hình đè lên thanh Clicky");
+      if (r.height < v.h * 0.6 && hit(q, r)) problems.push(sayP + ": hình che chỗ đang khoanh");
+      if (r.height < v.h * 0.6 && guards(t0).strong.some(g => hit(g, q))) problems.push(sayP + ": hình che tên dòng hoặc tiêu đề cột của số đang nói"); }
     const x = (s.sentences || [])[p.k ?? k] || "", tf = frames[0] ? frames[0].target : t0, say = "câu «" + x.slice(0, 60) + "»";
     const evs = (s.ev || [])[p.k ?? k] || [], worked = evs.some(e => e[1] === "t");   // a worked-out line: its key figure is printed nowhere
     const away = new Set(evs.filter(e => e[1] === "b" || e[1] === "o").map(e => e[0]));   // the chip says «có trong báo cáo»: framed elsewhere on purpose
@@ -4286,6 +4441,7 @@ window.__clickyKiemHinh = async function () {
       if (hd.length && r.bottom - Math.min(...hd.map(q => q.top)) < (rect($("bar")).top - top) * 0.8 && hd.some(q => q.top < top - 1 || q.bottom > v.y + v.h))
         problems.push(say + ": tiêu đề bảng của dòng đang khoanh bị che hoặc ra ngoài màn hình"); }
   }
+  hideHinh();
   // the end card as the talk leaves it (round 15): after each choice it stays above the bar, «Gửi» can be pressed,
   // and no figure of the report is under it
   if (QUYET.length && S.length) {
@@ -4373,7 +4529,14 @@ window.__clickyKiemDienThoai = async function () {   // on a phone: the bar, the
     }
     Object.keys(DECIDED).forEach(k => { delete DECIDED[k]; }); Object.assign(DECIDED, JSON.parse(keepD)); save(JSON.parse(keepP)); draw(); closePanel();
   }
-  clearFrames(); FAST = false;
+  for (const h of HINH) {   // each picture with its sentence's frame: on the screen, above the bar, never on the place
+    const g = window.__clickyHinh(h.vai); await wait(); if (!g) continue;
+    const q = rect($("hinh")), t = frames[0] && frames[0].target, r = t ? rect(t) : null, say = "hình «" + h.tieu_de.slice(0, 40) + "»";
+    if (q.top < v.y - 1 || q.bottom > v.y + v.h + 1 || q.left < v.x - 1 || q.right > v.x + v.w + 1) out.push(say + ": hình ra ngoài màn hình");
+    if (hit(q, rect($("bar")))) out.push(say + ": hình đè lên thanh Clicky");
+    if (r && r.height < v.h * 0.6 && hit(q, r)) out.push(say + ": hình che chỗ đang khoanh");
+  }
+  hideHinh(); clearFrames(); FAST = false;
   return {problems: out, size: Math.round(v.w) + "x" + Math.round(v.h)};
 };
 })();

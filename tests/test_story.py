@@ -1807,3 +1807,58 @@ def test_gate_two_plan_minus_actual_variance_group_rows_row_notes_and_no_rate_on
     yml.write_text(yaml.safe_dump(script, allow_unicode=True, sort_keys=False), encoding="utf-8")
     with pytest.raises(clicky_html.PackError, match=r"0,6.*giảm.*tăng"):
         build(src)
+
+
+def test_pictures_are_drawn_from_locked_figures_with_a_source_and_never_on_the_place(report, drawn_report, tmp_path):
+    # gate 1, item 18: each beat may carry one picture; every figure is printed or worked out by code with its
+    # formula, a doubted figure is never drawn, plan / revised plan / actual never look the same, and the picture
+    # never covers the place the sentence frames, at a laptop, a small laptop and a phone
+    pytest.importorskip("playwright")
+    a, b = build(report), build(drawn_report)
+    src = tmp_path / "thang10.html"
+    shutil.copyfile(Path(__file__).parent / "fixtures" / "bao_cao_thang_kh_tru_th.html", src)
+    c = build(src)
+
+    def pics(out):
+        page = Path(out).read_text(encoding="utf-8")
+        data = json.loads(re.search(r'<script[^>]*id="clicky-data"[^>]*>(.*?)</script>', page, re.S).group(1))
+        return {h["vai"]: h for h in data["hinh"]}
+    A, B, F = pics(a["out"]), pics(b["out"]), pics(c["out"])
+    assert [(x["ten"], x["so"], x["loai"]) for x in A["quy_mo"]["cot"]] == [("AOP gốc", "165,5", "ke_hoach"), ("AOPR", "186,4", "dieu_chinh")]
+    assert A["quy_mo"]["chenh"]["so"] == "20,9" and A["quy_mo"]["nguon"].startswith("Bảng «")
+    steps = A["dong_luc"]["buoc"]
+    assert steps[0]["ten"] == "khối Bán hàng" and steps[0]["so"] == "14,1" and A["dong_luc"]["ty_trong"]["so"] == "67"
+    assert abs(sum(s["v"] for s in steps) - 20.9) < 0.051 and A["dong_luc"]["chi_phi"] is True
+    assert [x["so"] for x in A["tran"]["cot"]] == ["186,4", "177,5"] and A["tran"]["chenh"]["so"] == "8,9"
+    assert [x["so"] for x in A["phan_con_lai"]["cot"]] == ["12,6", "8", "7,2"]   # the printed 12,6% first, the rest worked out
+    assert "18,0" not in json.dumps(B, ensure_ascii=False) and "120,0" not in json.dumps(B, ensure_ascii=False)   # doubted: never drawn
+    assert B["mau_thuan"]["tinh"] and B["mau_thuan"]["cot"][0]["cong_thuc"] == "(129,0 − 110,0) ÷ 110,0 × 100"
+    assert [(x["so"], x["v"] < 0) for x in F["dong_luc"]["buoc"]][:2] == [("1,4", False), ("0,6", True)]   # KH − TH read the right way round
+    assert F["quy_mo"]["cot"][1]["loai"] == "thuc_te"
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        for out, vais in ((a["out"], A), (b["out"], B), (c["out"], F)):
+            for w, h in ((1366, 768), (911, 512), (390, 844)):
+                pg = browser.new_page(viewport={"width": w, "height": h})
+                pg.goto(Path(out).as_uri())
+                pg.wait_for_timeout(500)
+                for vai in vais:
+                    g = pg.evaluate("v => window.__clickyHinh(v)", vai)
+                    if g is None:                  # its line is off in this talk
+                        continue
+                    shown = pg.evaluate("() => { const b = document.getElementById('clicky-host').shadowRoot.getElementById('hinh'); "
+                                        "return b.style.visibility !== 'hidden' ? b.innerText : ''; }")
+                    q, r = g["hinh"], g["place"]
+                    if shown:
+                        assert "Nguồn:" in shown, (vai, shown)
+                        assert q[0] >= -1 and q[1] >= -1 and q[2] <= w + 1 and q[3] <= h + 1, (out, w, vai, q)
+                        if r and r[3] - r[1] < h * 0.6:
+                            assert q[2] <= r[0] or r[2] <= q[0] or q[3] <= r[1] or r[3] <= q[1], (out, w, vai, q, r)
+                    else:
+                        assert h < 600, (out, w, vai)   # only a short screen lets the place win over its picture
+                pg.close()
+        browser.close()
