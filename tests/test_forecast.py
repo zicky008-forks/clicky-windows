@@ -243,3 +243,16 @@ def test_the_robot_grades_a_real_run_against_its_own_sum_of_the_case(tmp_path, m
                                                        "Chi phí cả năm ước đúng từng đồng",
                                                        "Nói rõ dòng bản dự báo thiếu lấy theo kế hoạch năm",
                                                        "File của case không bị sửa"}
+
+
+def test_an_estimate_file_whose_version_column_names_no_forecast_still_fills_the_months_to_come(tmp_path):
+    """R7 (grader): the folder's estimate file covers the months to come; its version column says only 'V2'.
+    The file's name says what it is, so the months to come come from it, not from the annual plan."""
+    d = case(tmp_path, plans={"AOP_2026.csv": fs.plan_rows("AOP"),
+                              "Uoc tinh T11-T12 2026.csv": fs.plan_rows("V2", approved="05/11/2026", scale=2)})
+    f = forecast.compute(d)
+    assert (f.target.version, f.basis.version) == ("AOP", "V2")
+    assert f.row("opex").rest(f.rest) == plan_total(REST, scale=2)
+    assert "V2" in " ".join(f.said) and "05/11/2026" in " ".join(f.said)
+    # a file named as an estimate that holds the annual plan is still the plan
+    assert not forecast.Version("AOP", ["Uoc tinh AOP.csv"]).forecast

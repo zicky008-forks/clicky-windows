@@ -40,6 +40,9 @@ COST, SALES = "chi phí", "doanh thu và giá vốn"
 LINE_WORDS = {COST: "dòng chi phí (bộ phận × yếu tố)", SALES: "dòng doanh thu và giá vốn (mã hàng × kênh)"}
 
 
+PLAN_NAME = re.compile(r"\b(aop|ke hoach|kh|budget|ngan sach|plan)\b")    # an annual plan, whatever its file says
+
+
 class NamedVersionMissing(Exception):
     """The catalogue names a forecast version the folder does not hold: asked, never guessed."""
 
@@ -56,7 +59,12 @@ class Version:
 
     @property
     def forecast(self) -> bool:
-        return file_roles.is_forecast(self.version)
+        """Named as a forecast, or kept only in files named as an estimate ('Uoc tinh Q4.xlsx' whose version column
+        says 'V2'): the user's file name says what the figures are."""
+        if file_roles.is_forecast(self.version):
+            return True
+        return bool(self.files) and not PLAN_NAME.search(key(self.version)) and \
+            all(file_roles.is_estimate(Path(f).stem) for f in self.files)
 
     def said(self) -> str:
         when = (f", duyệt ngày {self.approved[8:10]}/{self.approved[5:7]}/{self.approved[:4]}"
