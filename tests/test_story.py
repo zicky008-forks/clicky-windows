@@ -2462,3 +2462,53 @@ def test_rerun_seven_one_off_settled_events_shared_budget_elsewhere_new_items_an
             x = typed(q)
             assert x.startswith("LN-KD50 – Kem dưỡng ẩm hũ 50ml: Ảnh hưởng giá làm giảm 1,4 tỷ"), (q, x)
         browser.close()
+
+
+def test_rerun_eight_split_rows_hyphen_plans_new_items_asks_and_product_effects(tmp_path, monkeypatch):
+    # independent grader, gate 2 rerun 8 (our own synthetic shapes): a row split from another, its plan written «-»
+    # and «kế hoạch của dòng này» in the next sentence, left the mother's to-date gap said alone (TB9); «Chi phí KOL là
+    # gì, sao không có trong kế hoạch» was read as an unknown abbreviation (TB29); the numbered asks were quoted as the
+    # plan's source (TB28); a product table headed «Mã hàng» with «Hiệu ứng giá», asked with «khuyến mãi» or one word
+    # and the size, must read its price-effect cell, never the talk's or a note's «% giảm giá» (TB22).
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    fx = Path(__file__).parent / "fixtures"
+    reps = {}
+    for name in ("bao_cao_ban_chat_3", "bao_cao_ma_hang_hieu_ung"):
+        src = tmp_path / (name + ".html")
+        src.write_text((fx / (name + ".html")).read_text(encoding="utf-8"), encoding="utf-8")
+        reps[name] = build(src)
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 900})
+
+        def typed(q):                          # the reader's way: Escape, skip the talk, type in «Hỏi Vera», Enter
+            pg.keyboard.press("Escape")
+            pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const e = r.getElementById('clicky-skip') || document.getElementById('clicky-skip'); if (e) e.click(); }")
+            pg.wait_for_timeout(300)
+            box = pg.locator("#clicky-host #q")
+            box.fill(q)
+            box.press("Enter")
+            pg.wait_for_timeout(900)
+            return pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const b = r.getElementById('bub'); "
+                               "return ((b && !b.classList.contains('hidden')) ? r.getElementById('ba') : r.getElementById('a')).innerText; }")
+        pg.goto(Path(reps["bao_cao_ban_chat_3"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        x = typed("Truyền thông số lũy kế chênh lệch bao nhiêu so với kế hoạch?")
+        assert x.startswith("Kế hoạch của Truyền thông số (digital) được lập gộp với Chi phí KOL/KOC") and "Gộp lại, thực hiện 66,0 tỷ (em tính: 62,0 + 4,0)" in x, x
+        x = typed("Chi phí KOL là gì, sao không có trong kế hoạch?")
+        assert x.startswith("Báo cáo ghi: «Từ tháng 7, chi phí KOL được tách khỏi truyền thông số thành dòng riêng. Kế hoạch của dòng này vẫn nằm trong ngân sách truyền thông số.»"), x
+        assert "thực hiện lũy kế 10 tháng: 4,0 tỷ" in x and "phê duyệt" not in x, x
+        x = typed("Số kế hoạch lấy từ bản nào?")
+        assert "AOP 2026 bản Hội đồng duyệt ngày 18/12/2025" in x and "(1)" not in x and "phê duyệt" not in x, x
+        pg.goto(Path(reps["bao_cao_ma_hang_hieu_ung"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        for q in ("Giảm giá kem dưỡng ẩm hũ 50ml làm mất bao nhiêu?", "Khuyến mãi kem dưỡng ẩm 50ml làm mất bao nhiêu doanh thu?",
+                  "Giảm giá dòng kem 50ml làm mất bao nhiêu?"):
+            x = typed(q)
+            assert x.startswith("LN-KD50 – Kem dưỡng ẩm hũ 50ml: Hiệu ứng giá làm giảm 1,4 tỷ (cột «Hiệu ứng giá» ghi (1,4))."), (q, x)
+        browser.close()
