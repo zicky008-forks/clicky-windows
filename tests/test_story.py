@@ -2665,3 +2665,52 @@ def test_rerun_eleven_a_row_with_its_own_plan_is_never_merged_and_the_reports_ot
         x = typed("Kênh truyền thống tháng 10 chênh lệch bao nhiêu so với kế hoạch?")
         assert x.startswith("Kênh truyền thống cao hơn kế hoạch 150,0 triệu"), x
         browser.close()
+
+
+def test_rerun_twelve_two_plan_columns_keep_their_own_names_and_year_answers_never_take_a_month_sentence(tmp_path, monkeypatch):
+    # independent grader, gate 2 rerun 12 (our own synthetic shapes): a one-row volume-cost table with «KH gốc» and «KH linh hoạt»
+    # under a to-date heading, its label with «(lũy kế)», lost its own-plan comparison and could name one plan's gap by the other;
+    # a yes/no question on the year led with the month's conclusion and a false «lệch nhau»; «EBIT» was written «eBIT».
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    fx = Path(__file__).parent / "fixtures"
+    src = tmp_path / "bao_cao_hai_ke_hoach_ky.html"
+    src.write_text((fx / "bao_cao_hai_ke_hoach_ky.html").read_text(encoding="utf-8"), encoding="utf-8")
+    rep = build(src)
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 900})
+
+        def typed(q):                          # the reader's way: Escape, skip the talk, type in «Hỏi Vera», Enter
+            pg.keyboard.press("Escape")
+            pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const e = r.getElementById('clicky-skip') || document.getElementById('clicky-skip'); if (e) e.click(); }")
+            pg.wait_for_timeout(300)
+            box = pg.locator("#clicky-host #q")
+            box.fill(q)
+            box.press("Enter")
+            pg.wait_for_timeout(900)
+            return pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const b = r.getElementById('bub'); "
+                               "return ((b && !b.classList.contains('hidden')) ? r.getElementById('ba') : r.getElementById('a')).innerText; }")
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        for q in ("Chi phí bao bì theo sản lượng chênh lệch bao nhiêu so với kế hoạch?", "Chi phí bao bì theo sản lượng vượt kế hoạch bao nhiêu?",
+                  "Chi phí bao bì theo sản lượng lũy kế chênh lệch bao nhiêu?"):
+            x = typed(q)
+            assert "thấp hơn kế hoạch gốc 0,2 tỷ (em tính: 11,8 − 12,0)" in x, (q, x)   # both comparisons, each with its own plan
+            assert "So với kế hoạch linh hoạt, cao hơn 0,8 tỷ (cột «Chênh so KH linh hoạt» ghi 0,8)" in x, (q, x)
+            for s in x.split(". "):                # never one plan's name with the other plan's column or figure
+                assert not ("gốc" in s and ("linh hoạt" in s or "0,8" in s)), (q, s)
+        x = typed("Chi phí bao bì theo sản lượng có vượt ngân sách không?")
+        assert x.startswith("Không so với kế hoạch gốc; có so với kế hoạch linh hoạt"), x
+        x = typed("EBIT cả năm có đạt kế hoạch không?")
+        assert x.startswith("Có. EBIT ước cả năm 236,0 tỷ"), x
+        assert "tháng 10 thấp hơn" not in x and "lệch nhau" not in x and "eBIT" not in x and "Gửi anh" not in x, x
+        x = typed("EBIT cả năm chênh lệch bao nhiêu so với kế hoạch?")
+        assert x.startswith("EBIT ước cả năm 236,0 tỷ, cao hơn kế hoạch năm 6,0 tỷ") and "Báo cáo ghi" not in x, x
+        x = typed("EBIT tháng 10 có đạt kế hoạch không?")
+        assert x.startswith("Không. EBIT") and "thấp hơn 3,2 tỷ" in x, x
+        browser.close()
