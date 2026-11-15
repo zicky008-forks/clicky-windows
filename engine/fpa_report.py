@@ -201,7 +201,12 @@ def compute(folder: Path, version: Optional[str] = None, plan_file: Optional[str
     if costs is not None and split_planned(m):           # no plan by department: no variance to classify
         rev = m.row("revenue")
         driver = (rev.actual, rev.plan) if rev is not None and rev.plan and rev.has_plan else None
-        m.classified = variance_class.classify(costs, b.gl, b.plans, b.config, driver)
+        from engine import drivers
+        plan_files = [folder / f for f in {r.file for r in b.plans} | {r.file for r in b.sku_plans}
+                      if (folder / f).exists()]
+        rates = drivers.read(plan_files, b.config, {r.element for r in b.plans if r.element})
+        volume = sales_volume(sales) if sales is not None else None
+        m.classified = variance_class.classify(costs, b.gl, b.plans, b.config, driver, rates, volume)
     m.checks = company_checks(m)
     m.said = _said(m)
     return m
@@ -849,3 +854,15 @@ def understood(m: Month) -> list:
     if left:
         out.append(f"Có {len(left)} điều em chưa tính vào số hoặc cần chị cho biết, em ghi trong Phiếu nhận file.")
     return out
+
+
+def sales_volume(sales) -> Optional[tuple]:
+    """(actual, plan) volume of the month in the catalogue's standard unit; actual None when a row could not be
+    converted (then no cost is flexed by volume, and the unconverted rows are already said)."""
+    lines = list(getattr(sales, "month", []) or [])
+    if not lines:
+        return None
+    if any(l.qty is None for l in lines if l.actual_from):
+        return (None, None)
+    return (sum((l.qty for l in lines if l.actual_from and l.qty), ZERO),
+            sum((l.plan_qty or ZERO for l in lines if l.plan_from), ZERO))

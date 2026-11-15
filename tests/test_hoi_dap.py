@@ -593,3 +593,21 @@ def test_an_unknown_code_asked_by_its_area_and_the_held_lines_still_say_what_is_
     # a held line keeps its known cause in the report (R5): MT1's advertising is a one-off of its own
     held = next(v for v in b.variances if v["label"].startswith("MT1") and "Quảng cáo" in v["label"])
     assert held["verdict"] == "chờ chị gán mã" and "Khoản một lần" in held["causes"]
+
+
+def test_an_unknown_code_asked_by_a_one_word_area_with_a_what_is_it_cue(tmp_path):
+    d = fs.opex_folder(tmp_path / "Y")
+    rows = fs.gl_rows()[:-1]
+    rows.append(["20/10/2026", "PC96001", "10", "2026", "6418", "331", "HRC", "QC", "Trưng bày kênh Horeca T10",
+                 "30000000"])
+    fs.write_csv(d / "SoChiTietChiPhi_2026.csv", rows)
+    b = hoi_dap.read(fpa_report.write(fpa_report.compute(d))["xlsx"])
+    a = hoi_dap.answer(b, "Horeca là gì, sao không có trong kế hoạch?")
+    assert (a.query.intent, a.query.target) == ("unknown_code", "HRC"), a.query
+    assert hoi_dap.answer(b, "Chi phí Horeca?").query.intent != "unknown_code"     # no cue: not guessed
+
+
+def test_a_product_the_report_cannot_pin_down_is_parked_never_the_total(book):
+    a = hoi_dap.answer(book, "Giảm giá Trà xanh chai 1 lít làm mất bao nhiêu?")
+    assert a.status == hoi_dap.NO_FIGURE and a.cites == []
+    assert hoi_dap.answer(book, "Ảnh hưởng của giá bán bao nhiêu?").query.intent == "bridge"

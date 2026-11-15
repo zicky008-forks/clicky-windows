@@ -310,27 +310,52 @@ def _element_by_word(t: str, book: Book):
     return hits.pop() if len(hits) == 1 else None
 
 
+PACK_WORDS = {"chai", "lon", "hop", "goi", "thung", "tui", "loc", "vi", "can", "binh", "ly", "coc", "hu", "sp"}
+UNIT_ALIASES = ((r"(\d)\s*(lit|lít|litre|liter)\b", r"\1l"), (r"(\d)\s*(gr|gram)\b", r"\1g"))
+
+
 def _glue_units(text: str) -> str:
-    return re.sub(r"(\d)\s+(ml|l|lit|g|gr|kg|chai|lon|hop|goi|thung)\b", r"\1\2", text)
+    for pat, rep in UNIT_ALIASES:
+        text = re.sub(pat, rep, text)
+    return re.sub(r"(\d)\s+(ml|l|g|kg|cl|oz)\b", r"\1\2", text)
+
+
+def _name_parts(name: str) -> tuple:
+    """(the name's words without pack words or sizes, its sizes), folded: 'Nước cam lon 330 ml' -> ({nuoc, cam},
+    {330ml})."""
+    words = _glue_units(key(name)).split()
+    sizes = {w for w in words if any(ch.isdigit() for ch in w)}
+    return {w for w in words if w not in sizes and w not in PACK_WORDS and len(w) >= 2}, sizes
 
 
 def _sku_named(t: str, question: str, book: Book) -> Optional[str]:
-    """The one SKU the question names: by its code, its name, or every word of its name in any order with other
-    words between ('Trà xanh chai 500 ml' for 'Trà xanh 500ml')."""
-    hits = set()
+    """The one SKU the question names: by its code, or by its name's words in any order with pack words left out
+    ('Trà xanh chai 500 ml' for 'Trà xanh 500ml'); a size in the question must be the SKU's size."""
+    return _sku_match(t, book)[0]
+
+
+def _sku_match(t: str, book: Book) -> tuple:
+    """(SKU or None, whether the question names a product at all). A question that names a product the report
+    cannot pin down to one SKU is parked, never answered with the total."""
     tg = _glue_units(t)
     words = set(tg.split())
+    asked_sizes = {w for w in words if re.fullmatch(r"\d+(?:[.,]\d+)?(ml|l|g|kg|cl|oz)", w)}
+    codes = {r["sku"] for r in book.skus if key(r["sku"]) and _has(t, [key(r["sku"])])}
+    if len(codes) == 1:
+        return codes.pop(), True
+    hits, named = set(), bool(asked_sizes)
     for r in book.skus:
-        code, name = key(r["sku"]), _glue_units(key(r["name"]))
-        tokens = [w for w in name.split() if len(w) >= 2]
-        if (code and _has(t, [code])) or (len(name) >= 4 and _has(tg, [name])) \
-                or (len(tokens) >= 2 and all(w in words for w in tokens)):
+        main, sizes = _name_parts(r["name"])
+        if not main:
+            continue
+        seen = main & words
+        if len(main) >= 2 and len(seen) >= 2:
+            named = True
+        if seen == main and (not asked_sizes or asked_sizes & sizes or not sizes):
             hits.add(r["sku"])
-    if len(hits) > 1:                                  # 'Trà xanh 500ml' and 'Trà xanh 1L': the size tells them apart
-        sized = {h for h in hits if any(w in words for w in _glue_units(key(next(
-            r["name"] for r in book.skus if r["sku"] == h))).split() if any(ch.isdigit() for ch in w))}
-        hits = sized if len(sized) == 1 else hits
-    return hits.pop() if len(hits) == 1 else None
+    if len(hits) > 1 and asked_sizes:
+        hits = {h for h in hits if asked_sizes & _name_parts(next(r["name"] for r in book.skus if r["sku"] == h))[1]}
+    return (hits.pop() if len(hits) == 1 else None), named or bool(hits)
 
 
 AREA_STOP = {"chi phi", "phi chi", "ke hoach", "ngan sach", "thang", "nam", "bo phan", "nam o", "o khoi", "cua",
@@ -361,7 +386,23 @@ def _code_by_area(question: str, book: Book) -> Optional[str]:
         for code, q in quotes.items():
             if any(f" {w} " in t for w in _area_words(q)):
                 hits.add(code)
+            elif _has(t.strip(), UNKNOWN_CUES) and any(f" {w} " in t for w in _area_single(q, book)):
+                hits.add(code)                          # 'Horeca là gì, sao không có trong kế hoạch?'
     return hits.pop() if len(hits) == 1 else None
+
+
+UNKNOWN_CUES = ("la gi", "la cai gi", "thuoc dau", "thuoc bo phan nao", "khong co trong ke hoach", "ngoai ke hoach",
+                "chua co ke hoach", "khong co ke hoach", "chua co trong ke hoach", "o dau ra", "tu dau ra", "la ai")
+GENERIC = {"chi", "phi", "thang", "nam", "phong", "cong", "tac", "van", "ban", "hang", "quan", "doanh", "nghiep",
+           "nhan", "vien", "luong", "dich", "mua", "ngoai", "khac", "tien", "hoa", "don", "thue", "khoan", "muc",
+           "ghi", "chu", "nay", "cac", "nhung", "theo", "cho", "cua", "trong", "ngan", "sach", "hoach", "moi", "du"}
+
+
+def _area_single(text: str, book: Book) -> set:
+    """One-word names in a quote ('Horeca', 'Online'), when no known department or element shares the word."""
+    known = {w for r in book.costs for n in (r["dept"], r["element"]) for w in key(n).split()}
+    return {w for w in key(text).split() if len(w) >= 4 and not any(ch.isdigit() for ch in w)
+            and w not in GENERIC and w not in known}
 
 
 def _open_code(question: str, book: Book) -> Optional[str]:
@@ -420,11 +461,11 @@ def parse(question: str, book: Book) -> Query:
                 break
     if target is None and named is None and _has(t, UNUSUAL_WORDS + ("yeu to", "khoan muc")):
         target = _element_by_word(t, book)
-    sku = _sku_named(t, question, book)
+    sku, product = _sku_match(t, book)
     code = _open_code(question, book) or (_code_by_area(question, book) if target is None else None)
     part = next((p for p, words in BRIDGE_PARTS if _has(t, words)), None)
     absent = next((name for word, name in ABSENT if _has(t, [word])), None)
-    if contrast and line in ("gp", "op", "revenue") and not sku and not absent:
+    if contrast and line in ("gp", "op", "revenue") and not sku and not product and not absent:
         why = True                                     # 'bán nhiều hơn mà lãi thấp hơn': a why without the word
         part = None
     if absent:
@@ -433,8 +474,8 @@ def parse(question: str, book: Book) -> Query:
         q.intent = "ly"
     elif _has(t, PREV_WORDS):
         q.intent = "prev"
-    elif sku:
-        q.intent, q.target, q.part = "sku_one", sku, part
+    elif sku or (product and book.skus and (part or _has(t, BRIDGE_WORDS) or why)):
+        q.intent, q.target, q.part = "sku_one", sku, part     # a product the report cannot pin down: parked
     elif code or _has(t, UNKNOWN_CODE_WORDS):
         q.intent, q.target = "unknown_code", code
     elif _has(t, BASIS_WORDS):
@@ -792,8 +833,9 @@ def reading(book: Book, q: Query) -> str:
         said = f"{line or 'số liệu'} theo mã hàng, kênh hoặc mảng"
     elif i == "sku_one":
         names = {"price": "ảnh hưởng giá bán", "cost": "ảnh hưởng giá vốn", "mix": "ảnh hưởng cơ cấu"}
-        said = (f"{names.get(q.part or '', 'sản lượng, giá bán và tác động lên lợi nhuận gộp')} của mã {q.target}, "
-                f"{month}, {against}")
+        said = (f"{names.get(q.part or '', 'sản lượng, giá bán và tác động lên lợi nhuận gộp')} của "
+                + (f"mã {q.target}" if q.target else "một mã hàng em chưa xác định được trong báo cáo")
+                + f", {month}, {against}")
     elif i == "unknown_code":
         said = f"mã {q.target} chưa có trong danh mục" if q.target else "các mã chưa có trong danh mục"
     elif i == "absent":

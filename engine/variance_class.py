@@ -185,8 +185,11 @@ def _same(a: Decimal, b: Decimal) -> bool:
     return b != 0 and abs(a - b) <= abs(b) * SIMILAR
 
 
-def classify(v, gl: list, plans: list, config=None, driver: Optional[tuple] = None) -> list:
-    """Every month line of v, classified. driver: (actual, plan) revenue of the month, for variable costs."""
+def classify(v, gl: list, plans: list, config=None, driver: Optional[tuple] = None, rates=None,
+             volume: Optional[tuple] = None) -> list:
+    """Every month line of v, classified. driver: (actual, plan) revenue of the month, for variable costs.
+    rates: engine.drivers.Rates; volume: (actual, plan) sales volume of the month in the standard unit. A cost with a
+    volume rate is judged against rate x actual volume (its share of the element when several departments hold it)."""
     amount_t, pct_t = thresholds(config)
     var_codes = variable(config)
     year, actual, plan, entries = _series(v, gl, plans)
@@ -202,7 +205,22 @@ def classify(v, gl: list, plans: list, config=None, driver: Optional[tuple] = No
         if not c.pending:
             c.depends = depends.get(k, "")
         # volume first: a variable cost is judged against the flexed plan
-        if l.element in var_codes and driver and driver[1]:
+        rate = rates.get(l.element) if rates is not None else None
+        element_plan = sum((x.plan for x in v.month if x.element == l.element), ZERO)
+        if rates is not None and l.element in rates.clash:
+            c.maybe = ("Có " + str(len(rates.clash[l.element])) + " định mức khác nhau cho yếu tố này ("
+                       + "; ".join(f"{fmt(x.rate)} đ/{x.unit} ở {x.where}" for x in rates.clash[l.element])
+                       + "), em chưa tính ngân sách linh hoạt, chị cho biết dùng định mức nào.")
+        elif rate is not None and volume is not None and volume[0] is not None and element_plan and l.plan:
+            share = l.plan / element_plan
+            c.flex = (rate.rate * volume[0] * share).quantize(Decimal(1))
+            c.causes.append(Cause(VOLUME, c.flex - l.plan,
+                 f"Đây là chi phí theo sản lượng: định mức {fmt(rate.rate)} đ/{rate.unit} × sản lượng thực hiện "
+                 f"{fmt(volume[0])} {rate.unit}"
+                 + (f" × phần của dòng này {str((share * 100).quantize(Decimal('0.1'))).replace('.', ',')}%" if share != 1 else "")
+                 + f" = ngân sách linh hoạt {fmt(c.flex)} đ (định mức lấy từ {rate.where}); "
+                 f"phần theo sản lượng {fmt(c.flex - l.plan)} đ."))
+        elif l.element in var_codes and driver and driver[1]:
             ratio = Decimal(driver[0]) / Decimal(driver[1])
             c.flex = (l.plan * ratio).quantize(Decimal(1))
             c.causes.append(Cause(VOLUME, c.flex - l.plan,       # either side: the rest is spending against the flex
