@@ -243,3 +243,58 @@ def test_the_robot_grades_a_real_run_against_its_own_sum_of_the_case(tmp_path, m
                                                        "Chi phí cả năm ước đúng từng đồng",
                                                        "Nói rõ dòng bản dự báo thiếu lấy theo kế hoạch năm",
                                                        "File của case không bị sửa"}
+
+
+def test_an_estimate_file_whose_version_column_names_no_forecast_still_fills_the_months_to_come(tmp_path):
+    """R7 (grader): the folder's estimate file covers the months to come; its version column says only 'V2'.
+    The file's name says what it is, so the months to come come from it, not from the annual plan."""
+    d = case(tmp_path, plans={"AOP_2026.csv": fs.plan_rows("AOP"),
+                              "Uoc tinh T11-T12 2026.csv": fs.plan_rows("V2", approved="05/11/2026", scale=2)})
+    f = forecast.compute(d)
+    assert (f.target.version, f.basis.version) == ("AOP", "V2")
+    assert f.row("opex").rest(f.rest) == plan_total(REST, scale=2)
+    assert "V2" in " ".join(f.said) and "05/11/2026" in " ".join(f.said)
+    # a file named as an estimate that holds the annual plan is still the plan
+    assert not forecast.Version("AOP", ["Uoc tinh AOP.csv"]).forecast
+
+
+def _le_file(d, unit_row=True):
+    """A P&L-level latest estimate the way FP&A teams keep one: no version column, 'Txx TH/UT' month columns."""
+    rows = [["DỰ BÁO CẢ NĂM 2026 (THỰC HIỆN + ƯỚC TÍNH) - LE 9+3"],
+            ["Lập ngày 05/10/2026. T01–T09 thực hiện (TH), T10–T12 ước tính (UT)."
+             + (" ĐVT: triệu đồng" if unit_row else "")],
+            ["Chỉ tiêu", "T09 TH", "T10 UT", "T11 UT", "T12 UT", "Cả năm (9+3)"],
+            ["Doanh thu thuần", 1000, 1200, 1300, 1400, 12000],
+            ["Giá vốn hàng bán", "(700)", "(800)", "(850)", "(900)", 8000],
+            ["Lợi nhuận gộp", 300, 400, 450, 500, 4000],
+            ["Chi phí bán hàng", 100, 110, 120, 130, 1300],
+            ["Chi phí quản lý doanh nghiệp", 50, 55, 60, 65, 600],
+            ["Lợi nhuận hoạt động", 150, 235, 270, 305, 2100]]
+    ss.write_xlsx(d / "Uoc tinh LE 9+3 2026.xlsx", {"LE 9+3": rows})
+
+
+def test_a_pl_level_estimate_file_fills_the_months_after_the_report_month(tmp_path):
+    """R7 (grader): the estimate file has 'T11 UT' columns and no version column. The months after October come
+    from it (in its unit), October stays actual although the file still estimates it, profits are worked out."""
+    d = case(tmp_path, plans={"AOP_2026.csv": fs.plan_rows("AOP")})
+    _le_file(d)
+    f = forecast.compute(d)
+    M = D(10) ** 6
+    assert f.estimate is not None and f.estimate.made_on == "2026-10-05"
+    rev, cogs, opex, gp, op = (f.row(c) for c in ("revenue", "cogs", "opex", "gp", "op"))
+    assert rev.months["2026-11"] == 1300 * M and cogs.months["2026-12"] == 900 * M
+    assert opex.months["2026-11"] == (120 + 60) * M
+    assert gp.months["2026-11"] == (1300 - 850) * M and op.months["2026-12"] == (1400 - 900 - 130 - 65) * M
+    assert rev.months["2026-10"] == f.month.row("revenue").actual           # the report month stays actual
+    said = " ".join(f.said)
+    assert "Uoc tinh LE 9+3 2026.xlsx, lập ngày 05/10/2026" in said and "tháng 10/2026 trong file vẫn là ước tính" in said
+    out = forecast.write(f)
+    assert out["verified"]
+    receipt = load_workbook(out["xlsx"])[forecast.RECEIPT]
+    row = next(r for r in receipt.iter_rows(values_only=True) if r[0] == "Uoc tinh LE 9+3 2026.xlsx") if any(
+        r[0] == "Uoc tinh LE 9+3 2026.xlsx" for r in receipt.iter_rows(values_only=True)) else None
+    assert row is None or "không dùng" not in str(row[1]), row
+    basis = load_workbook(out["xlsx"])[forecast.PNL]["A2"].value                # R7b: the source names the file
+    rest = next(x for x in basis.split(";") if x.strip().startswith("dự báo"))
+    assert "Uoc tinh LE 9+3 2026.xlsx, lập ngày 05/10/2026" in rest and "TH đến T10/2026 + UT các tháng sau" in rest
+    assert "AOP" not in rest, basis

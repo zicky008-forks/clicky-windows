@@ -64,6 +64,16 @@ class Part:
     mix: Decimal = ZERO
     price: Decimal = ZERO
     cost: Decimal = ZERO
+    qty_plan: Decimal = ZERO                # what the reader needs to retell the SKU's story
+    qty_actual: Decimal = ZERO
+    price_plan: Decimal = ZERO              # per unit; for an unplanned SKU, as sold
+    price_actual: Optional[Decimal] = None  # per unit; None when the SKU was not sold
+    cost_plan: Decimal = ZERO
+    cost_actual: Optional[Decimal] = None
+
+    @property
+    def total(self) -> Decimal:
+        return self.mix + self.price + self.cost
 
 
 @dataclass
@@ -127,7 +137,10 @@ def _bridge(actual: dict, plan: dict) -> Bridge:
     for s in skus:
         price = a[s].revenue - pb[s] * a[s].qty      # (Pa - Pb) x Qa
         cost = -(a[s].cogs - cb[s] * a[s].qty)       # -(Ca - Cb) x Qa
-        parts.append(Part(s, mix=a[s].qty * gb[s] - qa * (b[s].qty / qb) * gb[s], price=price, cost=cost))
+        parts.append(Part(s, mix=a[s].qty * gb[s] - qa * (b[s].qty / qb) * gb[s], price=price, cost=cost,
+                          qty_plan=b[s].qty, qty_actual=a[s].qty, price_plan=pb[s], cost_plan=cb[s],
+                          price_actual=a[s].revenue / a[s].qty if a[s].qty else None,
+                          cost_actual=a[s].cogs / a[s].qty if a[s].qty else None))
     # Σ (Qa - ΣQa x s_b) x g_b = ΣQa·g_b - shared; the per-SKU split above is for showing, the total is exact.
     mix = sum((a[s].qty * gb[s] for s in skus), ZERO) - shared
     return Bridge(gp_b, gp_a, volume, mix, sum((p.price for p in parts), ZERO), sum((p.cost for p in parts), ZERO),

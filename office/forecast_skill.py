@@ -60,7 +60,9 @@ def beats_for(f, out: dict) -> list:
                   mark="ok" if ok else "bad", label=f"{top.name} cả năm ước" if top else "Dự báo",
                   value=f"{fmt(full)} đ" if top else "", note=f"Kế hoạch năm {fmt(top.plan_full)} đ" if top else "")]
     if f.rest:
-        if f.basis is not None and f.basis is not f.target:
+        if getattr(f, "estimate", None) is not None:
+            beats.append(Beat(f"Các tháng còn lại em lấy theo {f.estimate.said()}, so với kế hoạch năm."))
+        elif f.basis is not None and f.basis is not f.target:
             beats.append(Beat(f"Các tháng còn lại em lấy theo {f.basis.said()}, so với kế hoạch năm."))
         else:
             beats.append(Beat("Thư mục chưa có bản dự báo, nên các tháng còn lại em lấy theo kế hoạch năm.",

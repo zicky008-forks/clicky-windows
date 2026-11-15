@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Optional
 
@@ -86,19 +86,49 @@ class Month:
         return next((r for r in self.pnl if r.code == code), None)
 
 
+def _terms(text: str) -> set:
+    words = [w for w in key(text).split() if not w.isdigit()]
+    return {w for w in words if len(w) >= 5} | {f"{a} {b}" for a, b in zip(words, words[1:])}
+
+
+def code_words(code: str, gl: list) -> set:
+    """What a department code is known by: the code and its parts, the site, division or channel of its ledger
+    lines, and the words its voucher descriptions share (in at least half of its lines and in few other lines):
+    'Chi phí VP Miền Trung T10' -> 'mien trung'."""
+    from collections import Counter
+    words = {key(code)} | {key(x) for x in re.split(r"[-_./ ]+", str(code)) if len(x) >= 2}
+    mine = [e for e in gl if e.dept == code]
+    for e in mine:
+        words |= {key(x) for x in (e.site, e.division, e.channel) if x and len(key(x)) >= 2}
+    texts = [_terms(e.text) for e in mine if e.text]
+    others = [_terms(e.text) for e in gl if e.dept != code and e.text]
+    if texts:
+        here = Counter(t for ts in texts for t in ts)
+        there = Counter(t for ts in others for t in ts)
+        words |= {t for t, n in here.items() if n * 2 >= len(texts) and there[t] <= max(1, len(others) * 0.05)}
+    words.discard("")
+    return words
+
+
+def voucher_text(code: str, gl: list) -> str:
+    """The voucher description the code's lines use most, so the user (and a Board question that names the area,
+    not the code) can tell what the code is. Figures in it are dropped: the receipt line is a question, not a number."""
+    from collections import Counter
+    texts = Counter(re.sub(r"\s+", " ", re.sub(r"\S*\d\S*", "", e.text)).strip(" -:,") for e in gl
+                    if e.dept == code and e.text)
+    texts.pop("", None)
+    return texts.most_common(1)[0][0][:80] if texts else ""
+
+
 def notes_about(notes: list, codes: list, gl: list) -> list:
     """The plan's notes that speak of the department codes in question: a note that names the code (or a part of
-    it, 'KD1' in 'KD1-MB'), or the site, division or channel its ledger lines carry. A note about something else is
-    never quoted beside the question."""
+    it, 'KD1' in 'KD1-MB'), the site, division or channel its ledger lines carry, or the words its voucher
+    descriptions share. A note about something else is never quoted beside the question."""
     if not codes or not notes:
         return []
     words = set()
     for c in codes:
-        words |= {key(c)} | {key(x) for x in re.split(r"[-_./ ]+", str(c)) if len(x) >= 2}
-        for e in gl:
-            if e.dept == c:
-                words |= {key(x) for x in (e.site, e.division, e.channel) if x and len(key(x)) >= 2}
-    words.discard("")
+        words |= code_words(c, gl)
 
     def names(n: str) -> bool:
         text = f" {key(n)} "
@@ -145,6 +175,8 @@ def compute(folder: Path, version: Optional[str] = None, plan_file: Optional[str
                         plan_file=plan_file) if b.gl else None
     if costs is not None and costs.plan is not None:
         costs.scope_notes = notes_about(b.plan_notes.get(costs.plan.file, []), costs.unknown.get("bộ phận", []), b.gl)
+    if costs is not None:
+        costs.code_texts = {c: t for c in costs.unknown.get("bộ phận", []) if (t := voucher_text(c, b.gl))}
     sales = None
     if b.sales:
         sales = sales_pnl.compute(b.sales, b.sku_plans, b.plans, period=costs.period if costs else None,
@@ -169,7 +201,12 @@ def compute(folder: Path, version: Optional[str] = None, plan_file: Optional[str
     if costs is not None and split_planned(m):           # no plan by department: no variance to classify
         rev = m.row("revenue")
         driver = (rev.actual, rev.plan) if rev is not None and rev.plan and rev.has_plan else None
-        m.classified = variance_class.classify(costs, b.gl, b.plans, b.config, driver)
+        from engine import drivers
+        plan_files = [folder / f for f in {r.file for r in b.plans} | {r.file for r in b.sku_plans}
+                      if (folder / f).exists()]
+        rates = drivers.read(plan_files, b.config, {r.element for r in b.plans if r.element})
+        volume = sales_volume(sales) if sales is not None else None
+        m.classified = variance_class.classify(costs, b.gl, b.plans, b.config, driver, rates, volume)
     m.checks = company_checks(m)
     m.said = _said(m)
     return m
@@ -687,8 +724,12 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
         vs.append(["Trước khi gọi là vượt hay tiết kiệm, em xét lệch thời điểm, khoản một lần, điều chỉnh bút toán và "
                    "chi phí biến đổi theo doanh thu. Dòng dưới ngưỡng không phải bất thường."])
         vs.append(["Bộ phận · yếu tố", "Số báo cáo", "Nguyên nhân", "Số thực chất", "Phân loại", "Ngưỡng", "Nguồn"])
-        for c in sorted((c for c in m.classified if c.material), key=lambda c: -abs(c.underlying)):
-            vs.append([c.line.label, c.reported, " ".join(x.text for x in c.causes) or "",
+        shown = [c for c in m.classified if c.material or (c.pending and c.above) or c.flex is not None]
+        for c in sorted(shown, key=lambda c: (c.pending, -abs(c.underlying))):
+            known = " ".join([x.text for x in c.causes] + ([c.maybe] if c.maybe and c.pending else []))
+            vs.append([c.line.label, c.reported,
+                       (f"Mã bộ phận còn chờ chị gán; riêng dòng này: {known}" if known else
+                        "Mã bộ phận còn chờ chị gán, em chưa xếp loại.") if c.pending else known,
                        c.underlying, c.verdict, c.threshold,
                        ", ".join(w for x in c.causes for w in x.where[:3]) or ", ".join(c.line.actual_from[:3])])
             expect[f"'{VARIANCES}'!D{vs.max_row}"] = c.underlying
@@ -716,6 +757,7 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
             expect[f"'{BRIDGE}'!B{bs.max_row}"] = r["gap"]
             if br.unplanned:
                 bs.append(["Mã bán ngoài kế hoạch: " + ", ".join(br.unplanned)])
+            write_sku_rows(bs, br, {l.sku: l.name for l in m.sales.month if l.name})
 
     rs = wb.create_sheet(RECEIPT)
     rs.append([f"Phiếu nhận file · tháng {month}"])
@@ -743,7 +785,7 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
     left = (m.costs.left_out() if m.costs is not None else []) + (m.sales.left_out() if m.sales is not None else [])
     log.dropped += [[x, "", None, "nêu trong Phiếu nhận file"] for x in left]
     log.add(f"'{PNL}'!A1", "Báo cáo FP&A", "", f"{len(m.pnl)} dòng P&L", "Báo cáo tháng mới, file gốc không đổi",
-            source=", ".join(n for n, *_ in m.bundle.receipt))
+            source=sources_said(m))
     bb = wb.create_sheet(audit.SHEET)
     for line in audit.grid(log)[0]:
         bb.append(line)
@@ -762,3 +804,118 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
     wb.save(path)
     ok, diffs = saved_check.check(saved_check.tamper_from_env(path), expect)
     return {"xlsx": path, "verified": ok, "diffs": diffs, "cells": len(expect)}
+
+
+SKU_HEADER = ["Mã hàng", "Tên hàng", "Sản lượng KH", "Sản lượng TH", "Giá bán KH /đv", "Giá bán TH /đv",
+              "Giá vốn KH /đv", "Giá vốn TH /đv", "Cơ cấu", "Giá bán", "Giá vốn", "Cộng 3 phần"]
+SKU_TITLE = "Theo từng mã hàng (sắp theo ảnh hưởng lớn nhất; phần sản lượng tính chung, không chia theo mã)"
+
+
+def write_sku_rows(ws, br, names: dict) -> None:
+    """Each SKU's own part of the bridge, so the Board's 'why' gets a SKU story (which SKU, its price and volume
+    against plan) read from the saved file. Per-unit figures and parts are shown to the đồng; the exact totals stay
+    in the rows above."""
+    parts = [p for p in br.by_sku if p.qty_plan or p.qty_actual]
+    if not parts:
+        return
+    r = lambda x: None if x is None else x.quantize(Decimal(1), rounding=ROUND_HALF_UP)
+    crumb = lambda x: ZERO if x is not None and abs(x) < 1 else r(x)   # under 1 đ: rounding, left in the totals (R12)
+    ws.append([])
+    ws.append([SKU_TITLE])
+    ws.append(SKU_HEADER)
+    for p in sorted(parts, key=lambda p: (-abs(p.total), p.sku)):
+        ws.append([p.sku, names.get(p.sku, ""), p.qty_plan, p.qty_actual, r(p.price_plan), r(p.price_actual),
+                   r(p.cost_plan), r(p.cost_actual), crumb(p.mix), crumb(p.price), crumb(p.cost),
+                   crumb(p.mix) + crumb(p.price) + crumb(p.cost)])       # the row adds up on screen
+
+
+def understood(m: Month) -> list:
+    """What Clicky understood of the folder, one plain line each, for the 'Em hiểu thế này, đúng chưa?' card that
+    the user confirms before the report is written: the month, where the actual comes from, the plan it is held
+    against, the files used and not used, and how many points wait on the user. At most five lines, under a minute
+    to read."""
+    month = _month_text(m.period)
+    out = [f"Báo cáo tháng {month}" + (f", năm tài chính bắt đầu từ tháng {m.fy}" if m.fy and m.fy != 1 else "") + "."]
+    tb_file = getattr(m.tb, "file", None) if m.tb is not None and m.tb_not_used is None else None
+    out.append(f"Số thực tế lấy từ {actual_source(m)}" + (f" ({tb_file})" if tb_file else "") + ".")
+    basis = (m.costs.basis if m.costs is not None and m.costs.basis else "") or \
+        (m.sales.basis if m.sales is not None and m.sales.basis else "")
+    if basis:
+        basis = re.sub(r"^\s*Kế hoạch:\s*", "", basis)
+        out.append(f"So với kế hoạch: {basis}.")
+    else:
+        out.append("Thư mục chưa có kế hoạch để so: em chỉ làm được số thực hiện.")
+    rows = file_rows(m)[1:]
+    unused = [r[0] for r in rows if r[1] == "Không dùng" or NOT_COMPARED in str(r[1])]
+    line = f"Em đọc {len(rows)} file, dùng {len(rows) - len(unused)}"
+    if unused:
+        line += f"; không lấy số từ {', '.join(unused[:3])}" + (f" và {len(unused) - 3} file khác" if len(unused) > 3 else "")
+    out.append(line + ".")
+    left = (m.costs.left_out() if m.costs is not None else []) + (m.sales.left_out() if m.sales is not None else [])
+    if left:
+        out.append(f"Có {len(left)} điều em chưa tính vào số hoặc cần chị cho biết, em ghi trong Phiếu nhận file.")
+    return out
+
+
+def sales_volume(sales) -> Optional[tuple]:
+    """(actual, plan) volume of the month in the catalogue's standard unit; actual None when a row could not be
+    converted (then no cost is flexed by volume, and the unconverted rows are already said)."""
+    lines = list(getattr(sales, "month", []) or [])
+    if not lines:
+        return None
+    if any(l.qty is None for l in lines if l.actual_from):
+        return (None, None)
+    return (sum((l.qty for l in lines if l.actual_from and l.qty), ZERO),
+            sum((l.plan_qty or ZERO for l in lines if l.plan_from), ZERO))
+
+
+def _plan_files_not_chosen(m, also_used=()) -> dict:
+    """{file: why} of the plan files none of whose versions the report is held against (R9b): judged by the
+    file's own plan rows, never by how many of its lines happen to be counted as used."""
+    chosen = {(p.file, key(p.version or "")) for p in (getattr(m.costs, "plan", None), getattr(m.sales, "plan", None))
+              if p is not None}
+    if not chosen:
+        return {}
+    from engine import roles
+    first = next(p for p in (getattr(m.costs, "plan", None), getattr(m.sales, "plan", None)) if p is not None)
+    versions = {}
+    for r in list(m.bundle.plans) + list(getattr(m.bundle, "sku_plans", [])):
+        versions.setdefault(r.file, set()).add(r.version or "")
+    out = {}
+    for f, vs in versions.items():
+        if f in also_used or any((f, key(v)) in chosen for v in vs):
+            continue
+        if roles.is_estimate(Path(f).stem) or any(roles.is_estimate(v) for v in vs if v):
+            out[f] = "file ước tính (LE): dùng cho dự báo, không phải bản so sánh"      # R13: never an internal key
+            continue
+        named = ", ".join(sorted(v for v in vs if v and key(v) not in fpa.NOT_PLAN_VERSIONS))
+        if not named and any(v and key(v) in fpa.NOT_PLAN_VERSIONS for v in vs):
+            out[f] = "số thực tế ghi trong file: đọc, không dùng, số thực tế lấy từ sổ"
+            continue
+        named = named or "không ghi phiên bản"
+        out[f] = (f"cùng tên bản {first.version} nhưng không phải file được chọn; báo cáo so với file {first.file}"
+                  if key(named) == key(first.version) else
+                  f"bản {named}: không phải bản so sánh, báo cáo so với bản {first.version}")
+    return out
+
+
+def sources_said(m, also_used=()) -> str:
+    """The Biên bản's source for the report: the files the figures came from, then the files read and not used,
+    each named once with why (the receipt's rule: read is not used). A plan file whose versions were not chosen is
+    always 'read', whatever its line count says."""
+    rows = file_rows(m, also_used)[1:]
+    not_chosen = _plan_files_not_chosen(m, set(also_used))
+    used, read = [], {}
+    for r in rows:
+        name, role, n_used, why = r[0], str(r[1]), r[2], str(r[4] or "")
+        if name in not_chosen:
+            read.setdefault(name, not_chosen[name])
+        elif role == "Không dùng" or NOT_COMPARED in role or not n_used:
+            read.setdefault(name, why.split(";")[-1].strip() if role == "Không dùng" else "")
+        else:
+            used.append(name)
+    used = list(dict.fromkeys(used))
+    read = {k: v for k, v in read.items() if k not in used}
+    listed = [f"{k} ({v})" if v else k for k, v in read.items()]
+    return "Đã dùng: " + (", ".join(used) or "không file nào") + (
+        "; đã đọc, không lấy số: " + "; ".join(listed) if listed else "")

@@ -52,7 +52,7 @@ class SettingsWindow(QWidget):
         super().__init__()
         import tech_mode
         self.manager = manager
-        self.setWindowTitle("Cài đặt Clicky")
+        self.setWindowTitle("Cài đặt Numvera")
         self.resize(620, 600)
         self._tech_rows = []          # (form, widget) rows shown only in technical mode
         self._tech_widgets = []

@@ -11,8 +11,11 @@
 ;  Output:  dist\Setup-Clicky.exe   (single-file installer, ~200-400 MB)
 ; ────────────────────────────────────────────────────────────────────
 
-#define MyAppName        "Clicky"
-#define MyAppVersion     "1.6.0-preview"
+; Numvera is the product name people see (15/11/2026: "Clicky" is a live US mark). The program folder, the
+; exe, the data folder and the AppId keep their old names so an installed copy upgrades in place.
+#define MyAppName        "Numvera"
+#define MyAppFolder      "Clicky"
+#define MyAppVersion     "1.7.0-rc.1"
 #ifndef BuildRoot
   #define BuildRoot "dist\Clicky"
 #endif
@@ -24,7 +27,7 @@
 AppId={{9A4E3F2C-7B1D-4A8F-9C6E-3D7F1B5E9A0C}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-VersionInfoVersion=1.6.0.0
+VersionInfoVersion=1.7.0.0
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
@@ -32,7 +35,7 @@ AppSupportURL={#MyAppURL}
 ; Per-user folder (%LOCALAPPDATA%\Programs\Clicky), never Program Files, so no admin rights and no
 ; "install for all users?" question. No licence, folder, tasks, ready or finished page; no account,
 ; no API key, no Ollama and no AI-provider choice anywhere.
-DefaultDirName={userpf}\{#MyAppName}
+DefaultDirName={userpf}\{#MyAppFolder}
 UsePreviousAppDir=no
 DefaultGroupName={#MyAppName}
 DisableWelcomePage=yes
@@ -59,31 +62,34 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Messages]
 ; Inno Setup has no official Vietnamese translation, so the few lines a user actually sees are
 ; overridden here. This file is saved as UTF-8 with a BOM so these strings compile correctly.
-SetupAppTitle=Cài đặt Clicky
-SetupWindowTitle=Cài đặt Clicky
-WizardInstalling=Đang cài Clicky
+SetupAppTitle=Cài đặt Numvera
+SetupWindowTitle=Cài đặt Numvera
+WizardInstalling=Đang cài Numvera
 InstallingLabel=Chị đợi một chút, không cần làm gì thêm.
-StatusExtractFiles=Đang chép Clicky vào máy...
+StatusExtractFiles=Đang chép Numvera vào máy...
 StatusCreateDirs=Đang chuẩn bị...
 StatusCreateIcons=Đang tạo biểu tượng trên màn hình...
 StatusCreateIniEntries=Đang hoàn tất...
 StatusCreateRegistryEntries=Đang hoàn tất...
 StatusRegisterFiles=Đang hoàn tất...
 StatusSavingUninstall=Đang hoàn tất...
-StatusRunProgram=Đang mở Clicky...
+StatusRunProgram=Đang mở Numvera...
 StatusRollback=Đang hoàn tác, máy chị được giữ như cũ...
 ButtonCancel=Hủy
 ExitSetupTitle=Dừng cài đặt
-ExitSetupMessage=Clicky chưa cài xong. Chị có muốn dừng không?%n%nLúc khác chị mở lại file cài là được.
-UninstallAppTitle=Gỡ Clicky
-UninstallAppFullTitle=Gỡ Clicky
-ConfirmUninstall=Gỡ Clicky khỏi máy? File Excel của chị không bị đụng tới.
-UninstallStatusLabel=Đang gỡ Clicky...
-UninstalledAll=Đã gỡ Clicky khỏi máy.
+ExitSetupMessage=Numvera chưa cài xong. Chị có muốn dừng không?%n%nLúc khác chị mở lại file cài là được.
+UninstallAppTitle=Gỡ Numvera
+UninstallAppFullTitle=Gỡ Numvera
+ConfirmUninstall=Gỡ Numvera khỏi máy? File Excel của chị không bị đụng tới.
+UninstallStatusLabel=Đang gỡ Numvera...
+UninstalledAll=Đã gỡ Numvera khỏi máy.
 
 [InstallDelete]
 ; Older previews accidentally bundled a foreign ICU that shadows Windows ICU.
 Type: files; Name: "{app}\_internal\icuuc.dll"
+; Shortcuts of the copies named Clicky: the new ones say Numvera.
+Type: files; Name: "{autodesktop}\Clicky.lnk"
+Type: filesandordirs; Name: "{userprograms}\Clicky"
 
 [UninstallDelete]
 Type: files; Name: "{app}\install-stamp.txt"

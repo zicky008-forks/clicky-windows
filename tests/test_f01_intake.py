@@ -642,3 +642,22 @@ def test_the_code_question_quotes_the_note_about_that_code_only(tmp_path):
     waiting = [c for c in m.classified if c.pending]
     # KD9 reads like KD: every KD x LUONG line waits on the answer, whichever side of plan; MKT's does not
     assert {(c.line.dept, c.line.element) for c in waiting} == {("KD9", "LUONG"), ("KD", "LUONG")}
+
+
+def test_the_code_question_finds_the_note_by_the_area_its_vouchers_name(tmp_path):
+    # the code says nothing (X77); its vouchers all name the area; the plan's note names the area, not the code
+    d = _folder(tmp_path, "k16area", None, tb=False)
+    plan = [["KẾ HOẠCH CHI PHÍ 2026"], ["Văn phòng Miền Trung tính chung vào bộ phận Hành chính"],
+            ["Ghi chú", "Số liệu đã làm tròn đến nghìn đồng"]] + fs.plan_rows("AOP")[:-1]
+    ss.write_xlsx(d / "KeHoach_AOP_2026.xlsx", {"KH": plan})
+    rows = fs.gl_rows()
+    for i, amount in enumerate((4000000, 2500000, 1500000)):
+        rows.append(["20/10/2026", f"X{i}", "10", "2026", "6427", "331", "X77", "THUE",
+                     f"Thuê VP Miền Trung đợt {i + 1}", str(amount)])
+    fs.write_csv(d / "SoChiTietChiPhi_2026.csv", rows)
+    m = fpa_report.compute(d)
+    asked = next(x for x in m.costs.left_out() if "Mã bộ phận" in x)
+    assert "X77" in asked and "Văn phòng Miền Trung tính chung" in asked and "làm tròn" not in asked
+    # X77's biggest line is THUE: every THUE line waits on the answer, whichever side of plan
+    waiting = {(c.line.dept, c.line.element) for c in m.classified if c.pending}
+    assert ("X77", "THUE") in waiting and ("HC", "THUE") in waiting

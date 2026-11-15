@@ -40,6 +40,9 @@ COST, SALES = "chi phí", "doanh thu và giá vốn"
 LINE_WORDS = {COST: "dòng chi phí (bộ phận × yếu tố)", SALES: "dòng doanh thu và giá vốn (mã hàng × kênh)"}
 
 
+PLAN_NAME = re.compile(r"\b(aop|ke hoach|kh|budget|ngan sach|plan)\b")    # an annual plan, whatever its file says
+
+
 class NamedVersionMissing(Exception):
     """The catalogue names a forecast version the folder does not hold: asked, never guessed."""
 
@@ -56,7 +59,12 @@ class Version:
 
     @property
     def forecast(self) -> bool:
-        return file_roles.is_forecast(self.version)
+        """Named as a forecast, or kept only in files named as an estimate ('Uoc tinh Q4.xlsx' whose version column
+        says 'V2'): the user's file name says what the figures are."""
+        if file_roles.is_forecast(self.version):
+            return True
+        return bool(self.files) and not PLAN_NAME.search(key(self.version)) and \
+            all(file_roles.is_estimate(Path(f).stem) for f in self.files)
 
     def said(self) -> str:
         when = (f", duyệt ngày {self.approved[8:10]}/{self.approved[5:7]}/{self.approved[:4]}"
@@ -134,6 +142,7 @@ class Forecast:
     fallback: list = field(default_factory=list)    # (what, month) the forecast had no figures for: annual plan used
     filled: list = field(default_factory=list)      # (what, month, line) the forecast lacked in a month it has: plan used
     missing: list = field(default_factory=list)     # (what, month) no plan at all had figures for: 0, and said
+    estimate: Optional[object] = None               # engine.le_file.Estimate: a P&L-level estimate used for the rest
     said: list = field(default_factory=list)
 
     @property
@@ -142,6 +151,20 @@ class Forecast:
 
     def row(self, code: str) -> Optional[Row]:
         return next((r for r in self.rows if r.code == code), None)
+
+    def rest_said(self) -> str:
+        """Where the months to come come from, as the pack's basis line and the Q&A source say it: the estimate file
+        with its made-on date and 'TH đến Txx + UT các tháng sau' when one is used (R7b), else the forecast version."""
+        e = self.estimate
+        if e is not None:
+            covered = [mo for mo in self.rest if mo in e.months]
+            left = [mo for mo in self.rest if mo not in e.months]
+            said = (f"dự báo theo {e.said()}: TH đến T{_month_text(self.period)} + UT các tháng sau"
+                    + (f" ({_span(covered)})" if covered else ""))
+            if left:
+                said += f", tháng {_span(left)} theo {(self.basis or self.target).said() if (self.basis or self.target) else 'kế hoạch năm'}"
+            return said
+        return f"dự báo theo {self.basis.said()}" if self.basis is not None else "dự báo theo kế hoạch năm"
 
 
 def _cost_plan(plans: list, version: Optional[Version], month: str) -> dict:
@@ -300,8 +323,42 @@ def compute(folder: Path) -> Forecast:
                               {mo: gp.months.get(mo, ZERO) - opex.months.get(mo, ZERO) for mo in f.year},
                               gp.ytd - opex.ytd, {mo: gp.plan.get(mo, ZERO) - opex.plan.get(mo, ZERO) for mo in f.year},
                               gp.ytd_books and opex.ytd_books))
+    _use_estimate(f, folder, b)
     f.said = _said(f)
     return f
+
+
+def _use_estimate(f: Forecast, folder: Path, b) -> None:
+    """A P&L-level estimate file (engine.le_file) newer than the forecast version, or with no forecast version at
+    all, gives revenue, cost of goods sold and operating costs for the months to come; profits are worked out."""
+    from engine import le_file
+    if not f.rest:
+        return
+    found = le_file.find(folder, int(f.period[:4]), file_roles.is_estimate)
+    if not found:
+        return
+    e = found[-1]
+    approved = f.basis.approved if f.basis is not None and f.basis is not f.target else ""
+    if approved[:4].isdigit() and e.made_on and e.made_on < approved:
+        return                                      # the forecast version is newer
+    plan = {mo: {r.code: r.plan.get(mo) for r in f.rows if r.plan.get(mo)} for mo in f.year}
+    e = le_file.scale_to(e, plan)
+    covered = [mo for mo in f.rest if mo in e.months]
+    if not covered:
+        return
+    f.estimate = e
+    for r in f.rows:
+        if r.code in ("revenue", "cogs", "opex"):
+            for mo in covered:
+                if r.code in e.months[mo]:
+                    r.months[mo] = e.months[mo][r.code]
+    rev, cogs, gp, opex, op = (f.row(c) for c in ("revenue", "cogs", "gp", "opex", "op"))
+    if gp is not None and rev is not None and cogs is not None:
+        for mo in covered:
+            gp.months[mo] = rev.months.get(mo, ZERO) - cogs.months.get(mo, ZERO)
+    if op is not None and gp is not None and opex is not None:
+        for mo in covered:
+            op.months[mo] = gp.months.get(mo, ZERO) - opex.months.get(mo, ZERO)
 
 
 def gap(r: Row, done: list) -> Decimal:
@@ -321,7 +378,20 @@ def _said(f: Forecast) -> list:
     if f.target is not None:
         out.append(f"So với kế hoạch năm: {f.target.said()}.")
     if f.rest:
-        if f.basis is not None and f.basis is not f.target:
+        e = f.estimate
+        if e is not None:
+            covered = [mo for mo in f.rest if mo in e.months]
+            out.append(f"Các tháng {_span(covered)} lấy theo {e.said()} (cột ước tính UT"
+                       + (f", đơn vị {e.unit_said}" if e.unit_said else "") + "), bản ước mới nhất trong thư mục"
+                       + (f"; tháng {_month_text(f.period)} trong file vẫn là ước tính nên em dùng số thực hiện"
+                          if f.period in e.months else "") + ".")
+            out.append("File ước tính chỉ có cấp P&L: lợi nhuận gộp và lợi nhuận hoạt động em tính lại từ doanh thu, "
+                       "giá vốn và chi phí; bảng chi phí theo bộ phận các tháng còn lại vẫn theo "
+                       f"{(f.basis or f.target).said() if (f.basis or f.target) else 'kế hoạch năm'}.")
+            rest = [mo for mo in f.rest if mo not in e.months]
+            if rest:
+                out.append(f"File ước tính không có tháng {_span(rest)}; em lấy theo kế hoạch cho các tháng đó.")
+        elif f.basis is not None and f.basis is not f.target:
             out.append(f"Các tháng {_span(f.rest)} lấy theo {f.basis.said()}, bản dự báo mới nhất trong thư mục.")
         else:
             out.append(f"Thư mục chưa có bản dự báo nào, nên các tháng {_span(f.rest)} lấy theo kế hoạch năm.")
@@ -396,7 +466,7 @@ def write(f: Forecast, out: Optional[Path] = None) -> dict:
     expect = {}
     head = (["Chỉ tiêu"] + [("TH " if mo in f.done else "DB ") + _month_text(mo) for mo in f.year]
             + ["Lũy kế thực hiện", "Các tháng còn lại", "Cả năm ước", "Kế hoạch năm", "Chênh lệch", "%"])
-    basis = (f"Thực hiện đến T{month}; " + (f"dự báo theo {f.basis.said()}" if f.rest else "cả năm là thực hiện")
+    basis = (f"Thực hiện đến T{month}; " + (f.rest_said() if f.rest else "cả năm là thực hiện")
              + (f"; so với {f.target.said()}" if f.target else ""))
 
     def table(ws, rows, first_data):
@@ -454,6 +524,8 @@ def write(f: Forecast, out: Optional[Path] = None) -> dict:
             rs.append([label, _month_text(mo), what])
         rs.append([])
     used = {n for v in (f.target, f.basis) if v is not None for n in v.files}     # the forecast takes both
+    if f.estimate is not None:
+        used.add(f.estimate.file)
     for line in fpa_report.file_rows(f.month, also_used=used):
         rs.append(line)
 

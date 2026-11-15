@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout
 
 from ui.plain_card import BLUE, LINK_QSS, PRIMARY_QSS, CardWindow, button, label
 
-TITLE = "Chào chị, em là Clicky"
+TITLE = "Chào chị, em là Vera, trợ lý của Numvera"
 LEAD = "Em làm báo cáo tháng ngay trên Excel của chị. Em hứa 3 điều:"
 PROMISES = (
     ("Số tính trên máy chị", "File không rời máy. Gửi gì lên mạng, chị xem trước."),
@@ -96,7 +96,22 @@ def start_after_welcome(manager) -> None:
     on the choice card month_close uses. "Xem em làm" there goes through the normal chat dispatch
     (office.sample.SAMPLE_TRIGGER runs the sample)."""
     import first_run
-    from office import sample
     first_run.mark_welcome_done()
+    from storage import setting
+    if setting("privacy_chosen", False):
+        offer_sample(manager)
+        return
+    from ui.privacy_card import PrivacyCard
+    card = PrivacyCard()
+    card.chosen.connect(lambda _local: offer_sample(manager))
+    _keep.append(card)
+    card.present()
+
+
+_keep: list = []                                     # the privacy card, alive while Qt shows it
+
+
+def offer_sample(manager) -> None:
+    from office import sample
     beat = sample.offer()[-1]
     manager.sig_choices.emit(beat.text, list(beat.choices))

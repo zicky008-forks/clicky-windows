@@ -314,6 +314,35 @@ def write_log(send: Send, sent: bool, shown: bool = False) -> None:
         log.warning("outgoing log not written: %s", exc)
 
 
+def bytes_sent() -> int:
+    """Every byte that left this PC through the door, from the log (and its rotated copy): the UTF-8 size of each
+    request actually sent. The privacy card shows it as "0 byte rời máy" until the user lets something go."""
+    total = 0
+    for path in (log_path().with_name(log_path().stem + ".1" + log_path().suffix), log_path()):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if entry.get("sent") and isinstance(entry.get("text"), dict):
+                total += len(json.dumps(entry["text"], ensure_ascii=False).encode("utf-8"))
+    return total
+
+
+def bytes_words(n: int) -> str:
+    """'0 byte', '12,3 KB', '1,5 MB': Vietnamese decimal comma."""
+    if n < 1024:
+        return f"{n} byte"
+    for unit, size in (("KB", 1024), ("MB", 1024 ** 2), ("GB", 1024 ** 3)):
+        if n < size * 1024 or unit == "GB":
+            return f"{n / size:.1f} {unit}".replace(".", ",")
+    return f"{n} byte"
+
+
 def read_log(limit: int = 200) -> list:
     """Newest first, for the "Nhật ký gửi đi" window."""
     try:

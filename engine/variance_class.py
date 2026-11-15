@@ -62,6 +62,7 @@ class Classified:
     flex: Optional[Decimal] = None                  # the flexed plan, for a variable cost
     pending: bool = False        # its department code is still a question: not classified, not asked about
     maybe: str = ""              # a cause the books hint at but do not show (said, nothing taken out)
+    depends: str = ""            # its figure may change with an open department code answer (said)
 
     @property
     def reported(self) -> Decimal:
@@ -72,6 +73,12 @@ class Classified:
         """Above the threshold as reported, or (a variable cost) against the flexed plan. Never while pending."""
         if self.pending:
             return False
+        return self.above
+
+    @property
+    def above(self) -> bool:
+        """Above the threshold whether or not its code is pending: a held line is still examined, so what is known
+        about it (timing, one-off, volume) is said beside the open question."""
         return abs(self.reported) > self.threshold or abs(self.underlying) > self.threshold
 
     @property
@@ -100,8 +107,10 @@ class Classified:
     def sentence(self) -> str:
         label = self.line.label
         if self.pending:
+            known = " ".join([c.text for c in self.causes] + ([self.maybe] if self.maybe else []))
             return (f"{label}: chênh {fmt(self.reported)} đ so với kế hoạch, {PENDING}: mã bộ phận còn chờ chị cho biết "
-                    "gán vào đâu, em chưa xếp loại vượt hay thấp hơn.")
+                    "gán vào đâu, em chưa xếp loại vượt hay thấp hơn."
+                    + (f" Điều em đã thấy ở riêng dòng này: {known}" if known else ""))
         if not self.material:
             return (f"{label}: chênh {fmt(self.reported)} đ so với kế hoạch, dưới ngưỡng {fmt(self.threshold)} đ, "
                     "không phải bất thường.")
@@ -109,6 +118,8 @@ class Classified:
         said += [c.text for c in self.causes]
         if self.maybe:
             said.append(self.maybe)
+        if self.depends:
+            said.append(self.depends)
         if self.causes:
             said.append(f"Số thực chất chênh {fmt(self.underlying)} đ"
                         + (f", {self.verdict}." if self.alarm else ", trong ngưỡng."))
@@ -174,30 +185,48 @@ def _same(a: Decimal, b: Decimal) -> bool:
     return b != 0 and abs(a - b) <= abs(b) * SIMILAR
 
 
-def classify(v, gl: list, plans: list, config=None, driver: Optional[tuple] = None) -> list:
-    """Every month line of v, classified. driver: (actual, plan) revenue of the month, for variable costs."""
+def classify(v, gl: list, plans: list, config=None, driver: Optional[tuple] = None, rates=None,
+             volume: Optional[tuple] = None) -> list:
+    """Every month line of v, classified. driver: (actual, plan) revenue of the month, for variable costs.
+    rates: engine.drivers.Rates; volume: (actual, plan) sales volume of the month in the standard unit. A cost with a
+    volume rate is judged against rate x actual volume (its share of the element when several departments hold it)."""
     amount_t, pct_t = thresholds(config)
     var_codes = variable(config)
     year, actual, plan, entries = _series(v, gl, plans)
     before = v.months[:-1]
     ytd = {(l.dept, l.element): l for l in v.ytd}
-    waiting = _waiting_on_codes(v)
+    waiting, depends = _waiting_on_codes(v)
     out = []
     for l in v.month:
         k = (l.dept, l.element)
         thr = max(amount_t, abs(l.plan) * pct_t / 100)
         c = Classified(l, thr, ytd_variance=ytd[k].variance if k in ytd else l.variance, pending=k in waiting)
         out.append(c)
-        if c.pending:
-            continue
+        if not c.pending:
+            c.depends = depends.get(k, "")
         # volume first: a variable cost is judged against the flexed plan
-        if l.element in var_codes and driver and driver[1]:
+        rate = rates.get(l.element) if rates is not None else None
+        element_plan = sum((x.plan for x in v.month if x.element == l.element), ZERO)
+        if rates is not None and l.element in rates.clash:
+            c.maybe = ("Có " + str(len(rates.clash[l.element])) + " định mức khác nhau cho yếu tố này ("
+                       + "; ".join(f"{fmt(x.rate)} đ/{x.unit} ở {x.where}" for x in rates.clash[l.element])
+                       + "), em chưa tính ngân sách linh hoạt, chị cho biết dùng định mức nào.")
+        elif rate is not None and volume is not None and volume[0] is not None and element_plan and l.plan:
+            share = l.plan / element_plan
+            c.flex = (rate.rate * volume[0] * share).quantize(Decimal(1))
+            c.causes.append(Cause(VOLUME, c.flex - l.plan,
+                 f"Đây là chi phí theo sản lượng: định mức {fmt(rate.rate)} đ/{rate.unit} × sản lượng thực hiện "
+                 f"{fmt(volume[0])} {rate.unit}"
+                 + (f" × phần của dòng này {str((share * 100).quantize(Decimal('0.1'))).replace('.', ',')}%" if share != 1 else "")
+                 + f" = ngân sách linh hoạt {fmt(c.flex)} đ (định mức lấy từ {rate.where}); "
+                 f"phần theo sản lượng {fmt(c.flex - l.plan)} đ."))
+        elif l.element in var_codes and driver and driver[1]:
             ratio = Decimal(driver[0]) / Decimal(driver[1])
             c.flex = (l.plan * ratio).quantize(Decimal(1))
             c.causes.append(Cause(VOLUME, c.flex - l.plan,       # either side: the rest is spending against the flex
                  f"Đây là chi phí biến đổi: doanh thu đạt {(ratio * 100).quantize(Decimal('0.1'))}% kế hoạch, "
                  f"ngân sách linh hoạt {fmt(c.flex)} đ, phần theo sản lượng {fmt(c.flex - l.plan)} đ."))
-        if not c.material:
+        if not c.above:
             continue
         private = opex_split.sensitive(l.element, next(iter(l.accounts), "") if l.accounts else "", config)
         mine = entries.get(k, [])
@@ -292,30 +321,38 @@ def _timing_month(before: list, a: dict, p: dict, thr: Decimal, left: Decimal) -
     return min(hits, key=lambda h: (abs(abs(h[1]) - abs(left)), h[0]))
 
 
-def _waiting_on_codes(v) -> set:
-    """The month lines that wait on a department code question: the lines of a code the catalogue does not hold,
-    and the lines of the same cost element where the cost may belong. When the code reads like a known department
-    ('KD1' beside 'KD'), every line of that department x element waits, whichever side of plan it is on; otherwise
-    the same element in other departments on the other side of plan. Classing any of them before the answer would
-    be a guess."""
+def _waiting_on_codes(v) -> tuple:
+    """(lines that wait, {line: note}) for a department code question. Waiting: the lines of a code the catalogue
+    does not hold; when the code reads like a known department ('KD9' beside 'KD'), every line of that department x
+    element; otherwise every line of the cost element that holds the code's biggest amount, and the same element in
+    other departments on the other side of plan. Any other line of an element the code also posted to is
+    classified with a note that its figure may change with the answer."""
     codes = set((getattr(v, "unknown", {}) or {}).get("bộ phận", []) or [])
     if not codes:
-        return set()
+        return set(), {}
     known = {l.dept for l in v.month if l.dept and l.dept not in codes}
-    out = set()
-    for l in v.month:
-        if l.dept not in codes or not l.variance:
+    out, notes = set(), {}
+    for code in sorted(codes):
+        mine = [l for l in v.month if l.dept == code and l.variance]
+        if not mine:
             continue
-        out.add((l.dept, l.element))
-        c = key(l.dept).replace(" ", "")
+        biggest = max(mine, key=lambda l: (abs(l.actual), l.element)).element
+        c = key(code).replace(" ", "")
         like = {d for d in known if len(key(d)) >= 2 and (c.startswith(key(d).replace(" ", ""))
                                                           or key(d).replace(" ", "").startswith(c))}
-        for o in v.month:
-            if o.element != l.element or o.dept in codes or not o.dept:
-                continue
-            if (o.dept in like) or (not like and o.variance and (o.variance > 0) != (l.variance > 0)):
-                out.add((o.dept, o.element))
-    return out
+        for l in mine:
+            out.add((l.dept, l.element))
+            for o in v.month:
+                if o.element != l.element or o.dept in codes or not o.dept:
+                    continue
+                k = (o.dept, o.element)
+                if o.dept in like or (not like and (o.element == biggest
+                                                     or (o.variance and (o.variance > 0) != (l.variance > 0)))):
+                    out.add(k)
+                else:
+                    notes.setdefault(k, f"Số này có thể đổi khi chị cho biết mã {code} (cùng yếu tố chi phí) "
+                                        "thuộc bộ phận nào.")
+    return out, {k: n for k, n in notes.items() if k not in out}
 
 
 def summary(classified: list) -> tuple:

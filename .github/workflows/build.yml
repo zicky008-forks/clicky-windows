@@ -109,11 +109,11 @@ jobs:
           $notes = @()
           $base = $version -replace '-.*$', ''
           if (Test-Path "docs\phat-hanh\$base.md") { $notes = @('--releaseNotes', "docs\phat-hanh\$base.md") }
-          vpk pack --packId ClickyBI --packTitle "Clicky BI" --packVersion $version --packDir dist\Clicky --mainExe Clicky.exe --runtime win-x64 --outputDir releases @notes
+          vpk pack --packId ClickyBI --packTitle "Numvera" --packVersion $version --packDir dist\Clicky --mainExe Clicky.exe --runtime win-x64 --outputDir releases @notes
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem releases | ForEach-Object { "{0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB) } | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           if ('${{ github.ref_type }}' -eq 'tag') {
-            vpk upload github --repoUrl $repo --token $env:GH_TOKEN --outputDir releases --tag '${{ github.ref_name }}' --releaseName "Clicky BI $version" --publish --merge
+            vpk upload github --repoUrl $repo --token $env:GH_TOKEN --outputDir releases --tag '${{ github.ref_name }}' --releaseName "Numvera $version" --publish --merge
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - uses: actions/upload-artifact@v4

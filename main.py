@@ -168,7 +168,7 @@ def main():
     apply_theme(app)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("Clicky")
-    app.setApplicationDisplayName("Clicky - AI Companion")
+    app.setApplicationDisplayName("Numvera")
     from screen.capture import configure_displays
     configure_displays(app.screens())
     app.screenAdded.connect(lambda _screen: configure_displays(app.screens()))
@@ -266,7 +266,7 @@ def main():
             connections_window.shared_text.appendPlainText('Shared question: '+value['q']+'\nShared answer: '+value['a']+'\n')
         else:_show_scene(value['scene'])
     manager.sig_collab_message.connect(_shared_message)
-    settings_window.preview_voice.connect(lambda: manager._submit(manager._reply_local("Chào chị, em là Clicky. Đây là giọng em đang dùng.")))
+    settings_window.preview_voice.connect(lambda: manager._submit(manager._reply_local("Chào chị, em là Vera, trợ lý của Numvera. Đây là giọng em đang dùng.")))
 
     from PyQt6.QtWidgets import QLabel
     caption = QLabel()
@@ -389,6 +389,39 @@ def main():
     choice_card.chosen.connect(lambda _label: overlay.clear_annotations())
     choice_card.dismissed.connect(overlay.clear_annotations)
     manager.sig_turn_started.connect(lambda _q: choice_card.hide())
+    # Cards, frames and pointer drawn over Excel never stay painted over another app (user's PC, 9114deb):
+    # while another window is in front they are hidden and the story waits; back in Excel they return.
+    from ui.fg_guard import Guard
+    _held_windows = []
+
+    def _hide_story(on: bool):
+        overlay.set_suppressed(on)
+        if on:
+            _held_windows[:] = [w for w in (choice_card, caption) if w.isVisible()]
+            for w in _held_windows:
+                w.hide()
+        else:
+            for w in _held_windows:
+                w.show()
+            _held_windows.clear()
+        manager._excel_front = not on
+
+    def _front():
+        from desktop import front_kind
+        return front_kind(os.getpid())
+
+    def _guard_record(event, **fields):
+        import scene_log as _sl
+        _sl.record(event, **fields)
+
+    _guard = Guard(_front,
+                   lambda: getattr(manager, "_overlay_anchor", "") == "excel"
+                   and (overlay.has_story() or choice_card.isVisible() or bool(_held_windows)),
+                   _hide_story, overlay.clear_annotations, _guard_record)
+    if sys.platform == "win32":
+        _guard_timer = QTimer(app)
+        _guard_timer.timeout.connect(_guard.tick)
+        _guard_timer.start(200)
     # Job 13: after the first report on the user's own files, "bớt được bao lâu" (kept on this PC only).
     from ui.feedback_card import FeedbackCard
     feedback_card = FeedbackCard()
@@ -419,7 +452,7 @@ def main():
             # so a Windows toast never sits on top of the Excel range being explained.
             held, guided_state["held"] = guided_state["held"], []
             for message in dict.fromkeys(held):
-                tray.show_notification("Clicky", message)
+                tray.show_notification("Numvera", message)
         if active:
             if panel.isVisible():
                 guided_state["panel_was_open"] = True
@@ -452,7 +485,7 @@ def main():
         except Exception:
             return
         if line:
-            tray.show_notification("Clicky", line)
+            tray.show_notification("Numvera", line)
     from PyQt6.QtCore import QTimer as _UpdateTimer
     _UpdateTimer.singleShot(8_000, _update_notice)
     _UpdateTimer.singleShot(180_000, _quiet_update)
@@ -485,7 +518,7 @@ def main():
         if guided_state["active"]:
             guided_state["held"].append(message)
         else:
-            tray.show_notification("Clicky", message)
+            tray.show_notification("Numvera", message)
 
     manager.sig_notice.connect(_notice)
 
@@ -501,7 +534,7 @@ def main():
         ok = manager.attach_document(path)
         tray.show_notification(
             "Đã đính kèm tài liệu" if ok else "Chưa đính kèm được",
-            f"{os.path.basename(path)}\nChị hỏi Clicky về tài liệu này nhé." if ok else
+            f"{os.path.basename(path)}\nChị hỏi Vera về tài liệu này nhé." if ok else
             "Em chưa đọc được file này."
         )
     panel.on_document_dropped.connect(_on_doc_dropped)
@@ -614,7 +647,7 @@ def main():
         manager.set_active_provider(name)
         panel.refresh_for_provider(name)       # repopulate model dropdown + badge
         tray.rebuild_menu()                    # tick mark moves to new provider
-        tray.show_notification("Clicky", f"Switched to {name}")
+        tray.show_notification("Numvera", f"Switched to {name}")
 
     tray.on_switch_provider.connect(_switch)
     tray.on_stop.connect(manager.stop)
@@ -703,7 +736,7 @@ def main():
             manager.set_active_provider(provider)
             panel.refresh_for_provider(provider)
             tray.rebuild_menu()
-            tray.show_notification("Clicky", f"API keys saved — using {provider}")
+            tray.show_notification("Numvera", f"API keys saved — using {provider}")
 
         dlg.keys_saved.connect(_applied)
         dlg.show()
@@ -880,8 +913,8 @@ def main():
         QTimer.singleShot(400, panel.show)       # the open chat says what to type; no toast on top of it
     else:
         tray.show_notification(
-            "Clicky đã sẵn sàng",
-            "Gõ vào khung Clicky, ví dụ: làm báo cáo tháng từ thư mục này",
+            "Numvera đã sẵn sàng",
+            "Gõ vào khung Vera, ví dụ: làm báo cáo tháng từ thư mục này",
         )
 
     sys.exit(app.exec())

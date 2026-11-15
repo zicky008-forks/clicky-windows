@@ -1,6 +1,7 @@
 """BOD questions answered from the saved FP&A report (and forecast pack) of the synthetic month folder: every number
 an answer says is a cell of the saved file, follow-ups keep the question above, a question with no figure in the
 report and a question not understood each get their own status, and the report itself is never changed."""
+import re
 import json
 from decimal import Decimal
 from pathlib import Path
@@ -467,3 +468,215 @@ def test_the_month_is_compared_with_the_annual_plan_never_the_newer_approved_for
     assert hoi_dap.plan_version(hoi_dap.read(out["xlsx"])) == "AOP"
     named = fpa_report.compute(d, version="LE T09")                         # chosen by name it is still used
     assert named.costs.plan.version == "LE T09"
+
+
+# ── TB10 (grader, F01 Board questions): SKU story, one SKU's price, unknown code, one element's oddities ──────────
+
+def test_why_gross_profit_names_the_skus_behind_it_from_cells_of_the_report(book):
+    a = hoi_dap.answer(book, "Vì sao lợi nhuận gộp thấp hơn kế hoạch?")
+    assert a.status == hoi_dap.ANSWERED
+    # gross profit is short: the biggest part pulling it down is named, never volume when volume helped (R8)
+    gap = D(str(book.pnl["gp"]["var"].value))
+    adverse = {k: D(str(book.bridge[k].value)) for k in ("volume", "mix", "price", "cost")}
+    assert gap < 0 and adverse["volume"] > 0 and "Phần kéo xuống nhiều nhất là" in a.text
+    worst = min(adverse, key=adverse.get)
+    assert f"kéo xuống nhiều nhất là {dict(volume='sản lượng', mix='cơ cấu', price='giá bán', cost='giá vốn')[worst]}" \
+        in a.text
+    assert book.skus and book.skus[0]["sku"] in a.text and "Mã hàng tác động nhiều nhất" in a.text
+    _cells_hold(book, a)
+
+
+def test_the_price_effect_of_one_named_sku_is_its_own_row(book):
+    sku = book.skus[-1]
+    for said in (f"Ảnh hưởng giá bán của mã {sku['sku']}?", f"giá bán {sku['name']} ảnh hưởng thế nào?"):
+        a = hoi_dap.answer(book, said)
+        assert (a.query.intent, a.query.target, a.query.part) == ("sku_one", sku["sku"], "price"), said
+        assert sku["cells"]["price_part"].ref in [c["o"] for c in a.cites]
+        _cells_hold(book, a)
+
+
+def test_the_sku_table_adds_up_to_the_bridge(book):
+    total = sum(D(str(r["cells"]["total"].value)) for r in book.skus)
+    parts = sum(D(str(book.bridge[k].value)) for k in ("mix", "price", "cost"))
+    assert abs(total - parts) <= len(book.skus)            # each row rounded to the đồng
+
+
+def _with_unknown(book):
+    line = ("Mã bộ phận chưa có trong danh mục: D99; em vẫn tính theo mã, cần chị cho biết gán vào đâu "
+            "(file kế hoạch ghi: “Ngân sách dự án mới nằm ở khối Marketing”)")
+    costs = book.costs + [{"dept": "D99", "element": "QC", "verdict": "chờ chị gán mã",
+                           "cells": {"month": hoi_dap.Cell("'Chi phi theo bo phan'!C40", 5000000)}}]
+    return hoi_dap.Book(book.path, book.sha256, book.basis, book.pnl, costs, book.variances, book.bridge,
+                        book.bridge_said, [hoi_dap.Cell("'Phieu nhan file'!A9", line)], period=book.period)
+
+
+def test_an_unknown_department_code_is_answered_from_the_receipt(book):
+    b = _with_unknown(book)
+    for said in ("Mã bộ phận D99 là gì?", "Có mã bộ phận nào chưa có trong danh mục không?", "d99 gán vào đâu?"):
+        a = hoi_dap.answer(b, said)
+        assert a.status == hoi_dap.ANSWERED and a.query.intent == "unknown_code", said
+        assert "gán vào đâu" in a.text and "chờ chị gán mã" in a.text, said
+    assert "D99" in hoi_dap.answer(b, "Mã bộ phận D99 là gì?").text
+    a = hoi_dap.answer(book, "Có mã bộ phận nào chưa có trong danh mục không?")
+    assert a.status == hoi_dap.ANSWERED and "không ghi mã nào" in a.text
+
+
+def test_anything_unusual_about_one_element_answers_that_element(named):
+    for said in ("Có gì bất thường về công tác không?", "Khoản thuê văn phòng có gì bất thường?",
+                 "yếu tố khấu hao có vấn đề gì không?"):
+        a = hoi_dap.answer(named, said)
+        assert a.query.intent == "element", (said, a.query)
+    assert hoi_dap.answer(named, "5 khoản chi phí bất thường nhất tháng này").query.intent == "top"
+
+
+
+# ── R1–R5 (grader, F01 Board round 2): the Board's own wording ────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("said", ["Sao lãi gộp lại thấp hơn kế hoạch?", "Lãi gộp hụt do đâu?",
+                                  "Bán nhiều hơn kế hoạch mà lãi thấp hơn?",
+                                  "Sản lượng vượt mà lợi nhuận gộp lại giảm, tại sao?"])
+def test_a_why_without_the_word_vi_sao_gets_the_story(book, said):
+    a = hoi_dap.answer(book, said)
+    assert (a.query.intent, a.query.line) == ("why", "gp"), a.query
+    assert "Mã hàng tác động nhiều nhất" in a.text
+
+
+def test_san_luong_is_never_the_element_luong(named):
+    assert hoi_dap.parse("Sản lượng tháng này thế nào?", named).target is None
+    assert hoi_dap.parse("Lương tháng này?", named).target == "Lương"
+
+
+def test_a_sku_asked_by_product_name_and_size_with_a_price_word(book):
+    sku = next(r for r in book.skus if any(ch.isdigit() for ch in r["name"]))
+    words = sku["name"].split()
+    size = next(w for w in words if any(ch.isdigit() for ch in w))
+    spaced = re.sub(r"(\d)([A-Za-z])", r"\1 \2", size)
+    said = f"Giảm giá {' '.join(w for w in words if w != size)} chai {spaced} làm mất bao nhiêu lãi?"
+    a = hoi_dap.answer(book, said)
+    assert (a.query.intent, a.query.target, a.query.part) == ("sku_one", sku["sku"], "price"), (said, a.query)
+    _cells_hold(book, a)
+
+
+def test_a_full_year_question_with_no_metric_says_revenue_and_operating_profit(with_pack):
+    for said in ("Cả năm thì sao?", "Ước cả năm thế nào?"):
+        a = hoi_dap.answer(with_pack, said)
+        assert a.status == hoi_dap.ANSWERED and a.query.intent == "forecast", said
+        assert "doanh thu và lợi nhuận hoạt động cả năm ước" in a.text
+        assert "Doanh thu thuần cả năm ước" in a.text and "Lợi nhuận hoạt động cả năm ước" in a.text
+        _cells_hold(with_pack, a)
+
+
+def _unknown_area(tmp_path):
+    """A folder whose ledger posts to a department code the catalogue does not hold; its vouchers name the area."""
+    d = fs.opex_folder(tmp_path / "X")
+    rows = fs.gl_rows()[:-1]
+    rows.append(["20/10/2026", "PC95001", "10", "2026", "6418", "331", "MT1", "QC", "Chi phí VP Miền Trung T10",
+                 "30000000"])
+    rows.append(["21/10/2026", "PC95002", "10", "2026", "6418", "331", "MT1", "CTP", "Công tác Miền Trung T10",
+                 "4000000"])
+    fs.write_csv(d / "SoChiTietChiPhi_2026.csv", rows)
+    out = fpa_report.write(fpa_report.compute(d))
+    return hoi_dap.read(out["xlsx"])
+
+
+def test_an_unknown_code_asked_by_its_area_and_the_held_lines_still_say_what_is_known(tmp_path):
+    b = _unknown_area(tmp_path)
+    line = next(c.value for c in b.open if "chưa có trong danh mục" in c.value)
+    assert "MT1" in line and "Miền Trung" in line and "T10" not in line.split("chứng từ ghi")[1]
+    for said in ("Chi phí văn phòng Miền Trung là gì, thuộc đâu?", "Mã MT1 là gì?"):
+        a = hoi_dap.answer(b, said)
+        assert (a.query.intent, a.query.target) == ("unknown_code", "MT1"), said
+        assert "Dòng có thể đang giữ kế hoạch của mã này" in a.text and "Quảng cáo" in a.text
+        _cells_hold(b, a)
+    a = hoi_dap.answer(b, "Chi phí bộ phận Marketing tháng này?")
+    assert "Vì sao còn chờ:" in a.text and "MT1" in a.text
+    # a held line keeps its known cause in the report (R5): MT1's advertising is a one-off of its own
+    held = next(v for v in b.variances if v["label"].startswith("MT1") and "Quảng cáo" in v["label"])
+    assert held["verdict"] == "chờ chị gán mã" and "Khoản một lần" in held["causes"]
+
+
+def test_an_unknown_code_asked_by_a_one_word_area_with_a_what_is_it_cue(tmp_path):
+    d = fs.opex_folder(tmp_path / "Y")
+    rows = fs.gl_rows()[:-1]
+    rows.append(["20/10/2026", "PC96001", "10", "2026", "6418", "331", "HRC", "QC", "Trưng bày kênh Horeca T10",
+                 "30000000"])
+    fs.write_csv(d / "SoChiTietChiPhi_2026.csv", rows)
+    b = hoi_dap.read(fpa_report.write(fpa_report.compute(d))["xlsx"])
+    a = hoi_dap.answer(b, "Horeca là gì, sao không có trong kế hoạch?")
+    assert (a.query.intent, a.query.target) == ("unknown_code", "HRC"), a.query
+    assert hoi_dap.answer(b, "Chi phí Horeca?").query.intent != "unknown_code"     # no cue: not guessed
+
+
+def test_a_product_the_report_cannot_pin_down_is_parked_never_the_total(book):
+    a = hoi_dap.answer(book, "Giảm giá Trà xanh chai 1 lít làm mất bao nhiêu?")
+    assert a.status == hoi_dap.NO_FIGURE and a.cites == []
+    assert hoi_dap.answer(book, "Ảnh hưởng của giá bán bao nhiêu?").query.intent == "bridge"
+
+
+def test_a_product_named_without_the_brand_every_sku_carries(book):
+    skus = [dict(r, name=r["name"].split()[0] + " Sông Hồng " + " ".join(r["name"].split()[1:])) for r in book.skus]
+    branded = hoi_dap.Book(book.path, book.sha256, book.basis, book.pnl, book.costs, book.variances, book.bridge,
+                           book.bridge_said, book.open, period=book.period, skus=skus)
+    sku = next(r for r in skus if "500" in r["name"])
+    a = hoi_dap.answer(branded, "Giảm giá trà xanh 500 ml làm mất bao nhiêu?")
+    assert (a.query.intent, a.query.target, a.query.part) == ("sku_one", sku["sku"], "price"), a.query
+
+
+# ── Round 5 (grader on f0c0698): a version the report does not use, the department's year to date ────────────────
+
+def _two_versions(tmp_path):
+    d = case(tmp_path)
+    fs.write_csv(d / "AOP_2026.csv", fs.plan_rows("AOP v4", approved="2026-01-10"))
+    fs.write_csv(d / "AOP_v3_2026.csv", fs.plan_rows("AOP v3"))
+    m = fpa_report.compute(d)
+    return m, hoi_dap.read(fpa_report.write(m)["xlsx"])
+
+
+def test_a_question_on_a_version_not_used_says_so_first_then_answers_on_the_chosen_one(tmp_path):
+    """R10: 'theo bản v3 …' was answered with v4's figures and only 'Em hiểu là' named v4."""
+    m, b = _two_versions(tmp_path)
+    a = hoi_dap.answer(b, "Theo bản v3 thì chi phí hoạt động tháng này chênh bao nhiêu?")
+    assert a.status == hoi_dap.ANSWERED
+    assert a.parts[0].startswith("Báo cáo không dùng bản AOP v3 (file AOP_v3_2026.csv)") and "AOP v4" in a.parts[0]
+    assert a.parts[1] == "Em trả lời theo bản AOP v4:" and a.parts[2].startswith("Em hiểu là")
+    assert any(c.get("nguon") == "Phiếu nhận file" for c in a.cites)
+    _cells_hold(b, a)
+    assert hoi_dap.answer(b, "Theo bản v2 doanh thu tháng này?").parts[0].startswith("Thư mục báo cáo không có bản v2")
+    for same in ("Doanh thu tháng này so với bản AOP v4?", "Doanh thu tháng này bán được bao nhiêu?"):
+        assert hoi_dap.answer(b, same).parts[0].startswith("Em hiểu là"), same
+    # R9b: the Biên bản's source puts the unchosen plan under 'read, not used', with why
+    said = fpa_report.sources_said(m)
+    used, _sep, read = said.partition("; đã đọc, không lấy số: ")
+    assert "AOP_v3_2026.csv" not in used and "AOP_v3_2026.csv (bản AOP v3: không phải bản so sánh" in read
+
+
+def test_the_department_year_to_date_keeps_the_held_line_and_the_open_code_beside_it(tmp_path):
+    """R11: the month answer showed the open code beside the department; the year to date did not."""
+    b = _unknown_area(tmp_path)
+    for when in ("tháng này", "lũy kế từ đầu năm"):
+        a = hoi_dap.answer(b, f"Chi phí bộ phận Marketing {when}?")
+        assert "chờ chị gán mã" in a.text and "Mã MT1 (chưa có trong danh mục)" in a.text, when
+        _cells_hold(b, a)
+
+
+def test_a_sku_with_the_same_price_shows_no_price_crumb():
+    """R12: identical prices showed a price effect of -1 đ (a rounding crumb) on the SKU row."""
+    from types import SimpleNamespace
+    from openpyxl import Workbook
+    from engine.gp_bridge import Part
+    p = Part("SP01", mix=Decimal("1000.4"), price=Decimal("-0.6"), cost=Decimal("0.3"), qty_plan=Decimal(3),
+             qty_actual=Decimal(3), price_plan=Decimal("33333.3333"), price_actual=Decimal("33333.1333"),
+             cost_plan=Decimal(20000), cost_actual=Decimal(20000))
+    ws = Workbook().active
+    fpa_report.write_sku_rows(ws, SimpleNamespace(by_sku=[p]), {"SP01": "Trà"})
+    row = [c.value for c in ws[ws.max_row]]
+    assert row[4] == row[5] and row[9] == 0 and row[10] == 0 and row[8] == 1000 and row[11] == 1000
+
+
+def test_an_estimate_file_in_the_audit_source_says_estimate_never_an_internal_key(tmp_path):
+    """R13: the estimate file was said as '(bản thuc te: không phải bản so sánh…)'."""
+    d = case(tmp_path)
+    fs.write_csv(d / "Uoc tinh LE 9+3 2026.csv", fs.plan_rows("Thực tế"))
+    said = fpa_report.sources_said(fpa_report.compute(d))
+    assert "Uoc tinh LE 9+3 2026.csv (file ước tính (LE): dùng cho dự báo, không phải bản so sánh)" in said
+    assert "thuc te" not in said

@@ -142,6 +142,15 @@ def test_pressing_bat_dau_marks_the_welcome_and_offers_the_sample(qt_app):
     card.start_button.click()
     assert started == [True] and not card.isVisible()
     assert not first_run.welcome_needed()
+    # "0 byte rời máy chị" comes first: nothing offered until the user picks how Clicky may use AI
+    from ui import welcome
+    from ui.privacy_card import LOCAL
+    privacy = welcome._keep[-1]
+    assert manager.sig_choices.calls == [] and privacy.title_label.text() == "0 byte rời máy chị"
+    assert privacy.local_button.text() == LOCAL
+    privacy.local_button.click()
+    from storage import setting
+    assert setting("local_only") is True and setting("privacy_chosen") is True and not privacy.isVisible()
     (question, choices), = manager.sig_choices.calls
     assert question == sample.offer()[-1].text and choices == list(sample.OFFER_CHOICES)
     # The "Xem em làm" button is sent as typed text; the sample skill's trigger picks it up.
@@ -346,3 +355,24 @@ def test_error_card_and_preview(qt_app, monkeypatch):
     assert not empty.with_log.isChecked() and empty.lead.text() == bug_report.LOG_NOT_READY
     assert "Chế độ: chỉ gửi số đếm" in empty.report.body and empty.send_button.isVisibleTo(empty)
     card.close(), preview.close(), empty.close()
+
+
+def test_privacy_card_counts_only_what_was_really_sent(qt_app, tmp_path, monkeypatch):
+    import json
+    from office import outgoing
+    from ui.privacy_card import PrivacyCard, title
+    log = tmp_path / "gui-di.jsonl"
+    monkeypatch.setattr(outgoing, "log_path", lambda: log)
+    assert outgoing.bytes_sent() == 0 and title(0) == "0 byte rời máy chị"
+    text = {"system": "s", "user": "Doanh thu tháng này?", "history": []}
+    log.write_text(json.dumps({"sent": False, "card": True}) + "\n"
+                   + json.dumps({"sent": True, "text": text}, ensure_ascii=False) + "\nnot json\n", encoding="utf-8")
+    n = len(json.dumps(text, ensure_ascii=False).encode("utf-8"))
+    assert outgoing.bytes_sent() == n and title(n) == f"{n} byte rời máy chị"
+    assert outgoing.bytes_words(1536) == "1,5 KB" and outgoing.bytes_words(3 * 1024 ** 2) == "3,0 MB"
+    card = PrivacyCard()
+    assert card.title_label.text() == title(n)
+    monkeypatch.setenv("CLICKY_LOCAL_ONLY", "1")
+    forced = PrivacyCard()
+    assert not forced.ai_button.isEnabled()
+    card.close(), forced.close()

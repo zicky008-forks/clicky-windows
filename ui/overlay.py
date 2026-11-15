@@ -238,6 +238,8 @@ class CursorOverlay(QWidget):
         # Optional highlight ring around detected element (x, y, radius)
         self._ring: Optional[tuple] = None
         self._quiet = False
+        # Hidden while another app is in front of the Excel window being explained (ui.fg_guard)
+        self._suppressed = False
         self._ring_phase: float = 0.0
 
         # Teaching annotations — list of shape dicts the overlay paints each
@@ -552,8 +554,19 @@ class CursorOverlay(QWidget):
 
     # ── Painting ──────────────────────────────────────────────────────────────
 
+    def set_suppressed(self, on: bool):
+        """Paint nothing (cards, frames, pointer) while another app is in front of Excel; back as it was."""
+        self._suppressed = bool(on)
+        self.update()
+
+    def has_story(self) -> bool:
+        return bool(self._annotations) or self._locked_pos is not None
+
     def paintEvent(self, event):
         p = QPainter(self)
+        if self._suppressed:
+            p.end()
+            return
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # Ring goes UNDER the buddy

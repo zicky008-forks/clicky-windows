@@ -21,6 +21,12 @@ log = logging.getLogger(__name__)
 TRIGGER = (r"b[áa]o\s*c[áa]o\s*(fp\s*&?\s*a|th[ựu]c\s*hi[ệe]n\s*so\s*(v[ớo]i\s*)?k[ếe]\s*ho[ạa]ch)"
            r"|\bfp\s*&?\s*a\b.{0,20}th[áa]ng|so\s*v[ớo]i\s*(aop|k[ếe]\s*ho[ạa]ch\s*n[ăa]m)")
 ALARMS_SHOWN = 3
+CONFIRM_TITLE = "Em hiểu thế này, đúng chưa?"
+CONFIRM_YES = "Đúng rồi, làm báo cáo FP&A tháng"
+CONFIRM_FIX = "Sửa trước khi làm báo cáo FP&A"
+FIX_HINT = ("Chị gõ điều cần sửa kèm câu lệnh, ví dụ: làm báo cáo FP&A tháng so với AOPR. Em đọc lại thư mục và "
+            "hỏi chị lần nữa trước khi làm.")
+_ASKED: dict = {}                      # folder -> (files' signature, the user's words when asked)
 
 
 class Stop(Exception):
@@ -66,6 +72,23 @@ def prepare(folder: Path, said: str = "") -> tuple:
     scene_log.record("fpa_report", verified=out["verified"], cells=out["cells"], lines=len(m.pnl),
                      books=m.tb is not None, alarms=len(alarms))
     return m, out
+
+
+def signature(folder: Path) -> tuple:
+    """The folder's files as they stand (name, size, time), so a confirmation never covers files changed since."""
+    out = []
+    for p in sorted(Path(folder).iterdir()):
+        if p.is_file():
+            st = p.stat()
+            out.append((p.name, st.st_size, int(st.st_mtime)))
+    return tuple(out)
+
+
+def confirm_beat(m) -> Beat:
+    """One screen, read in under a minute: what Clicky understood, and two buttons."""
+    from engine import fpa_report
+    lines = fpa_report.understood(m)
+    return Beat(CONFIRM_TITLE + " " + " ".join(lines), label=CONFIRM_TITLE, choices=(CONFIRM_YES, CONFIRM_FIX))
 
 
 def _books(m) -> Beat:
@@ -122,7 +145,19 @@ def beats_for(m, out: dict) -> list:
     return beats
 
 
-async def run(manager, folder: Optional[Path] = None, said: str = "") -> None:
+def compute_only(folder: Path, said: str = ""):
+    """The month as prepare() would build it, without writing anything."""
+    from engine import fpa, fpa_report
+    try:
+        return fpa_report.compute(folder)
+    except fpa.PickVersion as exc:
+        version, file = picked(said, exc.choices)
+        if version is None:
+            raise
+        return fpa_report.compute(folder, version=version, plan_file=file)
+
+
+async def run(manager, folder: Optional[Path] = None, said: str = "", confirm: bool = False) -> None:
     from office.bod_skill import find_folder
     folder = find_folder(getattr(manager, "_excel", None), folder)
     if folder is None or not folder.is_dir():
@@ -130,6 +165,30 @@ async def run(manager, folder: Optional[Path] = None, said: str = "") -> None:
                                      "file, rồi gõ lại: làm báo cáo FP&A tháng.")])
         return
     scene_log.record("fpa_start", folder=scene_log.book_id(folder))     # an id, never the folder's name
+    if confirm:
+        from engine.tables import key
+        words = key(said)
+        if key(CONFIRM_FIX) in words:
+            _ASKED.pop(str(folder), None)
+            await mc.play(manager, [Beat(FIX_HINT)])
+            return
+        asked = _ASKED.get(str(folder))
+        sig = await asyncio.to_thread(signature, folder)
+        if key(CONFIRM_YES) in words and asked is not None and asked[0] == sig:
+            said = asked[1]                              # the plan the user named when asked still holds
+            _ASKED.pop(str(folder), None)
+            scene_log.record("fpa_confirmed")
+        else:
+            try:
+                m = await asyncio.to_thread(compute_only, folder, said)
+            except Exception:                            # noqa: BLE001 - prepare() below says it in plain words
+                m = None
+            if m is not None:
+                _ASKED[str(folder)] = (sig, said)
+                beat = confirm_beat(m)
+                scene_log.record("fpa_confirm_asked", choices=list(beat.choices))
+                await mc.play(manager, [beat])
+                return
     try:
         m, out = await asyncio.to_thread(prepare, folder, said)
     except Stop as stop:
@@ -142,11 +201,42 @@ async def run(manager, folder: Optional[Path] = None, said: str = "") -> None:
         await mc.play(manager, [Beat("Em chưa làm được báo cáo FP&A. File của chị chưa bị thay đổi gì. Chị bấm Báo "
                                      "lỗi để em gửi nhật ký đã che số.", mark="bad")])
         return
-    await mc.play(manager, beats_for(m, out))
+    beats = beats_for(m, out)
+    try:
+        extra = await asyncio.to_thread(learn, m, out)
+    except Exception:                                    # noqa: BLE001 - the report stands; memory is a bonus
+        log.exception("company memory step failed")
+        extra = None
+    if extra is not None:
+        beats.insert(len(beats) - 1, extra)
+    await mc.play(manager, beats)
+
+
+def learn(m, out: dict, path: Optional[str] = None) -> Optional[Beat]:
+    """Company memory after the report: the bosses' usual questions (SEP_HAY_HOI.md) tried on the saved report,
+    the month's progress written to TIEN_BO.csv, and lessons proposed unticked in BAI_HOC.md for the owner to approve.
+    Only when the memory folder exists already (the owner set it up); nothing is sent anywhere."""
+    from present import tri_nho
+    from engine import hoi_dap
+    if not tri_nho.folder(path).exists():
+        return None
+    mem = tri_nho.load(path)
+    period = f"{m.period[5:7]}/{m.period[:4]}"
+    usual = [(boss, q) for boss, qs in mem.bosses.items() for q in qs]
+    unanswered = []
+    if usual:
+        book = hoi_dap.read(out["xlsx"])
+        for boss, q in usual:
+            if hoi_dap.answer(book, q).status != hoi_dap.ANSWERED:
+                unanswered.append((boss, q))
+    tri_nho.propose_lessons(period, unanswered, path)
+    said = tri_nho.record_progress(period, len(usual), len(usual) - len(unanswered), path)["said"]
+    scene_log.record("tri_nho_progress", asked=len(usual), answered=len(usual) - len(unanswered))
+    return Beat(said, mark="ok" if not unanswered else "warn")
 
 
 async def handle(manager, transcript: str) -> str:
-    await run(manager, None, transcript or "")
+    await run(manager, None, transcript or "", confirm=True)
     return ""
 
 
