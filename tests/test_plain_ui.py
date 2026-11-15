@@ -77,8 +77,8 @@ def test_tray_panel_and_settings_say_nothing_technical(plain):
     settings.present(shift=False)
     texts = _settings_texts(settings)
     assert not _leaks(texts)
-    assert "Kỹ thuật" not in texts and "Cài đặt Clicky" in texts
-    assert {"Mở Clicky", "Nhật ký gửi đi", "Cài đặt…", "Thoát Clicky"} <= set(_menu_texts(tray._menu))
+    assert "Kỹ thuật" not in texts and "Cài đặt Numvera" in texts
+    assert {"Mở Numvera", "Nhật ký gửi đi", "Cài đặt…", "Thoát Numvera"} <= set(_menu_texts(tray._menu))
     settings.close()
     panel.close()
     tray.hide_icon()

@@ -218,7 +218,7 @@ class CompanionPanel(QWidget):
 
         # Header
         header = QHBoxLayout()
-        title = QLabel("Clicky")
+        title = QLabel("Numvera")
         title.setObjectName("title")
         title.setFont(FONT_TITLE)
         header.addWidget(title)
@@ -236,7 +236,7 @@ class CompanionPanel(QWidget):
             "border: none; border-radius: 12px; font-size: 14px; font-weight: bold; }"
             "QPushButton:hover { background: rgba(80,80,95,220); }"
         )
-        self._min_btn.setToolTip("Ẩn khung chat (mở lại từ biểu tượng Clicky ở khay)")
+        self._min_btn.setToolTip("Ẩn khung chat (mở lại từ biểu tượng Numvera ở khay)")
         self._min_btn.clicked.connect(self.hide)
         header.addWidget(self._min_btn)
         root.addLayout(header)
@@ -284,7 +284,7 @@ class CompanionPanel(QWidget):
 
         self._composer = QLineEdit()
         self._composer.setPlaceholderText("Gõ việc cần làm, ví dụ: làm báo cáo tháng từ thư mục này")
-        self._composer.setAccessibleName("Tin nhắn cho Clicky")
+        self._composer.setAccessibleName("Tin nhắn cho Clicky")    # the robot finds the box by this name (tools/dien_tap)
         self._composer.setMaxLength(12000)
         self._composer.returnPressed.connect(self._send_text)
         root.addWidget(self._composer)
@@ -492,7 +492,7 @@ class CompanionPanel(QWidget):
         # A turn that ended with no answer (an error shown as a notification) still gets closed off,
         # so the next "You:" never runs on from a dangling "Clicky: ".
         self._transcript += (self._response_text or "(chưa trả lời được)") + "\n\n" if self._transcript else ""
-        self._transcript += "Bạn: " + question + "\n\nClicky: "
+        self._transcript += "Bạn: " + question + "\n\nVera: "
         self._transcript = self._transcript[-40000:]
         self._response_text = ""
         self._response_label.setText(self._transcript)
@@ -500,7 +500,7 @@ class CompanionPanel(QWidget):
     def show_error(self, message: str):
         """Put a failed turn's reason in the chat itself, not only in a notification that may go unseen."""
         first = (message or "").strip().splitlines()[0][:200] if (message or "").strip() else "lỗi không rõ"
-        self.append_response_chunk(("\n" if self._response_text else "") + "⚠ Clicky chưa trả lời được: " + first)
+        self.append_response_chunk(("\n" if self._response_text else "") + "⚠ Vera chưa trả lời được: " + first)
 
     def set_audio_level(self, rms: float):
         self._waveform.set_level(rms)

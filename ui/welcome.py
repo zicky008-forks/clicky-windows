@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout
 
 from ui.plain_card import BLUE, LINK_QSS, PRIMARY_QSS, CardWindow, button, label
 
-TITLE = "Chào chị, em là Clicky"
+TITLE = "Chào chị, em là Vera, trợ lý của Numvera"
 LEAD = "Em làm báo cáo tháng ngay trên Excel của chị. Em hứa 3 điều:"
 PROMISES = (
     ("Số tính trên máy chị", "File không rời máy. Gửi gì lên mạng, chị xem trước."),

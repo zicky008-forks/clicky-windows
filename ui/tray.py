@@ -9,7 +9,7 @@ from config import cfg
 from storage import set_setting, setting
 import tech_mode
 
-QUIT = "Thoát Clicky"
+QUIT = "Thoát Numvera"
 SETTINGS = "Cài đặt…"
 
 
@@ -48,7 +48,7 @@ def tooltip() -> str:
         key = _hotkey_label()
     except Exception:
         key = cfg.hotkey
-    return f"Clicky · giữ {key} để nói, hoặc nháy đúp để mở"
+    return f"Numvera · giữ {key} để nói, hoặc nháy đúp để mở"
 
 
 class TrayManager(QObject):
@@ -172,7 +172,7 @@ class TrayManager(QObject):
         present_action.triggered.connect(self.on_present)
 
         # Off by default: Clicky's windows stay out of screenshots and screen recordings.
-        recording_action = menu.addAction("Cho phép quay màn hình Clicky (để quay demo)")
+        recording_action = menu.addAction("Cho phép quay màn hình Numvera (để quay demo)")
         recording_action.setCheckable(True)
         recording_action.setChecked(bool(setting("allow_screen_recording", False)))
         recording_action.triggered.connect(self._toggle_recording)
@@ -345,7 +345,7 @@ class TrayManager(QObject):
     def _fill_plain_menu(self, menu: QMenu):
         """The menu a beta user sees: plain Vietnamese, no AI provider, key, model or engine."""
         from office.outgoing import LOCAL_ONLY_LABEL, local_only, local_only_forced
-        menu.addAction("Mở Clicky").triggered.connect(self.on_show_panel)
+        menu.addAction("Mở Numvera").triggered.connect(self.on_show_panel)
         menu.addAction("Dừng (Esc)").triggered.connect(self.on_stop)
         menu.addSeparator()
         menu.addAction("Trình bày báo cáo (trợ lý bên cạnh)…").triggered.connect(self.on_present)
@@ -355,7 +355,7 @@ class TrayManager(QObject):
         local.setChecked(local_only())
         local.setEnabled(not local_only_forced())
         local.triggered.connect(self.on_toggle_local_only)
-        recording = menu.addAction("Cho phép quay màn hình Clicky (để quay demo)")
+        recording = menu.addAction("Cho phép quay màn hình Numvera (để quay demo)")
         recording.setCheckable(True)
         recording.setChecked(bool(setting("allow_screen_recording", False)))
         recording.triggered.connect(self._toggle_recording)

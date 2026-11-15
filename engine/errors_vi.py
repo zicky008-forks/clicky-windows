@@ -31,7 +31,7 @@ UNCHANGED = "File của chị chưa bị thay đổi gì"
 RETRY = "Thử lại"
 REPORT = "Báo lỗi"
 REPORT_NOTE_TITLE = "Nếu chị bấm Báo lỗi"
-REPORT_NOTE = "Em gửi nhật ký đã che tên cho đội Clicky. Không gửi file. Chị xem trước được."
+REPORT_NOTE = "Em gửi nhật ký đã che tên cho đội Numvera. Không gửi file. Chị xem trước được."
 
 
 @dataclass(frozen=True)
@@ -62,7 +62,7 @@ CATALOGUE = {
         "Chị đã dùng hết lượt dùng thử. Chị nhập mã kích hoạt của công ty để dùng tiếp."),
     GENERIC: ErrorText(
         GENERIC, "Có chỗ em chưa làm được",
-        "Chị bấm Thử lại. Nếu vẫn chưa được, chị bấm Báo lỗi để đội Clicky xem giúp."),
+        "Chị bấm Thử lại. Nếu vẫn chưa được, chị bấm Báo lỗi để đội Numvera xem giúp."),
 }
 
 

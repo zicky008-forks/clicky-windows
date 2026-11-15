@@ -1,4 +1,7 @@
-# Clicky for Windows 🔵
+# Numvera (formerly Clicky BI) 🔵
+
+> **Numvera** is the product name from v1.7 on; the assistant calls itself **Vera**. The code, the exe (`Clicky.exe`), the data folder (`%LOCALAPPDATA%\Clicky`) and module names keep the old name for now, so installed copies upgrade in place. This repository is a fork of clicky-windows (MIT); the original copyright line in `LICENSE` stays as it is.
+
 
 > **Clicky BI AI branch (`bi-ai`):** a finance/BI coworker built on this port. When Excel is in front, Clicky reads the workbook over COM (`office/excel_com.py`), answers in Vietnamese finance mode (`office/finance_mode.py`) and points at cells with `[CELL:Sheet!B12|label]` / `[RANGE:Sheet!B2:D20|label]`, whose positions come from Excel's own layout instead of a screenshot guess. Requires Windows, Excel desktop and `pywin32`. Cell pointing still needs live testing on real zoom/DPI/freeze-pane setups.
 >

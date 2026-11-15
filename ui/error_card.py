@@ -19,7 +19,7 @@ class ErrorCard(CardWindow):
     report_requested = pyqtSignal(str)     # error kind
 
     def __init__(self):
-        super().__init__("Clicky gặp trục trặc")
+        super().__init__("Numvera gặp trục trặc")
         top = QHBoxLayout()
         self.eyebrow = label(errors_vi.EYEBROW, "eyebrow", 9, QFont.Weight.Bold)
         top.addWidget(self.eyebrow, stretch=1)
@@ -108,7 +108,7 @@ class ReportPreview(CardWindow):
             self.consent_values[key] = value
         grid.setColumnStretch(1, 1)
         self.body.addWidget(self.consent)
-        self.with_log = QCheckBox("Kèm nhật ký đã che tên (giúp đội Clicky tìm lỗi nhanh hơn)")
+        self.with_log = QCheckBox("Kèm nhật ký đã che tên (giúp đội Numvera tìm lỗi nhanh hơn)")
         self.with_log.toggled.connect(lambda _on: self._refresh())
         self.body.addWidget(self.with_log)
         self.text = QPlainTextEdit()

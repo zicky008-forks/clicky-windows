@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 import httpx
 from storage import data_dir
 
-VERSION='1.6.1-preview'   # after the v1.6.0 release: CI builds must sort above it
+VERSION='1.7.0-rc.1'   # v1.7 (Numvera) release candidate: CI builds sort above v1.6.0, below v1.7.0
 REPOSITORY='zicky008-forks/clicky-windows'
 
 
