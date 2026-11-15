@@ -260,8 +260,131 @@ def read_sep(text: str) -> dict:
     return out
 
 
+PROPOSED_HEAD = "## Clicky đề xuất (chờ anh duyệt)"
+BOX = re.compile(r"^- \[(?P<mark>[ xX✓])\]\s*(?P<text>.+)$")
+
+
 def read_lessons(text: str) -> list:
-    return [line[2:].strip() for line in text.splitlines() if line.startswith("- ") and line[2:].strip()]
+    """The owner's lessons: plain '- ' lines, and Clicky's proposals the owner ticked ('- [x] …'). An unticked
+    proposal ('- [ ] …') is never used: Clicky only learns what the owner approved."""
+    out = []
+    for line in text.splitlines():
+        m = BOX.match(line)
+        if m:
+            if m.group("mark") != " ":
+                out.append(re.sub(r"\s*\(đề xuất kỳ [^)]*\)\s*$", "", m.group("text").strip()))
+        elif line.startswith("- ") and line[2:].strip():
+            out.append(line[2:].strip())
+    return out
+
+
+def read_proposed(text: str) -> list:
+    """Proposals still waiting for the owner's tick."""
+    return [m.group("text").strip() for line in text.splitlines() for m in [BOX.match(line)]
+            if m and m.group("mark") == " "]
+
+
+def propose_lessons(period: str, unanswered: list = (), path: Optional[str] = None, today=None) -> dict:
+    """Clicky's proposed lessons for this period, added unticked under PROPOSED_HEAD in BAI_HOC.md for the owner to
+    tick ('- [x]') or delete. Built from facts only, never from an AI:
+    - each usual boss question (SEP_HAY_HOI.md) the new report could not answer: (boss, question) in unanswered;
+    - each parked question the owner answered: put the answer in the report next time, so nobody parks it again;
+    - each promise past its date.
+    A proposal already there (ticked, unticked or a lesson with the same words) is not added twice."""
+    d = ensure(path)
+    f = d / BAI_HOC
+    text = read_text(f)
+    mem = load(path)
+    new = []
+    for boss, q in unanswered:
+        new.append(f"Sếp {boss} hay hỏi «{q}» mà báo cáo kỳ {period} chưa có số: thêm số này vào báo cáo.")
+    for e in mem.questions:
+        if e.answer:
+            who = e.fields.get("ai_hoi", "").strip()
+            new.append(f"«{e.text}»" + (f" ({who} hỏi)" if who else "") + f": đưa sẵn câu trả lời «{e.answer}» vào "
+                       "báo cáo, để không ai phải hỏi lại.")
+    today = today or dt.date.today()
+    for e in mem.open_promises():
+        due = _date(e.fields.get("han", ""))
+        if due is not None and due < today:
+            new.append(f"Lời hứa «{e.text}» đã quá hạn {due.strftime('%d/%m/%Y')}: làm xong hoặc báo lại người nhận.")
+    def same(x: str) -> str:                        # the period is not part of a proposal's identity
+        return fold(re.sub(r"kỳ \S+", "", re.sub(r"\s*\(đề xuất kỳ [^)]*\)\s*$", "", x)))
+    have = {same(x) for x in read_lessons(text) + read_proposed(text)}
+    added = []
+    for line in new:
+        if same(line) in have:
+            continue
+        have.add(same(line))
+        added.append(line)
+    if added:
+        body = text.rstrip("\n")
+        if PROPOSED_HEAD not in body:
+            body += ("\n\n" + PROPOSED_HEAD + "\n\n> Anh đổi [ ] thành [x] để Clicky dùng bài học này từ lần sau. "
+                     "Không đúng thì xóa dòng. Clicky không tự dùng dòng chưa duyệt.")
+        body += "\n" + "\n".join(f"- [ ] {x} (đề xuất kỳ {period})" for x in added)
+        f.write_text(body + "\n", encoding="utf-8")
+    return {"file": str(f), "added": added, "waiting": len(read_proposed(read_text(f)))}
+
+
+def _date(text: str):
+    m = re.search(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})", str(text))
+    if not m:
+        return None
+    try:
+        return dt.date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    except ValueError:
+        return None
+
+
+# --- TIEN_BO.csv: how the report improves month over month ---------------------------------------------
+
+TIEN_BO = "TIEN_BO.csv"
+TIEN_BO_HEAD = ["Kỳ", "Câu sếp hay hỏi", "Báo cáo trả lời được", "Câu treo còn mở", "Lời hứa chưa xong",
+                "Bài học đã duyệt", "Đề xuất chờ duyệt", "Ngày ghi"]
+
+
+def record_progress(period: str, asked: int, answered: int, path: Optional[str] = None, today=None) -> dict:
+    """One row per period in TIEN_BO.csv (the period's row is replaced when the report is built again), and the
+    sentence that compares it with the period before: the month-over-month measure the owner sees."""
+    import csv
+    d = ensure(path)
+    f = d / TIEN_BO
+    mem = load(path)
+    text = read_text(f) if f.exists() else ""
+    rows = [r for r in csv.reader(text.splitlines()) if r] if text else []
+    body = [r for r in rows[1:] if r and r[0] != period]
+    waiting = len(read_proposed(read_text(d / BAI_HOC)))
+    row = [period, str(asked), str(answered), str(len(mem.open_questions())), str(len(mem.open_promises())),
+           str(len(mem.lessons)), str(waiting), (today or dt.date.today()).strftime("%d/%m/%Y")]
+    body.append(row)
+    body.sort(key=lambda r: _period_key(r[0]))
+    with open(f, "w", encoding="utf-8-sig", newline="") as fh:     # BOM: Excel opens Vietnamese correctly
+        csv.writer(fh).writerows([TIEN_BO_HEAD] + body)
+    i = [r[0] for r in body].index(period)
+    before = body[i - 1] if i > 0 else None
+    return {"file": str(f), "row": row, "said": progress_sentence(row, before)}
+
+
+def _period_key(p: str) -> tuple:
+    m = re.match(r"(?:Q)?(\d{1,2})/(\d{4})", p)
+    return (int(m.group(2)), int(m.group(1)) * (3 if p.startswith("Q") else 1)) if m else (0, 0)
+
+
+def progress_sentence(row: list, before: Optional[list]) -> str:
+    asked, answered, open_q = int(row[1]), int(row[2]), int(row[3])
+    said = (f"Kỳ {row[0]}: báo cáo trả lời được {answered}/{asked} câu sếp hay hỏi" if asked else
+            f"Kỳ {row[0]}: anh chưa ghi câu sếp hay hỏi nào trong SEP_HAY_HOI.md")
+    if before is not None:
+        b_asked, b_answered, b_open = int(before[1]), int(before[2]), int(before[3])
+        if asked and b_asked:
+            said += f" (kỳ {before[0]}: {b_answered}/{b_asked})"
+        said += f"; câu treo còn mở {open_q} (kỳ trước {b_open})"
+    else:
+        said += f"; câu treo còn mở {open_q}"
+    if int(row[6]):
+        said += f"; {row[6]} bài học em đề xuất đang chờ anh duyệt trong BAI_HOC.md"
+    return said + "."
 
 
 @dataclass

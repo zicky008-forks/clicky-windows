@@ -201,7 +201,38 @@ async def run(manager, folder: Optional[Path] = None, said: str = "", confirm: b
         await mc.play(manager, [Beat("Em chưa làm được báo cáo FP&A. File của chị chưa bị thay đổi gì. Chị bấm Báo "
                                      "lỗi để em gửi nhật ký đã che số.", mark="bad")])
         return
-    await mc.play(manager, beats_for(m, out))
+    beats = beats_for(m, out)
+    try:
+        extra = await asyncio.to_thread(learn, m, out)
+    except Exception:                                    # noqa: BLE001 - the report stands; memory is a bonus
+        log.exception("company memory step failed")
+        extra = None
+    if extra is not None:
+        beats.insert(len(beats) - 1, extra)
+    await mc.play(manager, beats)
+
+
+def learn(m, out: dict, path: Optional[str] = None) -> Optional[Beat]:
+    """Company memory after the report: the bosses' usual questions (SEP_HAY_HOI.md) tried on the saved report,
+    the month's progress written to TIEN_BO.csv, and lessons proposed unticked in BAI_HOC.md for the owner to approve.
+    Only when the memory folder exists already (the owner set it up); nothing is sent anywhere."""
+    from present import tri_nho
+    from engine import hoi_dap
+    if not tri_nho.folder(path).exists():
+        return None
+    mem = tri_nho.load(path)
+    period = f"{m.period[5:7]}/{m.period[:4]}"
+    usual = [(boss, q) for boss, qs in mem.bosses.items() for q in qs]
+    unanswered = []
+    if usual:
+        book = hoi_dap.read(out["xlsx"])
+        for boss, q in usual:
+            if hoi_dap.answer(book, q).status != hoi_dap.ANSWERED:
+                unanswered.append((boss, q))
+    tri_nho.propose_lessons(period, unanswered, path)
+    said = tri_nho.record_progress(period, len(usual), len(usual) - len(unanswered), path)["said"]
+    scene_log.record("tri_nho_progress", asked=len(usual), answered=len(usual) - len(unanswered))
+    return Beat(said, mark="ok" if not unanswered else "warn")
 
 
 async def handle(manager, transcript: str) -> str:
