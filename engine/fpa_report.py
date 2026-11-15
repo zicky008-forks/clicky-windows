@@ -724,7 +724,7 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
         vs.append(["Trước khi gọi là vượt hay tiết kiệm, em xét lệch thời điểm, khoản một lần, điều chỉnh bút toán và "
                    "chi phí biến đổi theo doanh thu. Dòng dưới ngưỡng không phải bất thường."])
         vs.append(["Bộ phận · yếu tố", "Số báo cáo", "Nguyên nhân", "Số thực chất", "Phân loại", "Ngưỡng", "Nguồn"])
-        shown = [c for c in m.classified if c.material or (c.pending and c.above)]
+        shown = [c for c in m.classified if c.material or (c.pending and c.above) or c.flex is not None]
         for c in sorted(shown, key=lambda c: (c.pending, -abs(c.underlying))):
             known = " ".join([x.text for x in c.causes] + ([c.maybe] if c.maybe and c.pending else []))
             vs.append([c.line.label, c.reported,
@@ -785,7 +785,7 @@ def write(m: Month, out: Optional[Path] = None) -> dict:
     left = (m.costs.left_out() if m.costs is not None else []) + (m.sales.left_out() if m.sales is not None else [])
     log.dropped += [[x, "", None, "nêu trong Phiếu nhận file"] for x in left]
     log.add(f"'{PNL}'!A1", "Báo cáo FP&A", "", f"{len(m.pnl)} dòng P&L", "Báo cáo tháng mới, file gốc không đổi",
-            source=", ".join(n for n, *_ in m.bundle.receipt))
+            source=sources_said(m))
     bb = wb.create_sheet(audit.SHEET)
     for line in audit.grid(log)[0]:
         bb.append(line)
@@ -866,3 +866,18 @@ def sales_volume(sales) -> Optional[tuple]:
         return (None, None)
     return (sum((l.qty for l in lines if l.actual_from and l.qty), ZERO),
             sum((l.plan_qty or ZERO for l in lines if l.plan_from), ZERO))
+
+
+def sources_said(m, also_used=()) -> str:
+    """The Biên bản's source for the report: the files the figures came from, then the files read and not used,
+    each named once (the intake card's rule: read is not used)."""
+    rows = file_rows(m, also_used)[1:]
+    used, read = [], []
+    for r in rows:
+        name, role, n_used = r[0], str(r[1]), r[2]
+        aside = role == "Không dùng" or NOT_COMPARED in role or not n_used
+        (read if aside else used).append(name)
+    used = list(dict.fromkeys(used))
+    read = [x for x in dict.fromkeys(read) if x not in used]
+    return "Đã dùng: " + (", ".join(used) or "không file nào") + (
+        "; đã đọc, không lấy số: " + ", ".join(read) if read else "")

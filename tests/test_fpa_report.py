@@ -263,3 +263,13 @@ def test_typed_in_the_chat_it_first_asks_em_hieu_the_nay_then_writes_on_dung_roi
     assert any(p.name.startswith(fpa_report.OUT_PREFIX) for p in d.iterdir()) and "fpa_confirmed" in logged
     asyncio.run(fpa_skill.run(object(), d, fpa_skill.CONFIRM_FIX, confirm=True))
     assert played[-1].text == fpa_skill.FIX_HINT
+
+
+def test_the_audit_source_names_each_file_once_and_splits_read_from_used(tmp_path):
+    """R9 (grader): an unchosen plan was listed four times beside the chosen one."""
+    d = case(tmp_path)
+    fs.write_csv(d / "AOP_v3_2026.csv", fs.plan_rows("AOP v3"))
+    m = fpa_report.compute(d, version="AOP")
+    said = fpa_report.sources_said(m)
+    used, _sep, read = said.partition("; đã đọc, không lấy số: ")
+    assert "AOP_2026.csv" in used and "AOP_v3_2026.csv" in read and said.count("AOP_v3_2026.csv") == 1

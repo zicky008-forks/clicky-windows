@@ -611,3 +611,12 @@ def test_a_product_the_report_cannot_pin_down_is_parked_never_the_total(book):
     a = hoi_dap.answer(book, "Giảm giá Trà xanh chai 1 lít làm mất bao nhiêu?")
     assert a.status == hoi_dap.NO_FIGURE and a.cites == []
     assert hoi_dap.answer(book, "Ảnh hưởng của giá bán bao nhiêu?").query.intent == "bridge"
+
+
+def test_a_product_named_without_the_brand_every_sku_carries(book):
+    skus = [dict(r, name=r["name"].split()[0] + " Sông Hồng " + " ".join(r["name"].split()[1:])) for r in book.skus]
+    branded = hoi_dap.Book(book.path, book.sha256, book.basis, book.pnl, book.costs, book.variances, book.bridge,
+                           book.bridge_said, book.open, period=book.period, skus=skus)
+    sku = next(r for r in skus if "500" in r["name"])
+    a = hoi_dap.answer(branded, "Giảm giá trà xanh 500 ml làm mất bao nhiêu?")
+    assert (a.query.intent, a.query.target, a.query.part) == ("sku_one", sku["sku"], "price"), a.query

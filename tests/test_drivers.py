@@ -51,3 +51,22 @@ def test_the_flexed_budget_is_rate_times_actual_volume_with_its_formula(tmp_path
     # a line with no plan is not flexed (its share of the rate is nothing)
     other = next(c for c in m.classified if (c.line.dept, c.line.element) == ("MKT", "CTP"))
     assert other.flex is None
+
+
+def test_asked_about_a_rated_element_the_board_hears_the_flexed_budget_even_under_threshold(tmp_path):
+    from engine import hoi_dap
+    d = case(tmp_path)
+    rows = list(csv.reader(open(d / "AOP_2026.csv", encoding="utf-8-sig")))
+    first = fpa_report.compute(d)
+    _qa, qb = fpa_report.sales_volume(first.sales)
+    rate = int(sum(l.plan for l in first.costs.month if l.element == "KH") / qb)    # plan = rate x planned volume
+    rows.append([f"Ghi chú: Khấu hao = {rate:,} đồng/thùng × sản lượng kế hoạch".replace(",", ".")])
+    fs.write_csv(d / "AOP_2026.csv", rows)
+    m = fpa_report.compute(d)
+    small = [c for c in m.classified if c.line.element == "KH" and c.flex is not None and not c.material]
+    assert small, [(c.line.label, c.verdict) for c in m.classified if c.line.element == "KH"]
+    b = hoi_dap.read(fpa_report.write(m)["xlsx"])
+    a = hoi_dap.answer(b, "Yếu tố KH tháng này có gì bất thường?")
+    assert a.query.intent == "element" and "ngân sách linh hoạt" in a.text and "đ/thùng" in a.text
+    top = hoi_dap.answer(b, "Top 5 khoản chi phí chênh lớn nhất?")
+    assert "Khấu hao" not in top.text and "KH:" not in top.text

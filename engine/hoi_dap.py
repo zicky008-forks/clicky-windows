@@ -344,8 +344,11 @@ def _sku_match(t: str, book: Book) -> tuple:
     if len(codes) == 1:
         return codes.pop(), True
     hits, named = set(), bool(asked_sizes)
+    mains = [_name_parts(r["name"])[0] for r in book.skus if r["name"]]
+    brand = set.intersection(*mains) if len(mains) > 1 else set()   # a word every name carries: the brand
     for r in book.skus:
         main, sizes = _name_parts(r["name"])
+        main = main - brand
         if not main:
             continue
         seen = main & words
@@ -591,7 +594,9 @@ def _line(b: Book, q: Query, cites: list) -> str:
 
 def _variance_rows(b: Book, n: int, cites: list, rows=None) -> list:
     out = []
-    for r in (rows if rows is not None else b.variances)[:n]:
+    if rows is None:                                 # a small line is listed only for its flexed budget
+        rows = [r for r in b.variances if "duoi nguong" not in key(r["verdict"])]
+    for r in rows[:n]:
         said = f"{r['label']}: chênh {_num(r['cells']['reported'], cites, r['source'])}"
         if r["causes"]:
             said += " (" + _quote(r["causes_ref"], r["causes"], cites, r["source"]).rstrip(".") + ")"
