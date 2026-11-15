@@ -1,0 +1,2 @@
+# Mỗi dòng: Tên thật = Tên thay. Ví dụ:
+# Công ty Thật = Công ty A

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AOPR FY2627 - Chi phí nhân sự quản trị (SỐ GIẢ LẬP)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+body{font-family:Segoe UI,Arial,sans-serif;background:#f4f6f9;color:#1e293b;margin:0;padding:24px}
+.container{max-width:1200px;margin:0 auto}
+.header{background:linear-gradient(135deg,#0f3d68,#1d6fa5);color:#fff;padding:24px;border-radius:12px}
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin:20px 0}
+.kpi-card{background:#fff;border-radius:10px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.kpi-label{font-size:13px;color:#64748b}.kpi-value{font-size:26px;font-weight:700}.kpi-delta{font-size:13px;color:#b91c1c}
+.section{background:#fff;border-radius:10px;padding:20px;margin:20px 0}
+.insight-box{background:#fff7e6;border-left:4px solid #f59e0b;padding:12px 16px;border-radius:6px;margin:12px 0}
+table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:8px;border-bottom:1px solid #e2e8f0;text-align:right}
+th:first-child,td:first-child{text-align:left}thead th{background:#0f3d68;color:#fff}
+.chart-container{height:280px}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>AOP Revised FY2026–2027: Chi phí nhân sự quản trị</h1>
+    <p>Báo cáo cho Ban Giám đốc · SỐ GIẢ LẬP · cập nhật 11/11</p>
+  </div>
+  <div class="kpi-grid">
+    <div class="kpi-card"><div class="kpi-label">Tổng chi phí nhân sự AOPR</div><div class="kpi-value">186,4 tỷ</div><div class="kpi-delta">+12,6% so với AOP gốc</div></div>
+    <div class="kpi-card"><div class="kpi-label">Headcount bình quân</div><div class="kpi-value">1.248 người</div><div class="kpi-delta">+64 người so với AOP gốc</div></div>
+    <div class="kpi-card"><div class="kpi-label">Chi phí bình quân mỗi người</div><div class="kpi-value">149,4 triệu/năm</div><div class="kpi-delta">+6,7% so với AOP gốc</div></div>
+    <div class="kpi-card"><div class="kpi-label">Tỷ lệ chi phí nhân sự/DTT</div><div class="kpi-value">2,52%</div><div class="kpi-delta">AOP gốc 2,40%</div></div>
+  </div>
+
+  <div class="section">
+    <h2>1. Tổng quan: chi phí nhân sự tăng nhanh hơn doanh thu</h2>
+    <div class="insight-box"><strong>Thông điệp chính:</strong> Chi phí nhân sự AOPR tăng 12,6% trong khi doanh thu chỉ tăng 7,2%. Hai phần ba phần tăng đến từ tuyển mới ở khối bán hàng.</div>
+    <div class="chart-container"><canvas id="trendChart" aria-label="Chi phí nhân sự và doanh thu 3 năm"></canvas></div>
+  </div>
+
+  <div class="section">
+    <h2>2. Chi tiết theo khối</h2>
+    <p class="insight">Khối Bán hàng tăng mạnh nhất, 14,1 tỷ, do kế hoạch tuyển thêm 48 nhân viên bán hàng kênh MT và HRC+KA.</p>
+    <table>
+      <thead><tr><th>Khối</th><th>AOP gốc</th><th>AOPR</th><th>Chênh lệch</th><th>% tăng</th><th>Headcount AOPR</th></tr></thead>
+      <tbody>
+        <tr><td>Khối Bán hàng</td><td>78,2</td><td>92,3</td><td>14,1</td><td>18,0%</td><td>712</td></tr>
+        <tr><td>Khối Marketing</td><td>12,5</td><td>14,0</td><td>1,5</td><td>12,0%</td><td>64</td></tr>
+        <tr><td>Khối Chuỗi cung ứng</td><td>31,0</td><td>33,1</td><td>2,1</td><td>6,8%</td><td>254</td></tr>
+        <tr><td>Khối Tài chính - Kế toán</td><td>14,6</td><td>15,2</td><td>0,6</td><td>4,1%</td><td>86</td></tr>
+        <tr><td>Khối Nhân sự - Hành chính</td><td>13,4</td><td>14,1</td><td>0,7</td><td>5,2%</td><td>72</td></tr>
+        <tr><td>Khối CNTT</td><td>15,8</td><td>17,7</td><td>1,9</td><td>12,0%</td><td>60</td></tr>
+        <tr><td><strong>Tổng</strong></td><td>165,5</td><td>186,4</td><td>20,9</td><td>12,6%</td><td>1.248</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>3. Đề xuất của FP&amp;A</h2>
+    <div class="insight-box">Đề xuất: giữ tỷ lệ chi phí nhân sự/DTT ở 2,40% như AOP gốc, tức trần 177,5 tỷ; giãn tuyển 30 vị trí bán hàng sang quý 3 và gắn với doanh thu trên mỗi người.</div>
+    <div class="kpi-grid">
+      <div class="kpi-card"><div class="kpi-label">Trần đề xuất</div><div class="kpi-value">177,5 tỷ</div></div>
+      <div class="kpi-card"><div class="kpi-label">Cần giảm so với AOPR</div><div class="kpi-value">8,9 tỷ</div></div>
+    </div>
+  </div>
+</div>
+<script>
+try{new Chart(document.getElementById('trendChart'),{type:'bar',data:{labels:['FY2425','FY2526','FY2627 AOPR'],datasets:[{label:'Chi phí nhân sự',data:[148,162,186]}]}})}catch(e){}
+</script>
+</body>
+</html>
