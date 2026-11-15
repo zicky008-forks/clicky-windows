@@ -43,7 +43,8 @@ def events(point=None, card=None):
 
 def capture(shot="", cells=(LEFT_FIGURE, BELOW_FIGURE), screen=SCREEN):
     target = ("C7", CELL, -5_420_000_000)
-    return visual.Capture(beat_no=0, shot=shot, robot_rect=list(CELL), cells=[target, *cells], screen=list(screen))
+    return visual.Capture(beat_no=0, shot=shot, robot_rect=list(CELL), cells=[target, *cells], screen=list(screen),
+                          shown=True, shown_detail="Excel hiện rõ ở ô")
 
 
 def by_name(rows):
@@ -101,7 +102,7 @@ def test_ring_cut_at_screen_edge_fails():
     ev = events(point=(4.0, 210.0))
     ev[1]["excel_rect"] = edge
     ev[1]["box"] = ev[2]["box"] = [6.67, 200.0, 200.0, 220.0]
-    cap = visual.Capture(beat_no=0, robot_rect=list(edge), cells=[], screen=SCREEN)
+    cap = visual.Capture(beat_no=0, robot_rect=list(edge), cells=[], screen=SCREEN, shown=True)
     rows = by_name(visual.grade(ev, [cap]))
     assert not rows["Vòng tròn nằm trọn trong màn hình"][1]
 
@@ -168,3 +169,96 @@ def test_sticky_notes_scene_is_not_asked_for_a_frame(tmp_path):
     assert "Khung vẽ thật nằm đúng ô trên màn hình" not in names
     plain = by_name(visual.grade(events(), [capture(str(shot))], lambda p: Image.open(p).convert("RGB")))
     assert not plain["Thấy khung vẽ trên ảnh chụp"][1]     # an ordinary scene with no frame is still noted
+
+
+# ── Is Excel really what a person sees? (user's PC, 15/11: frames drawn over another app passed) ─────────
+
+EXCEL = {"hwnd": 11, "pid": 100, "rect": [0.0, 0.0, 1920.0, 1040.0], "exe": "EXCEL.EXE"}
+CLICKY = {"hwnd": 22, "pid": 200, "rect": [0.0, 0.0, 1920.0, 1080.0], "exe": "Clicky.exe"}
+OTHER = {"hwnd": 33, "pid": 300, "rect": [0.0, 0.0, 1920.0, 1040.0], "exe": "claude.exe"}
+
+
+def test_excel_shown_when_only_clicky_overlay_is_above():
+    ok, detail = visual.excel_shown([CLICKY, EXCEL], CELL, 11, skip_pids={200})
+    assert ok, detail
+
+
+def test_other_app_on_top_fails_and_names_only_the_program():
+    ok, detail = visual.excel_shown([CLICKY, OTHER, EXCEL], CELL, 11, skip_pids={200})
+    assert not ok
+    assert "claude.exe" in detail
+
+
+def test_click_through_overlays_and_cloaked_windows_do_not_count_as_cover():
+    ghost = dict(OTHER, click_through=True)
+    hidden = dict(OTHER, hwnd=34, cloaked=True)
+    assert visual.excel_shown([ghost, hidden, EXCEL], CELL, 11)[0]
+
+
+def test_partly_covered_cell_fails():
+    side = dict(OTHER, rect=[0.0, 0.0, CELL[0] + 20, 1040.0])      # covers the cell's left corners only
+    assert not visual.excel_shown([side, EXCEL], CELL, 11)[0]
+
+
+def test_minimised_excel_fails():
+    assert not visual.excel_shown([dict(EXCEL, minimized=True)], CELL, 11)[0]
+
+
+def test_frame_on_cell_over_another_app_is_not_a_pass():
+    img = frame_image(CELL)
+    cap = capture(shot="x.png")
+    cap.shown, cap.shown_detail = False, "Excel bị cửa sổ claude.exe che ở ô này"
+    rows = by_name(visual.grade(events(), [cap], lambda p: img))
+    assert rows["Excel thật sự hiện ở ô đang chỉ (không bị cửa sổ khác che)"][1] is False
+    assert "Khung vẽ thật nằm đúng ô trên màn hình" not in rows
+
+
+def test_unread_window_state_is_a_failure_not_a_skip():
+    cap = capture()
+    cap.shown = None
+    rows = by_name(visual.grade(events(), [cap]))
+    assert rows["Excel thật sự hiện ở ô đang chỉ (không bị cửa sổ khác che)"][1] is False
+
+
+def _cover_capture(shot_img, after_img=None):
+    cap = capture(shot="ok.png")
+    cap.cover = {"shot": "cover.png", "origin": (0, 0), "rect": [0.0, 0.0, 800.0, 600.0],
+                 "after_shot": "after.png" if after_img else None}
+    pics = {"ok.png": frame_image(CELL), "cover.png": shot_img, "after.png": after_img}
+    return cap, (lambda p: pics[p])
+
+
+CARD = [100.0, 240.0, 200.0, 260.0]          # logical → physical [150, 360, 300, 390]
+
+
+def test_cover_passes_when_nothing_of_clicky_shows_on_the_cover():
+    blank = Image.new("RGB", (800, 600), (255, 255, 255))
+    cap, opener = _cover_capture(blank, after_img=frame_image(CELL))
+    ev = events(card=CARD) + [{"t": 3, "event": "overlay_hidden", "reason": "focus"},
+                              {"t": 4, "event": "overlay_shown", "reason": "focus"}]
+    rows = by_name(visual.grade(ev, [cap], opener))
+    assert rows["Che Excel bằng cửa sổ khác: Clicky ẩn thẻ, khung, con trỏ"][1], rows
+    assert rows["Clicky ghi nhận bị che (overlay_hidden)"][1]
+    assert rows["Mở lại Excel: Clicky hiện lại và chạy tiếp"][1]
+
+
+def test_cover_fails_when_frame_or_card_stay_on_top():
+    leaky = frame_image(CELL)
+    ImageDraw.Draw(leaky).rectangle([150, 360, 300, 390], fill=(30, 30, 30))
+    cap, opener = _cover_capture(leaky)
+    rows = by_name(visual.grade(events(card=CARD), [cap], opener))
+    row = rows["Che Excel bằng cửa sổ khác: Clicky ẩn thẻ, khung, con trỏ"]
+    assert row[1] is False and row[3] is True
+    assert "khung vẫn hiện" in row[2] and "thẻ vẫn hiện" in row[2]
+
+
+def test_cover_that_robot_could_not_raise_fails_closed():
+    cap, opener = _cover_capture(Image.new("RGB", (800, 600), (255, 255, 255)))
+    cap.cover["error"] = "cửa sổ che không lên trước được (đang trước: EXCEL.EXE)"
+    rows = by_name(visual.grade(events(), [cap], opener))
+    assert rows["Che Excel bằng cửa sổ khác: Clicky ẩn thẻ, khung, con trỏ"][1] is False
+
+
+def test_cover_script_is_valid_python():
+    import ast
+    ast.parse(visual.COVER_SCRIPT)
