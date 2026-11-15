@@ -389,6 +389,39 @@ def main():
     choice_card.chosen.connect(lambda _label: overlay.clear_annotations())
     choice_card.dismissed.connect(overlay.clear_annotations)
     manager.sig_turn_started.connect(lambda _q: choice_card.hide())
+    # Cards, frames and pointer drawn over Excel never stay painted over another app (user's PC, 9114deb):
+    # while another window is in front they are hidden and the story waits; back in Excel they return.
+    from ui.fg_guard import Guard
+    _held_windows = []
+
+    def _hide_story(on: bool):
+        overlay.set_suppressed(on)
+        if on:
+            _held_windows[:] = [w for w in (choice_card, caption) if w.isVisible()]
+            for w in _held_windows:
+                w.hide()
+        else:
+            for w in _held_windows:
+                w.show()
+            _held_windows.clear()
+        manager._excel_front = not on
+
+    def _front():
+        from desktop import front_kind
+        return front_kind(os.getpid())
+
+    def _guard_record(event, **fields):
+        import scene_log as _sl
+        _sl.record(event, **fields)
+
+    _guard = Guard(_front,
+                   lambda: getattr(manager, "_overlay_anchor", "") == "excel"
+                   and (overlay.has_story() or choice_card.isVisible() or bool(_held_windows)),
+                   _hide_story, overlay.clear_annotations, _guard_record)
+    if sys.platform == "win32":
+        _guard_timer = QTimer(app)
+        _guard_timer.timeout.connect(_guard.tick)
+        _guard_timer.start(200)
     # Job 13: after the first report on the user's own files, "bớt được bao lâu" (kept on this PC only).
     from ui.feedback_card import FeedbackCard
     feedback_card = FeedbackCard()

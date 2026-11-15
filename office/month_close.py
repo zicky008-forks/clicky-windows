@@ -1923,6 +1923,19 @@ def _screen() -> tuple:
         return 0, 0, 1920, 1040
 
 
+async def _excel_in_front(manager, i: int) -> None:
+    """Wait at the sentence boundary while another app is in front of Excel (main.py's guard hides the cards):
+    the story goes on when the user is back in Excel, never spoken over another app."""
+    if getattr(manager, "_excel_front", True):
+        return
+    scene_log.record("story_paused", i=i, reason="focus")
+    while not getattr(manager, "_excel_front", True):
+        if getattr(manager, "_cancel_flag", False):
+            return
+        await asyncio.sleep(0.2)
+    scene_log.record("story_resumed", i=i)
+
+
 async def play(manager, beats: list, keep_card: bool = True) -> None:
     """One idea at a time: light up the beat's range, show its card, say its one sentence, pause, next.
 
@@ -1935,6 +1948,7 @@ async def play(manager, beats: list, keep_card: bool = True) -> None:
     from ui.card_layout import NO_BUBBLE, pointer_spot, reading_seconds
     run = object()
     manager._month_close_run = run
+    manager._overlay_anchor = "excel"              # the cards belong to Excel: hidden when another app is in front
     import turn_clock
     turn_clock.of(manager).mark("ready")
     guided = getattr(manager, "sig_guided", None)     # the chat panel steps aside while Clicky guides
@@ -1950,6 +1964,7 @@ async def play(manager, beats: list, keep_card: bool = True) -> None:
             manager.sig_response_chunk.emit("\n\n")
             if BEAT_GAP_S:
                 await asyncio.sleep(BEAT_GAP_S)
+        await _excel_in_front(manager, i)
         if beat.ref or beat.graphic:
             await _excel_free()
         if beat.book and beat.ref:
@@ -1965,7 +1980,7 @@ async def play(manager, beats: list, keep_card: bool = True) -> None:
         graphic = await _graphic_shape(manager, beat.graphic, box) if beat.graphic else None
         # the card names a source file for the user; the log carries its id instead
         hide = (lambda t: t.replace(Path(beat.book).name, f"[file {scene_log.book_id(beat.book)}]")) if beat.book else (lambda t: t)
-        scene_log.record("beat", i=i, ref=beat.ref, box=box, title=beat.label, value=beat.value, was=beat.was,
+        scene_log.record("beat", i=i, fg_ok=getattr(manager, "_excel_front", True), ref=beat.ref, box=box, title=beat.label, value=beat.value, was=beat.was,
                          note=hide(beat.note), mark=beat.mark, text=hide(beat.text), choices=list(beat.choices or []),
                          **({"graphic": graphic_log(beat.graphic)} if beat.graphic else {}))
         loose = None
