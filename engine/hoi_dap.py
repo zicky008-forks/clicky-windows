@@ -116,6 +116,12 @@ class Book:
     full: dict = field(default_factory=dict)       # forecast: code -> {field: Cell}
     period: str = ""                               # "10/2026"
     skus: list = field(default_factory=list)       # [{sku, name, cells: {field: Cell}}], biggest effect first
+    unused_versions: list = field(default_factory=list)  # [{version, file, why, cell}] plan versions read, not used
+
+
+VERSION_NOT_USED = re.compile(r"của bản (?:dự báo )?(.+?): (đọc, không dùng[^;]*)")
+VERSION_ASKED = re.compile(r"(?:\b(?:phiên bản|bản|version)\s+((?:[A-Za-z]+\s+)?v?\d[\w.+]*|[A-Za-z]{2,}\s*v?\d[\w.+]*)"
+                           r"|\b(?:ban|phien ban)\s+((?:[a-z]+\s+)?v\d+[\w.]*))", re.IGNORECASE)
 
 
 def sha256(path: Path) -> str:
@@ -209,7 +215,14 @@ def read(path: Path, forecast: Optional[Path] = None) -> Book:
                                "cells": {f: Cell(ref(fpa_report.BRIDGE, n, i + 1), r[i]) for i, f in
                                          enumerate(SKU_FIELDS) if i >= 2 and r[i] is not None}})
         if fpa_report.RECEIPT in wb.sheetnames:
-            for n, r in enumerate(wb[fpa_report.RECEIPT].iter_rows(values_only=True), 1):
+            receipt = list(wb[fpa_report.RECEIPT].iter_rows(values_only=True))
+            head = next((i for i, r in enumerate(receipt) if r and r[0] == "File"), None)
+            for n, r in enumerate(receipt[head + 1:] if head is not None else [], (head or 0) + 2):
+                why = str(r[4] or "") if r and len(r) > 4 else ""
+                for hit in VERSION_NOT_USED.finditer(why):
+                    b.unused_versions.append({"version": hit.group(1).strip(), "file": str(r[0]),
+                                              "why": hit.group(2).strip(), "cell": Cell(ref(fpa_report.RECEIPT, n, 5), why)})
+            for n, r in enumerate(receipt, 1):
                 if r and r[0] == "File":
                     break
                 text = str(r[0]) if r and r[0] and not any(v is not None for v in r[1:]) else ""
@@ -728,20 +741,34 @@ def _lines_of(b: Book, q: Query, cites: list) -> str:
         said = f"{other} thực hiện {_num(c[a], cites)}"
         if p in c and v in c:
             said += f", kế hoạch {_num(c[p], cites)}, chênh {_num(c[v], cites)}"
-        if not ytd and r["verdict"]:
-            said += f", {r['verdict']}"
+        if r["verdict"] and (not ytd or "gan ma" in key(r["verdict"])):
+            said += f", {r['verdict']}"                 # a held line stays held over the year to date too (R11)
         parts.append(said)
     when = "lũy kế từ đầu năm" if ytd else (f"tháng {b.period}" if b.period else "tháng này")
     text = f"{q.target} {when}:" + SEP + SEP.join(parts) + "."
     why = [x for x in b.variances if key(x["label"]).startswith(key(q.target)) or f" {key(q.target)}" in
            f" {key(x['label'])}"]
     if why:
-        text += SEP + "Giải thích:" + SEP + SEP.join(_variance_rows(b, 3, cites, why)) + "."
+        text += SEP + (f"Giải thích chênh lệch tháng {b.period or 'này'}:" if ytd else "Giải thích:") + SEP \
+            + SEP.join(_variance_rows(b, 3, cites, why)) + "."
     if any("gan ma" in key(r["verdict"]) for r in rows):
         codes = [c for c in b.open if "danh muc" in key(c.value) and "bo phan" in key(c.value)]
         if codes:
             text += SEP + "Vì sao còn chờ:" + SEP + SEP.join(_quote(c.ref, c.value, cites).rstrip(".") + "."
                                                            for c in codes)
+            if q.intent == "dept":                      # the open code beside the department, same period (R11)
+                for code in dict.fromkeys(r["dept"] for r in b.costs if key(r["dept"]) != key(q.target)
+                                          and any(_mentions(c.value, r["dept"]) for c in codes)):
+                    own = []
+                    for r in (x for x in b.costs if x["dept"] == code and a in x["cells"]):
+                        c = r["cells"]
+                        said = f"{r['element']} thực hiện {_num(c[a], cites)}"
+                        if p in c and v in c:
+                            said += f", kế hoạch {_num(c[p], cites)}"
+                        own.append(said)
+                    if own:
+                        text += SEP + (f"Mã {code} (chưa có trong danh mục) {when}, xem cùng {q.target} cho tới khi "
+                                       "chị gán:") + SEP + SEP.join(own) + "."
     return text
 
 
@@ -866,6 +893,9 @@ def answer(book: Book, question: str, parent: Optional[Query] = None) -> Answer:
     if q.intent is None or (q.intent == "why" and q.line is None):
         return Answer(NOT_UNDERSTOOD_TEXT, NOT_UNDERSTOOD, [], q, [NOT_UNDERSTOOD_TEXT])
     head = reading(book, q)
+    named = _version_named(book, question, cites)
+    if named:
+        head = named + SEP + head
     try:
         if q.intent == "sku" and book.skus and _has(key(question), ("ma hang", "sku", "san pham")):
             text = ("Mã hàng tác động nhiều nhất lên lợi nhuận gộp:" + SEP
@@ -912,6 +942,36 @@ def answer(book: Book, question: str, parent: Optional[Query] = None) -> Answer:
         text = (f"Báo cáo chưa tách riêng {name}, nên em nói chi phí hoạt động (gồm cả bán hàng và quản lý)."
                 + SEP + text)
     return _done(head + SEP + text, ANSWERED, cites, q)
+
+
+def _version_named(book: Book, question: str, cites: list) -> str:
+    """R10: a question 'theo bản v3 …' naming a plan version the report does not use. Said first, before the
+    answer on the chosen version: the named one is not used and why (the receipt's own words), or not in the
+    folder at all. '' when the question names no version or names the one the report uses."""
+    hit = VERSION_ASKED.search(question)
+    if not hit:
+        return ""
+    asked = (hit.group(1) or hit.group(2) or "").strip()
+    chosen = plan_version(book)
+    words = set(key(asked).split())
+    extra = words - set(key(chosen).split())
+    if not extra:
+        return ""
+    for u in book.unused_versions:
+        if extra <= set(key(u["version"]).split()):
+            cites.append({"o": u["cell"].ref, "van_ban": u["cell"].value, "nguon": "Phiếu nhận file"})
+            return (f"Báo cáo không dùng bản {u['version']} (file {u['file']}): em có đọc nhưng không lấy số, "
+                    f"vì không phải bản so sánh; báo cáo so với bản {chosen or 'kế hoạch đã chọn'}"
+                    + (f" ({_basis_tail(book)})" if _basis_tail(book) else "") + "." + SEP
+                    + f"Em trả lời theo bản {chosen or 'kế hoạch đã chọn'}:")
+    return (f"Thư mục báo cáo không có bản {asked}; báo cáo so với bản {chosen or 'kế hoạch đã chọn'}." + SEP
+            + f"Em trả lời theo bản {chosen or 'kế hoạch đã chọn'}:")
+
+
+def _basis_tail(book: Book) -> str:
+    """'duyệt ngày 10/01/2026' from the report's basis line, when it says so."""
+    hit = re.search(r"(duyệt ngày [\d/]+|đã duyệt[^,;.]*)", book.basis)
+    return hit.group(1) if hit else ""
 
 
 def b_basis(book: Book) -> bool:

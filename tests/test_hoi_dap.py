@@ -620,3 +620,54 @@ def test_a_product_named_without_the_brand_every_sku_carries(book):
     sku = next(r for r in skus if "500" in r["name"])
     a = hoi_dap.answer(branded, "Giảm giá trà xanh 500 ml làm mất bao nhiêu?")
     assert (a.query.intent, a.query.target, a.query.part) == ("sku_one", sku["sku"], "price"), a.query
+
+
+# ── Round 5 (grader on f0c0698): a version the report does not use, the department's year to date ────────────────
+
+def _two_versions(tmp_path):
+    d = case(tmp_path)
+    fs.write_csv(d / "AOP_2026.csv", fs.plan_rows("AOP v4", approved="2026-01-10"))
+    fs.write_csv(d / "AOP_v3_2026.csv", fs.plan_rows("AOP v3"))
+    m = fpa_report.compute(d)
+    return m, hoi_dap.read(fpa_report.write(m)["xlsx"])
+
+
+def test_a_question_on_a_version_not_used_says_so_first_then_answers_on_the_chosen_one(tmp_path):
+    """R10: 'theo bản v3 …' was answered with v4's figures and only 'Em hiểu là' named v4."""
+    m, b = _two_versions(tmp_path)
+    a = hoi_dap.answer(b, "Theo bản v3 thì chi phí hoạt động tháng này chênh bao nhiêu?")
+    assert a.status == hoi_dap.ANSWERED
+    assert a.parts[0].startswith("Báo cáo không dùng bản AOP v3 (file AOP_v3_2026.csv)") and "AOP v4" in a.parts[0]
+    assert a.parts[1] == "Em trả lời theo bản AOP v4:" and a.parts[2].startswith("Em hiểu là")
+    assert any(c.get("nguon") == "Phiếu nhận file" for c in a.cites)
+    _cells_hold(b, a)
+    assert hoi_dap.answer(b, "Theo bản v2 doanh thu tháng này?").parts[0].startswith("Thư mục báo cáo không có bản v2")
+    for same in ("Doanh thu tháng này so với bản AOP v4?", "Doanh thu tháng này bán được bao nhiêu?"):
+        assert hoi_dap.answer(b, same).parts[0].startswith("Em hiểu là"), same
+    # R9b: the Biên bản's source puts the unchosen plan under 'read, not used', with why
+    said = fpa_report.sources_said(m)
+    used, _sep, read = said.partition("; đã đọc, không lấy số: ")
+    assert "AOP_v3_2026.csv" not in used and "AOP_v3_2026.csv (bản AOP v3: không phải bản so sánh" in read
+
+
+def test_the_department_year_to_date_keeps_the_held_line_and_the_open_code_beside_it(tmp_path):
+    """R11: the month answer showed the open code beside the department; the year to date did not."""
+    b = _unknown_area(tmp_path)
+    for when in ("tháng này", "lũy kế từ đầu năm"):
+        a = hoi_dap.answer(b, f"Chi phí bộ phận Marketing {when}?")
+        assert "chờ chị gán mã" in a.text and "Mã MT1 (chưa có trong danh mục)" in a.text, when
+        _cells_hold(b, a)
+
+
+def test_a_sku_with_the_same_price_shows_no_price_crumb():
+    """R12: identical prices showed a price effect of -1 đ (a rounding crumb) on the SKU row."""
+    from types import SimpleNamespace
+    from openpyxl import Workbook
+    from engine.gp_bridge import Part
+    p = Part("SP01", mix=Decimal("1000.4"), price=Decimal("-0.6"), cost=Decimal("0.3"), qty_plan=Decimal(3),
+             qty_actual=Decimal(3), price_plan=Decimal("33333.3333"), price_actual=Decimal("33333.1333"),
+             cost_plan=Decimal(20000), cost_actual=Decimal(20000))
+    ws = Workbook().active
+    fpa_report.write_sku_rows(ws, SimpleNamespace(by_sku=[p]), {"SP01": "Trà"})
+    row = [c.value for c in ws[ws.max_row]]
+    assert row[4] == row[5] and row[9] == 0 and row[10] == 0 and row[8] == 1000 and row[11] == 1000

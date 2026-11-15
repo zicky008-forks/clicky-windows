@@ -152,6 +152,20 @@ class Forecast:
     def row(self, code: str) -> Optional[Row]:
         return next((r for r in self.rows if r.code == code), None)
 
+    def rest_said(self) -> str:
+        """Where the months to come come from, as the pack's basis line and the Q&A source say it: the estimate file
+        with its made-on date and 'TH đến Txx + UT các tháng sau' when one is used (R7b), else the forecast version."""
+        e = self.estimate
+        if e is not None:
+            covered = [mo for mo in self.rest if mo in e.months]
+            left = [mo for mo in self.rest if mo not in e.months]
+            said = (f"dự báo theo {e.said()}: TH đến T{_month_text(self.period)} + UT các tháng sau"
+                    + (f" ({_span(covered)})" if covered else ""))
+            if left:
+                said += f", tháng {_span(left)} theo {(self.basis or self.target).said() if (self.basis or self.target) else 'kế hoạch năm'}"
+            return said
+        return f"dự báo theo {self.basis.said()}" if self.basis is not None else "dự báo theo kế hoạch năm"
+
 
 def _cost_plan(plans: list, version: Optional[Version], month: str) -> dict:
     """{(dept, element): amount} of the version's cost lines for one month; {} when it has none that month."""
@@ -452,7 +466,7 @@ def write(f: Forecast, out: Optional[Path] = None) -> dict:
     expect = {}
     head = (["Chỉ tiêu"] + [("TH " if mo in f.done else "DB ") + _month_text(mo) for mo in f.year]
             + ["Lũy kế thực hiện", "Các tháng còn lại", "Cả năm ước", "Kế hoạch năm", "Chênh lệch", "%"])
-    basis = (f"Thực hiện đến T{month}; " + (f"dự báo theo {f.basis.said()}" if f.rest else "cả năm là thực hiện")
+    basis = (f"Thực hiện đến T{month}; " + (f.rest_said() if f.rest else "cả năm là thực hiện")
              + (f"; so với {f.target.said()}" if f.target else ""))
 
     def table(ws, rows, first_data):

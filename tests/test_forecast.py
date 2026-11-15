@@ -294,3 +294,7 @@ def test_a_pl_level_estimate_file_fills_the_months_after_the_report_month(tmp_pa
     row = next(r for r in receipt.iter_rows(values_only=True) if r[0] == "Uoc tinh LE 9+3 2026.xlsx") if any(
         r[0] == "Uoc tinh LE 9+3 2026.xlsx" for r in receipt.iter_rows(values_only=True)) else None
     assert row is None or "không dùng" not in str(row[1]), row
+    basis = load_workbook(out["xlsx"])[forecast.PNL]["A2"].value                # R7b: the source names the file
+    rest = next(x for x in basis.split(";") if x.strip().startswith("dự báo"))
+    assert "Uoc tinh LE 9+3 2026.xlsx, lập ngày 05/10/2026" in rest and "TH đến T10/2026 + UT các tháng sau" in rest
+    assert "AOP" not in rest, basis

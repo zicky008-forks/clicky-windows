@@ -819,13 +819,14 @@ def write_sku_rows(ws, br, names: dict) -> None:
     if not parts:
         return
     r = lambda x: None if x is None else x.quantize(Decimal(1), rounding=ROUND_HALF_UP)
+    crumb = lambda x: ZERO if x is not None and abs(x) < 1 else r(x)   # under 1 đ: rounding, left in the totals (R12)
     ws.append([])
     ws.append([SKU_TITLE])
     ws.append(SKU_HEADER)
     for p in sorted(parts, key=lambda p: (-abs(p.total), p.sku)):
         ws.append([p.sku, names.get(p.sku, ""), p.qty_plan, p.qty_actual, r(p.price_plan), r(p.price_actual),
-                   r(p.cost_plan), r(p.cost_actual), r(p.mix), r(p.price), r(p.cost),
-                   r(p.mix) + r(p.price) + r(p.cost)])       # the row adds up on screen
+                   r(p.cost_plan), r(p.cost_actual), crumb(p.mix), crumb(p.price), crumb(p.cost),
+                   crumb(p.mix) + crumb(p.price) + crumb(p.cost)])       # the row adds up on screen
 
 
 def understood(m: Month) -> list:
@@ -868,16 +869,45 @@ def sales_volume(sales) -> Optional[tuple]:
             sum((l.plan_qty or ZERO for l in lines if l.plan_from), ZERO))
 
 
+def _plan_files_not_chosen(m, also_used=()) -> dict:
+    """{file: why} of the plan files none of whose versions the report is held against (R9b): judged by the
+    file's own plan rows, never by how many of its lines happen to be counted as used."""
+    chosen = {(p.file, key(p.version or "")) for p in (getattr(m.costs, "plan", None), getattr(m.sales, "plan", None))
+              if p is not None}
+    if not chosen:
+        return {}
+    first = next(p for p in (getattr(m.costs, "plan", None), getattr(m.sales, "plan", None)) if p is not None)
+    versions = {}
+    for r in list(m.bundle.plans) + list(getattr(m.bundle, "sku_plans", [])):
+        versions.setdefault(r.file, set()).add(r.version or "")
+    out = {}
+    for f, vs in versions.items():
+        if f in also_used or any((f, key(v)) in chosen for v in vs):
+            continue
+        named = ", ".join(sorted(v for v in vs if v)) or "không ghi phiên bản"
+        out[f] = (f"cùng tên bản {first.version} nhưng không phải file được chọn; báo cáo so với file {first.file}"
+                  if key(named) == key(first.version) else
+                  f"bản {named}: không phải bản so sánh, báo cáo so với bản {first.version}")
+    return out
+
+
 def sources_said(m, also_used=()) -> str:
     """The Biên bản's source for the report: the files the figures came from, then the files read and not used,
-    each named once (the intake card's rule: read is not used)."""
+    each named once with why (the receipt's rule: read is not used). A plan file whose versions were not chosen is
+    always 'read', whatever its line count says."""
     rows = file_rows(m, also_used)[1:]
-    used, read = [], []
+    not_chosen = _plan_files_not_chosen(m, set(also_used))
+    used, read = [], {}
     for r in rows:
-        name, role, n_used = r[0], str(r[1]), r[2]
-        aside = role == "Không dùng" or NOT_COMPARED in role or not n_used
-        (read if aside else used).append(name)
+        name, role, n_used, why = r[0], str(r[1]), r[2], str(r[4] or "")
+        if name in not_chosen:
+            read.setdefault(name, not_chosen[name])
+        elif role == "Không dùng" or NOT_COMPARED in role or not n_used:
+            read.setdefault(name, why.split(";")[-1].strip() if role == "Không dùng" else "")
+        else:
+            used.append(name)
     used = list(dict.fromkeys(used))
-    read = [x for x in dict.fromkeys(read) if x not in used]
+    read = {k: v for k, v in read.items() if k not in used}
+    listed = [f"{k} ({v})" if v else k for k, v in read.items()]
     return "Đã dùng: " + (", ".join(used) or "không file nào") + (
-        "; đã đọc, không lấy số: " + ", ".join(read) if read else "")
+        "; đã đọc, không lấy số: " + "; ".join(listed) if listed else "")
