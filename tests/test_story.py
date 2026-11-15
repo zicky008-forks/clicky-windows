@@ -2230,7 +2230,7 @@ def test_rerun_four_loss_talk_nature_notes_sources_and_yes_no_nature(tmp_path, m
         pg.wait_for_timeout(700)
         hoi = lambda q: pg.evaluate("q => window.__clickyHoi(q, null)", q)   # noqa: E731
         x = hoi("Chương trình tri ân nhà phân phối có phải vượt ngân sách không?")
-        assert x.startswith("Báo cáo ghi: «Chương trình khuyến mãi tri ân") and "cả năm không vượt ngân sách" in x, x
+        assert x.startswith("Không. Báo cáo ghi: «Chương trình khuyến mãi tri ân") and "cả năm không vượt ngân sách" in x, x   # «Không» first (TB17b)
         x = hoi("Thưởng doanh số quý 3 có trong ngân sách không?")
         assert "đã có trong ngân sách năm" in x, x
         x = hoi("Lương và thưởng đội bán có phải vượt ngân sách không?")
@@ -2338,4 +2338,69 @@ def test_rerun_five_numbered_asks_sources_are_not_asks_the_voice_and_typed_natur
         assert "hóa đơn truyền hình của tháng 9 ghi nhận trễ" in x, x
         x = typed("Số kế hoạch lấy từ bản nào?")
         assert "AOP 2026 theo Nghị quyết HĐQT số 12/2025" in x, x
+        browser.close()
+
+
+def test_rerun_six_yes_no_nature_one_off_shared_budget_footer_sources_and_codes(tmp_path, monkeypatch):
+    # independent grader, gate 2 rerun 6 (our own synthetic shapes): a yes/no nature question got only a quote, never
+    # «Không/Có» first, nor the row without its one-off amount (TB17b); an item only in the notes, asked «tháng 10 có gì
+    # bất thường», was parked (TB17c); a footer line «<Cột>: <bản>, duyệt theo …» was not found as the plan's source
+    # (TB21); a product row «MÃ – mô tả» asked by its description did not read its price-effect cell (TB22); a note
+    # «kế hoạch của B nằm trong ngân sách A» left A's to-date gap said as A's own (TB9); «sự kiện ra mắt» was read
+    # as a loss («mất»); the talk named a budget-keeping ask as the way to pull a timing rise down (TB27).
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    fx = Path(__file__).parent / "fixtures"
+    reps = {}
+    for name in ("bao_cao_ban_chat", "bao_cao_nguon_chan_trang", "bao_cao_ma_hang_mo_ta"):
+        src = tmp_path / (name + ".html")
+        src.write_text((fx / (name + ".html")).read_text(encoding="utf-8"), encoding="utf-8")
+        reps[name] = build(src)
+    said = [c for s in yaml.safe_load(Path(reps["bao_cao_ban_chat"]["kich_ban"]).read_text(encoding="utf-8"))["canh"] for c in s["cau"]]
+    assert any(c.get("vai") == "nguyen_nhan" and "lệch thời điểm" in c["noi"] for c in said)
+    assert not any(c["noi"].startswith("Để kéo phần tăng này xuống") for c in said), [c["noi"] for c in said]
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 900})
+
+        def typed(q):                          # the reader's way: Escape, skip the talk, type in «Hỏi Vera», Enter
+            pg.keyboard.press("Escape")
+            pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const e = r.getElementById('clicky-skip') || document.getElementById('clicky-skip'); if (e) e.click(); }")
+            pg.wait_for_timeout(300)
+            box = pg.locator("#clicky-host #q")
+            box.fill(q)
+            box.press("Enter")
+            pg.wait_for_timeout(900)
+            return pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const b = r.getElementById('bub'); "
+                               "return ((b && !b.classList.contains('hidden')) ? r.getElementById('ba') : r.getElementById('a')).innerText; }")
+        pg.goto(Path(reps["bao_cao_ban_chat"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        x = typed("Sửa chữa thấp hơn 1,2 tỷ, có phải tiết kiệm không?")
+        assert x.startswith("Không. Báo cáo ghi: «Sửa chữa và bảo trì thấp hơn kế hoạch vì hoãn"), x
+        x = typed("Khuyến mãi vượt 2,6 tỷ có phải vượt ngân sách không?")
+        assert x.startswith("Không. ") and "cả năm không vượt ngân sách" in x, x
+        x = typed("Chi phí quản lý có khoản nào bất thường không?")
+        assert x.startswith("Có. ") and "Bỏ khoản một lần 0,8 tỷ ra thì Chi phí quản lý là 13,3 tỷ (em tính: 14,1 − 0,8), thấp hơn kế hoạch gốc 1,7 tỷ (em tính: 13,3 − 15,0)." in x, x
+        x = typed("Chi phí quản lý thấp hơn 0,9 tỷ có phải nhờ tiết kiệm thật không?")
+        assert x.startswith("Báo cáo không ghi rõ có phải tiết kiệm hay không.") and "13,3 tỷ" in x and "Đúng ạ" not in x, x
+        x = typed("Phí tư vấn tháng 10 có gì bất thường không?")
+        assert x.startswith("Có. Báo cáo ghi: «Chi phí quản lý tháng 10 có phí tư vấn tái cấu trúc 0,8 tỷ"), x
+        x = typed("Truyền thông số lũy kế thấp hơn kế hoạch bao nhiêu?")
+        assert "Gộp lại, thực hiện 66,0 tỷ (em tính: 62,0 + 4,0), cao hơn kế hoạch lũy kế 10 tháng 1,0 tỷ" in x, x
+        x = typed("Sự kiện ra mắt vượt kế hoạch bao nhiêu?")
+        assert "Lãi gộp" not in x and "4,0" in x, x
+        pg.goto(Path(reps["bao_cao_nguon_chan_trang"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        x = typed("Số kế hoạch lấy từ bản nào?")
+        assert "KH gốc: AOP 2026 bản v3, HĐQT duyệt theo NQ 12/2025/NQ-HĐQT" in x, x
+        x = typed("Ngân sách linh hoạt lấy từ đâu?")
+        assert "NS linh hoạt: KH gốc điều chỉnh theo sản lượng thực tế" in x, x
+        pg.goto(Path(reps["bao_cao_ma_hang_mo_ta"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        x = typed("Kem dưỡng ẩm hũ 50ml giảm giá làm mất bao nhiêu?")
+        assert x.startswith("LN-KD50 – Kem dưỡng ẩm hũ 50ml: Ảnh hưởng giá làm giảm 1,4 tỷ (cột «Ảnh hưởng giá» ghi (1,4))."), x
         browser.close()

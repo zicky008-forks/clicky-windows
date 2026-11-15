@@ -619,6 +619,10 @@ def _reframe(lines: list, places: dict) -> None:
                 break
 
 
+PASSING = re.compile(r"lệch thời điểm|một lần|không lặp lại|chạy sớm|ghi nhận (trễ|sớm)|tạm thời|đã có trong (ngân sách|kế hoạch)|nằm trong (ngân sách|kế hoạch)|không vượt", re.I)
+HOLD_DOWN = re.compile(r"\b(bằng|ở mức|dưới|không vượt|không quá|tối đa|trần)\b", re.I)
+
+
 def row_note(row, items: list, flags: list, toks: tuple = ()) -> Optional[tuple]:
     """The report's own note on a row, «… do <cause>» (timing, one-off), as speech; with the item that prints it.
     None when no note names the row, or the note is a sentence in doubt."""
@@ -1482,8 +1486,12 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                 fl["cau"].append(lines[-1][1].noi)
 
     # proposed bridge (round 18): with no cut line, the asks that pull the rise down are named before the close
-    if ask_pairs and len(ask_pairs) > 2 and cut is None and up and not any(ln.vai == "cau_noi_hoi" for _m, ln in lines):
-        holds = [lc(a) for _n, a in ask_pairs if re.match(r"(giữ|hoãn|giãn|cắt|dừng)\b", str(a), re.I)]
+    # a rise the report calls timing, one-off or already budgeted is not one to cut: its nature was said instead (TB27)
+    passing = any(ln.vai == "nguyen_nhan" and PASSING.search(ln.noi) for _m, ln in lines)
+    if ask_pairs and len(ask_pairs) > 2 and cut is None and up and not passing and not any(ln.vai == "cau_noi_hoi" for _m, ln in lines):
+        # «giữ quỹ lương bằng kế hoạch» holds a cost down; «giữ ngân sách khuyến mãi cả năm» only keeps a budget (TB27)
+        holds = [lc(a) for _n, a in ask_pairs if re.match(r"(hoãn|giãn|cắt|dừng|giảm)\b", str(a), re.I)
+                 or (re.match(r"giữ\b", str(a), re.I) and HOLD_DOWN.search(str(a)))]
         holds = [re.sub(r"\s+(cho cả năm|sang năm sau)\b.*$", "", h) for h in holds]
         if holds:
             lines.append(("Chốt", Line(f"Để kéo phần tăng này xuống, {owner} đề nghị {' và '.join(holds)}.", cid(first),
