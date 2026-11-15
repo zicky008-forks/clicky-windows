@@ -73,7 +73,7 @@ def test_the_story_asks_first_then_tells_one_driver_and_never_reads_the_page_in_
     # it closes on every ask again as a short tag with its money, never word for word, then invites the room
     assert [c["noi"] for c in said[-2:]] == [
         "Tóm lại, anh Tuấn xin anh chị quyết: một là giữ trần 177,5 tỷ; hai là giãn tuyển 30 vị trí bán hàng sang quý 3.",
-        "Em kính mời anh chị cho ý kiến ạ."]
+        "Anh chị muốn quyết điều gì hôm nay ạ? Anh chị bấm chọn trên thẻ, em ghi lại gửi anh Tuấn."]   # gate 1, item 19
     # every line says which beat it is, so a question after the talk finds its answer
     assert all(c.get("vai") for c in said)
 
@@ -1918,3 +1918,47 @@ def test_grader_rerun_two_gap_questions_opinions_absent_basis_one_family_and_own
         assert "15,0" not in x and "Bỏ" not in x and "Bảng cũ" not in x, x
         assert "12,9%" in hoi("Ngoài Bán hàng MT ra thì phần còn lại tăng hay giảm?")
         browser.close()
+
+
+def test_the_month_result_and_where_the_year_lands_are_told_and_drawn(tmp_path, monkeypatch):
+    # gate 2 grader TB3: the talk covered the cost table only, never profit, the profit bridge or the full year;
+    # gate 1 rule 3 (Finance meeting, YTD actual + forecast): «cả năm sẽ về đâu», the forecast said and drawn as
+    # one (dashed, «dự báo»), the target AOP, never the forecast; every sum worked out by code from the months
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    src = tmp_path / "ytd.html"
+    shutil.copyfile(Path(__file__).parent / "fixtures" / "bao_cao_ytd_du_bao.html", src)
+    rep = build(src)
+    cau = [c for s in yaml.safe_load(Path(rep["kich_ban"]).read_text(encoding="utf-8"))["canh"] for c in s["cau"]]
+    by = {c.get("vai"): c for c in cau}
+    assert by["kq_loi_nhuan"]["noi"] == "Trước hết là kết quả kinh doanh: lợi nhuận trước thuế đạt 68,3% kế hoạch, thấp hơn kế hoạch 5,7 tỷ."
+    assert by["kq_doanh_thu"]["noi"] == "Doanh thu thuần thấp hơn kế hoạch 7,5 tỷ."
+    assert by["kq_cau"]["noi"] == ("Lợi nhuận trước thuế thấp hơn kế hoạch vì: lãi gộp thiếu 4,5 tỷ, chi phí bán hàng vượt 1,8 tỷ, "
+                                   "bù lại chi phí quản lý thấp hơn kế hoạch 0,6 tỷ.")
+    vai = [c.get("vai") for c in cau]
+    assert vai.index("kq_loi_nhuan") < vai.index("quy_mo") < vai.index("ca_nam") < vai.index("chot")   # result, why, the year, the asks
+    assert by["ca_nam"]["noi"] == "Cả năm sẽ về đâu? Lũy kế đến tháng 10, doanh thu thuần thực hiện 1.154,5 tỷ."
+    assert by["ca_nam_du_bao"]["noi"] == "Cộng dự báo hai tháng còn lại 260,0 tỷ, cả năm ước 1.414,5 tỷ."
+    assert by["ca_nam_khoang_cach"]["noi"] == "So với AOP cả năm 1.440,0 tỷ, thấp hơn 25,5 tỷ."
+    assert by["ca_nam_du_bao"]["so_tinh"][0] == "260,0 = 125,0 + 135,0"
+    page = Path(rep["out"]).read_text(encoding="utf-8")
+    data = json.loads(re.search(r'<script[^>]*id="clicky-data"[^>]*>(.*?)</script>', page, re.S).group(1))
+    pics = {h["vai"]: h for h in data["hinh"]}
+    kq = pics["kq_cau"]
+    assert [(b["ten"], b["so"], b["v"]) for b in kq["buoc"]] == [("Lãi gộp", "4,5", -4.5), ("Chi phí bán hàng", "1,8", -1.8),
+                                                                 ("Chi phí quản lý", "0,6", 0.6)]
+    assert (kq["dau"]["so"], kq["cuoi"]["so"]) == ("18,0", "12,3")
+    yr = pics["ca_nam"]
+    assert yr["kieu"] == "duong" and yr["thang"][0] == "T1" and len(yr["thuc_te"]) == 10 and yr["du_bao"] == [1279.5, 1414.5]
+    assert yr["muc_tieu"]["so"] == "1.440,0" and yr["cuoi"]["so"] == "1.414,5" and yr["chenh"]["so"] == "25,5" and yr["tinh"]
+    assert set(yr["cung"]) == {"ca_nam_du_bao", "ca_nam_khoang_cach"}
+    r = kiem_hinh.check(rep["out"])
+    if not r.get("skipped"):
+        assert r["ok"], r["problems"]
+    # a revised plan row too: the year is still against AOP, and the owner is asked which target holds
+    src.write_text(src.read_text(encoding="utf-8").replace(
+        "<tr><td>Thực hiện</td>", "<tr><td>Kế hoạch điều chỉnh (AOPR)</td>" + "<td>118,0</td>" * 12 + "<td>1.416,0</td></tr>\n<tr><td>Thực hiện</td>", 1),
+        encoding="utf-8")
+    rep2 = build(src)
+    said2 = [c["noi"] for s in yaml.safe_load(Path(rep2["kich_ban"]).read_text(encoding="utf-8"))["canh"] for c in s["cau"]]
+    assert "So với AOP cả năm 1.440,0 tỷ, thấp hơn 25,5 tỷ." in said2
+    assert any("anh xem mục tiêu nào đúng" in x for x in rep2["phan_bien"])

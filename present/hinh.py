@@ -161,6 +161,47 @@ def visuals(items: list, places: dict, en: bool = False, doubted: frozenset = fr
                 out.append({"vai": "phan_con_lai", "kieu": "so_sanh", "tieu_de": "Tốc độ tăng, có và không có " + S._short(top_r.label),
                             "don_vi": "%", "cot": bars, "nguon": "Em tính từ dòng Tổng và dòng " + S._short(top_r.label), "tinh": True})
 
+    # kq_cau: planned profit to actual profit, one step per row that moved it (TB3), drawn only when they add up
+    pt = S.pl_table(places, en, skip=t.id)
+    steps = S.pl_bridge(pt, en) if pt is not None else None
+    pp, pa = (S._num(pt.total, pt.plan, en), S._num(pt.total, pt.actual, en)) if pt is not None else (None, None)
+    if steps and len(steps) >= 2 and pp and pa and not any(x[1] in doubted for x in steps):
+        pplan, pact = _clip(pt.plan_name, 18), _clip(pt.actual_name, 18)
+        bars = [_bar(S._short(r.label), tok, eff, "buoc", **({"cong_thuc": S.pretty(d[2])} if d[2] else {})) for r, tok, eff, d in steps]
+        for b in bars:
+            b["dau"] = "+" if b["v"] >= 0 else "−"
+        out.append({"vai": "kq_cau", "kieu": "cau", "tieu_de": f"{_cap_first(pt.total.label)}: từ {pplan} đến {pact}", "don_vi": pt.unit or "",
+                    "dau": _bar(pplan, pp[0], pp[1], kind_of(pt.plan_name)), "buoc": bars,
+                    "cuoi": _bar(pact, pa[0], pa[1], kind_of(pt.actual_name)),
+                    "noi_bat": max(range(len(steps)), key=lambda k: abs(steps[k][2])), "chi_phi": False, "ty_trong": None,
+                    "nguon": _src(places, pt, "cột chênh lệch từng dòng; chi phí tăng là lợi nhuận giảm"),
+                    "tinh": any(d[2] for _r, _t, _e, d in steps)})
+
+    # ca_nam: where the year lands, month by month added up; actual solid, forecast dashed «dự báo», AOP the target
+    y = S.year_table(places, en)
+    if y is not None:
+        f = S.year_figures(y, en)
+        run, acc = [], Decimal(0)
+        for row, cols in ((y.actual, y.a_cols), (y.forecast, y.f_cols)):
+            for i in cols:
+                acc += S._num(row, i, en)[1]
+                run.append(acc)
+        na = len(y.a_cols)
+        plan_run, pacc = [], Decimal(0)
+        for i in (y.plan_cols if len(y.plan_cols) == len(y.months) else []):
+            pacc += S._num(y.plan, i, en)[1]
+            plan_run.append(_f(pacc))
+        pname = "AOP" if re.search(r"\baop\b", y.plan.label or "", re.I) else "Kế hoạch"
+        out.append({"vai": "ca_nam", "cung": ["ca_nam_du_bao", "ca_nam_khoang_cach"], "kieu": "duong",
+                    "tieu_de": f"{_cap_first(y.subject or 'kết quả')} cộng dồn: thực hiện và dự báo", "don_vi": y.unit or "",
+                    "thang": y.months, "thuc_te": [_f(v) for v in run[:na]], "du_bao": [_f(v) for v in run[na:]],
+                    "ke_hoach": plan_run, "muc_tieu": {"v": _f(f["plan"][1]), "ten": f"{pname} cả năm", "so": f["plan"][0]},
+                    "cuoi": {"v": _f(f["year"][1]), "so": f["year"][0]},
+                    "chenh": {"so": f["gap"][0], "dau": "−" if f["gap"][1] < 0 else "+",
+                              "cong_thuc": f"cả năm ước {f['year'][0]} − {pname} cả năm {f['plan'][0]}"},
+                    "nguon": _src(places, y, "dòng Thực hiện, Dự báo, " + _clip(re.sub(r'^[\W_]+', '', y.plan.label), 24)) + "; em cộng dồn từng tháng",
+                    "tinh": True})
+
     # tran: the actual total against the proposed cap, the cut between them (both printed, never a doubted cap)
     note, cards, _pairs = S.reco(items, places)
     cut = next((c for c in cards if c.figs and any(f.sign == "-" for f in c.figs)), None)

@@ -551,6 +551,238 @@ def row_note(row, items: list, flags: list) -> Optional[tuple]:
     return None
 
 
+PROFIT = re.compile(r"lợi nhuận|lãi (thuần|ròng|trước thuế|sau thuế)|\bebitda?\b|\bprofit\b|\blntt\b|\blnst\b", re.I)
+GROSS = re.compile(r"lãi gộp|lợi nhuận gộp|gross", re.I)
+
+
+def pl_table(places: dict, en: bool, skip: str = "") -> Optional[Table]:
+    """The profit and loss table: plan and actual columns, a revenue row and a profit row (no total row needed).
+    Its «total» is the profit before tax when printed, else the last profit row."""
+    by_table: dict = {}
+    for p in places.values():
+        if p.kind == "row" and p.cols:
+            by_table.setdefault(re.sub(r"r\d+$", "", p.id), []).append(p)
+    for tid, rows in by_table.items():
+        if tid == skip:
+            continue
+        head = rows[0].cols
+        money = [i for i, c in enumerate(head) if c.kind == "value" and (c.unit in C.MONEY or c.unit is None)
+                 and not C.HEAD_PEOPLE.search(c.header)]
+        plan = next((i for i in money if PLAN_WORD.search(head[i].header)), None)
+        actual = next((i for i in money if i != plan), None)
+        if plan is None or actual is None:
+            continue
+        body = [r for r in rows if r.label and _num(r, plan, en) and _num(r, actual, en)]
+        rev = next((r for r in body if REVENUE.search(r.label) and not PROFIT.search(r.label)), None)
+        profits = [r for r in body if PROFIT.search(r.label) and not GROSS.search(r.label) and body.index(r) > body.index(rev)] if rev else []
+        if rev is None or not profits:
+            continue
+        prof = next((r for r in profits if re.search(r"trước thuế|\blntt\b|before tax|\bpbt\b", r.label, re.I)), profits[-1])
+        var = next((i for i, c in enumerate(head) if c.kind == "var"), None)
+        pct = next((i for i, c in enumerate(head) if c.kind == "pctvar" or (c.unit == "%" and i not in money)), None)
+        unit = head[actual].unit
+        if unit is None:
+            sec = places.get(tid).section if places.get(tid) else None
+            m = re.search(r"\b(nghìn tỷ|tỷ|triệu|nghìn)\b", places[sec].text if sec in places else "", re.I)
+            unit = m.group(1).lower() if m else None
+        if unit is None:
+            m = re.search(r"đơn vị\s*:?\s*(nghìn tỷ|tỷ|triệu|nghìn)", " ".join(p.text for p in places.values() if p.kind in ("text", "note", "para")), re.I)
+            unit = m.group(1).lower() if m else None
+        return Table(tid, [r for r in body if r is not prof], prof, plan, actual, var, pct,
+                     head[plan].name or head[plan].header, head[actual].name or head[actual].header, unit, "")
+    return None
+
+
+def pl_bridge(pt: Table, en: bool) -> Optional[list]:
+    """The steps from planned to actual profit: gross profit (or revenue and cost of sales), then each row down to
+    the profit row, as (row, printed token, effect on profit). None unless the effects add up to the profit's own
+    change exactly; subtotal rows in between are never a step."""
+    rows = pt.rows
+    prof_d = delta(pt, pt.total, en)
+    if not prof_d:
+        return None
+    gp = next((r for r in rows if GROSS.search(r.label)), None)
+    start = rows.index(gp) if gp is not None else next((k for k, r in enumerate(rows) if REVENUE.search(r.label)), None)
+    if start is None:
+        return None
+    steps = []
+    for r in rows[start:]:
+        if r is not gp and (PROFIT.search(r.label) or GROSS.search(r.label)):
+            continue                                   # a subtotal: its rows are steps already
+        d = delta(pt, r, en)
+        if not d:
+            return None
+        cost = bool(C.COST_WORDS.search(r.label)) and r is not gp
+        steps.append((r, d[0], -d[1] if cost else d[1], d))
+    if not steps or sum((x[2] for x in steps), Decimal(0)) != prof_d[1]:
+        return None
+    return steps
+
+
+MONTH = re.compile(r"^\s*(?:t|th|tháng|thg|m)\.?\s*0?(\d{1,2})\b", re.I)
+YEAR_COL = re.compile(r"cả năm|\bnăm\b|\bfy\b|full year|\bnăm \d{4}\b", re.I)
+ACT_ROW = re.compile(r"thực hiện|thực tế|\bactual\b|\bact\b", re.I)
+FC_ROW = re.compile(r"dự báo|forecast|\bfc\b|\bước\b|outlook", re.I)
+REV_ROW = re.compile(r"aopr|điều chỉnh|revised|\bkhđc\b|reforecast", re.I)
+
+
+@dataclass
+class Year:
+    id: str
+    months: list          # header labels, in order ("T1" … "T12")
+    plan: object          # the plan row Place (AOP, never a forecast or a revised plan)
+    actual: object
+    forecast: object
+    a_cols: list          # column indexes with an actual figure
+    f_cols: list          # column indexes with a forecast figure, after the last actual
+    plan_cols: list
+    year_col: Optional[int]
+    unit: Optional[str]
+    subject: str          # «doanh thu thuần», from the table's heading
+    revised: object       # a revised-plan row too: the owner says which target (bod-hoi-dap rule)
+
+
+def year_table(places: dict, en: bool) -> Optional[Year]:
+    """A month-by-month table with an actual row, a forecast row for the months after it, and the plan (AOP) row:
+    where the year lands (gate 1, «cả năm sẽ về đâu»). None unless every month is actual or forecast, never both."""
+    by_table: dict = {}
+    for p in places.values():
+        if p.kind == "row" and p.cols:
+            by_table.setdefault(re.sub(r"r\d+$", "", p.id), []).append(p)
+    for tid, rows in by_table.items():
+        head = rows[0].cols
+        mcols = [(i, int(MONTH.match(c.header).group(1))) for i, c in enumerate(head) if MONTH.match(c.header or "")]
+        if len(mcols) < 6 or [m for _i, m in mcols] != sorted(m for _i, m in mcols):
+            continue
+        name = lambda r: re.sub(r"^[\W_]+", "", r.label or "")             # noqa: E731
+        plan = next((r for r in rows if PLAN_WORD.search(name(r)) and not REV_ROW.search(name(r)) and not FC_ROW.search(name(r))), None)
+        revised = next((r for r in rows if REV_ROW.search(name(r))), None)
+        act = next((r for r in rows if ACT_ROW.search(name(r)) and not FC_ROW.search(name(r))), None)
+        fc = next((r for r in rows if FC_ROW.search(name(r)) and not ACT_ROW.search(name(r))), None)
+        if plan is None or act is None or fc is None:
+            continue
+        a_cols = [i for i, _m in mcols if _num(act, i, en)]
+        f_cols = [i for i, _m in mcols if _num(fc, i, en)]
+        idx = [i for i, _m in mcols]
+        if not a_cols or not f_cols or a_cols != idx[:len(a_cols)] or f_cols != idx[len(a_cols):]:
+            continue                           # a month that is both, or neither: never added up
+        plan_cols = [i for i in idx if _num(plan, i, en)]
+        year_col = next((i for i, c in enumerate(head) if YEAR_COL.search(c.header or "") and _num(plan, i, en)), None)
+        if len(plan_cols) != len(idx) and year_col is None:
+            continue
+        sec = places.get(tid).section if places.get(tid) else None
+        heading = places[sec].text if sec in places else ""
+        unit = head[a_cols[0]].unit
+        if unit is None:
+            m = re.search(r"\b(nghìn tỷ|tỷ|triệu|nghìn)\b", heading, re.I) or \
+                re.search(r"đơn vị\s*:?\s*(nghìn tỷ|tỷ|triệu|nghìn)", " ".join(p.text for p in places.values() if p.kind in ("text", "note", "para")), re.I)
+            unit = m.group(1).lower() if m else None
+        m = re.search(r"(doanh thu thuần|doanh thu|lợi nhuận trước thuế|lợi nhuận|chi phí|sản lượng)", heading, re.I)
+        return Year(tid, [head[i].header for i in idx], plan, act, fc, a_cols, f_cols, plan_cols, year_col, unit,
+                    m.group(1).lower() if m else "", revised)
+    return None
+
+
+def year_figures(y: Year, en: bool) -> dict:
+    """The year's sums, each with its formula from printed monthly figures: actual to date, forecast, the year
+    as actual plus forecast, the plan for the year (printed when the table has a year column), and the gap."""
+    def total(row, cols):
+        toks = [_num(row, i, en)[0] for i in cols]
+        expr = " + ".join(toks)
+        return say(evaluate(expr, en), max(decimals(t, en) for t in toks), en), evaluate(expr, en), expr
+    ytd, fc = total(y.actual, y.a_cols), total(y.forecast, y.f_cols)
+    yr_expr = f"{ytd[2]} + {fc[2]}"
+    places_ = max(decimals(ytd[0], en), decimals(fc[0], en))
+    yr = say(evaluate(yr_expr, en), places_, en), evaluate(yr_expr, en), yr_expr
+    if y.year_col is not None:
+        pt = _num(y.plan, y.year_col, en)
+        plan = pt[0], pt[1], ""
+    else:
+        plan = total(y.plan, y.plan_cols)
+    gap_expr = f"({yr_expr}) - {plan[0] if not plan[2] else '(' + plan[2] + ')'}"
+    gap = say(abs(evaluate(gap_expr, en)), places_, en), evaluate(gap_expr, en), gap_expr
+    return {"ytd": ytd, "fc": fc, "year": yr, "plan": plan, "gap": gap}
+
+
+def year_lines(places: dict, en: bool) -> tuple:
+    """«Cả năm sẽ về đâu»: actual to date, the forecast said as a forecast, the year against the plan (AOP), and
+    the gap; every sum worked out by code from the monthly figures. (lines, flags)"""
+    y = year_table(places, en)
+    if y is None:
+        return [], []
+    f = year_figures(y, en)
+    unit = y.unit or ""
+    subj = y.subject or "kết quả"
+    last = int(MONTH.match(y.months[len(y.a_cols) - 1]).group(1))
+    n = ["", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín", "mười", "mười một", "mười hai"][min(len(y.f_cols), 12)]
+    pname = "AOP" if re.search(r"\baop\b", y.plan.label or "", re.I) else "kế hoạch"
+    out = [("Cả năm sẽ về đâu", Line(f"Cả năm sẽ về đâu? Lũy kế đến tháng {last}, {subj} thực hiện {f['ytd'][0]} {unit}.".replace("  ", " ").replace(" .", "."),
+                                     y.actual.id, so_tinh=[f"{f['ytd'][0]} = {f['ytd'][2]}"], dung=0.6, vai="ca_nam")),
+           ("Cả năm sẽ về đâu", Line(f"Cộng dự báo {n} tháng còn lại {f['fc'][0]} {unit}, cả năm ước {f['year'][0]} {unit}."
+                                     .replace("  ", " ").replace(" .", "."), y.forecast.id,
+                                     so_tinh=[f"{f['fc'][0]} = {f['fc'][2]}", f"{f['year'][0]} = {f['year'][2]}"], vai="ca_nam_du_bao"))]
+    if f["gap"][1]:
+        word = "thấp hơn" if f["gap"][1] < 0 else "cao hơn"
+        out.append(("Cả năm sẽ về đâu", Line(f"So với {pname} cả năm {f['plan'][0]} {unit}, {word} {f['gap'][0]} {unit}."
+                                            .replace("  ", " ").replace(" .", "."), y.plan.id,
+                                            so_tinh=([f"{f['plan'][0]} = {f['plan'][2]}"] if f["plan"][2] else [])
+                                            + [f"{f['gap'][0]} = {f['gap'][2]}"], vai="ca_nam_khoang_cach")))
+    flags = []
+    if y.revised is not None:                  # the target is AOP, never a forecast; a revised plan too: the owner says which
+        flags.append({"xem": f"Bảng cả năm có cả {_short(y.plan.label)} và {_short(y.revised.label)}. Em so cả năm với "
+                             f"{_short(y.plan.label)}; anh xem mục tiêu nào đúng cho buổi họp."})
+    return out, flags
+
+
+def pl_lines(places: dict, t: Table, en: bool) -> list:
+    """The profit and loss scene: profit against plan, revenue and gross profit, then the steps that moved profit
+    (at most three figures a line, each framed on the row that prints it or carried as a figure from another row)."""
+    pt = pl_table(places, en, skip=t.id if t is not None else "")
+    if pt is None:
+        return []
+    out = []
+    unit = pt.unit or ""
+    pname = plan_said(pt.plan_name)
+    pname = pname[:1].lower() + pname[1:] if pname[:1].isupper() and not pname.isupper() and " " not in pname[:4] or pname == "Kế hoạch" else pname
+    prof = pt.total
+    pd_ = delta(pt, prof, en)
+    if not pd_ or not pd_[1]:
+        return []
+    ppct = _num(prof, pt.pct, en) if pt.pct is not None else None
+    hi = "cao" if pd_[1] > 0 else "thấp"
+    reach = f"đạt {ppct[0]}% {pname}, " if ppct else ""
+    st = [f"{pd_[0]} = {pd_[2]}"] if pd_[2] else []
+    out.append(("Kết quả kinh doanh", Line(f"Trước hết là kết quả kinh doanh: {_lc(prof.label)} {reach}{hi} hơn {pname} {pd_[0]} {unit}."
+                                         .replace("  ", " ").replace(" .", "."), prof.id, so_tinh=st, vai="kq_loi_nhuan")))
+    rev = next((r for r in pt.rows if REVENUE.search(r.label) and not PROFIT.search(r.label)), None)
+    gp = next((r for r in pt.rows if GROSS.search(r.label)), None)
+    rd = delta(pt, rev, en) if rev is not None else None
+    steps = pl_bridge(pt, en)
+    if rd and rd[1]:
+        gd = delta(pt, gp, en) if gp is not None and not (steps and len(steps) >= 2) else None   # the bridge says it next
+        pull = (f", kéo {_lc(gp.label)} {'cao' if gd[1] > 0 else 'thấp'} hơn {gd[0]} {unit}"
+                if gd and gd[1] and (gd[1] > 0) == (rd[1] > 0) else "")
+        out.append(("Kết quả kinh doanh", Line(f"{_cap(rev.label)} {'cao' if rd[1] > 0 else 'thấp'} hơn {pname} {rd[0]} {unit}{pull}."
+                                             .replace("  ", " ").replace(" .", ".").replace(" ,", ","), rev.id,
+                                             so_tinh=([f"{rd[0]} = {rd[2]}"] if rd[2] else []) + ([f"{gd[0]} = {gd[2]}"] if pull and gd[2] else []),
+                                             xac_nhan=[gd[0]] if pull and not gd[2] else [], vai="kq_doanh_thu")))
+    if steps and len(steps) >= 2:
+        big = sorted(steps, key=lambda x: -abs(x[2]))
+        said_, rest = big[:3], big[3:]
+        parts = []
+        for r, tok, eff, d in said_:
+            cost = bool(C.COST_WORDS.search(r.label)) and r is not gp
+            word = ("vượt" if eff < 0 else "thấp hơn kế hoạch") if cost else ("thiếu" if eff < 0 else "vượt")
+            lead = "bù lại " if eff * pd_[1] < 0 else ""
+            parts.append(f"{lead}{_lc(_short(r.label))} {word} {tok} {unit}".replace("  ", " ").strip())
+        more = f", và {len(rest)} khoản khác" if rest else ""
+        verb = "thấp hơn" if pd_[1] < 0 else "cao hơn"
+        out.append(("Kết quả kinh doanh", Line(f"{_cap(prof.label)} {verb} {pname} vì: " + ", ".join(parts) + more + ".",
+                                             prof.id, so_tinh=[f"{d[0]} = {d[2]}" for _r, _t, _e, d in said_ if d[2]],
+                                             xac_nhan=[tok for _r, tok, _e, d in said_ if not d[2]], vai="kq_cau")))
+    return out
+
+
 def story(items: list, places: dict, owner: str, en: bool = False, hidden: frozenset = frozenset()) -> Optional[dict]:
     """The talk as scenes of lines (the script format clicky_html builds and checks), plus "phan_bien": what
     the owner should look at before the Board sees it. None when the report has no table to tell a story from.
@@ -635,6 +867,9 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
     if con is not None:
         con_doubt = next((fl for fl in flags if fl.get("sai") and con[1].tok in fl["sai"]
                           and fl["sai"] in con[0].text), None)
+
+    # B1: the month's result first (TB3, gate-2 grader): profit against plan, revenue, and what moved profit
+    lines += pl_lines(places, t, en)
 
     # B2 + B3: how big the change is, then the contrast that makes it matter
     if tdelta:
@@ -864,6 +1099,11 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                                        bat=False, vai="cau_noi_hoi")))
 
     # B10: close on every decision asked at the start, then stop for questions
+    # gate 1, rule 3: where the year lands, before the close (actual to date, the forecast said as one, against AOP)
+    yl, yf = year_lines(places, en)
+    lines += yl
+    flags += yf
+
     if ask_list and many:                          # just listed one by one: the card after the talk holds them
         lines.append(("Chốt", Line(f"Tóm lại, {owner} xin anh chị quyết {count_w.get(len(ask_list), 'các việc')} vừa nêu; "
                                    "em để sẵn trên màn hình.", cid(first), dung=1.0, vai="chot")))
@@ -895,7 +1135,9 @@ def story(items: list, places: dict, owner: str, en: bool = False, hidden: froze
                           lines[k][1].noi, count=1)
             if soft != lines[k][1].noi:
                 lines.insert(k + 1, ("Chốt", Line(soft, lines[k][1].chi, dung=lines[k][1].dung, bat=False, vai="chot", thay="chot")))
-    lines.append(("Chốt", Line("Em kính mời anh chị cho ý kiến ạ.", "", dung=2.0, vai="moi_hoi")))
+    # gate 1, item 19: the close is a question the room answers on the card, and the choice goes to the owner's minutes
+    lines.append(("Chốt", Line("Anh chị muốn quyết điều gì hôm nay ạ? Anh chị bấm chọn trên thẻ, em ghi lại gửi "
+                               f"{owner}." if ask_list else "Em kính mời anh chị cho ý kiến ạ.", "", dung=2.0, vai="moi_hoi")))
 
     # pacing: a breath after the greeting and the contrast, a longer one after the asks, a short one on the cap
     hoi = [k for k, (m_, ln) in enumerate(lines) if ln.vai == "hoi" and m_ == "Mở đầu"]

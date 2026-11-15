@@ -259,7 +259,7 @@ def test_a_request_to_say_another_figure_is_refused_and_never_sent_to_the_owner(
 def test_after_the_talk_the_decisions_wait_on_screen_and_a_choice_goes_to_the_owner_only_when_sent(page):
     pg, errors = page
     card = pg.evaluate("window.__clickyHetBai()")
-    assert card.startswith("Anh Tuấn xin anh chị quyết:")
+    assert card.startswith("Anh chị muốn quyết điều gì hôm nay?")   # gate 1, item 19: the closing question, answered on the card
     assert "Giữ tỷ lệ chi phí nhân sự trên doanh thu thuần ở 2,40%, tức trần 177,5 tỷ" in card and "Giãn tuyển 30 vị trí" in card
     assert card.count("Đồng ý") == 2 and card.count("Cần bàn thêm") == 2
     assert "tức trần 177,5 tỷ (cần giảm 8,9 tỷ)" in card                    # the cut the ask means, from the printed tile
@@ -281,6 +281,7 @@ def test_after_the_talk_the_decisions_wait_on_screen_and_a_choice_goes_to_the_ow
     subject, body = (unquote(x) for x in href.split("?subject=")[1].split("&body="))
     assert subject.startswith("Ý kiến về đề nghị: ")
     assert body.index("QUYẾT ĐỊNH") < body.index("CÂU HỎI") and "1. «Giữ tỷ lệ" in body and "SƠ BỘ" in body
+    assert re.search(r"BIÊN BẢN: QUYẾT ĐỊNH ANH CHỊ ĐÃ GHI \(lúc \d\d:\d\d ngày \d\d/\d\d/\d{4}\)", body), body   # item 19: the minutes, timed
     assert "2. «Giãn tuyển 30 vị trí bán hàng sang quý 3 và gắn với doanh thu trên mỗi người»: chưa cho ý kiến" in body
     assert "— tại «Khối Marketing, Chênh lệch 1,5»" in body, body
     assert not errors
@@ -431,7 +432,7 @@ def test_the_decision_card_waits_two_seconds_after_the_last_word(page):
     pg.wait_for_timeout(1200)
     assert not pg.evaluate(shown)
     pg.wait_for_timeout(1300)
-    assert pg.evaluate(shown) and "xin anh chị quyết" in _answer(pg, "a")
+    assert pg.evaluate(shown) and "Anh chị muốn quyết điều gì hôm nay?" in _answer(pg, "a")
     assert not errors
 
 

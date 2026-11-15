@@ -172,7 +172,7 @@ button.on{background:var(--warnsoft);border-color:var(--warn)}
 .hinh{position:fixed;z-index:2147483000;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:12px;box-shadow:var(--sh);padding:8px 10px 6px;font-size:13px}
 .hinh .htit{font-weight:600;font-size:13.5px;margin-bottom:2px;line-height:1.3}.hinh .hsh{font-weight:400;color:var(--muted)}
 .hinh svg{display:block;overflow:visible}.hinh text{font-size:11.5px;fill:var(--fg);font-family:inherit}.hinh .hn{font-weight:700;font-size:12.5px}.hinh .hl{fill:var(--muted)}
-.hinh .htag{fill:var(--muted);font-style:italic;font-size:10.5px}.hinh .hg{font-weight:700;fill:var(--warn)}
+.hinh .htag{fill:var(--muted);font-style:italic;font-size:10.5px}.hinh .hg{font-weight:700;fill:var(--warn)}.hinh .hgl{stroke:var(--warn);stroke-width:2}
 .hinh .ht{fill:var(--acc)}.hinh .hk{fill:var(--soft2);stroke:var(--line)}.hinh .hf{fill:url(#hp);stroke:var(--acc);stroke-dasharray:4 3}.hinh .hc{fill:none;stroke:var(--warn);stroke-width:2;stroke-dasharray:5 3}
 .hinh .hd{fill:#5b7db1}.hinh .hup{fill:var(--warn)}.hinh .hdn{fill:var(--acc)}.hinh .hbig{stroke:var(--fg);stroke-width:1.5}
 .hinh .hpb{fill:var(--bg)}.hinh .hpl{stroke:var(--acc);stroke-width:2.2}.hinh .hb{fill:none;stroke:var(--warn);stroke-width:1.5}.hinh .hz{fill:none;stroke:var(--bg);stroke-width:2.5}
@@ -866,7 +866,7 @@ const HINH = (D.hinh || []).filter(h => S.some(s => (s.vai || []).includes(h.vai
 let hinhOn = null, hinhKey = "";
 const LEAD_S = 0.5;   // the picture comes with the frame, half a second before the words (rule 1 of «Clicky sống động»)
 const SVGN = "http://www.w3.org/2000/svg";
-function hinhOf(vai) { return HINH.find(h => h.vai === vai) || null; }
+function hinhOf(vai) { return HINH.find(h => h.vai === vai) || HINH.find(h => (h.cung || []).includes(vai)) || null; }   // «cả năm»: one picture over its three lines
 function nf(v, tok) {   // a figure counting up, written like the report writes it; the last frame is the token itself
   const d = ((String(tok).split(",")[1]) || "").replace(/\D.*$/, "").length;
   const s = Math.abs(v).toFixed(d).split("."); s[0] = s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ".");
@@ -917,13 +917,20 @@ function hinhSvg(h, w) {   // the picture as SVG text; numbers in data-to so the
     const vals = all.concat(h.ke_hoach || []).concat(tgt !== null ? [tgt] : []), lo = Math.min(0, ...vals), hi = Math.max(...vals) * 1.08 || 1;
     const L = 8, R = W - 58, top = 18, bot = H - 26, X = i => L + (R - L) * i / Math.max(1, n - 1), Y = v => bot - (bot - top) * (v - lo) / (hi - lo);
     if (h.ke_hoach && h.ke_hoach.length) x.push('<polyline class="hpk" points="' + h.ke_hoach.map((v, i) => X(i) + "," + Y(v)).join(" ") + '"/>');
-    if (tgt !== null) { x.push('<line class="hpk" x1="' + L + '" x2="' + R + '" y1="' + Y(tgt) + '" y2="' + Y(tgt) + '"/>'); x.push('<text class="hl" x="' + (R + 4) + '" y="' + (Y(tgt) + 4) + '">' + esc(h.muc_tieu.ten) + '</text>'); }
+    if (tgt !== null) { x.push('<line class="hpk" x1="' + L + '" x2="' + R + '" y1="' + Y(tgt) + '" y2="' + Y(tgt) + '"/>');   // the target named on the left, out of the end figures' way
+      x.push('<text class="hl" x="' + (L + 2) + '" y="' + (Y(tgt) - 5) + '">' + esc(h.muc_tieu.ten + (h.muc_tieu.so ? " " + h.muc_tieu.so : "")) + '</text>'); }
     const na = h.thuc_te.length;
     x.push('<polyline class="hpa" data-draw="1" points="' + h.thuc_te.map((v, i) => X(i) + "," + Y(v)).join(" ") + '"/>');
     if ((h.du_bao || []).length) { x.push('<polyline class="hpf" data-draw="2" points="' + [h.thuc_te[na - 1]].concat(h.du_bao).map((v, i) => X(na - 1 + i) + "," + Y(v)).join(" ") + '"/>');
-      x.push('<text class="htag" x="' + X(n - 1) + '" y="' + (Y(all[n - 1]) - 8) + '" text-anchor="end">dự báo</text>'); }
+      x.push('<text class="htag" x="' + ((X(na - 1) + X(n - 1)) / 2) + '" y="' + (Y((all[na - 1] + all[n - 1]) / 2) + 16) + '" text-anchor="middle">dự báo</text>'); }
     x.push('<text class="hl" x="' + L + '" y="' + (H - 8) + '">' + esc(months[0]) + '</text><text class="hl" x="' + X(na - 1) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(months[na - 1]) + '</text><text class="hl" x="' + R + '" y="' + (H - 8) + '" text-anchor="end">' + esc(months[n - 1]) + '</text>');
-    if (h.cuoi) x.push(num(h.cuoi.v, h.cuoi.so, "hn", R + 4, Y(all[n - 1]) + 4, "start"));
+    const below = tgt !== null && all[n - 1] < tgt;
+    if (h.cuoi) x.push(num(h.cuoi.v, h.cuoi.so, "hn", R + 4, Y(all[n - 1]) + (below ? 14 : -4), "start"));
+    if (h.chenh && tgt !== null) {   // the gap at the year's end, named: «thiếu 25,5» under AOP, «vượt» over it
+      const y1 = Y(tgt), y2 = Y(all[n - 1]);
+      x.push('<line class="hgl" x1="' + (R + 2) + '" x2="' + (R + 2) + '" y1="' + Math.min(y1, y2) + '" y2="' + Math.max(y1, y2, Math.min(y1, y2) + 2) + '"/>');
+      x.push('<text class="hg" x="' + (R + 4) + '" y="' + (below ? y1 - 5 : y1 + 14) + '">' + (below ? "thiếu " : "vượt ") + esc(h.chenh.so) + '</text>');
+    }
   }
   return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="' + esc(h.tieu_de) + '">' + x.join("") + "</svg>";
 }
@@ -1530,7 +1537,7 @@ function decisionCard() {   // the asks, word for word as approved; a choice rea
   $("panel")._docked = false;   // a new card may bring the printed asks up once
   const a = $("a"); a.className = "ans dec"; a.innerHTML = "";
   $("cap").textContent = OWNER.charAt(0).toUpperCase() + OWNER.slice(1) + " xin anh chị quyết " + (QUYET.length > 1 ? NUMW[QUYET.length - 1] + " việc" : "một việc") + ".";   // never the last half-sentence of the talk (round 16)
-  const head = document.createElement("div"); head.textContent = OWNER.charAt(0).toUpperCase() + OWNER.slice(1) + " xin anh chị quyết:"; a.appendChild(head);
+  const head = document.createElement("div"); head.textContent = "Anh chị muốn quyết điều gì hôm nay?"; a.appendChild(head);   // gate 1, item 19: the closing question, answered here
   const cut = cutTag(), rows = [];
   const sendRow = () => { if (a.querySelector(".decsend")) return; const sb = document.createElement("div"); sb.className = "decsend";   // one Send for the whole card
     { const hq = quiet("Bấm «" + SEND + "» để báo " + OWNER_HE + "; đề nghị chưa chọn sẽ ghi là chưa cho ý kiến."); hq.classList.add("help"); sb.appendChild(hq); }
@@ -4313,7 +4320,8 @@ function mailBody(l) {   // decisions first, then questions with where they were
   // one line per ask, numbered as the owner numbered them, the last choice only; an ask left unanswered is said so
   const kOf = x => x.k !== undefined ? x.k : QUYET.findIndex(t => x.q.startsWith("Quyết định «" + t + "»"));
   const lastOf = k => dec.filter(x => kOf(x) === k).pop();
-  if (dec.length) out.push("QUYẾT ĐỊNH ANH CHỊ ĐÃ GHI", ...QUYET.map((t, k) => { const x = lastOf(k);
+  const now = new Date(), two = n => String(n).padStart(2, "0");   // the minutes say when the room chose
+  if (dec.length) out.push("BIÊN BẢN: QUYẾT ĐỊNH ANH CHỊ ĐÃ GHI (lúc " + two(now.getHours()) + ":" + two(now.getMinutes()) + " ngày " + two(now.getDate()) + "/" + two(now.getMonth() + 1) + "/" + now.getFullYear() + ")", ...QUYET.map((t, k) => { const x = lastOf(k);
     return (k + 1) + ". " + (x ? x.q.replace(DEC, "«") : "«" + t + "»: chưa cho ý kiến") + (x && askDoubt(t) ? " [" + askDoubt(t) + "]" : ""); }), "");
   if (qs.length) out.push(dec.length ? "CÂU HỎI" : "Khi xem báo cáo \"" + TITLE + "\", tôi có các câu hỏi sau:", ...qs.map((x, i) => (i + 1) + ". " + x.q + (x.where ? " — tại «" + x.where + "»" : x.part ? " (phần " + x.part + ")" : "")), "");
   out.push("(Gửi từ Clicky, mã báo cáo " + (M.pack_id || "") + (DRAFT ? "; bản trình bày SƠ BỘ, kịch bản chưa duyệt" : "") + ")");
@@ -4570,7 +4578,7 @@ window.__clickyKiemDienThoai = async function () {   // on a phone: the bar, the
     [...$("a").querySelectorAll(".decrow")].forEach((r, k) => { const q = rect(r); if (q.top < w.y - 1 || q.bottom > w.y + w.h + 1) out.push("đề nghị " + (k + 1) + " không nằm trọn trên màn hình"); });
     [...$("a").querySelectorAll(".decrow button")].forEach(b => { if (rect(b).height < 43.5) out.push("nút " + b.textContent + " nhỏ hơn 44px"); });
     const keepD = JSON.stringify(DECIDED), keepP = JSON.stringify(load());   // the reader's own choices come back after the check
-    QUYET.forEach((_, k) => { if (k < QUYET.length - 1) decide(k, "Đồng ý"); }); decisionCard(); await wait();
+    QUYET.forEach((_, k) => { if (k < Math.max(1, QUYET.length - 1)) decide(k, "Đồng ý"); }); decisionCard(); await wait();   // one ask: it is chosen, or no Send shows
     const sends = [...root.querySelectorAll("button")].filter(b => b.textContent === SEND && b.getClientRects().length && !b.closest(".hidden"));
     if (sends.length !== 1) out.push(sends.length + " nút «" + SEND + "» trên màn hình");
     for (const [k, r] of [...$("a").querySelectorAll(".decrow")].entries()) {   // round 13: ask 4 sat under the Send bar and a tap reached the report
