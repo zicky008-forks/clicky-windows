@@ -2460,7 +2460,7 @@ function resolve(q, scope) {
     const col = Object.keys(D.ten_ke_hoach || {}).find(k => (D.ten_ke_hoach[k] || []).some(v => fold(v) === fold(k === term ? "" : term)) && pageText().includes(k));
     if (col) return {kind: "colname", term, col, Q};   // "kế hoạch điều chỉnh là gì": the column the talk calls that
     const ab = (term.match(/(?<![\p{L}\p{N}])\p{Lu}[\p{Lu}\p{N}&+]{1,7}(?![\p{L}\p{N}])/gu) || []).find(x => !Object.keys(D.aliases || {}).some(k => k.toUpperCase() === x));   // «TMĐT», never «TM»
-    if (ab) { const full = spelledOut(ab); if (full) return {kind: "define", term: ab, says: full, Q}; }
+    if (ab) { const full = spelledOut(ab); if (full) return {kind: "define", term: ab, says: [full], Q}; }   // a list: one reading, never its letters
     if (ab && pageText().includes(ab)) return {kind: "noalias", term: ab, Q};   // printed, never explained: said, never guessed
   }
   { const cd = cardDiff(Q, scope); if (cd) return cd; }
@@ -3415,6 +3415,7 @@ const EN_WORDS = /\b(the|what|why|how|did|does|do|is|are|was|were|which|vs|versu
 const VI_FN = /\b(khong|bao nhieu|ke hoach|chi phi|doanh thu|vi sao|tai sao|thang|nam|co|cua|nhu the nao|la gi|chenh lech|vuot|thap hon|cao hon|luy ke)\b/;
 function isEnglishQ(q) {   // the report's own row and column names may sit inside an English question
   let s = String(q || ""); const re = typeof document !== "undefined" && document.body ? rowNamesRe() : null; if (re) s = s.replace(re, " X ");
+  s = s.replace(/(?<![\p{L}\p{N}])\p{Lu}[\p{Lu}\p{N}&+]{1,7}(?![\p{L}\p{N}])/gu, " X ");   // «TMĐT» in an English question
   if (/[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(s)) return false;
   if (VI_FN.test(" " + s.toLowerCase() + " ")) return false;
   return (s.match(EN_WORDS) || []).length >= 2;
@@ -3446,7 +3447,7 @@ function enToVi(q) {
   const low = () => s.toLowerCase();
   const take = (re, out) => { let hit = false; s = s.replace(re, () => { hit = true; return " "; }); return hit ? out : ""; };
   const judge = take(/\b(is (this|that|it) )?(worrying|worried|concerning|a concern|of concern|alarming|serious|a problem|ok|okay|fine|acceptable|reasonable)\b|\bshould we (be )?(worry|worried|concerned)( about (it|this|that))?\b/gi, "có đáng lo không");
-  { const ab = s.match(/^\s*[Ww]hat (does|do) ([A-Z][A-Z0-9&+]{1,7}) (mean|stand for)\s*$|^\s*[Ww]hat is (an? )?([A-Z][A-Z0-9&+]{1,7})\s*$|^\s*([Mm]eaning of|[Dd]efine) ([A-Z][A-Z0-9&+]{1,7})\s*$/);
+  { const ab = s.match(/^\s*[Ww]hat (does|do) (\p{Lu}[\p{Lu}\p{N}&+]{1,7}) (mean|stand for)\s*$|^\s*[Ww]hat is (an? )?(\p{Lu}[\p{Lu}\p{N}&+]{1,7})\s*$|^\s*([Mm]eaning of|[Dd]efine) (\p{Lu}[\p{Lu}\p{N}&+]{1,7})\s*$/u);
     if (ab) { const w = ab[2] || ab[5] || ab[7]; EN_MAP = {vi: w + " là gì?", rest: [w], need: [], subject: w, why: "", when: "", tail: "là gì", define: true}; return EN_MAP.vi; } }
   const why = take(/\bwhy\b|\bwhat (drove|caused|explains|is behind|was behind)\b|\b(reason|reasons|drivers?) (for|of|behind)\b|\bexplain\b/gi, "Vì sao");
   // period
@@ -3461,6 +3462,7 @@ function enToVi(q) {
   const tracking = /\bhow (did|does|do|is|are|was|were) .* (do|doing|did|perform|performing|performed|tracking|track|trend|trending|land|landing|compare|look)\b/i.test(s) || /\b(vs\.?|versus|against|compared (to|with)) (the )?(\w+ )?(plan|budget|aop|target)\b/i.test(s);
   const vsPlan = /\b(vs\.?|versus|against|compared (to|with)|to) (the )?(plan|budget|aop|target)\b/i;
   if (/\bhighest percentgrowth\b/i.test(s)) pred = "nào có % tăng cao nhất";
+  else if (/\b(by )?(how many|what) (percent|percentage|%)( points?)? (did|does|is|was|were|are)\b.*\b(plan|budget|target)\b|\b(percent|percentage|%) (above|over|below|under) (the )?(plan|budget|target)\b/i.test(s)) pred = "đạt bao nhiêu % kế hoạch";
   else if (/\b(what (percentage|percent|%|share) of (the )?(plan|budget|target)|% of (the )?(plan|budget|target)|(achievement|attainment|completion) (rate|level|%)|percent(age)? (achieved|attained|reached))\b/i.test(s)) pred = "đạt bao nhiêu % kế hoạch";
   else if (/\b(growth rate|percent(age)? (growth|increase|rise|change)|(grow|grew|increase|increased|rise|rose|change|changed) (by )?(how many|what) (percent|%)|(grow|grew|increase|increased|rise|rose) in (percent|percentage) terms|how much .* (grow|grew|increase|increased|rise|rose) in (percent|%|percentage))\b/i.test(s)) pred = "tăng bao nhiêu phần trăm";
   else if (/\b(variance|difference|gap|deviation|delta|how far)\b/i.test(s)) pred = "chênh lệch bao nhiêu so với kế hoạch";
@@ -3528,7 +3530,8 @@ const EN_PHRASES = [
   [/^Có\.\s*/g, "Yes. "], [/^Không\.\s*/g, "No. "], [/^Chưa\.\s*/g, "Not yet. "],
   [/^(Có|Không|Chưa) so với ([^;.]+)/g, (m, a, b) => ({Có: "Yes", Không: "No", Chưa: "Not yet"})[a] + " against " + b], [/; (có|không|chưa) so với /g, (m, a) => "; " + ({có: "yes", không: "no", chưa: "not yet"})[a] + " against "],
   [/\(cột (\u0002\d+\u0003) ghi (\(?[^()]*\)?)\)/g, "(column $1 shows $2)"], [/\(em tính: /g, "(worked out: "], [/\(em tính từ số in trên báo cáo\)/g, "(worked out from report figures)"],
-  [/Báo cáo ghi:/g, "The report says:"], [/^(\S+) là viết tắt của (\u0002\d+\u0003), nghĩa là (\u0002\d+\u0003)\./g, "$1 stands for $2, which means $3."],
+  [/Báo cáo ghi:/g, "The report says:"], [/^(\S+) là viết tắt của (\u0002\d+\u0003), nghĩa là (\u0002\d+\u0003)\./g, "$1 stands for $2, which means $3."], [/^(\S+) là viết tắt của (\u0002\d+\u0003), còn gọi là ((?:\u0002\d+\u0003(?:, )?)+)\./g, "$1 stands for $2, also called $3."],
+  [/^(\S+) là viết tắt của (\u0002\d+\u0003)\./g, "$1 stands for $2."],
   [/Trong bài nói em gọi cột này là (\u0002\d+\u0003)\./g, "In the talk I call this column $1."], [/^Theo bảng chữ viết tắt em dùng cho báo cáo này$/g, "From the abbreviation list used for this report"], [/^Anh chị muốn so các .+? theo cột nào ạ\?/g, "Which column should I rank the rows on?"], [/Lấy từ báo cáo /g, "From the report "], [/, đúng chỗ đang khoanh/g, ", at the circled place"],
   [/So với ([^,]+), cao hơn /g, "Against $1, higher by "], [/So với ([^,]+), thấp hơn /g, "Against $1, lower by "],
   [/ so với ([^,]+), cao hơn /g, " against $1: higher by "], [/ so với ([^,]+), thấp hơn /g, " against $1: lower by "],
@@ -3609,7 +3612,8 @@ function enRender(a, o) {   // the rendered answer box, put into English in plac
   if (EN_MAP && EN_MAP.unsure) return enAsk(a, "words");
   { const body = ((a.querySelector("div") || a).innerText || "").trim();
     if (o.cls === "park" || body === D.fallback || VI_MISSING.test(body)) return enAsk(a, "missing");   // the mapping may be what failed
-    if (!enOnRow(body)) return enAsk(a, "row"); }
+    if (!enOnRow(body)) return enAsk(a, "row");
+    if (EN_MAP && !EN_MAP.define && /bao nhiêu|đạt kế hoạch|vượt kế hoạch|thấp hơn kế hoạch|cao nhất|thấp nhất|nhiều nhất/.test(EN_MAP.tail || "") && !/\d/.test(body.replace(/«[^»]*»/g, ""))) return enAsk(a, "nofigure"); }
   const viText = a.innerText;
   // text nodes in reading order; a «quote» may run across several nodes (a highlighted figure inside it)
   const nodes = []; const tw = document.createTreeWalker(a, NodeFilter.SHOW_TEXT); while (tw.nextNode()) nodes.push(tw.currentNode);
@@ -3659,9 +3663,11 @@ function enPrintedOnPage(vi) {   // the report prints this name, or an abbreviat
 function askAny(q, scope) {   // the ask box: an English question is asked in Vietnamese and answered in English
   EN_ON = isEnglishQ(q) || (!!EN_PREV && /^\s*(and|what about|how about|why|is that|is this|was that|should we)\b/i.test(q) && !/[^\x00-\x7f]/.test(q));
   EN_LAST = null; EN_MAP = null; enPrinted = enPrintedOnPage;
+  { const box = isOpen($("bub")) ? $("ba") : $("a"); if (box) delete box.dataset.en; }
   if (EN_ON) {
     let vi = enToVi(q); const page = " " + reportText() + " ";
-    if (!EN_MAP.subject && EN_PREV && !EN_MAP.define) {   // a follow-up: the subject (and period, if none said) of the last English question
+    const follow = /^\s*(and|what about|how about|why|is that|is this|was that|was this|should we|so)\b|^\s*(\S+\s+){0,3}(that|this|it)\s*[?.!]*\s*$/i.test(q);
+    if (!EN_MAP.subject && EN_PREV && !EN_MAP.define && follow) {   // a follow-up: the subject (and period, if none said) of the last English question
       const parts = [EN_MAP.why, EN_PREV.subject, EN_MAP.when || EN_PREV.when, EN_MAP.tail].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
       vi = parts.charAt(0).toUpperCase() + parts.slice(1) + "?";
       EN_MAP = Object.assign({}, EN_MAP, {vi, subject: EN_PREV.subject, rest: EN_PREV.rest, need: EN_PREV.need, when: EN_MAP.when || EN_PREV.when});

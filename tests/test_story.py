@@ -2847,6 +2847,9 @@ def test_an_english_question_gets_an_english_answer_with_every_figure_locked(tmp
         assert "below plan by 3.2 bn" in a and "The report says: «EBIT tháng 10 thấp hơn kế hoạch 3,2 tỷ" in a, a
         a = typed("Did EBIT meet the full-year plan?")
         assert "236.0 bn" in a and "102.6%" in a and "(worked out: 236.0 ÷ 230.0 × 100)" in a and "Estimate:" in a, a
+        a = typed("What is the full-year estimate versus plan?")   # no row named: never the last question's row (grader rerun 17)
+        assert "EBIT" not in a.split("I read")[0] or "Doanh thu" in a, a
+        assert "I read your question as: «Cả năm" in a or a.startswith("I could not match"), a
         a = typed("EBIT in October is below plan, is it worrying?")
         assert "does not judge whether this is a concern" in a and not a.startswith(("Yes", "No")), a
         a = typed("What was our competitor's profit this year?")   # never a «not in the report» claim on an English reading
@@ -2903,3 +2906,42 @@ console.log(JSON.stringify(out));
     got = subprocess.run([node, str(js)], capture_output=True, text=True, timeout=60)
     assert got.returncode == 0, got.stderr
     assert json.loads(got.stdout) == [True, True, False, False, False, False, True, False]
+
+
+def test_an_abbreviation_the_report_spells_out_is_read_whole_in_both_languages(tmp_path, monkeypatch):
+    # grader rerun 17: «CSKH là gì?» for a row label «Chăm sóc khách hàng (CSKH)» was said letter by letter («C», «h», …);
+    # in English «What does CSKH mean?» was taken for Vietnamese and parked as «not in the report».
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    fx = Path(__file__).parent / "fixtures"
+    src = tmp_path / "bao_cao_cskh.html"
+    src.write_text((fx / "bao_cao_bo_phan_mot_lan.html").read_text(encoding="utf-8").replace("Hành chính", "Chăm sóc khách hàng (CSKH)"), encoding="utf-8")
+    rep = build(src)
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 900})
+
+        def typed(q):
+            pg.keyboard.press("Escape")
+            pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const e = r.getElementById('clicky-skip') || document.getElementById('clicky-skip'); if (e) e.click(); }")
+            pg.wait_for_timeout(300)
+            box = pg.locator("#clicky-host #q")
+            box.fill(q)
+            box.press("Enter")
+            pg.wait_for_timeout(900)
+            return pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const b = r.getElementById('bub'); "
+                               "const a = ((b && !b.classList.contains('hidden')) ? r.getElementById('ba') : r.getElementById('a')).cloneNode(true); "
+                               "a.querySelectorAll('.receipt').forEach(x => x.remove()); return a.innerText; }")
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        a = typed("CSKH là gì?")
+        assert a.startswith("CSKH là viết tắt của «Chăm sóc khách hàng».") and "«C»" not in a, a
+        a = typed("What does CSKH mean?")
+        assert a.startswith("CSKH stands for «Chăm sóc khách hàng».") and "chưa tìm thấy" not in a, a
+        a = typed("What is customer service in October versus plan?")   # the English name, because the report prints it
+        assert "Chăm sóc khách hàng (CSKH) against the October plan: lower by 0.1 bn" in a, a
+        browser.close()
