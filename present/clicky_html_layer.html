@@ -3545,7 +3545,7 @@ const EN_PHRASES = [
   [/ lỗ (\(?\d[\d.,]*\)?) (tỷ|triệu)(?!\p{L})/gu, (m, n, u) => " shows a loss of VND " + n + (u === "tỷ" ? " bn" : " m")], [/ lãi (\(?\d[\d.,]*\)?) (tỷ|triệu)(?!\p{L})/gu, (m, n, u) => " shows a profit of VND " + n + (u === "tỷ" ? " bn" : " m")],
   [/, ngân sách linh hoạt là (?=shows )/g, ", against a flexible budget that "],
   [/Theo bảng (\u0002\d+\u0003):/g, "From the table $1:"], [/mười tháng đã làm /g, "ten months delivered "],
-  [/\(em tính: cộng T(1[0-2]|[1-9])\s*[–‒-]\s*T(1[0-2]|[1-9]) dòng ([^)]+)\)/g, (m, a, b, r) => "(worked out: sum of " + EN_MONTHS[+a - 1].slice(0, 3).replace(/^./, c => c.toUpperCase()) + "–" + EN_MONTHS[+b - 1].slice(0, 3).replace(/^./, c => c.toUpperCase()) + ", row " + r + ")"],
+  [/\(em tính: cộng T(1[0-2]|[1-9])\s*[–‒-]\s*T(1[0-2]|[1-9]) dòng ([^)]+)\)/g, (m, a, b, r) => "(worked out: sum of " + EN_MONTHS[+a - 1].slice(0, 3).replace(/^./, c => c.toUpperCase()) + "–" + EN_MONTHS[+b - 1].slice(0, 3).replace(/^./, c => c.toUpperCase()) + ", row " + (/[«\u0002]/.test(r) ? r : "«" + r.trim() + "»") + ")"],
   [/, cộng dự báo (hai|ba|một) tháng còn lại /g, (m, k) => ", plus the forecast for the remaining " + ({hai: "two", ba: "three", "một": "one"})[k] + " months "],
   [/, cả năm ước /g, ", a full-year estimate of "],
   [/, (thấp|cao) hơn kế hoạch( \([^)]*\))? cả năm (\(?\d[\d.,]*\)?) (tỷ|triệu) là (\(?\d[\d.,]*\)?) (tỷ|triệu)(?!\p{L})/gu, (m, d, a, n, u, k, u2) => ", VND " + k + (u2 === "tỷ" ? " bn" : " m") + (d === "cao" ? " above" : " below") + " the full-year plan" + (a || "") + " of VND " + n + (u === "tỷ" ? " bn" : " m")],
@@ -3631,7 +3631,7 @@ function enLabel(name) {   // an English name for a report label, or "" when any
 function enText(t) {   // the report's «quoted words» are held aside, never translated
   const q = []; let x = String(t).replace(/«[^»]*»/g, m => { q.push(m); return "\u0002" + (q.length - 1) + "\u0003"; });
   if (ROWNAMES_RE) { const said = new Set();   // a label is named in English once, then by its label
-    x = x.replace(ROWNAMES_RE, (m, at, all) => { if (/^ của /.test(all.slice(at + m.length, at + m.length + 5))) return m;   /* «Kế hoạch của …» is prose */ const e = !said.has(m) && enLabel(m); said.add(m); q.push(e ? e + " («" + m + "»)" : "«" + m + "»"); return "\u0002" + (q.length - 1) + "\u0003"; }); }
+    x = x.replace(ROWNAMES_RE, (m, at, all) => { if (/^ của /.test(all.slice(at + m.length, at + m.length + 5))) return m;   /* «Kế hoạch của …» is prose */ if (/^T(1[0-2]|[1-9])$/.test(m) && (/[–‒-]\s*$/.test(all.slice(Math.max(0, at - 2), at)) || /^\s*[–‒-]\s*T\d/.test(all.slice(at + m.length, at + m.length + 5)))) return m;   /* «T1–T10» is a span of months */ const e = !said.has(m) && enLabel(m); said.add(m); q.push(e ? e + " («" + m + "»)" : "«" + m + "»"); return "\u0002" + (q.length - 1) + "\u0003"; }); }
   for (const [re, to] of EN_PHRASES) x = x.replace(re, to);
   for (const [re, to] of PLAN_EN) x = x.replace(re, to);
   x = enNum(x);
@@ -3756,12 +3756,13 @@ function enColumn(q, map) {
   if (!map || map.why || (map.tail || "") !== "bao nhiêu") return "";
   const t = String(q).toLowerCase();
   const want = /\boriginal (plan|budget|aop)\b/.test(t) ? "goc" : /\brevised\b/.test(t) ? "aopr" : /\bflexible\b/.test(t) ? "linh" :
-    /\b(forecast|estimate|outlook|landing|projected)\b/.test(t) ? "uoc" :
+    /\b(forecast|estimate|outlook|landing|land|lands|projected|end up|finish)\b/.test(t) ? "uoc" :
     /\b(actuals?|actually|spent|spend|spending|booked|delivered|came in|results?|achieved|realised|realized|did we (do|make|spend|book|sell|deliver))\b|\bdid (?:(?!do\b|on\b|in\b)[\w-]+ ){1,4}cost\b/.test(t) ? "th" :
     /\b(plan|planned|budget|budgeted|target)\b/.test(t) ? "kh" : "";
   if (!want) return "";
   const per = /lũy kế/.test(map.when || "") ? "ytd" : /cả năm/.test(map.when || "") ? "fy" : /tháng/.test(map.when || "") ? "m" : "";
   const kind = h => { const f = fold(h);
+    if (/^\s*1?\d\s*\+\s*\d{1,2}\s*$/.test(f)) return {m: "uoc", p: "fy"};   // «10+2»: ten months done plus two forecast
     const m = /\bchenh\b|%/.test(f) ? "" : /\bgoc\b/.test(f) ? "goc" : /\baopr\b|dieu chinh/.test(f) ? "aopr" : /linh hoat/.test(f) ? "linh" : /\buoc\b|du bao/.test(f) ? "uoc" :
       /^(th|thuc hien)\b/.test(f) ? "th" : /^(kh|ke hoach|ngan sach|ns|aop)\b/.test(f) ? "kh" : "";
     const p = /\blk ?\d|luy ke|t1 ?[-–] ?t\d/.test(f) ? "ytd" : /\b(ca nam|nam|fy)\b/.test(f) ? "fy" : /\bt(1[0-2]|[1-9])\b|thang \d/.test(f) ? "m" : "";
@@ -3806,6 +3807,16 @@ function askAny(q, scope) {   // the ask box: an English question is asked in Vi
       }
     }
     EN_MAP.q = cq;
+    if (!EN_MAP.define) {   // «CSKH» typed for a row printed «Chăm sóc khách hàng (CSKH)»: the row's own name is asked
+      const labels = enHeads().concat([...document.querySelectorAll("table tr")].map(tr => ((tr.cells || [])[0] || {}).textContent || "")).map(x => x.trim());
+      for (const w of EN_MAP.rest.filter(w => /^[A-ZĐ&]{2,6}$/.test(w))) {
+        const esc4 = w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const full = labels.map(x => x.match(new RegExp("^(.{2,40}?)\\s*\\(\\s*" + esc4 + "\\s*\\)$"))).filter(Boolean).map(x => x[1].trim());
+        if (new Set(full).size !== 1) continue;
+        const sw = x => String(x || "").split(w).join(full[0]);
+        vi = sw(vi); EN_MAP = Object.assign({}, EN_MAP, {vi, subject: sw(EN_MAP.subject), rest: EN_MAP.rest.filter(x => x !== w), need: EN_MAP.need.map(sw).concat([full[0]])});
+      }
+    }
     // every word that was not understood must be a name printed in the report; otherwise the question is not run at all
     if (!EN_MAP.subject || EN_MAP.rest.some(w => { const f = fold(w); return !f || !new RegExp("(^|[^a-z0-9])" + f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![a-z0-9])").test(page); })) { EN_MAP.unsure = true; TYPED = q; answer("", null, {src: ""}); return; }
     { const rm = (document.title + " " + ((document.querySelector("h1,h2,p") || {}).textContent || "")).match(/tháng (1[0-2]|[1-9])\s*\/\s*\d{4}/i);

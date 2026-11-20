@@ -2968,4 +2968,47 @@ def test_an_abbreviation_the_report_spells_out_is_read_whole_in_both_languages(t
         assert a.startswith("In this report, CSKH is written next to «Chăm sóc khách hàng».") and "chưa tìm thấy" not in a, a
         a = typed("What is customer service in October versus plan?")   # the English name, because the report prints it
         assert "«Chăm sóc khách hàng (CSKH)» was VND 0.1 bn below the October plan" in a, a
+        a = typed("How much did CSKH spend this year so far?")   # the abbreviation asks the row it is printed next to
+        assert "«Chăm sóc khách hàng (CSKH)», YTD Oct actual («TH LK10»): VND 19.5 bn" in a, a
+        browser.close()
+
+
+def test_a_full_year_english_question_is_answered_in_english(tmp_path, monkeypatch):
+    # grader rerun 20: a full-year figure fell back to the Vietnamese wording («T1–T10» read as two labels, «dòng» left);
+    # a «10+2» column is the full-year estimate
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    fx = Path(__file__).parent / "fixtures"
+    reps = {}
+    for name in ("bao_cao_ytd_du_bao", "bao_cao_hoi_hdqt"):
+        src = tmp_path / (name + ".html")
+        src.write_text((fx / (name + ".html")).read_text(encoding="utf-8"), encoding="utf-8")
+        reps[name] = build(src)
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 900})
+
+        def typed(q):
+            pg.keyboard.press("Escape")
+            pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const e = r.getElementById('clicky-skip') || document.getElementById('clicky-skip'); if (e) e.click(); }")
+            pg.wait_for_timeout(300)
+            box = pg.locator("#clicky-host #q")
+            box.fill(q)
+            box.press("Enter")
+            pg.wait_for_timeout(900)
+            return pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const b = r.getElementById('bub'); "
+                               "const a = ((b && !b.classList.contains('hidden')) ? r.getElementById('ba') : r.getElementById('a')).cloneNode(true); "
+                               "a.querySelectorAll('.receipt').forEach(x => x.remove()); return a.innerText; }")
+        pg.goto(Path(reps["bao_cao_ytd_du_bao"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        a = typed("What is the full-year revenue forecast?")
+        assert "a full-year estimate of VND 1,414.5 bn" in a and "Sum of Jan–Oct" in a and "could not word" not in a, a
+        pg.goto(Path(reps["bao_cao_hoi_hdqt"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        a = typed("Where will EBIT land for the full year?")
+        assert "VND 198.4 bn" in a and "«EBIT 10+2 bao nhiêu?»" in a, a
         browser.close()
