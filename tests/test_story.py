@@ -2842,9 +2842,9 @@ def test_an_english_question_gets_an_english_answer_with_every_figure_locked(tmp
         pg.goto(Path(reps["bao_cao_hai_ke_hoach_ky"]["out"]).as_uri())
         pg.wait_for_timeout(1500)
         a = typed("What was the revenue variance vs plan in October?")
-        assert "below plan by 9.0 bn" in a and "(column «Chênh lệch» shows (9.0))" in a and "Exact: printed in the report" in a, a
+        assert "came in VND 9.0 bn below plan" in a and "(«Chênh lệch» column: (9.0))" in a and "Exact: Figure printed in the report" in a, a
         a = typed("Why was EBIT below plan in October?")
-        assert "below plan by 3.2 bn" in a and "The report says: «EBIT tháng 10 thấp hơn kế hoạch 3,2 tỷ" in a, a
+        assert "VND 3.2 bn below plan" in a and "The report says: «EBIT tháng 10 thấp hơn kế hoạch 3,2 tỷ" in a, a
         a = typed("Did EBIT meet the full-year plan?")
         assert "236.0 bn" in a and "102.6%" in a and "(worked out: 236.0 ÷ 230.0 × 100)" in a and "Estimate:" in a, a
         a = typed("What is the full-year estimate versus plan?")   # no row named: never the last question's row (grader rerun 17)
@@ -2859,9 +2859,9 @@ def test_an_english_question_gets_an_english_answer_with_every_figure_locked(tmp
         pg.goto(Path(reps["bao_cao_bo_phan_mot_lan"]["out"]).as_uri())
         pg.wait_for_timeout(1500)
         a = typed("Why is Marketing over plan in October?")
-        assert "against the October plan: higher by 0.6 bn" in a and "«Marketing vượt 0,6 tỷ" in a and "could not word" not in a, a
+        assert "VND 0.6 bn above the October plan" in a and "«Marketing vượt 0,6 tỷ" in a and "could not word" not in a, a
         a = typed("What is the Marketing variance vs plan year to date?")
-        assert "10 months to date: higher by 1.1 bn" in a, a
+        assert "VND 1.1 bn above the 10-month YTD plan" in a, a
         assert "I read your question as: «Marketing lũy kế chênh lệch bao nhiêu so với kế hoạch?»" in a, a
         # grader rerun 15 classes: words not understood never reach the row matcher, a reading on the wrong row is not
         # shown, a label glued to digits (T10) is not a figure
@@ -2870,15 +2870,28 @@ def test_an_english_question_gets_an_english_answer_with_every_figure_locked(tmp
             assert a.startswith("I could not match your English question") and not re.search(r"\d", a.split("I read")[0]), (q, a)
         # an English department name is used only because the report prints its Vietnamese name; a follow-up keeps the subject
         a = typed("What is admin year to date versus budget?")
-        assert "Hành chính against plan 10 months to date: lower by 0.5 bn" in a, a
+        assert "Admin («Hành chính») was VND 0.5 bn below the 10-month YTD plan" in a, a
         a = typed("Is that worrying?")
         assert "does not judge whether this is a concern" in a and "Hành chính" in a and not a.startswith(("Yes", "No")), a
         a = typed("Why is Sales over plan?")   # «Bán hàng» is not printed in this report: never answered from another row
         assert a.startswith("I could not match your English question") and "What is Marketing versus plan?" in a, a
-        for q, want in (("How much did Marketing overspend in October?", "0.6 bn"), ("What caused the Marketing overrun in October?", "«Marketing vượt 0,6 tỷ"),
+        for q, want in (("How much did Marketing overspend in October?", "VND 0.6 bn"), ("What caused the Marketing overrun in October?", "«Marketing vượt 0,6 tỷ"),
                         ("Is Marketing over budget year to date?", "1.1 bn")):
             a = typed(q)
             assert want in a and "could not" not in a and "T 10" not in a, (q, a)
+        # follow-ups: «And year to date?» keeps the last subject and measure; «this month» never takes the last period;
+        # a question that was not answered is never the «that» of the next one
+        a = typed("How much did Marketing overspend in October?")
+        a = typed("And year to date?")
+        assert "VND 1.1 bn above the 10-month YTD plan" in a and "«Marketing lũy kế vượt kế hoạch bao nhiêu?»" in a, a
+        a = typed("And year to date for admin?")
+        assert "Admin («Hành chính»)" in a and "10-month YTD plan" in a and "(0.5)" in a, a
+        a = typed("What's the year-to-date marketing budget?")
+        a = typed("How about admin costs this month?")
+        assert "Oct actual («TH T10») VND 1.9 bn" in a and "I read your question as: «Hành chính chi phí bao nhiêu?»" in a, a
+        a = typed("Which division overspent?")
+        a = typed("What's driving that?")
+        assert a.startswith("I could not match your English question"), a
         browser.close()
 
 
@@ -2941,7 +2954,7 @@ def test_an_abbreviation_the_report_spells_out_is_read_whole_in_both_languages(t
         a = typed("CSKH là gì?")
         assert a.startswith("CSKH là viết tắt của «Chăm sóc khách hàng».") and "«C»" not in a, a
         a = typed("What does CSKH mean?")
-        assert a.startswith("CSKH stands for «Chăm sóc khách hàng».") and "chưa tìm thấy" not in a, a
+        assert a.startswith("In this report, CSKH is written next to «Chăm sóc khách hàng».") and "chưa tìm thấy" not in a, a
         a = typed("What is customer service in October versus plan?")   # the English name, because the report prints it
-        assert "Chăm sóc khách hàng (CSKH) against the October plan: lower by 0.1 bn" in a, a
+        assert "«Chăm sóc khách hàng (CSKH)» was VND 0.1 bn below the October plan" in a, a
         browser.close()
