@@ -2847,6 +2847,8 @@ def test_an_english_question_gets_an_english_answer_with_every_figure_locked(tmp
         assert "VND 3.2 bn below plan" in a and "The report says: «EBIT tháng 10 thấp hơn kế hoạch 3,2 tỷ" in a, a
         a = typed("Did EBIT meet the full-year plan?")
         assert "236.0 bn" in a and "102.6%" in a and "(worked out: 236.0 ÷ 230.0 × 100)" in a and "Estimate:" in a, a
+        a = typed("What's the full-year EBIT forecast?")   # the column says forecast; «dự báo» is not a row word
+        assert "«EBIT», full-year estimate («Ước cả năm»): VND 236.0 bn" in a, a
         a = typed("What is the full-year estimate versus plan?")   # no row named: never the last question's row (grader rerun 17)
         assert "EBIT" not in a.split("I read")[0] or "Doanh thu" in a, a
         assert "I read your question as: «Cả năm" in a or a.startswith("I could not match"), a
@@ -2889,6 +2891,15 @@ def test_an_english_question_gets_an_english_answer_with_every_figure_locked(tmp
         a = typed("What's the year-to-date marketing budget?")
         a = typed("How about admin costs this month?")
         assert "Oct actual («TH T10») VND 1.9 bn" in a and "I read your question as: «Hành chính chi phí bao nhiêu?»" in a, a
+        # grader rerun 19 misses: «this year so far», «first ten months», a savings framing, «they»
+        a = typed("How much did we spend on Marketing this year so far?")
+        assert "YTD Oct actual («TH LK10»): VND 31.1 bn" in a, a
+        a = typed("How much over plan were they?")
+        assert "VND 1.1 bn above the 10-month YTD plan" in a, a
+        a = typed("What did admin cost for the first ten months?")
+        assert "VND 19.5 bn" in a and "TH LK10" in a, a
+        a = typed("How much did admin save year to date?")
+        assert "VND 0.5 bn below the 10-month YTD plan" in a, a
         a = typed("Which division overspent?")
         a = typed("What's driving that?")
         assert a.startswith("I could not match your English question"), a

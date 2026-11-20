@@ -3445,7 +3445,9 @@ const EN_MONTHS = ["january", "february", "march", "april", "may", "june", "july
 function enToVi(q) {
   let s = " " + String(q).replace(/[?!.]+\s*$/, "").replace(/\s+/g, " ").trim() + " ";
   s = s.replace(/\b(through|thru|up to|until|to the end of) (the )?(end of )?(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/gi, " year to date ")
-    .replace(/\b(annual|annually|for the year as a whole)\b/gi, " full year ").replace(/\bahead of\b/gi, " above ").replace(/\bbehind (plan|budget|target)\b/gi, " below $1");
+    .replace(/\b(annual|annually|for the year as a whole)\b/gi, " full year ").replace(/\bahead of\b/gi, " above ")
+    .replace(/\b((for|in|over) )?(this year so far|so far this year|the year so far|year so far|(the )?first (ten|10|nine|9|eleven|11|eight|8|seven|7|six|6) months( of the year)?)\b/gi, " year to date ")
+    .replace(/\bdid (.{2,40}?) (save|saving)\b/gi, "was $1 below plan").replace(/\bsavings? (on|in|for) /gi, "below plan $1 ").replace(/\bbehind (plan|budget|target)\b/gi, " below $1");
   s = s.replace(/\b(what|how|where|who)['’]?s\b|\b(it|that)['’]s\b/gi, (m, a, b) => (a || b) + " is").replace(/(\w)['’]s\b/g, "$1")
     .replace(/^\s*(can|could|would) you (please )?(explain|tell me|show me|say)\b/i, " explain").replace(/\b(came|come|coming|end|ended|ending) (in|up)\b/gi, " ")
     .replace(/\bwhere (will|does|did|is|are|do) (.+?) (land|end up|finish|come out)\b/i, " what is $2 ")
@@ -3504,7 +3506,7 @@ function enToVi(q) {
   const things = [];
   EN_NAMES.forEach(([re, vis]) => { s = s.replace(re, (m, ...g) => { const v = vis.map(enPrinted).find(Boolean); if (!v) return m;
     things.push({at: g[g.length - 2], vi: v, name: true}); return " ".repeat(m.length); }); });
-  let t = s.replace(/\b(the|a|an|what|which|how|much|many|is|are|was|were|did|does|has|have|had|will|in|for|of|our|its|this|that|by|on|at|vs\.?|versus|against|compared|to|with|plan|budget|aop|target|variance|difference|gap|deviation|delta|far|above|below|over|under|more|less|than|exceed|exceeded|beat|miss|missed|short|meet|met|hit|achieve|achieved|reach|reached|make|made|on track|higher|lower|share|percentage|percent|increase|increased|grew|grow|rose|rise|most|highest|largest|biggest|lowest|smallest|least|so|and|why|amount|figure|number|total|value|be|been|month|year|we|us|about|terms|doing|perform|performing|performed|tracking|track|trend|trending|look|looking|land|compare|compared|currently|now|right|there|any|all|please|tell|me|show|give|can|could|would|you|will|shall|should|where|when|behind|please|off|drop|dropped|decline|declined|fall|fell|dip|dipped|movement|move|moved|achievement|attainment|completion|rate|growth|percent|percentage|reach|reached|change|changed|terms|actually|further|overall|as|anything|remind|into|bring|brought|bringing|extra|being|kind|sort|roughly|approximately|exactly|currently|net|total|whole|line|item|original|revised|flexible|actuals?|spent|spend|book|booked|delivered|achieve|achieved|realised|realized)\b/gi, " ").replace(/(^|\s)%(?=\s|$)/g, " ").replace(/\b(do|it)\b/g, " ").replace(/\b(Do|It)\b(?= [a-z])/g, " ");
+  let t = s.replace(/\b(the|a|an|what|which|how|much|many|is|are|was|were|did|does|has|have|had|will|in|for|of|our|its|this|that|by|on|at|vs\.?|versus|against|compared|to|with|plan|budget|aop|target|variance|difference|gap|deviation|delta|far|above|below|over|under|more|less|than|exceed|exceeded|beat|miss|missed|short|meet|met|hit|achieve|achieved|reach|reached|make|made|on track|higher|lower|share|percentage|percent|increase|increased|grew|grow|rose|rise|most|highest|largest|biggest|lowest|smallest|least|so|and|why|amount|figure|number|total|value|be|been|month|year|we|us|about|terms|doing|perform|performing|performed|tracking|track|trend|trending|look|looking|land|compare|compared|currently|now|right|there|any|all|please|tell|me|show|give|can|could|would|you|will|shall|should|where|when|behind|please|off|drop|dropped|decline|declined|fall|fell|dip|dipped|movement|move|moved|achievement|attainment|completion|rate|growth|percent|percentage|reach|reached|change|changed|terms|actually|further|overall|as|anything|remind|into|bring|brought|bringing|extra|being|kind|sort|roughly|approximately|exactly|currently|net|total|whole|line|item|original|revised|flexible|actuals?|spent|spend|book|booked|delivered|achieve|achieved|realised|realized|they|them|those|these)\b/gi, " ").replace(/(^|\s)%(?=\s|$)/g, " ").replace(/\b(do|it)\b/g, " ").replace(/\b(Do|It)\b(?= [a-z])/g, " ");
   GL.forEach(([re, vi]) => { t = t.replace(re, (m, ...g) => { things.push({at: g[g.length - 2], vi}); return " ".repeat(m.length); }); });
   const rest = t.split(/\s+/).filter(w => w && !/^[,;:'"()-]+$/.test(w));
   // in the order typed, with an English «X block/department» said the Vietnamese way round («khối X»)
@@ -3755,7 +3757,7 @@ function enColumn(q, map) {
   const t = String(q).toLowerCase();
   const want = /\boriginal (plan|budget|aop)\b/.test(t) ? "goc" : /\brevised\b/.test(t) ? "aopr" : /\bflexible\b/.test(t) ? "linh" :
     /\b(forecast|estimate|outlook|landing|projected)\b/.test(t) ? "uoc" :
-    /\b(actuals?|actually|spent|spend|spending|booked|delivered|came in|results?|achieved|realised|realized|did we (do|make|spend|book|sell|deliver))\b/.test(t) ? "th" :
+    /\b(actuals?|actually|spent|spend|spending|booked|delivered|came in|results?|achieved|realised|realized|did we (do|make|spend|book|sell|deliver))\b|\bdid (?:(?!do\b|on\b|in\b)[\w-]+ ){1,4}cost\b/.test(t) ? "th" :
     /\b(plan|planned|budget|budgeted|target)\b/.test(t) ? "kh" : "";
   if (!want) return "";
   const per = /lũy kế/.test(map.when || "") ? "ytd" : /cả năm/.test(map.when || "") ? "fy" : /tháng/.test(map.when || "") ? "m" : "";
@@ -3777,12 +3779,12 @@ function enPrintedOnPage(vi) {   // the report prints this name, or an abbreviat
   return key || "";
 }
 function askAny(q, scope) {   // the ask box: an English question is asked in Vietnamese and answered in English
-  EN_ON = isEnglishQ(q) || (!!EN_PREV && /^\s*(and|what about|how about|why|is that|is this|was that|should we|so)\b|\b(that|this|it)\b/i.test(q) && !/[^\x00-\x7f]/.test(q));
+  EN_ON = isEnglishQ(q) || (!!EN_PREV && /^\s*(and|what about|how about|why|is that|is this|was that|should we|so)\b|\b(that|this|it|they|them|those)\b/i.test(q) && !/[^\x00-\x7f]/.test(q));
   EN_LAST = null; EN_MAP = null; EN_PREV_USED = false; enPrinted = enPrintedOnPage;
   { const box = isOpen($("bub")) ? $("ba") : $("a"); if (box) delete box.dataset.en; }
   if (EN_ON) {
     let vi = enToVi(q); const page = " " + reportText() + " ";
-    const lead = /^\s*(and|what about|how about|so)\b/i.test(q), ref = /\b(that|this|it)\b/i.test(q);
+    const lead = /^\s*(and|what about|how about|so)\b/i.test(q), ref = /\b(that|this|it|they|them|those)\b/i.test(q);
     const follow = lead || ref || /^\s*(why|is that|is this|was that|was this|should we)\b/i.test(q);
     let cq = q;   // the words the printed column is chosen from
     if (EN_PREV && !EN_MAP.define && !EN_PREV.define) {
@@ -3811,7 +3813,10 @@ function askAny(q, scope) {   // the ask box: an English question is asked in Vi
       if (rm && mq && rm[1] === mq[1] && !/lũy kế|cả năm/.test(EN_MAP.when) && !enHeads().some(h => /\bt(1[0-2]|[1-9])\b|thang \d/.test(fold(h)))) {
         vi = vi.replace(new RegExp(" ?tháng " + mq[1] + "(?!\\d)"), ""); EN_MAP.vi = vi; } }
     { const col = enColumn(cq, EN_MAP);
-      if (col) { vi = (EN_MAP.subject.charAt(0).toUpperCase() + EN_MAP.subject.slice(1) + " " + col + " bao nhiêu?").replace(/\s+/g, " "); EN_MAP.vi = vi; EN_MAP.col = col; } }
+      if (col) {   // the column names the measure: «dự báo» (forecast) is not part of the row
+        const bare = w => String(w || "").replace(/\s*\b(dự báo)\b\s*/gi, " ").replace(/\s+/g, " ").trim();
+        EN_MAP.subject = bare(EN_MAP.subject); EN_MAP.need = EN_MAP.need.map(bare).filter(Boolean); EN_MAP.rest = EN_MAP.rest.map(bare).filter(Boolean);
+        vi = (EN_MAP.subject.charAt(0).toUpperCase() + EN_MAP.subject.slice(1) + " " + col + " bao nhiêu?").replace(/\s+/g, " "); EN_MAP.vi = vi; EN_MAP.col = col; } }
     if (EN_MAP.define && !Object.keys(D.aliases || {}).some(k => k.toUpperCase() === EN_MAP.subject.toUpperCase())) {   // «Kế hoạch (AOP)»
       const esc3 = EN_MAP.subject.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const lab = enHeads().concat([...document.querySelectorAll("table tr")].map(tr => ((tr.cells || [])[0] || {}).textContent || "")).map(x => x.trim())
