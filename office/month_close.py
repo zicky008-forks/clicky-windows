@@ -1553,6 +1553,8 @@ def verify_saved(bridge) -> list:
     scene_log.record("verify", ok=ok, path=path, diffs=diffs)
     if ok:
         scene_log.record("delivered", path=path)
+        from office import guided
+        guided.delivered()
         return [Beat("Em đã mở lại file đã lưu: khớp sổ cái 0 đ. File sẵn sàng để gửi.",
                      _check_ref("A7:E7") if _check_ref("C7") in _EXPECT else None,
                      "Khớp sổ cái", "ok", "0 đ", f"Đã đọc lại {len(_EXPECT)} ô từ file trên đĩa · {Path(path).name}")]
@@ -2031,6 +2033,9 @@ async def play(manager, beats: list, keep_card: bool = True) -> None:
     # a voice can sit still for ten seconds while scenes are still to come).
     scene_log.record("story_end", beats=len(beats), last=beats[-1].text[:80] if beats else "",
                      choices=list(beats[-1].choices or []) if beats else [])
+    if beats and beats[-1].choices:
+        from office import guided                  # own files: Vera presses a safe button, or names the next one
+        guided.after_question(manager, run, beats[-1].choices)
     if beats and not beats[-1].choices:
         def fade():
             if getattr(manager, "_month_close_run", None) is run:

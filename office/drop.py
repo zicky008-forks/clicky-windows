@@ -130,7 +130,14 @@ def prepare(bridge, paths: list) -> tuple:
 
 
 async def handle(manager, paths: list) -> None:
-    """Called when files land on the drop zone."""
+    """Called when files land on the drop zone.
+
+    The first drop of a session asks for permission before anything is opened or read (office.guided)."""
+    from office import guided
+    if guided.needs_consent():
+        guided.hold(paths)
+        await mc.play(manager, [guided.consent_beat()])
+        return
     bridge = manager._excel
     folder, beats = await asyncio.to_thread(prepare, bridge, list(paths))
     if beats:

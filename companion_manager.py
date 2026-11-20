@@ -1138,7 +1138,7 @@ class CompanionManager(QObject):
         try:
             # ── Voice commands — short-circuit before LLM ──
             if is_stop(transcript):
-                self.stop()
+                self.user_stop()
                 return
 
             title = getattr(self, "_desktop_context", {}).get("title") or active_window_title()
@@ -2579,6 +2579,18 @@ class CompanionManager(QObject):
 
     # ── Stop / cancel ─────────────────────────────────────────────────────────
 
+    def user_stop(self):
+        """The person pressed Dừng / Esc or said "dừng": stop, and Vera presses no button by herself again."""
+        halted = False
+        try:
+            from office import guided
+            halted = guided.halt()
+        except Exception:
+            _log.debug("guided halt failed", exc_info=True)
+        self.stop()
+        if halted:
+            self.sig_caption.emit("Em dừng rồi. Từ giờ chị bấm, em chỉ chỗ.")
+
     def stop(self):
         """Cancel the current LLM stream + any in-flight TTS. Bound to Esc."""
         self._cancel_flag = True
@@ -2598,6 +2610,11 @@ class CompanionManager(QObject):
         self._drive.stop()
         self._pending_drive = None
         self._guided = False
+        try:
+            from office import guided                  # any new turn cancels Vera's pending button press
+            guided.cancel_pending()
+        except Exception:
+            _log.debug("guided cancel failed", exc_info=True)
         if self._guided_listener:
             self._guided_listener.stop()
             self._guided_listener = None
