@@ -3231,7 +3231,7 @@ function rowFocus(q0, scope) {
   if (sn && (NAT_ONCE.test(" " + fold(sn).replace(/[^a-z0-9]+/g, " ") + " ") || / (khoan|chi phi) .{0,30}mot lan /.test(" " + fold(sn) + " ") || !noteFits(p, sn, g.text))) sn = "";
   const flex = Q.opinion ? flexSaid(p) : "";   // two plans: the gap between them is the volume, the reason a reader asking «đáng lo» needs
   if (sn && !/ được lập gộp với /.test(g.text)) { answer(esc(ynLead(f, g.text, p.row.label) + g.text) + " Lưu ý: báo cáo ghi «" + whole(sn.replace(/\.?$/, ".")) + "», nên số chênh lệch này chưa phải của riêng " + esc(p.row.label) + "; báo cáo chưa tách riêng." + esc(judge), g.target, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"}); return true; }
-  const extra = notes.find(it => !rfOtherSpan(Q, it.s) && noteFits(p, it.s, g.text) && (it.row || fold(it.s).replace(/^\s*(ghi chu|chu thich|luu y|ket luan|nhan xet|\d+[.)])\s*:?\s*/, "").indexOf(fold(p.row.label).split(" ")[0]) <= 24) &&
+  const extra = notes.find(it => !rfOtherSpan(Q, it.s) && noteFits(p, it.s, g.text) && (it.row || (k => k >= 0 && k <= 24)(strictNamed(p.row.label, " " + fold(it.s).replace(/^\s*(ghi chu|chu thich|luu y|ket luan|nhan xet|\d+[.)])\s*:?\s*/, "").replace(/[^a-z0-9]+/g, " ") + " "))) &&
     (CAUSE.test(it.s) || /lech thoi diem|mot lan|bat thuong|hoan|gop/.test(fold(it.s))));
   answer(esc(ynLead(f, g.text, p.row.label) + g.text) + (extra ? " Báo cáo ghi: «" + whole(extra.s) + "»" : "") + esc((flex ? " " + flex : "") + judge), g.target, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"});
   return true;
@@ -3458,6 +3458,7 @@ function enToVi(q) {
     .replace(/\b(annual|annually|for the year as a whole)\b/gi, " full year ").replace(/\bahead of\b/gi, " above ")
     .replace(/\b((for|in|over) )?(this year so far|so far this year|the year so far|year so far|(the )?first (ten|10|nine|9|eleven|11|eight|8|seven|7|six|6) months( of the year)?)\b/gi, " year to date ")
     .replace(/\bdid (.{2,40}?) (save|saving)\b/gi, "was $1 below plan").replace(/\bsavings? (on|in|for) /gi, "below plan $1 ").replace(/\bbehind (plan|budget|target)\b/gi, " below $1");
+  if (/\b(aop|annual (operating )?plan|full[- ]year plan|this year|end up|ends up|ended up|for the year|beat)\b/i.test(s) && !/\b(year to date|ytd|so far|this month|last month|month of|in the month|january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec|q[1-4]|quarter)\b/i.test(s) && /\b(aop|annual (operating )?plan|full[- ]year plan|this year|for the year)\b/i.test(s)) s += " full year ";   // AOP or "this year" without a month: only the full-year column may answer
   s = s.replace(/\b(what|how|where|who)['’]?s\b|\b(it|that)['’]s\b/gi, (m, a, b) => (a || b) + " is").replace(/(\w)['’]s\b/g, "$1")
     .replace(/^\s*(can|could|would) you (please )?(explain|tell me|show me|say)\b/i, " explain").replace(/\b(came|come|coming|end|ended|ending) (in|up)\b/gi, " ")
     .replace(/\bwhere (will|does|did|is|are|do) (.+?) (land|end up|finish|come out)\b/i, " what is $2 ")
@@ -3540,7 +3541,7 @@ function enToVi(q) {
 function enNum(t) {   // 1.234,5 → 1,234.5 ; 3,2 → 3.2 (the report's marks, said the English way)
   return String(t).replace(/(?<![\p{L}\d.,])(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+,\d+)(?![\d\p{L}])/gu, m => m.replace(/\./g, "\u0001").replace(/,/g, ".").replace(/\u0001/g, ","));
 }
-const PLAN_EN = [[/AOP gốc/g, "the original AOP"], [/ngân sách linh hoạt/g, "the flexible budget"], [/kế hoạch gốc/g, "the original plan"], [/kế hoạch linh hoạt/g, "the flexible plan"], [/kế hoạch năm/g, "the full-year plan"],
+const PLAN_EN = [[/AOP gốc/g, "the original AOP"], [/AOP năm/g, "the full-year AOP"], [/ngân sách linh hoạt/g, "the flexible budget"], [/kế hoạch gốc/g, "the original plan"], [/kế hoạch linh hoạt/g, "the flexible plan"], [/kế hoạch năm/g, "the full-year plan"],
   [/kế hoạch lũy kế (\d+) tháng/g, "the $1-month to-date plan"], [/kế hoạch tháng (\d+)/g, (m, n) => "the " + EN_MONTHS[+n - 1].replace(/^./, c => c.toUpperCase()) + " plan"],
   [/kế hoạch/g, "plan"], [/ngân sách/g, "budget"]];
 const EN_PHRASES = [
@@ -3575,8 +3576,8 @@ const EN_PHRASES = [
   [/Báo cáo ghi:/g, "The report says:"], [/^(\S+) là viết tắt của (\u0002\d+\u0003), nghĩa là (\u0002\d+\u0003)\./g, "$1 stands for $2, which means $3."], [/^(\S+) là viết tắt của (\u0002\d+\u0003), còn gọi là ((?:\u0002\d+\u0003(?:, )?)+)\./g, "$1 stands for $2, also called $3."],
   [/^(\S+) là viết tắt của (\u0002\d+\u0003)\./g, "$1 stands for $2."],
   [/Trong bài nói em gọi cột này là (\u0002\d+\u0003)\./g, "In the talk I call this column $1."], [/^Theo bảng chữ viết tắt em dùng cho báo cáo này$/g, "From the abbreviation list used for this report"], [/^Anh chị muốn so các .+? theo cột nào ạ\?/g, "Which column should I rank the rows on?"], [/Lấy từ báo cáo /g, "From the report "], [/, đúng chỗ đang khoanh/g, ", at the circled place"],
-  [/ thấp hơn ((?:kế hoạch|ngân sách|AOP)(?: (?:gốc|linh hoạt|năm))?(?: \([^)]*\))?(?: tháng (?:1[0-2]|[1-9])| lũy kế \d+ tháng)?) ?(\d[\d.,]*) (tỷ|triệu)(?!\p{L})/gu, (m, p, n, u) => " came in VND " + n + (u === "tỷ" ? " bn" : " m") + " below " + p],
-  [/ cao hơn ((?:kế hoạch|ngân sách|AOP)(?: (?:gốc|linh hoạt|năm))?(?: \([^)]*\))?(?: tháng (?:1[0-2]|[1-9])| lũy kế \d+ tháng)?) ?(\d[\d.,]*) (tỷ|triệu)(?!\p{L})/gu, (m, p, n, u) => " came in VND " + n + (u === "tỷ" ? " bn" : " m") + " above " + p],
+  [/ thấp hơn ((?:kế hoạch|ngân sách|AOP|\u0002\d+\u0003)(?: (?:gốc|linh hoạt|năm))?(?: \([^)]*\))?(?: tháng (?:1[0-2]|[1-9])| lũy kế \d+ tháng)?) ?(\d[\d.,]*) (tỷ|triệu)(?!\p{L})/gu, (m, p, n, u) => " came in VND " + n + (u === "tỷ" ? " bn" : " m") + " below " + p],
+  [/ cao hơn ((?:kế hoạch|ngân sách|AOP|\u0002\d+\u0003)(?: (?:gốc|linh hoạt|năm))?(?: \([^)]*\))?(?: tháng (?:1[0-2]|[1-9])| lũy kế \d+ tháng)?) ?(\d[\d.,]*) (tỷ|triệu)(?!\p{L})/gu, (m, p, n, u) => " came in VND " + n + (u === "tỷ" ? " bn" : " m") + " above " + p],
   [/ so với ([^,]+), cao hơn (\d[\d.,]*) (tỷ|triệu)(?!\p{L})/gu, (m, p, n, u) => " was VND " + n + (u === "tỷ" ? " bn" : " m") + " above " + p],
   [/ so với ([^,]+), thấp hơn (\d[\d.,]*) (tỷ|triệu)(?!\p{L})/gu, (m, p, n, u) => " was VND " + n + (u === "tỷ" ? " bn" : " m") + " below " + p],
   [/^(\u0002\d+\u0003|\S+) ước cả năm /g, "$1 full-year estimate: "], [/ cao nhất về ([^:]+):/g, " ranks highest on $1:"], [/ thấp nhất về ([^:]+):/g, " ranks lowest on $1:"],

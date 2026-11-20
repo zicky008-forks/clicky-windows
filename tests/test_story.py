@@ -3014,6 +3014,16 @@ def test_a_scope_note_is_said_only_for_its_own_row_and_period(tmp_path, monkeypa
         assert "VND 198.4 bn" in a and "38.0" not in a, a
         a = typed("What is the EBIT forecast for the remaining two months?")
         assert "«EBIT», «Ước T11–T12»: VND 38.0 bn" in a, a
+        # grader rerun 24: «AOP», «annual plan» and «this year» on a variance or yes/no question mean the full-year AOP,
+        # never the October variance; a month named beside AOP stays monthly
+        a = typed("Where will EBIT end up versus AOP?")
+        assert "17.6" in a and "5.7" not in a and "AOP năm" in a, a
+        a = typed("Will we beat AOP on revenue this year?")
+        assert "25.5" in a and "7.5" not in a, a
+        a = typed("How is net revenue tracking against the annual plan?")
+        assert "25.5" in a and "7.5" not in a, a
+        a = typed("What is October revenue versus AOP?")
+        assert "7.5" in a and "25.5" not in a, a
         pg.goto(Path(reps["bao_cao_bo_phan_mot_lan"]["out"]).as_uri())
         pg.wait_for_timeout(1500)
         a = typed("Marketing TH LK10 bao nhiêu?")
