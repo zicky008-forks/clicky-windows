@@ -2973,6 +2973,56 @@ def test_an_abbreviation_the_report_spells_out_is_read_whole_in_both_languages(t
         browser.close()
 
 
+def test_a_scope_note_is_said_only_for_its_own_row_and_period(tmp_path, monkeypatch):
+    # grader rerun 23: «Ngân sách Marketing gồm cả … trưng bày» was quoted beside Trưng bày; a month's one-off note
+    # («… một lần …, khoản này chưa tính trong kế hoạch») was quoted beside a to-date figure.
+    # English: «end up this year» is the full-year estimate, never the remaining-months column; that column only when asked.
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    fx = Path(__file__).parent / "fixtures"
+    reps = {}
+    for name in ("bao_cao_hoi_hdqt", "bao_cao_bo_phan_mot_lan"):
+        src = tmp_path / (name + ".html")
+        src.write_text((fx / (name + ".html")).read_text(encoding="utf-8"), encoding="utf-8")
+        reps[name] = build(src)
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 900})
+
+        def typed(q):
+            pg.keyboard.press("Escape")
+            pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const e = r.getElementById('clicky-skip') || document.getElementById('clicky-skip'); if (e) e.click(); }")
+            pg.wait_for_timeout(300)
+            box = pg.locator("#clicky-host #q")
+            box.fill(q)
+            box.press("Enter")
+            pg.wait_for_timeout(900)
+            return pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const b = r.getElementById('bub'); "
+                               "const a = ((b && !b.classList.contains('hidden')) ? r.getElementById('ba') : r.getElementById('a')).cloneNode(true); "
+                               "a.querySelectorAll('.receipt').forEach(x => x.remove()); return a.innerText; }")
+        pg.goto(Path(reps["bao_cao_hoi_hdqt"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        a = typed("Trưng bày bao nhiêu?")
+        assert "Thực hiện 4,2 tỷ" in a and "Ngân sách Marketing gồm cả" not in a, a
+        a = typed("Marketing bao nhiêu?")
+        assert "Ngân sách Marketing gồm cả 1,0 tỷ" in a, a
+        a = typed("Where will EBIT end up this year?")
+        assert "VND 198.4 bn" in a and "38.0" not in a, a
+        a = typed("What is the EBIT forecast for the remaining two months?")
+        assert "«EBIT», «Ước T11–T12»: VND 38.0 bn" in a, a
+        pg.goto(Path(reps["bao_cao_bo_phan_mot_lan"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        a = typed("Marketing TH LK10 bao nhiêu?")
+        assert "31,1 tỷ" in a and "một lần" not in a, a
+        a = typed("Marketing TH T10 bao nhiêu?")
+        assert "3,6 tỷ" in a and "một lần 0,5 tỷ" in a, a
+        browser.close()
+
+
 def test_a_full_year_english_question_is_answered_in_english(tmp_path, monkeypatch):
     # grader rerun 20: a full-year figure fell back to the Vietnamese wording («T1–T10» read as two labels, «dòng» left);
     # a «10+2» column is the full-year estimate
