@@ -2862,9 +2862,16 @@ def test_an_english_question_gets_an_english_answer_with_every_figure_locked(tmp
         assert "I read your question as: «Marketing lũy kế chênh lệch bao nhiêu so với kế hoạch?»" in a, a
         # grader rerun 15 classes: words not understood never reach the row matcher, a reading on the wrong row is not
         # shown, a label glued to digits (T10) is not a figure
-        for q in ("How many months does the packaging compare cover?", "Admin costs year to date vs plan?", "How much did admin save versus budget?"):
+        for q in ("How many months does the packaging compare cover?", "How much did Marketing spend on bonuses?", "What is the EBITDA margin?"):
             a = typed(q)
             assert a.startswith("I could not match your English question") and not re.search(r"\d", a.split("I read")[0]), (q, a)
+        # an English department name is used only because the report prints its Vietnamese name; a follow-up keeps the subject
+        a = typed("What is admin year to date versus budget?")
+        assert "Hành chính against plan 10 months to date: lower by 0.5 bn" in a, a
+        a = typed("Is that worrying?")
+        assert "does not judge whether this is a concern" in a and "Hành chính" in a and not a.startswith(("Yes", "No")), a
+        a = typed("Why is Sales over plan?")   # «Bán hàng» is not printed in this report: never answered from another row
+        assert a.startswith("I could not match your English question") and "What is Marketing versus plan?" in a, a
         for q, want in (("How much did Marketing overspend in October?", "0.6 bn"), ("What caused the Marketing overrun in October?", "«Marketing vượt 0,6 tỷ"),
                         ("Is Marketing over budget year to date?", "1.1 bn")):
             a = typed(q)

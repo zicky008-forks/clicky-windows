@@ -3413,12 +3413,24 @@ function receiptOf(body) {
 let EN_ON = false, EN_MAP = null;
 const EN_WORDS = /\b(the|what|why|how|did|does|do|is|are|was|were|which|vs|versus|against|plan|budget|variance|revenue|cost|costs|profit|month|year|full|worrying|concern|much|above|below|over|under|meet|hit|explain|share|percent|percentage|highest|lowest|most|increase|drove|driver|october|ytd|forecast|of|in|for|to)\b/gi;
 const VI_FN = /\b(khong|bao nhieu|ke hoach|chi phi|doanh thu|vi sao|tai sao|thang|nam|co|cua|nhu the nao|la gi|chenh lech|vuot|thap hon|cao hon|luy ke)\b/;
-function isEnglishQ(q) {
-  const s = String(q || "");
+function isEnglishQ(q) {   // the report's own row and column names may sit inside an English question
+  let s = String(q || ""); const re = typeof document !== "undefined" && document.body ? rowNamesRe() : null; if (re) s = s.replace(re, " X ");
   if (/[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(s)) return false;
   if (VI_FN.test(" " + s.toLowerCase() + " ")) return false;
   return (s.match(EN_WORDS) || []).length >= 2;
 }
+// common department, channel and line names said in English. A name is used only when the report prints it (or an
+// abbreviation whose reading says it); otherwise the English word stays unknown and the reader is asked to rephrase.
+const EN_NAMES = [[/\b(hr and admin(istration)?|admin(istration)? and hr)\b/gi, ["nhân sự - hành chính", "hành chính nhân sự", "hành chính - nhân sự"]],
+  [/\b(admin|administration|general affairs)\b/gi, ["hành chính"]], [/\b(hr|human resources?|people team)\b/gi, ["nhân sự"]],
+  [/\b(finance and accounting|finance & accounting)\b/gi, ["tài chính - kế toán", "tài chính kế toán"]], [/\b(finance)\b/gi, ["tài chính"]], [/\b(accounting)\b/gi, ["kế toán"]],
+  [/\bIT\b|\b(information technology|tech team)\b/g, ["cntt", "công nghệ thông tin"]], [/\bsupply chain\b/gi, ["chuỗi cung ứng"]],
+  [/\b(logistics|warehousing)\b/gi, ["logistics", "kho vận"]], [/\b(production|manufacturing|factory|plant)\b/gi, ["sản xuất", "nhà máy"]],
+  [/\b(r&d|research and development|research)\b/gi, ["nghiên cứu", "r&d"]], [/\blegal\b/gi, ["pháp chế", "pháp lý"]],
+  [/\bcustomer (service|care)\b/gi, ["chăm sóc khách hàng", "cskh"]], [/\b(modern trade)\b/gi, ["kênh hiện đại", "mt"]],
+  [/\b(traditional trade|general trade)\b/gi, ["kênh truyền thống", "gt"]], [/\b(e-?commerce|online channel)\b/gi, ["thương mại điện tử", "tmđt"]],
+  [/\bkey accounts?\b/gi, ["ka"]], [/\bhoreca\b/gi, ["hrc", "horeca"]], [/\bsales\b(?! (revenue|department|division|block|team))/gi, ["bán hàng"]]];
+let enPrinted = () => "";   // the page sets it: the Vietnamese name (or abbreviation) the report prints, or ""
 const EN_MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 function enToVi(q) {
   let s = " " + String(q).replace(/[?!.]+\s*$/, "").replace(/\s+/g, " ").trim() + " ";
@@ -3434,6 +3446,8 @@ function enToVi(q) {
   const low = () => s.toLowerCase();
   const take = (re, out) => { let hit = false; s = s.replace(re, () => { hit = true; return " "; }); return hit ? out : ""; };
   const judge = take(/\b(is (this|that|it) )?(worrying|worried|concerning|a concern|of concern|alarming|serious|a problem|ok|okay|fine|acceptable|reasonable)\b|\bshould we (be )?(worry|worried|concerned)( about (it|this|that))?\b/gi, "có đáng lo không");
+  { const ab = s.match(/^\s*[Ww]hat (does|do) ([A-Z][A-Z0-9&+]{1,7}) (mean|stand for)\s*$|^\s*[Ww]hat is (an? )?([A-Z][A-Z0-9&+]{1,7})\s*$|^\s*([Mm]eaning of|[Dd]efine) ([A-Z][A-Z0-9&+]{1,7})\s*$/);
+    if (ab) { const w = ab[2] || ab[5] || ab[7]; EN_MAP = {vi: w + " là gì?", rest: [w], need: [], subject: w, why: "", when: "", tail: "là gì", define: true}; return EN_MAP.vi; } }
   const why = take(/\bwhy\b|\bwhat (drove|caused|explains|is behind|was behind)\b|\b(reason|reasons|drivers?) (for|of|behind)\b|\bexplain\b/gi, "Vì sao");
   // period
   let period = "";
@@ -3447,6 +3461,8 @@ function enToVi(q) {
   const tracking = /\bhow (did|does|do|is|are|was|were) .* (do|doing|did|perform|performing|performed|tracking|track|trend|trending|land|landing|compare|look)\b/i.test(s) || /\b(vs\.?|versus|against|compared (to|with)) (the )?(\w+ )?(plan|budget|aop|target)\b/i.test(s);
   const vsPlan = /\b(vs\.?|versus|against|compared (to|with)|to) (the )?(plan|budget|aop|target)\b/i;
   if (/\bhighest percentgrowth\b/i.test(s)) pred = "nào có % tăng cao nhất";
+  else if (/\b(what (percentage|percent|%|share) of (the )?(plan|budget|target)|% of (the )?(plan|budget|target)|(achievement|attainment|completion) (rate|level|%)|percent(age)? (achieved|attained|reached))\b/i.test(s)) pred = "đạt bao nhiêu % kế hoạch";
+  else if (/\b(growth rate|percent(age)? (growth|increase|rise|change)|(grow|grew|increase|increased|rise|rose|change|changed) (by )?(how many|what) (percent|%)|(grow|grew|increase|increased|rise|rose) in (percent|percentage) terms|how much .* (grow|grew|increase|increased|rise|rose) in (percent|%|percentage))\b/i.test(s)) pred = "tăng bao nhiêu phần trăm";
   else if (/\b(variance|difference|gap|deviation|delta|how far)\b/i.test(s)) pred = "chênh lệch bao nhiêu so với kế hoạch";
   else if (/\bhow much\b.*\babove plan\b/i.test(s)) pred = "vượt kế hoạch bao nhiêu";
   else if (/\bhow much\b.*\bbelow plan\b/i.test(s)) pred = "thấp hơn kế hoạch bao nhiêu";
@@ -3473,7 +3489,9 @@ function enToVi(q) {
     [/\b(sales (department|division|block|team))\b/gi, "khối bán hàng"], [/\b(department|division|block|team)\b/gi, "khối"], [/\bchannel\b/gi, "kênh"],
     [/\b(costs?|expenses?|spend(ing)?|opex)\b/gi, "chi phí"], [/\bforecast\b/gi, "dự báo"], [/\bheadcount\b/gi, "headcount"]];
   const things = [];
-  let t = s.replace(/\b(the|a|an|what|which|how|much|many|is|are|was|were|did|does|has|have|had|will|in|for|of|our|its|this|that|by|on|at|vs\.?|versus|against|compared|to|with|plan|budget|aop|target|variance|difference|gap|deviation|delta|far|above|below|over|under|more|less|than|exceed|exceeded|beat|miss|missed|short|meet|met|hit|achieve|achieved|reach|reached|make|made|on track|higher|lower|share|percentage|percent|increase|increased|grew|grow|rose|rise|most|highest|largest|biggest|lowest|smallest|least|so|and|why|amount|figure|number|total|value|be|been|month|year|we|us|about|terms|doing|perform|performing|performed|tracking|track|trend|trending|look|looking|land|compare|compared|currently|now|right|there|any|all|please|tell|me|show|give|can|could|would|you|will|shall|should|where|when|behind|please|off|drop|dropped|decline|declined|fall|fell|dip|dipped|movement|move|moved)\b/gi, " ").replace(/\b(do|it)\b/g, " ").replace(/\b(Do|It)\b(?= [a-z])/g, " ");
+  if (!/\b(net sales|sales revenue)\b/i.test(s)) EN_NAMES.forEach(([re, vis]) => { s = s.replace(re, (m, ...g) => { const v = vis.map(enPrinted).find(Boolean); if (!v) return m;
+    things.push({at: g[g.length - 2], vi: v, name: true}); return " ".repeat(m.length); }); });
+  let t = s.replace(/\b(the|a|an|what|which|how|much|many|is|are|was|were|did|does|has|have|had|will|in|for|of|our|its|this|that|by|on|at|vs\.?|versus|against|compared|to|with|plan|budget|aop|target|variance|difference|gap|deviation|delta|far|above|below|over|under|more|less|than|exceed|exceeded|beat|miss|missed|short|meet|met|hit|achieve|achieved|reach|reached|make|made|on track|higher|lower|share|percentage|percent|increase|increased|grew|grow|rose|rise|most|highest|largest|biggest|lowest|smallest|least|so|and|why|amount|figure|number|total|value|be|been|month|year|we|us|about|terms|doing|perform|performing|performed|tracking|track|trend|trending|look|looking|land|compare|compared|currently|now|right|there|any|all|please|tell|me|show|give|can|could|would|you|will|shall|should|where|when|behind|please|off|drop|dropped|decline|declined|fall|fell|dip|dipped|movement|move|moved|achievement|attainment|completion|rate|growth|percent|percentage|reach|reached|change|changed|terms)\b/gi, " ").replace(/\b(do|it)\b/g, " ").replace(/\b(Do|It)\b(?= [a-z])/g, " ");
   GL.forEach(([re, vi]) => { t = t.replace(re, (m, ...g) => { things.push({at: g[g.length - 2], vi}); return " ".repeat(m.length); }); });
   const rest = t.split(/\s+/).filter(w => w && !/^[,;:'"()-]+$/.test(w));
   // in the order typed, with an English «X block/department» said the Vietnamese way round («khối X»)
@@ -3491,7 +3509,7 @@ function enToVi(q) {
   // Generic words (cost, department, forecast, volume) say nothing about the row, so they are not held.
   const ROWWORD = /^(doanh thu|lợi nhuận gộp|giá vốn|lợi nhuận|bao bì|lương|khối bán hàng)$/;
   EN_MAP = {vi: out, rest: rest.map(w => w.replace(/^[,;:'"()]+|[,;:'"()]+$/g, "")).filter(Boolean),
-    need: things.map(x => x.vi).filter(x => ROWWORD.test(x)), subject};
+    need: things.filter(x => x.name || ROWWORD.test(x.vi)).map(x => x.vi), subject, why, when, tail};
   return out;
 }
 function enNum(t) {   // 1.234,5 → 1,234.5 ; 3,2 → 3.2 (the report's marks, said the English way)
@@ -3510,14 +3528,15 @@ const EN_PHRASES = [
   [/^Có\.\s*/g, "Yes. "], [/^Không\.\s*/g, "No. "], [/^Chưa\.\s*/g, "Not yet. "],
   [/^(Có|Không|Chưa) so với ([^;.]+)/g, (m, a, b) => ({Có: "Yes", Không: "No", Chưa: "Not yet"})[a] + " against " + b], [/; (có|không|chưa) so với /g, (m, a) => "; " + ({có: "yes", không: "no", chưa: "not yet"})[a] + " against "],
   [/\(cột (\u0002\d+\u0003) ghi (\(?[^()]*\)?)\)/g, "(column $1 shows $2)"], [/\(em tính: /g, "(worked out: "], [/\(em tính từ số in trên báo cáo\)/g, "(worked out from report figures)"],
-  [/Báo cáo ghi:/g, "The report says:"], [/^Anh chị muốn so các .+? theo cột nào ạ\?/g, "Which column should I rank the rows on?"], [/Lấy từ báo cáo /g, "From the report "], [/, đúng chỗ đang khoanh/g, ", at the circled place"],
+  [/Báo cáo ghi:/g, "The report says:"], [/^(\S+) là viết tắt của (\u0002\d+\u0003), nghĩa là (\u0002\d+\u0003)\./g, "$1 stands for $2, which means $3."],
+  [/Trong bài nói em gọi cột này là (\u0002\d+\u0003)\./g, "In the talk I call this column $1."], [/^Theo bảng chữ viết tắt em dùng cho báo cáo này$/g, "From the abbreviation list used for this report"], [/^Anh chị muốn so các .+? theo cột nào ạ\?/g, "Which column should I rank the rows on?"], [/Lấy từ báo cáo /g, "From the report "], [/, đúng chỗ đang khoanh/g, ", at the circled place"],
   [/So với ([^,]+), cao hơn /g, "Against $1, higher by "], [/So với ([^,]+), thấp hơn /g, "Against $1, lower by "],
   [/ so với ([^,]+), cao hơn /g, " against $1: higher by "], [/ so với ([^,]+), thấp hơn /g, " against $1: lower by "],
   [/ thấp hơn ((?:kế hoạch|ngân sách)[^\d(,.]*?) ?(?=\d)/g, " is below $1 by "], [/ cao hơn ((?:kế hoạch|ngân sách)[^\d(,.]*?) ?(?=\d)/g, " is above $1 by "],
   [/, cao hơn (?=\d)/g, ", higher by "], [/, thấp hơn (?=\d)/g, ", lower by "], [/ cao hơn (?=\d)/g, " higher by "], [/ thấp hơn (?=\d)/g, " lower by "],
   [/, đạt (\d[\d.,]*%) ((?:kế hoạch)[^(,.]*)/g, ", at $1 of $2"], [/ đạt (\d[\d.,]*%) ((?:kế hoạch)[^(,.]*)/g, " at $1 of $2"],
   [/ ước cả năm /g, " full-year estimate "], [/ cả năm /g, " full year "], [/ lũy kế (\d+) tháng/g, " $1 months to date"], [/ lũy kế/g, " to date"],
-  [/ cao nhất về ([^:]+):/g, " is highest on $1:"], [/ thấp nhất về ([^:]+):/g, " is lowest on $1:"],
+  [/ cao nhất về ([^:]+):/g, " is highest on $1:"], [/ đạt (\d[\d.,]*%) kế hoạch /g, " at $1 of plan "], [/ thấp nhất về ([^:]+):/g, " is lowest on $1:"],
   [/So (\d+) dòng của bảng, không tính dòng Tổng\. Em xếp theo chính các số trên báo cáo\./g, "Compared across the table's $1 rows, excluding the Total row; ranked on the report's own figures."],
   [/Chính xác: em tính từ số in trên báo cáo, cách tính ở phiếu dưới/g, "Exact: worked out from report figures, working in the receipt below"],
   [/Chính xác: số in trên báo cáo/g, "Exact: printed in the report"], [/Ước tính: có số dự báo, chưa phải thực hiện/g, "Estimate: includes a forecast, not actuals"],
@@ -3570,6 +3589,11 @@ function enAsk(a, why) {   // no confident match: ask again; never a «not in th
   a.dataset.en = why + (EN_MAP ? " | " + EN_MAP.vi + " | rest=" + EN_MAP.rest.join(",") : "");   // for the rehearsal robot
   const d = document.createElement("div"); d.textContent = EN_REPHRASE; a.appendChild(d);
   if (EN_MAP && EN_MAP.vi && why !== "words") { const n = document.createElement("div"); n.className = "src"; n.textContent = "I read it as: «" + EN_MAP.vi + "»"; a.appendChild(n); }
+  const rows = []; document.querySelectorAll("table tr").forEach(tr => { const c = tr.querySelector("td,th"); const x = c && c.textContent.trim();
+    if (x && tr.querySelector("td") && !/^(tổng|tong|total|cộng)\b/i.test(x) && x.length < 40 && !rows.includes(x)) rows.push(x); });
+  const ex = rows.slice(0, 3).map(r => "What is " + r + " versus plan?");
+  if (ex.length) { const n = document.createElement("div"); n.className = "src"; n.textContent = "Questions in English that work well, with the report's own row names:"; a.appendChild(n);
+    a.appendChild(chips(ex.map(x => [x, () => { const box = $("q"); if (box) box.value = x; askAny(x); }]))); }
   EN_LAST = {ok: false, en: EN_REPHRASE, vi: "", why};
   return EN_REPHRASE;
 }
@@ -3624,15 +3648,29 @@ function reportText() {   // the report's own words, without Vera's layer
   if (REPORT_TEXT === null) REPORT_TEXT = fold([...document.body.children].filter(e => e.id !== "clicky-host" && !/^(SCRIPT|STYLE|TEMPLATE)$/.test(e.tagName)).map(e => e.innerText || "").join(" "));
   return REPORT_TEXT;
 }
+let EN_PREV = null;
+function enPrintedOnPage(vi) {   // the report prints this name, or an abbreviation whose reading says it
+  const page = " " + reportText() + " ", f = fold(vi);
+  const at = w => new RegExp("(^|[^a-z0-9])" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![a-z0-9])").test(page);
+  if (at(f)) return vi;
+  const key = Object.keys(D.aliases || {}).find(k => [].concat(D.aliases[k] || []).some(r => fold(r).includes(f)) && at(fold(k)));
+  return key || "";
+}
 function askAny(q, scope) {   // the ask box: an English question is asked in Vietnamese and answered in English
-  EN_ON = isEnglishQ(q);
-  EN_LAST = null; EN_MAP = null;
+  EN_ON = isEnglishQ(q) || (!!EN_PREV && /^\s*(and|what about|how about|why|is that|is this|was that|should we)\b/i.test(q) && !/[^\x00-\x7f]/.test(q));
+  EN_LAST = null; EN_MAP = null; enPrinted = enPrintedOnPage;
   if (EN_ON) {
-    const vi = enToVi(q), page = " " + reportText() + " ";
+    let vi = enToVi(q); const page = " " + reportText() + " ";
+    if (!EN_MAP.subject && EN_PREV && !EN_MAP.define) {   // a follow-up: the subject (and period, if none said) of the last English question
+      const parts = [EN_MAP.why, EN_PREV.subject, EN_MAP.when || EN_PREV.when, EN_MAP.tail].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+      vi = parts.charAt(0).toUpperCase() + parts.slice(1) + "?";
+      EN_MAP = Object.assign({}, EN_MAP, {vi, subject: EN_PREV.subject, rest: EN_PREV.rest, need: EN_PREV.need, when: EN_MAP.when || EN_PREV.when});
+    }
     // every word that was not understood must be a name printed in the report; otherwise the question is not run at all
     if (!EN_MAP.subject || EN_MAP.rest.some(w => { const f = fold(w); return !f || !new RegExp("(^|[^a-z0-9])" + f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![a-z0-9])").test(page); })) { EN_MAP.unsure = true; TYPED = q; answer("", null, {src: ""}); return; }
+    EN_PREV = EN_MAP;
     ask(vi, scope);
-  } else ask(q, scope);
+  } else { EN_PREV = null; ask(q, scope); }
   if (EN_ON) TYPED = q;   // the owner reads the reader's own words
 }
 let enVoice = null;
