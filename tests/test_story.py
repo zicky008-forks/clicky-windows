@@ -3103,3 +3103,86 @@ def test_a_full_year_english_question_is_answered_in_english(tmp_path, monkeypat
         a = typed("What percentage of plan did modern trade reach in October?")
         assert "%" in a.split("I read")[0] or a.startswith("I could not match your English question"), a
         browser.close()
+
+
+def test_english_can_be_turned_off_for_a_report(tmp_path, monkeypatch):
+    # fallback for a meeting: CLICKY_EN=0 builds a report where an English question gets no figure, Vietnamese works as before
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    monkeypatch.setenv("CLICKY_EN", "0")
+    fx = Path(__file__).parent / "fixtures"
+    src = tmp_path / "bao_cao_hoi_hdqt.html"
+    src.write_text((fx / "bao_cao_hoi_hdqt.html").read_text(encoding="utf-8"), encoding="utf-8")
+    rep = build(src)
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 900})
+
+        def typed(q):
+            pg.keyboard.press("Escape")
+            pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const e = r.getElementById('clicky-skip') || document.getElementById('clicky-skip'); if (e) e.click(); }")
+            pg.wait_for_timeout(300)
+            box = pg.locator("#clicky-host #q")
+            box.fill(q)
+            box.press("Enter")
+            pg.wait_for_timeout(900)
+            return pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const b = r.getElementById('bub'); "
+                               "const a = ((b && !b.classList.contains('hidden')) ? r.getElementById('ba') : r.getElementById('a')).cloneNode(true); "
+                               "a.querySelectorAll('.receipt').forEach(x => x.remove()); return a.innerText; }")
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        a = typed("Will gross profit beat AOP this year?")
+        assert "chỉ trả lời bằng tiếng Việt" in a and not any(ch.isdigit() for ch in a), a
+        a = typed("What is October revenue versus AOP?")
+        assert "chỉ trả lời bằng tiếng Việt" in a and "7" not in a, a
+        a = typed("Doanh thu thuần tháng 10 chênh lệch bao nhiêu so với kế hoạch?")
+        assert "7,5 tỷ" in a and "tiếng Việt" not in a, a
+        browser.close()
+
+
+def test_a_block_spend_question_never_gets_the_total_row_or_a_word_matched_note(tmp_path, monkeypatch):
+    # grader rerun 25: «Khối quản lý tháng 10 chi bao nhiêu?» was answered with «Tổng chi phí hoạt động» (the block is not a row;
+    # «quản» sat in the title's «quản trị»); «Kế toán … chi bao nhiêu?» quoted a note that says «hạch toán … kế hoạch»
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    fx = Path(__file__).parent / "fixtures"
+    src = tmp_path / "bao_cao_khoi_khong_dong.html"
+    src.write_text((fx / "bao_cao_khoi_khong_dong.html").read_text(encoding="utf-8"), encoding="utf-8")
+    rep = build(src)
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 900})
+
+        def typed(q):
+            pg.keyboard.press("Escape")
+            pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const e = r.getElementById('clicky-skip') || document.getElementById('clicky-skip'); if (e) e.click(); }")
+            pg.wait_for_timeout(300)
+            box = pg.locator("#clicky-host #q")
+            box.fill(q)
+            box.press("Enter")
+            pg.wait_for_timeout(900)
+            return pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const b = r.getElementById('bub'); "
+                               "const a = ((b && !b.classList.contains('hidden')) ? r.getElementById('ba') : r.getElementById('a')).cloneNode(true); "
+                               "a.querySelectorAll('.receipt').forEach(x => x.remove()); return a.innerText; }")
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        for q in ("Khối quản lý tháng 10 chi bao nhiêu?", "Khối quản lý lũy kế chi bao nhiêu?", "Khối văn phòng tháng 10 chi bao nhiêu?"):
+            a = typed(q)
+            assert not any(x in a for x in ("36,0", "37,2", "348,0", "351,2")), (q, a)
+        a = typed("Kế toán tháng 10 chi bao nhiêu?")
+        assert "Báo cáo viết" not in a and "thuê kho" not in a, a
+        a = typed("Kho tháng 10 tăng bao nhiêu?")   # the note that names it is still quoted
+        assert "thuê kho tăng 0,3 tỷ" in a, a
+        a = typed("Tổng chi phí hoạt động tháng 10 bao nhiêu?")
+        assert "37,2 tỷ" in a, a
+        a = typed("Chi phí QLDN tháng 10 bao nhiêu?")
+        assert "11,4 tỷ" in a, a
+        browser.close()

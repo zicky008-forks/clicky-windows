@@ -3455,6 +3455,7 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     rulebook = hop_vera.rules(box)
     data = {"meta": meta, "scenes": scenes,
             "quy_tac": {"khong_phan_xet": {k: rulebook["khong_phan_xet"][k] for k in ("bat", "tu", "cau")}},
+            "tieng_anh": os.environ.get("CLICKY_EN", "1").strip() != "0",   # CLICKY_EN=0: English questions get no answer
             "cards": [{"id": it.node.attrs["data-clicky"], "text": it.text, "label": card_label(it.node)}
                       for it in items if it.kind == "card"],
             "cot": table_columns(places),

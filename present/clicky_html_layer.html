@@ -2352,7 +2352,7 @@ function noteAnswer(q, fallback) {   // fallback: the page found no figure; a se
   const PLANW = /^(ke|hoach|kh|aop|aopr|ngan|sach|ns|budget|bp|chi|tieu|muc|tieu)$/;   // «kế hoạch» asked, «AOP», «ngân sách» written
   for (const it of noteSents()) { const fs = " " + fold(it.s).replace(/[^a-z0-9]+/g, " ").trim() + " ", w = words(widen(fold(it.s + " " + (it.head || "")))), planIn = / (ke hoach|kh|aop|aopr|ngan sach|budget|bp|chi tieu|muc tieu) /.test(fs);
     const hit = subj.filter(x => w.includes(x) || (planIn && PLANW.test(x))).length;   // a table's foot note is also about its heading («Cả năm»)
-    const ok = cue ? cue.s.test(fs) && (!subj.length || hit >= Math.ceil(subj.length / 2)) : subj.length >= 2 && hit === subj.length && (!many || /\d[\d.,]*\s*(tỷ|triệu|nghìn|đồng|%)/.test(it.s));
+    const ok = cue ? cue.s.test(fs) && (!subj.length || hit >= Math.ceil(subj.length / 2)) : subj.length >= 2 && hit === subj.length && phraseKept(Q, subj, w) && (!many || /\d[\d.,]*\s*(tỷ|triệu|nghìn|đồng|%)/.test(it.s));
     if (ok && !doubted(it.s) && !isAskSent(it.s)) hits.push({it, sc: hit + (/\d/.test(it.s) ? 0.5 : 0)}); }
   if (!hits.length) return false;
   hits.sort((a, b) => b.sc - a.sc);
@@ -2361,10 +2361,15 @@ function noteAnswer(q, fallback) {   // fallback: the page found no figure; a se
   answer(top.map(say).join(" "), top[0].b.el, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»" + (top.length > 1 ? ", hai chỗ" : "")});
   return true;
 }
+function phraseKept(Q, need, w) {   // two words side by side in the question stay a phrase in the sentence: «kế toán» is not «hạch toán … kế hoạch» (rerun 25)
+  const PERW = /^(thang|quy|nam|ky|luy|t\d+|q\d)$/, ok = x => need.includes(x) && !PERW.test(x);
+  const qs = fold(Q.q).replace(/[^a-z0-9]+/g, " ").trim().split(" ");   // side by side as typed, not after the small words are dropped
+  return qs.slice(1).every((c, i) => !ok(qs[i]) || !ok(c) || qs[i] === c || w.some((x, k) => x === qs[i] && w.slice(k + 1, k + 4).includes(c)));
+}
 function figureSentence(Q) {   // a sentence of the report holding every word of the question and a figure
   const need = Q.w0.filter(x => !UNITW.has(x)); if (need.length < 2) return null;   // "3 năm", "bao nhiêu người": unit words are not the subject
   for (const b of blocks()) for (const s of splitSent(b.text)) { const w = words(widen(fold(s)));
-    if (need.every(x => w.includes(x))) return {b, s, fig: /\d/.test(s)}; }
+    if (need.every(x => w.includes(x)) && phraseKept(Q, need, w)) return {b, s, fig: /\d/.test(s)}; }
   return null;
 }
 // "Số nhân viên", "Headcount" in a table of money: that row counts people, whatever its columns say
@@ -2596,6 +2601,16 @@ function resolve(q, scope) {
     if (c.row) { const pa = parentRow(c.m, c.row); if (pa) coverOf([pa.label]).forEach(w => c.cover.add(w));
       if (c.row.codes && c.row.codes.length) coverOf(["mã số " + c.row.codes.join(" ")]).forEach(w => c.cover.add(w)); }   // "mã số 110": the code is shown with the row
     c.rest = leftover(Q, c.cover, c.card ? c.card.el : c.m ? c.m.el : null); c.total = c.score - 8 * c.rest.length + (c.rest.length ? 0 : 1000);   // a place that covers the question first
+    if (c.colOnly && c.row.total && !c.rest.length) {   // «Khối quản lý tháng 10 chi bao nhiêu?»: a name the total does not print is never the total (rerun 25)
+      const ctx = " " + fold([c.m.heading, c.m.cap, document.title, (document.querySelector("h1") || {}).textContent].join(" ")).replace(/[^a-z0-9]+/g, " ") + " ";
+      const qt = fold(Q.q).replace(/[^a-z0-9]+/g, " ").trim().split(" ");
+      const said = x => { const ps = x.split("_"); if (!ps.every(y => qt.includes(y))) return true;   // an alias the reader did not type
+        if (ps.length > 1) return ctx.includes(" " + ps.join(" ") + " ");
+        const i = qt.indexOf(x);   // «Chi phí nhân sự AOP gốc?» under a page about «Chi phí nhân sự»: the page's own subject; «quản lý» is not «quản trị»
+        const pr = [[qt[i - 1], x], [x, qt[i + 1]]].filter(([a, b]) => a && b && !GENERIC.has(a) && !GENERIC.has(b) && !/^(\d+|thang|quy|nam|luy|bao|nhieu|chi|la|co|khong)$/.test(a === x ? b : a));
+        return pr.length ? pr.some(([a, b]) => ctx.includes(" " + a + " " + b + " ")) : ctx.includes(" " + x + " "); };
+      const own = Q.w.filter(w => !c.cover.has(w) && !GENERIC.has(w) && !UNITW.has(w) && !/^(thang|quy|nam|ky|luy|ke|tong|cong|t\d+)$/.test(w) && !said(w));
+      if (own.length) { c.rest = own; c.total = c.score - 8 * own.length; } }
     if (Q.delta && c.row && !c.cols && c.c >= 0 && !deltaCols(c.m).includes(c.c)) c.total -= 15; });
   cands.sort((a, b) => b.total - a.total);
   const same = (a, b) => a === b || (a.row && a.row === b.row && a.c === b.c) || (a.card && a.card === b.card) || (a.chart && a.text === b.text);
@@ -3842,6 +3857,9 @@ function enPrintedOnPage(vi) {   // the report prints this name, or an abbreviat
 function askAny(q, scope) {   // the ask box: an English question is asked in Vietnamese and answered in English
   EN_ON = isEnglishQ(q) || (!!EN_PREV && /^\s*(and|what about|how about|why|is that|is this|was that|should we|so)\b|\b(that|this|it|they|them|those)\b/i.test(q) && !/[^\x00-\x7f]/.test(q));
   EN_LAST = null; EN_MAP = null; EN_PREV_USED = false; EN_HEADED = ""; enPrinted = enPrintedOnPage;
+  if (EN_ON && D.tieng_anh === false) {   // English turned off for this report (CLICKY_EN=0): no figure, ask in Vietnamese
+    EN_ON = false; EN_PREV = null; TYPED = q;
+    answer("Báo cáo này em chỉ trả lời bằng tiếng Việt, chị hỏi lại bằng tiếng Việt giúp em nhé. This report answers in Vietnamese only.", null, {src: "", cls: "park"}); return; }
   { const box = isOpen($("bub")) ? $("ba") : $("a"); if (box) delete box.dataset.en; }
   if (EN_ON) {
     let vi = enToVi(q); const page = " " + reportText() + " ";
