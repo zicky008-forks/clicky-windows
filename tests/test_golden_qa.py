@@ -61,3 +61,45 @@ def test_the_presenter_page_passes_its_synthetic_golden_file(tmp_path, monkeypat
     finally:
         ask.close()
     assert res["dat"] == res["tong"], [r for r in res["cau"] if not r["dat"]]
+
+
+def test_a_worked_out_figure_is_labelled_as_worked_out_not_as_printed(tmp_path, monkeypatch):
+    from present import clicky_html
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    from test_story import build
+    fx = Path(__file__).parent / "fixtures"
+    src = tmp_path / "bao_cao_hai_ke_hoach_ky.html"
+    src.write_text((fx / "bao_cao_hai_ke_hoach_ky.html").read_text(encoding="utf-8"), encoding="utf-8")
+    rep = build(src)
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    from present import kiem_hinh
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 900})
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+
+        def label(q):
+            pg.keyboard.press("Escape")
+            pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const e = r.getElementById('clicky-skip') || document.getElementById('clicky-skip'); if (e) e.click(); }")
+            pg.wait_for_timeout(300)
+            box = pg.locator("#clicky-host #q")
+            box.fill(q)
+            box.press("Enter")
+            pg.wait_for_timeout(900)
+            return pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const t = r.querySelector('.trust'); return t ? t.textContent : ''; }")
+        assert label("EBIT tháng 10 thấp hơn kế hoạch có đáng lo không?") == "Chính xác: số in trên báo cáo"
+        assert "em tính từ số in trên báo cáo" in label("Chi phí bao bì theo sản lượng chênh lệch bao nhiêu so với kế hoạch?")
+        browser.close()
+
+
+def test_an_answer_in_another_language_keeps_every_figure_and_adds_none():
+    ok = so_viet.same_figures("EBIT thấp hơn kế hoạch 3,2 tỷ (em tính: 19,3 − 22,5).", "EBIT was 3.2 bn below plan (worked out: 19.3 − 22.5).")
+    assert ok == (True, [], [])
+    assert so_viet.same_figures("Chi phí 1.234,5 tỷ, bằng 7,03% doanh thu.", "Cost VND 1,234.5 billion, 7.03% of revenue.")[0]
+    bad = so_viet.same_figures("EBIT thấp hơn kế hoạch 3,2 tỷ.", "EBIT was VND 3.5 billion below plan, about 2%.")
+    assert bad == (False, ["3,2 tỷ"], ["3.5 billion", "2%"])

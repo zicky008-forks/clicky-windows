@@ -18,11 +18,12 @@ from typing import Optional
 
 UNITS = {"tỷ": "tỷ", "ty": "tỷ", "tỉ": "tỷ", "triệu": "triệu", "trieu": "triệu", "tr": "triệu", "nghìn": "nghìn",
          "ngàn": "nghìn", "k": "nghìn", "%": "%", "điểm %": "điểm %", "đ": "đồng", "đồng": "đồng", "₫": "đồng",
-         "vnd": "đồng", "vnđ": "đồng"}
+         "vnd": "đồng", "vnđ": "đồng", "bn": "tỷ", "billion": "tỷ", "mn": "triệu", "million": "triệu",
+         "percentage points": "điểm %", "pp": "điểm %"}
 SCALE = {"tỷ": Decimal(10) ** 9, "triệu": Decimal(10) ** 6, "nghìn": Decimal(1000), "đồng": Decimal(1)}
 
 _NUM = re.compile(r"(?P<neg>[(\-−–]\s*)?(?P<n>\d[\d.,  ]*\d|\d)(?P<close>\))?"
-                  r"(?:\s*(?P<u>điểm\s*%|%|tỷ|tỉ|ty|triệu|trieu|tr|nghìn|ngàn|k|đồng|đ|₫|vnđ|vnd)(?![\w]))?", re.I)
+                  r"(?:\s*(?P<u>điểm\s*%|percentage points|%|tỷ|tỉ|ty|triệu|trieu|tr|nghìn|ngàn|k|đồng|đ|₫|vnđ|vnd|billion|bn|million|mn|pp)(?![\w]))?", re.I)
 
 
 @dataclass(frozen=True)
@@ -98,3 +99,23 @@ def same(a: So, value, unit: str = "", tol=Decimal("0")) -> bool:
             return abs(a.dong - want * SCALE[unit]) <= tol * SCALE[unit]
         return False
     return abs(a.value - want) <= tol
+
+
+def same_figures(source: str, other: str, other_vn: bool = False) -> tuple:
+    """The number lock for an answer said in another language: every figure of the Vietnamese answer must be in the
+    other one with the same value and unit, and the other must add none. (ok, missing, extra) as texts.
+    other_vn: the other text writes Vietnamese marks too (a Vietnamese rewording); False for English (1,234.5)."""
+    a = find_all(source, vn=True)
+    b = find_all(other, vn=other_vn)
+    def key(x):
+        return (x.dong if x.dong is not None else x.value, x.unit if x.unit not in SCALE else "đồng")
+    left = [key(x) for x in b]
+    missing = []
+    for x in a:
+        k = key(x)
+        if k in left:
+            left.remove(k)
+        else:
+            missing.append(x.text)
+    extra = [x.text for x in b if key(x) in left]
+    return (not missing and not extra), missing, extra

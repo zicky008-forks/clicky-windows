@@ -2806,3 +2806,83 @@ def test_rerun_thirteen_a_judgement_is_never_answered_yes_or_no_and_a_one_off_no
         assert x.startswith("Marketing so với kế hoạch tháng 10, cao hơn 0,6 tỷ"), x
         assert "Báo cáo ghi: «Marketing vượt 0,6 tỷ do phí sự kiện ra mắt một lần 0,5 tỷ" in x and "chưa tách riêng" not in x, x
         browser.close()
+
+
+def test_an_english_question_gets_an_english_answer_with_every_figure_locked(tmp_path, monkeypatch):
+    # owner's choice for the 25/11 meeting: a board member may ask in English. The page asks the Vietnamese question, then words
+    # the answer in English only if every figure and unit matches (the number lock); the report's own «quoted» words and row
+    # names stay as printed. A Vietnamese question is answered exactly as before.
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    fx = Path(__file__).parent / "fixtures"
+    reps = {}
+    for name in ("bao_cao_hai_ke_hoach_ky", "bao_cao_bo_phan_mot_lan"):
+        src = tmp_path / (name + ".html")
+        src.write_text((fx / (name + ".html")).read_text(encoding="utf-8"), encoding="utf-8")
+        reps[name] = build(src)
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 900})
+
+        def typed(q):
+            pg.keyboard.press("Escape")
+            pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const e = r.getElementById('clicky-skip') || document.getElementById('clicky-skip'); if (e) e.click(); }")
+            pg.wait_for_timeout(300)
+            box = pg.locator("#clicky-host #q")
+            box.fill(q)
+            box.press("Enter")
+            pg.wait_for_timeout(900)
+            return pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const b = r.getElementById('bub'); "
+                               "const a = ((b && !b.classList.contains('hidden')) ? r.getElementById('ba') : r.getElementById('a')).cloneNode(true); "
+                               "a.querySelectorAll('.receipt').forEach(x => x.remove()); return a.innerText; }")
+        pg.goto(Path(reps["bao_cao_hai_ke_hoach_ky"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        a = typed("What was the revenue variance vs plan in October?")
+        assert "below plan by 9.0 bn" in a and "(column «Chênh lệch» shows (9.0))" in a and "Exact: printed in the report" in a, a
+        a = typed("Why was EBIT below plan in October?")
+        assert "below plan by 3.2 bn" in a and "The report says: «EBIT tháng 10 thấp hơn kế hoạch 3,2 tỷ" in a, a
+        a = typed("Did EBIT meet the full-year plan?")
+        assert "236.0 bn" in a and "102.6%" in a and "(worked out: 236.0 ÷ 230.0 × 100)" in a and "Estimate:" in a, a
+        a = typed("EBIT in October is below plan, is it worrying?")
+        assert "does not judge whether this is a concern" in a and not a.startswith(("Yes", "No")), a
+        a = typed("What was our competitor's profit this year?")
+        assert "I could not find this in the report" in a and "Missing:" in a, a
+        a = typed("Doanh thu thuần tháng 10 chênh lệch bao nhiêu so với kế hoạch?")
+        assert "thấp hơn kế hoạch 9,0 tỷ" in a and "below plan" not in a, a
+        pg.goto(Path(reps["bao_cao_bo_phan_mot_lan"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        a = typed("Why is Marketing over plan in October?")
+        assert "against the October plan: higher by 0.6 bn" in a and "«Marketing vượt 0,6 tỷ" in a and "could not word" not in a, a
+        a = typed("What is the Marketing variance vs plan year to date?")
+        assert "10 months to date: higher by 1.1 bn" in a, a
+        browser.close()
+
+
+def test_the_english_number_lock_refuses_a_lost_or_changed_figure(tmp_path):
+    # the page's own English module, run in node: a wording that drops, changes or adds a figure or unit is refused
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    layer = (Path(__file__).parent.parent / "present" / "clicky_html_layer.html").read_text(encoding="utf-8")
+    mod = layer[layer.index("// --- English questions and answers (Hộp Vera"):layer.index("function answer(text, target, o) {")]
+    js = tmp_path / "lock.js"
+    js.write_text(mod + """
+const vi = "Doanh thu thuần thấp hơn kế hoạch 9,0 tỷ (cột «Chênh lệch» ghi (9,0)). Marketing so với kế hoạch tháng 10, cao hơn 0,6 tỷ.";
+const out = [enLock(vi, enText(vi)),
+  enLock(vi, "Revenue is below plan by 9.0 bn (column «Chênh lệch» shows (9.0)). Marketing against the October plan: higher by 0.6 bn."),
+  enLock(vi, "Revenue is below plan by 9.0 bn. Marketing against the October plan: higher by 0.6 bn."),
+  enLock(vi, "Revenue is below plan by 9.0 m (column «Chênh lệch» shows (9.0)). Marketing against the October plan: higher by 0.6 bn."),
+  enLock(vi, "Revenue is below plan by 9.0 bn (column «Chênh lệch» shows (9.0)). Marketing against the October plan: higher by 0.6 bn, 10 more."),
+  enLock(vi, "Revenue is below plan by 90 bn (column «Chênh lệch» shows (9.0)). Marketing against the October plan: higher by 0.6 bn."),
+  !!enLeft("Marketing cao hơn kế hoạch của tháng"), !!enLeft("Marketing against plan (column «Chênh lệch của T10» shows 0.6)")];
+console.log(JSON.stringify(out));
+""", encoding="utf-8")
+    got = subprocess.run([node, str(js)], capture_output=True, text=True, timeout=60)
+    assert got.returncode == 0, got.stderr
+    assert json.loads(got.stdout) == [True, True, False, False, False, False, True, False]
