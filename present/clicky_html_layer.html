@@ -124,6 +124,10 @@ table.mini caption{caption-side:bottom;text-align:left;color:var(--muted);font-s
 .lasso .tip button{min-height:32px;padding:2px 10px}
 button.on{background:var(--warnsoft);border-color:var(--warn)}
 .quiet{color:var(--muted);font-size:12px}
+.trust{display:inline-block;font-size:12px;font-weight:700;border-radius:5px;padding:1px 7px;margin-top:5px;border:1.5px solid var(--line)}
+.trust.exact{color:#0b6b3a;border-color:#2e8b57}.trust.est{color:#7a4b06;border-color:#b86e00}.trust.miss{color:var(--muted)}
+:host([data-theme="dark"]) .trust.exact{color:#7fd6a3;border-color:#7fd6a3}
+.receipt{font-size:12.5px;color:var(--muted);margin-top:3px}.receipt summary{cursor:pointer;min-height:24px}.receipt li{margin:1px 0}
 .badge{font-size:12.5px;font-weight:700;color:#7a4b06;border:1.5px solid #b86e00;background:var(--warnsoft);border-radius:6px;padding:2px 8px;white-space:nowrap;cursor:pointer;min-height:28px;min-width:0}
 :host([data-theme="dark"]) .badge{color:var(--warn);border-color:var(--warn)}
 .sl{display:none}
@@ -1382,6 +1386,31 @@ function chartTitle(x, c) {
   return (c && (c.getAttribute("aria-label") || c.getAttribute("title"))) || x.getAttribute("aria-label") || x.getAttribute("title") || cellText(t) || cellText(cap) || prev || "";
 }
 
+// --- Sổ quy tắc (the owner's rule book, Hộp Vera piece 3): rules every answer obeys before it is shown or said ---
+const RULES = D.quy_tac || {};
+// rule «không phán xét»: «có đáng lo / ổn / nghiêm trọng không» is the owner's call. The page says the figure and its
+// direction, never «Có.» / «Không.» on the judgement (gate 2's last blocker: «Có, đáng lo»).
+const JUDGE = ((RULES.khong_phan_xet || {}).tu || ["dang lo", "dang ngai", "dang quan ngai", "co sao khong", "co van de khong",
+  "nghiem trong", "co on khong", "on khong", "co tot khong", "co xau khong", "nguy hiem", "dang bao dong", "co kha quan khong",
+  "co chap nhan duoc khong", "chap nhan duoc khong", "co hop ly khong", "hop ly khong", "co nen lo khong"]).map(x => fold(String(x)).trim()).filter(Boolean);
+function judgeHit(f) {   // the judgement words in a folded question, or ""
+  if ((RULES.khong_phan_xet || {}).bat === false) return "";
+  const x = " " + String(f).replace(/[?.!,;:]+/g, " ").replace(/\s+/g, " ").trim() + " ";
+  return JUDGE.find(w => x.includes(" " + w + " ")) || "";
+}
+const JUDGE_NOTE = (RULES.khong_phan_xet || {}).cau || "Báo cáo chỉ ghi số, không đánh giá có đáng lo hay không.";
+function judgeGuard(text, html) {   // last gate before an answer is shown: no verdict leads a judgement question
+  if (!TYPED || !judgeHit(fold(TYPED))) return text;
+  let t = String(text);
+  const lead = /^((?:<[^>]+>)*)(Có|Không|Chưa)(?: so với [^;.]+)?(?:; (?:có|không|chưa) so với [^;.]+)*(?:,| ?\.)\s*(?:theo số trên bảng\.?\s*)?/;
+  t = t.replace(lead, (m, tags) => tags);
+  t = t.replace(/^((?:<[^>]+>)*)(\p{Ll})/u, (m, tags, c) => tags + c.toUpperCase());
+  const plain = t.replace(/<[^>]*>/g, "");
+  if (!/không đánh giá/.test(plain)) t = t.replace(/\s*$/, "") + " " + (html ? esc(JUDGE_NOTE) : JUDGE_NOTE);
+  RULE_HITS.push({luat: "khong_phan_xet", cau: TYPED});
+  return t;
+}
+const RULE_HITS = [];
 // --- answering: always from the page, in the place the reader pointed at ---
 function qinfo(q) {
   const f = fold(q);
@@ -1390,7 +1419,7 @@ function qinfo(q) {
   let sup = null;
   if (sm) { sup = /^(thap|it|nho|cham|kem)$/.test(sm[1]) ? "min" : "max"; if (/\b(giam|hut|thieu)\b/.test(f) && sup === "max" && !/\b(tang|vuot)\b/.test(f)) sup = "min"; }
   // «có đáng lo không»: a judgement the report never makes; the figure is shown, the judgement goes to the owner (TB12)
-  const opinion = (f.match(/\b(co )?(dang lo|dang ngai|dang quan ngai|co sao khong|co van de( gi)? khong|co nghiem trong khong|nghiem trong khong|co on khong|co tot khong|co xau khong|co nguy hiem khong)\b/) || [])[0] || "";
+  const opinion = (f.match(/\b(co )?(dang lo|dang ngai|dang quan ngai|co sao khong|co van de( gi)? khong|co nghiem trong khong|nghiem trong khong|co on khong|co tot khong|co xau khong|co nguy hiem khong)\b/) || [])[0] || judgeHit(f);
   // «hụt / vượt kế hoạch bao nhiêu»: the difference from plan, never the plan's own figure (TB7)
   const yesno = /\b(co phai|phai khong|dung khong|co .{0,40} khong)\s*$/.test(f.replace(/[?.!]+$/, "").trim());
   const gap = /\b(vuot|hut|thieu|lech|cao hon|thap hon)\b/.test(f) && /\b(ke hoach|kh|aop|ngan sach|budget|muc tieu|chi tieu)\b/.test(f) && (/\b(bao nhieu|may|the nao|bao)\b/.test(f) || !!opinion || yesno) && !/\b(phan tram|ty le)\b|%/.test(f + q);
@@ -2932,6 +2961,7 @@ function natVerdict(f, s) {
   return "";
 }
 function ynLead(f, text, label) {   // «… có đạt / vượt / hụt kế hoạch không?» starts «Có.» or «Không.» from the gap about to be said (rerun 12)
+  if (judgeHit(f)) return "";   // Sổ quy tắc: a judgement question never gets a verdict lead
   if (!/ (khong|chua) $/.test(f) || !/ (co|da|co phai) /.test(f)) return "";
   const t = String(text), at = t.indexOf("Gộp lại"), body = at >= 0 ? t.slice(at) : t;
   // each comparison said: its direction and its plan («thấp hơn kế hoạch gốc …», «So với kế hoạch linh hoạt, cao hơn …»)
@@ -3338,12 +3368,34 @@ function doubtNote(text) {   // one gate: any answer that shows a figure the own
   return notes.length ? " Lưu ý: " + notes.join("; ") + "." : "";
 }
 let HOW_MUCH = "";   // the question being answered asks «bao nhiêu»: an answer with no figure is no answer (TB22)
+// --- trust label and calculation receipt (Hộp Vera piece 6): every answer with a figure says how sure it is, and the
+// receipt (closed by default) lists each figure, where it is printed or how it was worked out, and the pack it is from.
+// «Ước tính»: a forecast, estimate or rolling figure. «Thiếu»: parked, nothing said. Vera explains the receipt, never makes it.
+const EST_WORDS = /(^|[^\p{L}])(ước|dự báo|LE|FC|RF|rolling|forecast|ước tính)([^\p{L}]|$)/u;
+function trustOf(body, o) {
+  if ((o && o.cls === "park") || body === D.fallback || /^Câu này em chưa tìm thấy/.test(body)) return {k: "miss", t: "Thiếu số: em ghi lại để " + OWNER + " trả lời"};
+  if (!/\d/.test(body.replace(/tháng \d+|T\d+|quý \d|\b20\d\d\b|FY\d+/g, ""))) return null;
+  if (EST_WORDS.test(body)) return {k: "est", t: "Ước tính: có số dự báo, chưa phải thực hiện"};
+  return {k: "exact", t: "Chính xác: số in trên báo cáo"};
+}
+function receiptOf(body) {
+  const items = [];
+  for (const m of body.matchAll(/(\d[\d.,]*\d|\d)\s*(tỷ|triệu|%)?\s*\(em tính: ([^)]+)\)/g)) items.push(m[1] + (m[2] ? " " + m[2] : "") + " = " + m[3] + " (em tính từ số in trên báo cáo)");
+  for (const m of body.matchAll(/\(cột «([^»]+)» ghi (\(?[^()]*\)?)\)/g)) items.push(m[2] + ": in sẵn ở cột «" + m[1] + "»");
+  if (!items.length) return null;
+  const d = document.createElement("details"); d.className = "receipt";
+  const sm = document.createElement("summary"); sm.textContent = "Phiếu kiểm chứng cách tính"; d.appendChild(sm);
+  const ul = document.createElement("ul"); items.concat(["Mã bản trình bày " + ((D.meta || {}).pack_id || "") + ": số nào đổi trong báo cáo thì mã này đổi"])
+    .forEach(t => { const li = document.createElement("li"); li.textContent = t; ul.appendChild(li); }); d.appendChild(ul);
+  return d;
+}
 function answer(text, target, o) {
   o = o || {};
   if (HOW_MUCH && o.cls !== "park" && !/\d/.test(String(text).replace(/<[^>]*>/g, "").replace(/\d[\d.,]*\s*%/g, "")) && !/ (phan tram|ty le|%) /.test(" " + fold(HOW_MUCH) + " ")) {   // «giảm giá 8%» is not the amount asked   // words only: the figure the report prints for it, if one row's effect cell holds it
     const q0 = HOW_MUCH; HOW_MUCH = ""; if (effectAsk(q0, null, true)) return; }
   text = String(text).replace(/^(Vì vậy|Tức là|Do đó|Vậy nên),?\s+(.)/, (m, w, c) => c.toUpperCase());   // a talk line's link word dangles alone
   { const n = doubtNote(text); if (n) text = text + (o.html ? esc(n) : n); }
+  if (o.cls !== "park") text = judgeGuard(text, o.html);
   { const t = String(text).replace(/<[^>]*>/g, ""); LAST_ANS = t;
     for (const m of t.matchAll(/(\d[\d.,]*\d|\d)\s*(tỷ|triệu|%)?\s*\(em tính: ([^)]+)\)/g))
       SAID.push({tok: m[1], u: m[2] || "", how: m[3], line: ((t.split(/(?<=[.;])\s+|(?<=[:,])\s+(?![^(]*\))/).find(x => x.includes(m[0])) || t).trim().replace(/^./, c => c.toUpperCase()))});   // the clause that says it
@@ -3362,6 +3414,9 @@ function answer(text, target, o) {
   ex.filter(figs).forEach(x => a.appendChild(x));   // the figures first, then where they come from
   if (src) a.appendChild(quiet(src));
   ex.filter(x => !figs(x)).forEach(x => a.appendChild(x));
+  { const body = String(text).replace(/<[^>]*>/g, ""), tr = trustOf(body, o);   // Chính xác / Ước tính / Thiếu, then the receipt (hidden)
+    if (tr) { const n = document.createElement("span"); n.className = "trust " + tr.k; n.textContent = tr.t; a.appendChild(n);
+      const r = receiptOf(body); if (r) a.appendChild(r); } }
   if (!o.clip && !viVoice && !toldNoVoice && text !== D.fallback) { toldNoVoice = true;   // said once, under the panel's own hint: never inside an answer
     const h = root.querySelector("#panel .hint"); if (h) { const n = document.createElement("span"); n.className = "novoice"; n.textContent = " Máy anh chị chưa có giọng tiếng Việt, em hiện chữ thôi ạ."; h.appendChild(n); } }
   if (!aside && started && !ended) resumeAt = {i: idx, t: audio.currentTime};

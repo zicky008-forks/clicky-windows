@@ -248,3 +248,20 @@ def test_talk_slides_questions_whatif_and_stop():
 def test_estimate_seconds():
     script = {"slides": [{"so": 1, "loi_noi": "một hai ba {tq:x}", "dung_giay": 2}]}
     assert estimate_seconds(script, syllables_per_second=3) == pytest.approx(2 + 1 + 3 / 3 + 6 / 3)
+
+
+def test_each_what_if_run_is_logged_and_the_answer_carries_the_state_vera_checked(tmp_path):
+    import json
+    deck = FakeDeck([[S(1, "Thông điệp chính", is_title=True)]])
+    book = FakeBook({"Kich_ban!F15": 0, "Kich_ban!F16": 0, "Kich_ban!B27": 10.0})
+    src = DictSource(SUMMARY, {"Kich_ban!B27": 10.0})
+    src.cells = book.cells
+    log = tmp_path / "what_if_log.jsonl"
+    talk = Talk({"meta": {}, "slides": []}, BANK, Resolver(src), deck, say=lambda a, b: None, point=lambda *a: None,
+                wait=lambda s: None, whatif=WhatIf(book, calculate=book.calculate), whatif_log=str(log))
+    r = talk.answer("Nếu doanh thu kênh GT giảm 5% thì sao?")
+    assert r["trang_thai"]["o_da_tra_ve"] is True and r["trang_thai"]["ket_qua"]
+    talk.answer("Nếu doanh thu kênh GT tăng 3% thì sao?")
+    rows = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 2 and all(x["tra_ve"] for x in rows) and rows[0]["cau_hoi"].startswith("Nếu doanh thu kênh GT giảm")
+    assert book.cells["Kich_ban!F15"] == 0                       # the workbook is as it was

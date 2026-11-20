@@ -124,7 +124,8 @@ def main(argv=None) -> int:
     print("\n".join(rep.lines()))
     talk = Talk(script, bank, resolver, deck, say=lambda shown, spoken: print("  NÓI:", shown),
                 point=lambda rect, label: print("  CHỈ:", label, rect), wait=lambda s: None,
-                whatif=LibreOfficeWhatIf(a.xlsx), minutes=minutes)
+                whatif=LibreOfficeWhatIf(a.xlsx), minutes=minutes,
+                whatif_log=str(Path(a.minutes or Path(a.xlsx).with_name("bien_ban_thuyet_trinh.md")).with_name("what_if_log.jsonl")))
     from present.talk import estimate_seconds
     print(f"Ước tính thời lượng: {estimate_seconds(script) / 60:.1f} phút (mục tiêu {(script.get('meta') or {}).get('thoi_luong_muc_tieu_phut', '?')} phút)")
     code = 0 if rep.ok else 1

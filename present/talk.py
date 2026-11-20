@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from present import deck as deck_mod
+from present import hop_vera
 from present.placeholders import Resolver
 from present.qa import Bank, fuzzy_names, parse_percent, pick_option
 from present.doc_tai_chinh import doc as speakable  # FP&A readings (AOPR, Power BI), then numbers
@@ -59,8 +60,10 @@ def estimate_seconds(script: dict, syllables_per_second: float = 3.2) -> float:
 class Talk:
     def __init__(self, script: dict, bank: dict, resolver: Resolver, deck, say: Callable[[str, str], None],
                  point: Callable[[tuple, str], None], wait: Callable[[float], None], whatif=None,
-                 minutes: Optional[Minutes] = None):
+                 minutes: Optional[Minutes] = None, rules: Optional[dict] = None, whatif_log: Optional[str] = None):
         self.script, self.bank = script, Bank(bank)
+        self.rules = rules or hop_vera.rules()
+        self.whatif_log = whatif_log            # one JSON line per what-if run, kept beside the minutes (never the workbook)
         self.resolver, self.deck, self.whatif = resolver, deck, whatif
         self.say, self.point, self.wait = say, point, wait
         self.minutes = minutes or Minutes()
@@ -149,6 +152,7 @@ class Talk:
         text = entry.get("tra_loi", "")
         if row is not None:
             text = text.replace("<dong>", str(row))
+        text = hop_vera.guard(question, text, self.rules)[0]   # Sổ quy tắc: no verdict on a judgement question
         text = self._speak(text, entry["id"], extra)
         self.minutes.questions.append((question, entry["id"], text))
         return {"id": entry["id"], "text": text, "choices": [], "drill": entry.get("drill"), "slide": entry.get("nhay_slide")}
@@ -200,6 +204,7 @@ class Talk:
             inputs[target] = value
         run = self.whatif.run(inputs, list(what.get("doc") or []))
         self.minutes.whatifs.append((run.inputs, run.results, run.restored, run.problems))
+        self._log_whatif(entry["id"], question, run)
         if not run.restored:
             self.minutes.stops.append(f"{entry['id']}: không trả được ô về giá trị cũ")
             raise Stop("không trả được ô về giá trị cũ; KHÔNG lưu file, báo anh Tuấn")
@@ -209,7 +214,20 @@ class Talk:
         finally:
             self.resolver.overrides = {}
         self.minutes.questions.append((question, entry["id"], text))
-        return {"id": entry["id"], "text": text, "choices": [], "drill": entry.get("drill")}
+        # the state Vera checked before speaking: every input back as it was, the slide she is on
+        return {"id": entry["id"], "text": text, "choices": [], "drill": entry.get("drill"),
+                "trang_thai": {"slide": self.slide, "o_da_tra_ve": run.restored, "ket_qua": dict(run.results)}}
+
+    def _log_whatif(self, qid: str, question: str, run) -> None:
+        if not self.whatif_log:
+            return
+        import datetime as _dt
+        import json as _json
+        row = {"luc": _dt.datetime.now().isoformat(timespec="seconds"), "id": qid, "cau_hoi": question,
+               "ghi": {k: str(v) for k, v in run.inputs.items()}, "doc": {k: str(v) for k, v in run.results.items()},
+               "tra_ve": run.restored, "van_de": list(run.problems)}
+        with open(self.whatif_log, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def fold_all(question: str) -> bool:

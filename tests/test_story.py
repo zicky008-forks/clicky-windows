@@ -2714,3 +2714,42 @@ def test_rerun_twelve_two_plan_columns_keep_their_own_names_and_year_answers_nev
         x = typed("EBIT tháng 10 có đạt kế hoạch không?")
         assert x.startswith("Không. EBIT") and "thấp hơn 3,2 tỷ" in x, x
         browser.close()
+
+
+def test_rule_book_a_judgement_question_never_gets_a_yes_or_no_verdict(tmp_path, monkeypatch):
+    # Sổ quy tắc, rule 1 (gate 2's last blocker): «… có đáng lo không?» is the owner's call. The page may say the gap and its
+    # direction, but never opens with «Có.» / «Không.» on the judgement, and says who judges it.
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    fx = Path(__file__).parent / "fixtures"
+    src = tmp_path / "bao_cao_hai_ke_hoach_ky.html"
+    src.write_text((fx / "bao_cao_hai_ke_hoach_ky.html").read_text(encoding="utf-8"), encoding="utf-8")
+    rep = build(src)
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 900})
+
+        def typed(q):
+            pg.keyboard.press("Escape")
+            pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const e = r.getElementById('clicky-skip') || document.getElementById('clicky-skip'); if (e) e.click(); }")
+            pg.wait_for_timeout(300)
+            box = pg.locator("#clicky-host #q")
+            box.fill(q)
+            box.press("Enter")
+            pg.wait_for_timeout(900)
+            return pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const b = r.getElementById('bub'); "
+                               "return ((b && !b.classList.contains('hidden')) ? r.getElementById('ba') : r.getElementById('a')).innerText; }")
+        pg.goto(Path(rep["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        for q in ("EBIT tháng 10 thấp hơn kế hoạch có đáng lo không?", "EBIT tháng 10 hụt kế hoạch như vậy có đáng lo ngại không?",
+                  "Chi phí bao bì theo sản lượng vượt kế hoạch có đáng lo không?", "EBIT cả năm vượt kế hoạch có ổn không?",
+                  "EBIT tháng 10 thấp hơn kế hoạch có nghiêm trọng không?"):
+            x = typed(q)
+            assert not re.match(r"^(Có|Không|Chưa)\b", x), (q, x)                 # no verdict, on either part
+            assert not re.search(r"\b(đáng lo|không đáng lo|nghiêm trọng|ổn)\s*[.,]", x.split("không đánh giá")[0]), (q, x)
+            assert "không đánh giá" in x, (q, x)                                  # the judgement is handed to the owner, in words
+        browser.close()

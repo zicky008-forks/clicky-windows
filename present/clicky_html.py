@@ -48,7 +48,7 @@ from typing import Callable, Optional
 
 import yaml
 
-from present import doc_tai_chinh, goi_html, tri_nho, vn_format
+from present import doc_tai_chinh, goi_html, hop_vera, tri_nho, vn_format
 from present.goi_html import PackError, audio_mime, offline_voice
 
 VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track",
@@ -3451,7 +3451,10 @@ def build(report: str, out: Optional[str] = None, owner: Optional[str] = None, c
     meta["pack_id"] = meta["report_sha256"][:16]
     meta["record"] = dict(record["tong"], ma=record["ma_bam"][:12])
     meta["canh_bao"] = notes
+    box = hop_vera.open_box(src_path.parent, tri_nho.folder(memory) if memory else None)   # Hộp Vera beside the report
+    rulebook = hop_vera.rules(box)
     data = {"meta": meta, "scenes": scenes,
+            "quy_tac": {"khong_phan_xet": {k: rulebook["khong_phan_xet"][k] for k in ("bat", "tu", "cau")}},
             "cards": [{"id": it.node.attrs["data-clicky"], "text": it.text, "label": card_label(it.node)}
                       for it in items if it.kind == "card"],
             "cot": table_columns(places),
