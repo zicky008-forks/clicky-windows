@@ -2963,6 +2963,8 @@ function natVerdict(f, s) {
 function ynLead(f, text, label) {   // «… có đạt / vượt / hụt kế hoạch không?» starts «Có.» or «Không.» from the gap about to be said (rerun 12)
   if (judgeHit(f)) return "";   // Sổ quy tắc: a judgement question never gets a verdict lead
   if (!/ (khong|chua) $/.test(f) || !/ (co|da|co phai) /.test(f)) return "";
+  // «… vượt …, có đáng lo không?»: the yes/no is the judgement, the owner's to make; only the figures are said (rerun 13)
+  if (/ (dang lo|dang ngai|quan ngai|co sao|van de|nghiem trong|on khong|tot khong|xau khong|nguy hiem|co sao khong|anh huong lon) /.test(f)) return "";
   const t = String(text), at = t.indexOf("Gộp lại"), body = at >= 0 ? t.slice(at) : t;
   // each comparison said: its direction and its plan («thấp hơn kế hoạch gốc …», «So với kế hoạch linh hoạt, cao hơn …»)
   const cmp = []; body.split(/(?<=\.)\s+(?=\p{Lu})/u).forEach(x => { const m = x.match(/(cao hơn|thấp hơn|bằng )/); if (!m) return;
@@ -3082,13 +3084,22 @@ function sentSpan(x) {   // the period a folded, space-padded sentence states: t
 function lc1(t) {   // «Doanh thu …» goes on as «doanh thu …»; an abbreviation («EBIT», «TMĐT») keeps its capitals
   t = String(t); return /^\p{Lu}[\p{Lu}\p{N}&]/u.test(t) ? t : t.charAt(0).toLowerCase() + t.slice(1);
 }
-function noteFits(p, s, said) {   // a note quoted beside a gap: of the same period, and a figure in it is one the answer says (rerun 12)
+function noteFits(p, s, said) {   // a note quoted beside a gap: of the same period, or with no period, naming a figure the answer says (reruns 12–13)
   const x = " " + fold(s).replace(/[^a-z0-9]+/g, " ") + " ", ss = sentSpan(x), tsp = p.act.sp || tableSpan(p.m) || "m";
   if (ss && ss !== tsp) return false;
   if (ss) return true;
-  const nums = t => (String(t).replace(/(tháng|quý|năm|T|Q)\s*\d{1,4}(\/\d{2,4})?/gi, " ").match(/\d[\d.,]*\d|\d/g) || []).map(v => v.replace(/[.,]0+$/, "").replace(/\./g, ""));
+  const nums = t => (String(t).replace(/(?<!\p{L})(tháng|quý|năm|lũy kế)\s+\d{1,4}(\/\d{2,4})?/giu, " ").replace(/(?<!\p{L})(T|Q|LK)\d{1,2}(?!\d)/gu, " ").match(/\d[\d.,]*\d|\d/g) || []).map(v => v.replace(/[.,]0+$/, "").replace(/\./g, ""));
   const mine = new Set(nums(said)), its = nums(s);
-  return !its.length || its.every(v => mine.has(v));
+  return !its.length || its.some(v => mine.has(v));   // «vượt 0,6 tỷ do … một lần 0,5 tỷ» belongs to the gap of 0,6, never to a to-date 1,1
+}
+function flexSaid(p) {   // «KH gốc» and «KH linh hoạt» side by side, a note saying the flexible plan is the original at actual volume:
+  // the difference of the two plans is the volume effect, with its working and the note (rerun 13)
+  const {m, row} = p, pl = (p.plans || []), og = pl.find(x => /\bgoc\b/.test(x.h)), fx = pl.find(x => /\blinh hoat\b/.test(x.h)); if (!og || !fx) return "";
+  const note = noteSents().find(it => / linh hoat /.test(" " + fold(it.s).replace(/[^a-z0-9]+/g, " ") + " ") && / san luong /.test(" " + fold(it.s).replace(/[^a-z0-9]+/g, " ") + " ") && !isAskSent(it.s));
+  if (!note) return "";
+  const a = numOf(cellText(row.cells[og.c] || ""), m.en), b = numOf(cellText(row.cells[fx.c] || ""), m.en); if (!a || !b) return "";
+  const d = numSub(b, a); if (!d.n) return "";
+  return "Hai cột kế hoạch lệch nhau " + withUnit(numBare(d), colUnit(m, fx.c)) + " (em tính: " + numShow(a) + " − " + numShow(b) + "); phần này do sản lượng thực tế " + (d.n < 0 ? "thấp" : "cao") + " hơn kế hoạch, vì báo cáo ghi «" + note.s.trim().replace(/[.!]+$/, "") + "».";
 }
 function contraNote(p) {   // a report sentence on this row and span, with a figure, saying the other direction against plan
   const {m, row, act} = p, main = rfMain(p.plans || []); if (!main) return null;
@@ -3152,7 +3163,7 @@ function newItemAsk(q, scope) {   // «Bộ phận TMĐT là gì, sao không có
   return true;
 }
 function rowFocus(q0, scope) {
-  const NAT_Q = / (co phai|phai la|phai khong|that khong|that su|thuc su|bat thuong|dot bien|lech thoi diem|mot lan|tiet kiem|vuot ngan sach|trong ngan sach) /;
+  const NAT_Q = / (co phai|phai la|phai khong|that khong|that su|thuc su|bat thuong|dot bien|lech thoi diem|mot lan|tiet kiem|vuot ngan sach|trong ngan sach|dang lo|dang ngai|co sao khong|co van de) /;   // «vượt 0,8 tỷ, có đáng lo không»: the figure points at the row (rerun 13)
   const figs0 = q0.match(/\d[\d.,]*\d(?:\s*%)?|\d(?:\s*%)?/g) || [];
   if (/\d[.,]\d|\d\s*(%|tỷ|triệu)/.test(q0) && !NAT_Q.test(" " + fold(q0).replace(/[?.!,;:]+/g, " ").replace(/\s+/g, " ") + " ")) return false;   // a claim with a figure is checked by rowClaim
   // «Sửa chữa thấp hơn 1,2 tỷ, có phải tiết kiệm không?»: the figure only points at the row; the question is its nature (TB17)
@@ -3215,11 +3226,14 @@ function rowFocus(q0, scope) {
   if (cn) {   // the report's own sentence says the other way: it leads, the row's own figure follows as a mismatch (TB9)
     answer(esc(ynLead(f, g.text, p.row.label)) + "Báo cáo ghi: «" + whole(cn.s) + "» " + esc("Số trên bảng của riêng dòng " + p.row.label + (cn.opp ? " thì ngược chiều: " : " thì khác: ") + lc1(g.text) +
       " Hai chỗ này lệch nhau, có thể câu trên tính gộp cả dòng khác; em ghi lại để " + OWNER + " kiểm."), cn.b.el, {html: true, extra: parkNote(q), src: "Lấy từ báo cáo «" + TITLE + "»"}); return true; }
-  const sn = scopeNote(p.row), judge = Q.opinion ? " Báo cáo chỉ ghi số, không đánh giá có đáng lo hay không." : "";   // the judgement is the owner's (TB12)
+  let sn = scopeNote(p.row); const judge = Q.opinion ? " Báo cáo chỉ ghi số, không đánh giá có đáng lo hay không." : "";   // the judgement is the owner's (TB12)
+  // «chưa tách riêng» is said of what the row's figure covers, never of a one-off amount, and only from a note of the same period (rerun 13)
+  if (sn && (NAT_ONCE.test(" " + fold(sn).replace(/[^a-z0-9]+/g, " ") + " ") || / (khoan|chi phi) .{0,30}mot lan /.test(" " + fold(sn) + " ") || !noteFits(p, sn, g.text))) sn = "";
+  const flex = Q.opinion ? flexSaid(p) : "";   // two plans: the gap between them is the volume, the reason a reader asking «đáng lo» needs
   if (sn && !/ được lập gộp với /.test(g.text)) { answer(esc(ynLead(f, g.text, p.row.label) + g.text) + " Lưu ý: báo cáo ghi «" + whole(sn.replace(/\.?$/, ".")) + "», nên số chênh lệch này chưa phải của riêng " + esc(p.row.label) + "; báo cáo chưa tách riêng." + esc(judge), g.target, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"}); return true; }
   const extra = notes.find(it => !rfOtherSpan(Q, it.s) && noteFits(p, it.s, g.text) && (it.row || fold(it.s).replace(/^\s*(ghi chu|chu thich|luu y|ket luan|nhan xet|\d+[.)])\s*:?\s*/, "").indexOf(fold(p.row.label).split(" ")[0]) <= 24) &&
     (CAUSE.test(it.s) || /lech thoi diem|mot lan|bat thuong|hoan|gop/.test(fold(it.s))));
-  answer(esc(ynLead(f, g.text, p.row.label) + g.text) + (extra ? " Báo cáo ghi: «" + whole(extra.s) + "»" : "") + esc(judge), g.target, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"});
+  answer(esc(ynLead(f, g.text, p.row.label) + g.text) + (extra ? " Báo cáo ghi: «" + whole(extra.s) + "»" : "") + esc((flex ? " " + flex : "") + judge), g.target, {html: true, src: "Lấy từ báo cáo «" + TITLE + "»"});
   return true;
 }
 function lossSaid(m, row, k) {   // a profit written negative is a loss: «Thực hiện lỗ 0,8 tỷ», never «Thực hiện (0,8) tỷ» (TB19)

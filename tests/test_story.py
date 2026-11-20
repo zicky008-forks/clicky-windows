@@ -2753,3 +2753,56 @@ def test_rule_book_a_judgement_question_never_gets_a_yes_or_no_verdict(tmp_path,
             assert not re.search(r"\b(đáng lo|không đáng lo|nghiêm trọng|ổn)\s*[.,]", x.split("không đánh giá")[0]), (q, x)
             assert "không đánh giá" in x, (q, x)                                  # the judgement is handed to the owner, in words
         browser.close()
+
+
+def test_rerun_thirteen_a_judgement_is_never_answered_yes_or_no_and_a_one_off_note_keeps_its_period(tmp_path, monkeypatch):
+    # independent grader, gate 2 rerun 13 (our own synthetic shapes): «… vượt …, có đáng lo không?» was led by «Có.», a guessed
+    # judgement; two plan columns did not say their difference is the volume; a to-date question quoted a month note on a one-off
+    # with no period and called it «chưa tách riêng», the shared-plan words.
+    monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
+    fx = Path(__file__).parent / "fixtures"
+    reps = {}
+    for name in ("bao_cao_hai_ke_hoach_ky", "bao_cao_bo_phan_mot_lan"):
+        src = tmp_path / (name + ".html")
+        src.write_text((fx / (name + ".html")).read_text(encoding="utf-8"), encoding="utf-8")
+        reps[name] = build(src)
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        try:
+            browser = kiem_hinh._launch(pw)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+        pg = browser.new_page(viewport={"width": 1366, "height": 900})
+
+        def typed(q):                          # the reader's way: Escape, skip the talk, type in «Hỏi Vera», Enter
+            pg.keyboard.press("Escape")
+            pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const e = r.getElementById('clicky-skip') || document.getElementById('clicky-skip'); if (e) e.click(); }")
+            pg.wait_for_timeout(300)
+            box = pg.locator("#clicky-host #q")
+            box.fill(q)
+            box.press("Enter")
+            pg.wait_for_timeout(900)
+            return pg.evaluate("() => { const r = document.getElementById('clicky-host').shadowRoot; const b = r.getElementById('bub'); "
+                               "return ((b && !b.classList.contains('hidden')) ? r.getElementById('ba') : r.getElementById('a')).innerText; }")
+        pg.goto(Path(reps["bao_cao_hai_ke_hoach_ky"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        vol = "Hai cột kế hoạch lệch nhau 1,0 tỷ (em tính: 12,0 − 11,0); phần này do sản lượng thực tế thấp hơn kế hoạch"
+        for q in ("Chi phí bao bì theo sản lượng vượt kế hoạch, có đáng lo không?",
+                  "Chi phí bao bì theo sản lượng vượt kế hoạch linh hoạt 0,8 tỷ, có đáng lo không?"):
+            x = typed(q)
+            assert x.startswith("Chi phí bao bì theo sản lượng (lũy kế)"), (q, x)   # the figures, never «Có.» / «Không.»
+            assert vol in x and "không đánh giá có đáng lo hay không" in x and "cao hơn kế hoạch linh hoạt 0,8 tỷ" in x.replace("So với kế hoạch linh hoạt, cao hơn", "cao hơn kế hoạch linh hoạt"), (q, x)
+        x = typed("EBIT tháng 10 thấp hơn kế hoạch, có sao không?")
+        assert x.startswith("EBIT thấp hơn kế hoạch 3,2 tỷ"), x
+        x = typed("EBIT tháng 10 có đạt kế hoạch không?")          # a yes/no on the figures keeps its «Không.»
+        assert x.startswith("Không. EBIT"), x
+        pg.goto(Path(reps["bao_cao_bo_phan_mot_lan"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        x = typed("Marketing lũy kế chênh lệch bao nhiêu so với kế hoạch?")
+        assert x.startswith("Marketing so với kế hoạch lũy kế 10 tháng, cao hơn 1,1 tỷ"), x
+        assert "0,6" not in x and "chưa tách riêng" not in x and "Báo cáo ghi" not in x, x
+        x = typed("Marketing tháng 10 chênh lệch bao nhiêu so với kế hoạch?")   # the month: the note on its own gap, as a cause
+        assert x.startswith("Marketing so với kế hoạch tháng 10, cao hơn 0,6 tỷ"), x
+        assert "Báo cáo ghi: «Marketing vượt 0,6 tỷ do phí sự kiện ra mắt một lần 0,5 tỷ" in x and "chưa tách riêng" not in x, x
+        browser.close()
