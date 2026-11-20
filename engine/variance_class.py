@@ -62,6 +62,7 @@ class Classified:
     flex: Optional[Decimal] = None                  # the flexed plan, for a variable cost
     pending: bool = False        # its department code is still a question: not classified, not asked about
     maybe: str = ""              # a cause the books hint at but do not show (said, nothing taken out)
+    depends: str = ""            # its figure may change with an open department code answer (said)
 
     @property
     def reported(self) -> Decimal:
@@ -109,6 +110,8 @@ class Classified:
         said += [c.text for c in self.causes]
         if self.maybe:
             said.append(self.maybe)
+        if self.depends:
+            said.append(self.depends)
         if self.causes:
             said.append(f"Số thực chất chênh {fmt(self.underlying)} đ"
                         + (f", {self.verdict}." if self.alarm else ", trong ngưỡng."))
@@ -181,7 +184,7 @@ def classify(v, gl: list, plans: list, config=None, driver: Optional[tuple] = No
     year, actual, plan, entries = _series(v, gl, plans)
     before = v.months[:-1]
     ytd = {(l.dept, l.element): l for l in v.ytd}
-    waiting = _waiting_on_codes(v)
+    waiting, depends = _waiting_on_codes(v)
     out = []
     for l in v.month:
         k = (l.dept, l.element)
@@ -190,6 +193,7 @@ def classify(v, gl: list, plans: list, config=None, driver: Optional[tuple] = No
         out.append(c)
         if c.pending:
             continue
+        c.depends = depends.get(k, "")
         # volume first: a variable cost is judged against the flexed plan
         if l.element in var_codes and driver and driver[1]:
             ratio = Decimal(driver[0]) / Decimal(driver[1])
@@ -292,30 +296,38 @@ def _timing_month(before: list, a: dict, p: dict, thr: Decimal, left: Decimal) -
     return min(hits, key=lambda h: (abs(abs(h[1]) - abs(left)), h[0]))
 
 
-def _waiting_on_codes(v) -> set:
-    """The month lines that wait on a department code question: the lines of a code the catalogue does not hold,
-    and the lines of the same cost element where the cost may belong. When the code reads like a known department
-    ('KD1' beside 'KD'), every line of that department x element waits, whichever side of plan it is on; otherwise
-    the same element in other departments on the other side of plan. Classing any of them before the answer would
-    be a guess."""
+def _waiting_on_codes(v) -> tuple:
+    """(lines that wait, {line: note}) for a department code question. Waiting: the lines of a code the catalogue
+    does not hold; when the code reads like a known department ('KD9' beside 'KD'), every line of that department x
+    element; otherwise every line of the cost element that holds the code's biggest amount, and the same element in
+    other departments on the other side of plan. Any other line of an element the code also posted to is
+    classified with a note that its figure may change with the answer."""
     codes = set((getattr(v, "unknown", {}) or {}).get("bộ phận", []) or [])
     if not codes:
-        return set()
+        return set(), {}
     known = {l.dept for l in v.month if l.dept and l.dept not in codes}
-    out = set()
-    for l in v.month:
-        if l.dept not in codes or not l.variance:
+    out, notes = set(), {}
+    for code in sorted(codes):
+        mine = [l for l in v.month if l.dept == code and l.variance]
+        if not mine:
             continue
-        out.add((l.dept, l.element))
-        c = key(l.dept).replace(" ", "")
+        biggest = max(mine, key=lambda l: (abs(l.actual), l.element)).element
+        c = key(code).replace(" ", "")
         like = {d for d in known if len(key(d)) >= 2 and (c.startswith(key(d).replace(" ", ""))
                                                           or key(d).replace(" ", "").startswith(c))}
-        for o in v.month:
-            if o.element != l.element or o.dept in codes or not o.dept:
-                continue
-            if (o.dept in like) or (not like and o.variance and (o.variance > 0) != (l.variance > 0)):
-                out.add((o.dept, o.element))
-    return out
+        for l in mine:
+            out.add((l.dept, l.element))
+            for o in v.month:
+                if o.element != l.element or o.dept in codes or not o.dept:
+                    continue
+                k = (o.dept, o.element)
+                if o.dept in like or (not like and (o.element == biggest
+                                                     or (o.variance and (o.variance > 0) != (l.variance > 0)))):
+                    out.add(k)
+                else:
+                    notes.setdefault(k, f"Số này có thể đổi khi chị cho biết mã {code} (cùng yếu tố chi phí) "
+                                        "thuộc bộ phận nào.")
+    return out, {k: n for k, n in notes.items() if k not in out}
 
 
 def summary(classified: list) -> tuple:
