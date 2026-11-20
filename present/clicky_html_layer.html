@@ -3651,6 +3651,7 @@ function rowNamesRe() {
   const names = new Set(); const add = c => { const x = c && c.textContent.trim(); if (x && x.length < 80 && /\p{L}/u.test(x)) names.add(x); };
   document.querySelectorAll("table tr").forEach(tr => add(tr.querySelector("th,td")));
   document.querySelectorAll("table th").forEach(add);
+  document.querySelectorAll("table").forEach(tb => { if (!tb.querySelector("th") && tb.rows[0]) [...tb.rows[0].cells].forEach(add); });   // a header row written in td
   const esc2 = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   ROWNAMES_RE = names.size ? new RegExp("(?<![\\p{L}\\p{N}])(?:" + [...names].sort((a, b) => b.length - a.length).map(esc2).join("|") + ")(?![\\p{L}\\p{N}])", "gu") : null;
   return ROWNAMES_RE;
@@ -3748,13 +3749,16 @@ function reportText() {   // the report's own words, without Vera's layer
 let EN_PREV = null, EN_PREV_USED = false;
 // «What did we spend on Marketing YTD?» asks one printed column («TH LK10»): the question is asked with the column's own name,
 // the form the page answers best. Only one column may fit; otherwise the question stays as mapped.
-function enHeads() {   // the column names: a table's th cells, or its first row
-  const cells = []; document.querySelectorAll("table").forEach(tb => { const th = tb.querySelectorAll("th"); (th.length ? [...th] : [...((tb.rows[0] || {}).cells || [])]).forEach(c => cells.push(c)); });
+function enHeads(subject) {   // the column names: a table's th cells, or its first row (only the tables that hold the subject's row)
+  const f = subject ? fold(subject) : "";
+  const holds = tb => !f || [...tb.rows].some(tr => { const c = fold(((tr.cells || [])[0] || {}).textContent || ""); return c && (c === f || c.startsWith(f + " (")); });
+  const cells = []; document.querySelectorAll("table").forEach(tb => { if (!holds(tb)) return; const th = tb.querySelectorAll("th"); (th.length ? [...th] : [...((tb.rows[0] || {}).cells || [])]).forEach(c => cells.push(c)); });
   return [...new Set(cells.map(c => c.textContent.trim()).filter(x => x && x.length < 40))];
 }
 function enColumn(q, map) {
   if (!map || map.why || (map.tail || "") !== "bao nhiêu") return "";
   const t = String(q).toLowerCase();
+  if (/\b(percent|percentage|share|ratio|rate|margin)\b|%/.test(t)) return "";   // a percentage is never one amount column
   const want = /\boriginal (plan|budget|aop)\b/.test(t) ? "goc" : /\brevised\b/.test(t) ? "aopr" : /\bflexible\b/.test(t) ? "linh" :
     /\b(forecast|estimate|outlook|landing|land|lands|projected|end up|finish)\b/.test(t) ? "uoc" :
     /\b(actuals?|actually|spent|spend|spending|booked|delivered|came in|results?|achieved|realised|realized|did we (do|make|spend|book|sell|deliver))\b|\bdid (?:(?!do\b|on\b|in\b)[\w-]+ ){1,4}cost\b/.test(t) ? "th" :
@@ -3764,11 +3768,15 @@ function enColumn(q, map) {
   const kind = h => { const f = fold(h);
     if (/^\s*1?\d\s*\+\s*\d{1,2}\s*$/.test(f)) return {m: "uoc", p: "fy"};   // «10+2»: ten months done plus two forecast
     const m = /\bchenh\b|%/.test(f) ? "" : /\bgoc\b/.test(f) ? "goc" : /\baopr\b|dieu chinh/.test(f) ? "aopr" : /linh hoat/.test(f) ? "linh" : /\buoc\b|du bao/.test(f) ? "uoc" :
-      /^(th|thuc hien)\b/.test(f) ? "th" : /^(kh|ke hoach|ngan sach|ns|aop)\b/.test(f) ? "kh" : "";
+      /(^|\s)(th|thuc hien)\b/.test(f) ? "th" : /(^|\s)(kh|ke hoach|ngan sach|ns|aop)\b/.test(f) ? "kh" : "";
     const p = /\blk ?\d|luy ke|t1 ?[-–] ?t\d/.test(f) ? "ytd" : /\b(ca nam|nam|fy)\b/.test(f) ? "fy" : /\bt(1[0-2]|[1-9])\b|thang \d/.test(f) ? "m" : "";
     return {m, p}; };
-  const heads = enHeads();
+  const own = enHeads(map.subject), heads = own.length ? own : enHeads();
   let fit = heads.filter(h => { const k = kind(h); return k.m === want && (per ? k.p === per : true); });
+  if (!fit.length && per === "m") {   // the subject's table has no month columns: in a month report its plain columns are the month
+    const rm = (document.title + " " + ((document.querySelector("h1,h2,p") || {}).textContent || "")).match(/tháng (1[0-2]|[1-9])\s*\/\s*\d{4}/i), mq = (map.when || "").match(/tháng (1[0-2]|[1-9])\b/);
+    if (rm && mq && rm[1] === mq[1]) fit = heads.filter(h => { const k = kind(h); return k.m === want && !k.p; });
+  }
   if (!per && fit.length > 1) { const plain = fit.filter(h => !kind(h).p); fit = plain.length ? plain : fit.filter(h => kind(h).p === "m"); }
   return fit.length === 1 ? fit[0] : "";
 }

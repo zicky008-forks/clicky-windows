@@ -2979,9 +2979,12 @@ def test_a_full_year_english_question_is_answered_in_english(tmp_path, monkeypat
     monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
     fx = Path(__file__).parent / "fixtures"
     reps = {}
-    for name in ("bao_cao_ytd_du_bao", "bao_cao_hoi_hdqt"):
+    for name in ("bao_cao_ytd_du_bao", "bao_cao_hoi_hdqt", "bao_cao_ca_nam_theo_cot", "bao_cao_hai_ke_hoach_ky", "bao_cao_ns_linh_hoat"):
         src = tmp_path / (name + ".html")
-        src.write_text((fx / (name + ".html")).read_text(encoding="utf-8"), encoding="utf-8")
+        html = (fx / (name + ".html")).read_text(encoding="utf-8")
+        if name == "bao_cao_hai_ke_hoach_ky":   # grader rerun 21: column headers written as a first row of td cells
+            html = html.replace("<th>", "<td>").replace("</th>", "</td>")
+        src.write_text(html, encoding="utf-8")
         reps[name] = build(src)
     pytest.importorskip("playwright")
     from playwright.sync_api import sync_playwright
@@ -3011,4 +3014,19 @@ def test_a_full_year_english_question_is_answered_in_english(tmp_path, monkeypat
         pg.wait_for_timeout(1500)
         a = typed("Where will EBIT land for the full year?")
         assert "VND 198.4 bn" in a and "«EBIT 10+2 bao nhiêu?»" in a, a
+        pg.goto(Path(reps["bao_cao_hai_ke_hoach_ky"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        a = typed("What's the full-year EBIT forecast?")   # a one-cell answer whose header is a td cell is still worded in English
+        assert "«EBIT», full-year estimate («Ước cả năm»): VND 236.0 bn" in a, a
+        pg.goto(Path(reps["bao_cao_ca_nam_theo_cot"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        a = typed("How much did Marketing spend in October?")   # the month report's plain «Thực hiện» column, from Marketing's own table
+        assert "actual («Thực hiện»): VND 5.4 bn" in a, a
+        a = typed("How much did Marketing spend this year so far?")   # that table has no year-to-date column: never another table's figure
+        assert a.startswith("I could not match your English question"), a
+        pg.goto(Path(reps["bao_cao_ns_linh_hoat"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        typed("How did net revenue do against the flexible budget in October?")
+        a = typed("And as a percentage of the original plan?")   # a percentage is never answered with one amount column
+        assert "VND 150.0 bn" not in a, a
         browser.close()
