@@ -1,0 +1,12 @@
+[
+ {"id": "G01", "cau_hoi": "EBIT tháng 10 có đạt kế hoạch không?", "loai": "so",
+  "mo_dau": "Không. EBIT", "phai_co": ["thấp hơn"], "so": [{"gia_tri": 3.2, "don_vi": "tỷ", "sai_so": 0.05}]},
+ {"id": "G02", "cau_hoi": "EBIT cả năm chênh lệch bao nhiêu so với kế hoạch?", "loai": "so",
+  "phai_co": ["cao hơn kế hoạch năm"], "khong_duoc_co": ["Báo cáo ghi"], "so": [{"gia_tri": 236.0, "don_vi": "tỷ"}, {"gia_tri": 6.0, "don_vi": "tỷ"}]},
+ {"id": "G03", "cau_hoi": "EBIT tháng 10 thấp hơn kế hoạch có đáng lo không?", "loai": "phan_xet",
+  "so": [{"gia_tri": 3.2, "don_vi": "tỷ", "sai_so": 0.05}]},
+ {"id": "G04", "cau_hoi": "Chi phí bao bì theo sản lượng vượt kế hoạch có đáng lo không?", "loai": "phan_xet",
+  "phai_co": ["kế hoạch gốc", "kế hoạch linh hoạt"], "so": [{"gia_tri": 0.2, "don_vi": "tỷ"}, {"gia_tri": 0.8, "don_vi": "tỷ"}]},
+ {"id": "G05", "cau_hoi": "Chi phí bao bì theo sản lượng có vượt ngân sách không?", "loai": "so",
+  "mo_dau": "Không so với kế hoạch gốc; có so với kế hoạch linh hoạt"}
+]
