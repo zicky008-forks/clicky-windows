@@ -525,7 +525,7 @@ def main():
     # Panel → Manager
     panel.on_model_changed.connect(manager.set_model)
     panel.on_text_submitted.connect(manager.submit_text)
-    panel.on_stop_requested.connect(manager.stop)
+    panel.on_stop_requested.connect(manager.user_stop)
     manager.sig_turn_started.connect(panel.begin_turn)
     panel.on_new_chat.connect(manager.clear_history)
     panel.on_new_chat.connect(panel.clear_response)
@@ -650,7 +650,7 @@ def main():
         tray.show_notification("Numvera", f"Switched to {name}")
 
     tray.on_switch_provider.connect(_switch)
-    tray.on_stop.connect(manager.stop)
+    tray.on_stop.connect(manager.user_stop)
     tray.on_copilot_login.connect(lambda: _copilot_login_flow(tray, panel, manager))
     tray.on_copilot_refresh.connect(manager.refresh_copilot_models)
 
@@ -858,7 +858,7 @@ def main():
     _install_shortcuts()
 
     # Esc = cancel current generation (kills Ollama ramble mid-stream)
-    stop_key = StopHotkey(on_stop=manager.stop, key="esc")
+    stop_key = StopHotkey(on_stop=manager.user_stop, key="esc")
     stop_key.start()
 
     # ── Show UI + start listener ──────────────────────────────────────────────

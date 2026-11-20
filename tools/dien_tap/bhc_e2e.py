@@ -44,7 +44,10 @@ from present_robot import Result, file_hash, find_clicky, other_files_open, read
 INTAKE = "Đúng rồi, làm tiếp"
 FIX = "Sửa giúp tôi"
 SAVE = "Lưu và kiểm tra"
-AUTO_PRESS = (INTAKE, FIX, SAVE)
+# The permission card before Vera touches dropped files (office/guided.py). "Tôi tự bấm" keeps every later
+# button the robot's to press, so the stage is graded exactly as before the card existed.
+CONSENT = "Tôi tự bấm, em chỉ chỗ"
+AUTO_PRESS = (CONSENT, INTAKE, FIX, SAVE)
 ORIGINAL_TAG = "_ban-goc"
 
 
