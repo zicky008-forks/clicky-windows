@@ -3476,7 +3476,7 @@ function enToVi(q) {
   const vsPlan = /\b(vs\.?|versus|against|compared (to|with)|to) (the )?(plan|budget|aop|target)\b/i;
   if (/\bhighest percentgrowth\b/i.test(s)) pred = "nào có % tăng cao nhất";
   else if (/\b(by )?(how many|what) (percent|percentage|%)( points?)? (did|does|is|was|were|are)\b.*\b(plan|budget|target)\b|\b(percent|percentage|%) (above|over|below|under) (the )?(plan|budget|target)\b/i.test(s)) pred = "đạt bao nhiêu % kế hoạch";
-  else if (/\b(what (percentage|percent|%|share) of (the )?(plan|budget|target)|% of (the )?(plan|budget|target)|(achievement|attainment|completion) (rate|level|%)|percent(age)? (achieved|attained|reached))\b/i.test(s)) pred = "đạt bao nhiêu % kế hoạch";
+  else if (/\b(what\s+(percentage|percent|%|share)\s+of\s+(the\s+)?([\w-]+\s+){0,2}(plan|budget|target)|%\s+of\s+(the\s+)?([\w-]+\s+){0,2}(plan|budget|target)|(achievement|attainment|completion) (rate|level|%)|percent(age)? (achieved|attained|reached))\b/i.test(s)) pred = "đạt bao nhiêu % kế hoạch";
   else if (/\b(growth rate|percent(age)? (growth|increase|rise|change)|(grow|grew|increase|increased|rise|rose|change|changed) (by )?(how many|what) (percent|%)|(grow|grew|increase|increased|rise|rose) in (percent|percentage) terms|how much .* (grow|grew|increase|increased|rise|rose) in (percent|%|percentage))\b/i.test(s)) pred = "tăng bao nhiêu phần trăm";
   else if (/\b(variance|difference|gap|deviation|delta|how far)\b/i.test(s)) pred = "chênh lệch bao nhiêu so với kế hoạch";
   else if (/\bhow much\b.*\babove plan\b/i.test(s)) pred = "vượt kế hoạch bao nhiêu";
@@ -3506,7 +3506,7 @@ function enToVi(q) {
   const things = [];
   EN_NAMES.forEach(([re, vis]) => { s = s.replace(re, (m, ...g) => { const v = vis.map(enPrinted).find(Boolean); if (!v) return m;
     things.push({at: g[g.length - 2], vi: v, name: true}); return " ".repeat(m.length); }); });
-  let t = s.replace(/\b(the|a|an|what|which|how|much|many|is|are|was|were|did|does|has|have|had|will|in|for|of|our|its|this|that|by|on|at|vs\.?|versus|against|compared|to|with|plan|budget|aop|target|variance|difference|gap|deviation|delta|far|above|below|over|under|more|less|than|exceed|exceeded|beat|miss|missed|short|meet|met|hit|achieve|achieved|reach|reached|make|made|on track|higher|lower|share|percentage|percent|increase|increased|grew|grow|rose|rise|most|highest|largest|biggest|lowest|smallest|least|so|and|why|amount|figure|number|total|value|be|been|month|year|we|us|about|terms|doing|perform|performing|performed|tracking|track|trend|trending|look|looking|land|compare|compared|currently|now|right|there|any|all|please|tell|me|show|give|can|could|would|you|will|shall|should|where|when|behind|please|off|drop|dropped|decline|declined|fall|fell|dip|dipped|movement|move|moved|achievement|attainment|completion|rate|growth|percent|percentage|reach|reached|change|changed|terms|actually|further|overall|as|anything|remind|into|bring|brought|bringing|extra|being|kind|sort|roughly|approximately|exactly|currently|net|total|whole|line|item|original|revised|flexible|actuals?|spent|spend|book|booked|delivered|achieve|achieved|realised|realized|they|them|those|these)\b/gi, " ").replace(/(^|\s)%(?=\s|$)/g, " ").replace(/\b(do|it)\b/g, " ").replace(/\b(Do|It)\b(?= [a-z])/g, " ");
+  let t = s.replace(/\b(the|a|an|what|which|how|much|many|is|are|was|were|did|does|has|have|had|will|in|for|of|our|its|this|that|by|on|at|vs\.?|versus|against|compared|to|with|plan|budget|aop|target|variance|difference|gap|deviation|delta|far|above|below|over|under|more|less|than|exceed|exceeded|beat|miss|missed|short|meet|met|hit|achieve|achieved|reach|reached|make|made|on track|higher|lower|share|percentage|percent|increase|increased|grew|grow|rose|rise|most|highest|largest|biggest|lowest|smallest|least|so|and|why|amount|figure|number|total|value|be|been|month|year|we|us|about|terms|doing|perform|performing|performed|tracking|track|trend|trending|look|looking|land|compare|compared|currently|now|right|there|any|all|please|tell|me|show|give|can|could|would|you|will|shall|should|where|when|behind|please|off|drop|dropped|decline|declined|fall|fell|dip|dipped|movement|move|moved|achievement|attainment|completion|rate|growth|percent|percentage|reach|reached|change|changed|terms|actually|further|overall|as|anything|remind|into|bring|brought|bringing|extra|being|kind|sort|roughly|approximately|exactly|currently|net|total|whole|line|item|original|revised|flexible|actuals?|spent|spend|book|booked|delivered|achieve|achieved|realised|realized|they|them|those|these|sell|sold|selling)\b/gi, " ").replace(/(^|\s)%(?=\s|$)/g, " ").replace(/\b(do|it)\b/g, " ").replace(/\b(Do|It)\b(?= [a-z])/g, " ");
   GL.forEach(([re, vi]) => { t = t.replace(re, (m, ...g) => { things.push({at: g[g.length - 2], vi}); return " ".repeat(m.length); }); });
   const rest = t.split(/\s+/).filter(w => w && !/^[,;:'"()-]+$/.test(w));
   // in the order typed, with an English «X block/department» said the Vietnamese way round («khối X»)
@@ -3538,6 +3538,8 @@ const EN_PHRASES = [
   [/(sản lượng|giá vốn|giá bán|cơ cấu|tỷ giá|chi phí) làm (giảm|tăng) (\(?\d[\d.,]*\)?) (tỷ|triệu)(?!\p{L})/gu, (m, w, d, n, u) => ({"sản lượng": "volume", "giá vốn": "cost of sales", "giá bán": "selling price", "cơ cấu": "mix", "tỷ giá": "FX", "chi phí": "cost"})[w] + (d === "giảm" ? " took off VND " : " added VND ") + n + (u === "tỷ" ? " bn" : " m")],
   [/^Em tính từ bảng (\u0002\d+\u0003)/g, "Worked out from the table $1"],
   [/Báo cáo ghi thêm:/g, "The report also notes:"], [/Báo cáo viết:/g, "The report says:"], [/, đoạn đang khoanh/g, ", in the circled passage"],
+  [/Số trên bảng của riêng dòng (\u0002\d+\u0003) thì khác: /gu, "The table's own figure for $1 is different: "],
+  [/Hai chỗ này lệch nhau, có thể câu trên tính gộp cả dòng khác; em ghi lại để (.{2,40}?) kiểm\./gu, "The two figures differ; the sentence may include other lines. I have noted it for $1 to check."],
   [/Kế hoạch của (\u0002\d+\u0003) được lập gộp với (\u0002\d+\u0003): (.+?) (\(?\d[\d.,]*\)?) (tỷ|triệu) cho cả (\d+) dòng, nên (\u0002\d+\u0003) không có chênh lệch riêng\./gu, (m, a, b, p, n, u, k, c) => a + "'s plan is set jointly with " + b + ": " + p + " of VND " + n + (u === "tỷ" ? " bn" : " m") + " covers the " + k + " lines, so " + c + " has no variance of its own."],
   [/Gộp lại, thực hiện (\(?\d[\d.,]*\)?) (tỷ|triệu)(\s*\(em tính: [^)]*\))?, (cao|thấp) hơn ((?:kế hoạch|ngân sách|AOP)(?: (?:gốc|linh hoạt|năm))?(?: \([^)]*\))?(?: tháng (?:1[0-2]|[1-9])| lũy kế \d+ tháng)?) (\(?\d[\d.,]*\)?) (tỷ|triệu)(?!\p{L})/gu, (m, n, u, w, d, p, k, u2) => "Combined, actuals are VND " + n + (u === "tỷ" ? " bn" : " m") + (w || "") + ", VND " + k + (u2 === "tỷ" ? " bn" : " m") + (d === "cao" ? " above " : " below ") + p],
   [/thực hiện tháng (1[0-2]|[1-9]) /g, (m, n) => EN_MONTHS[+n - 1].replace(/^./, c => c.toUpperCase()) + " actual "], [/thực hiện lũy kế (\d+) tháng /g, "$1-month YTD actual "],
@@ -3658,6 +3660,7 @@ function rowNamesRe() {
 }
 function figs(t, en) {   // figures and their units, read the way the text writes them (the Python side: engine/so_viet.py)
   const out = []; let s = String(t).replace(/«[^»]*»/g, " ");
+  if (!en && ROWNAMES_RE) s = s.replace(ROWNAMES_RE, " ");   // «Cả năm ước (10+2)» is a label, as the English quotes it
   if (!en) s = s.replace(/tháng (1[0-2]|[1-9])(?!\d|[.,]\d)/g, " ");   // «tháng 10» is said as a month name, not a figure
   const re = en ? /(?<![\p{L}\d.,])(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+|\d+)\s*(bn|m|pp|%|people)?(?![a-z])/gu : /(?<![\p{L}\d.,])(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+,\d+|\d+)\s*(tỷ|triệu|điểm %|%|người)?/gu;
   for (const m of s.matchAll(re)) {
@@ -3700,8 +3703,10 @@ function enRender(a, o) {   // the rendered answer box, put into English in plac
   { const body = ((a.querySelector("div") || a).innerText || "").trim();
     if (o.cls === "park" || body === D.fallback || VI_MISSING.test(body)) return enAsk(a, "missing");   // the mapping may be what failed
     if (!enOnRow(body)) return enAsk(a, "row");
-    if (EN_MAP && /lũy kế/.test(EN_MAP.when || "") && !/lũy kế|LK\s?\d|T1\s*[–-]\s*T\d|tháng đầu năm|từ đầu năm/i.test(body)) return enAsk(a, "period");   // a to-date question, a month's figures
+    if (EN_MAP && /lũy kế/.test(EN_MAP.when || "") && !/lũy kế|LK\s?\d|T1\s*[–-]\s*T\d|tháng đầu năm|từ đầu năm/i.test(body) && !enHeaded(body, "ytd")) return enAsk(a, "period");   // a to-date question, a month's figures
     if (EN_MAP && /cả năm/.test(EN_MAP.when || "") && !/cả năm|năm|FY/i.test(body)) return enAsk(a, "period");
+    if (EN_MAP && EN_MAP.needHead && !enHeaded(body, EN_MAP.needHead)) return enAsk(a, "period");   // two tables with the same columns: the answer must come from the one headed for the month
+    if (EN_MAP && /%|phần trăm/.test(EN_MAP.tail || "") && !/%/.test(body.replace(/«[^»]*»/g, ""))) return enAsk(a, "percent");   // a percentage asked, amounts only: not an answer
     { const mm = (EN_MAP && (EN_MAP.when || "").match(/tháng (1[0-2]|[1-9])\b/));   // a month asked, only to-date or full-year figures given
       if (mm && !/lũy kế/.test(EN_MAP.when) && /Lũy kế|lũy kế|LK\s?\d|T1\s*[–‒-]\s*T\d|cả năm|Ước|ước|KH năm/.test(body) && !new RegExp("tháng " + mm[1] + "(?!\\d)|\\bT" + mm[1] + "(?!\\d)").test(body.replace(/T1\s*[–‒-]\s*T\d+/g, ""))) return enAsk(a, "period"); }
     if (EN_MAP && !EN_MAP.define && !EN_MAP.rest.length && !EN_MAP.need.length && !/nào|cao nhất|thấp nhất|nhiều nhất/.test(EN_MAP.tail || "") && !EN_PREV_USED) return enAsk(a, "nosubject");
@@ -3734,6 +3739,7 @@ function enRender(a, o) {   // the rendered answer box, put into English in plac
     return "";
   }
   { const n = document.createElement("div"); n.className = "src"; n.textContent = "I read your question as: «" + EN_MAP.vi + "»"; a.insertBefore(n, a.firstChild.nextSibling); }
+  if (EN_HEADED) { const n = document.createElement("div"); n.className = "src"; n.textContent = (EN_HEADED_PER === "ytd" ? "Year to date: these" : "These") + " figures are from the table «" + EN_HEADED + "»."; a.insertBefore(n, a.firstChild.nextSibling); }
   const d = document.createElement("details"); d.className = "receipt"; d.open = true;
   const sm = document.createElement("summary"); sm.textContent = "Vietnamese original"; d.appendChild(sm);
   const p = document.createElement("div"); p.textContent = (keep.querySelector("div") || keep).innerText; d.appendChild(p); a.appendChild(d);
@@ -3755,13 +3761,36 @@ function enHeads(subject) {   // the column names: a table's th cells, or its fi
   const cells = []; document.querySelectorAll("table").forEach(tb => { if (!holds(tb)) return; const th = tb.querySelectorAll("th"); (th.length ? [...th] : [...((tb.rows[0] || {}).cells || [])]).forEach(c => cells.push(c)); });
   return [...new Set(cells.map(c => c.textContent.trim()).filter(x => x && x.length < 40))];
 }
+// Two tables with the same columns, one for the month and one to date: the period is in the heading just above each table.
+let EN_HEADED = "", EN_HEADED_PER = "";
+const EN_YTD_HEAD = /lũy kế|LK\s?\d|từ đầu năm|\d+ tháng đầu năm|T1\s*[–‒-]\s*T\d/i;
+function enTableHead(tb) {   // the table's caption and the nearest heading above it (the page may wrap the table)
+  const hs = [...document.querySelectorAll("h1,h2,h3,h4,h5,h6")].filter(h => h.compareDocumentPosition(tb) & 4);
+  return (tb.caption ? tb.caption.textContent : "") + " " + (hs.length ? hs[hs.length - 1].textContent : "");
+}
+function enHeadFits(h, per) { return per === "ytd" ? EN_YTD_HEAD.test(h) : per === "m" ? /tháng (1[0-2]|[1-9])\b|\bT(1[0-2]|[1-9])\b/.test(h) && !EN_YTD_HEAD.test(h) : false; }
+function enHeaded(body, per) {   // every figure of the answer is printed in a table headed for that period, and in no other table
+  const nums = String(body).replace(/«[^»]*»/g, " ").match(/\(?\d{1,3}(?:\.\d{3})*(?:,\d+)?\)?/g) || [];
+  const big = nums.map(x => x.replace(/[()]/g, "")).filter(x => /,|\./.test(x));
+  if (!big.length) return false;
+  const tabs = [...document.querySelectorAll("table")].map(tb => ({head: enTableHead(tb).trim(), fits: enHeadFits(enTableHead(tb), per), text: " " + [...tb.querySelectorAll("td,th")].map(c => c.textContent.trim()).join(" | ") + " "}));
+  const at = (t, x) => new RegExp("(^|[^\\d.,])\\(?" + x.replace(/[.,]/g, m => "\\" + m) + "\\)?(?![\\d]|[.,]\\d)").test(t);
+  const ok = big.every(x => tabs.some(t => t.fits && at(t.text, x)) && !tabs.some(t => !t.fits && at(t.text, x)));
+  if (ok) EN_HEADED_PER = per;
+  if (ok) EN_HEADED = (tabs.find(t => t.fits && at(t.text, big[0])) || {}).head || "";
+  return ok;
+}
+function enMine(subject) {   // the tables that hold the subject's row
+  const f0 = fold(subject || "");
+  return [...document.querySelectorAll("table")].filter(tb => [...tb.rows].some(tr => { const c = fold(((tr.cells || [])[0] || {}).textContent || ""); return c && (c === f0 || c.startsWith(f0 + " (")); }));
+}
 function enColumn(q, map) {
   if (!map || map.why || (map.tail || "") !== "bao nhiêu") return "";
   const t = String(q).toLowerCase();
   if (/\b(percent|percentage|share|ratio|rate|margin)\b|%/.test(t)) return "";   // a percentage is never one amount column
   const want = /\boriginal (plan|budget|aop)\b/.test(t) ? "goc" : /\brevised\b/.test(t) ? "aopr" : /\bflexible\b/.test(t) ? "linh" :
     /\b(forecast|estimate|outlook|landing|land|lands|projected|end up|finish)\b/.test(t) ? "uoc" :
-    /\b(actuals?|actually|spent|spend|spending|booked|delivered|came in|results?|achieved|realised|realized|did we (do|make|spend|book|sell|deliver))\b|\bdid (?:(?!do\b|on\b|in\b)[\w-]+ ){1,4}cost\b/.test(t) ? "th" :
+    /\b(actuals?|actually|spent|spend|spending|booked|delivered|came in|results?|achieved|realised|realized|did we (do|make|spend|book|sell|deliver)|sell|sold)\b|\bdid (?:(?!do\b|on\b|in\b)[\w-]+ ){1,4}cost\b/.test(t) ? "th" :
     /\b(plan|planned|budget|budgeted|target)\b/.test(t) ? "kh" : "";
   if (!want) return "";
   const per = /lũy kế/.test(map.when || "") ? "ytd" : /cả năm/.test(map.when || "") ? "fy" : /tháng/.test(map.when || "") ? "m" : "";
@@ -3775,7 +3804,16 @@ function enColumn(q, map) {
   let fit = heads.filter(h => { const k = kind(h); return k.m === want && (per ? k.p === per : true); });
   if (!fit.length && per === "m") {   // the subject's table has no month columns: in a month report its plain columns are the month
     const rm = (document.title + " " + ((document.querySelector("h1,h2,p") || {}).textContent || "")).match(/tháng (1[0-2]|[1-9])\s*\/\s*\d{4}/i), mq = (map.when || "").match(/tháng (1[0-2]|[1-9])\b/);
-    if (rm && mq && rm[1] === mq[1]) fit = heads.filter(h => { const k = kind(h); return k.m === want && !k.p; });
+    if (rm && mq && rm[1] === mq[1]) { fit = heads.filter(h => { const k = kind(h); return k.m === want && !k.p; }); if (enMine(map.subject).length > 1) map.needHead = "m"; }
+  }
+  if (!fit.length && (per === "ytd" || per === "m")) {   // a pair of tables with the same columns: the one headed for the period
+    const mine = enMine(map.subject);
+    const headed = mine.filter(tb => enHeadFits(enTableHead(tb), per));
+    if (mine.length > 1 && headed.length === 1) {
+      const th = headed[0].querySelectorAll("th"), hs = [...(th.length ? th : ((headed[0].rows[0] || {}).cells || []))].map(c => c.textContent.trim());
+      const one = hs.filter(h => { const k = kind(h); return k.m === want && !k.p; });
+      if (one.length === 1) { if (per === "m") { map.needHead = "m"; return one[0]; } return "lũy kế " + one[0]; }
+    }
   }
   if (!per && fit.length > 1) { const plain = fit.filter(h => !kind(h).p); fit = plain.length ? plain : fit.filter(h => kind(h).p === "m"); }
   return fit.length === 1 ? fit[0] : "";
@@ -3789,7 +3827,7 @@ function enPrintedOnPage(vi) {   // the report prints this name, or an abbreviat
 }
 function askAny(q, scope) {   // the ask box: an English question is asked in Vietnamese and answered in English
   EN_ON = isEnglishQ(q) || (!!EN_PREV && /^\s*(and|what about|how about|why|is that|is this|was that|should we|so)\b|\b(that|this|it|they|them|those)\b/i.test(q) && !/[^\x00-\x7f]/.test(q));
-  EN_LAST = null; EN_MAP = null; EN_PREV_USED = false; enPrinted = enPrintedOnPage;
+  EN_LAST = null; EN_MAP = null; EN_PREV_USED = false; EN_HEADED = ""; enPrinted = enPrintedOnPage;
   { const box = isOpen($("bub")) ? $("ba") : $("a"); if (box) delete box.dataset.en; }
   if (EN_ON) {
     let vi = enToVi(q); const page = " " + reportText() + " ";

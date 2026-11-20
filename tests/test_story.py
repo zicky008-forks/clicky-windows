@@ -2979,10 +2979,11 @@ def test_a_full_year_english_question_is_answered_in_english(tmp_path, monkeypat
     monkeypatch.setattr(clicky_html, "wav_to_mp3", lambda wav: (wav, 3.0))
     fx = Path(__file__).parent / "fixtures"
     reps = {}
-    for name in ("bao_cao_ytd_du_bao", "bao_cao_hoi_hdqt", "bao_cao_ca_nam_theo_cot", "bao_cao_hai_ke_hoach_ky", "bao_cao_ns_linh_hoat"):
+    for name in ("bao_cao_ytd_du_bao", "bao_cao_hoi_hdqt", "bao_cao_ca_nam_theo_cot", "bao_cao_hai_ke_hoach_ky", "bao_cao_ns_linh_hoat", "bao_cao_kenh_thang_luy_ke", "bao_cao_kenh_tach"):
         src = tmp_path / (name + ".html")
         html = (fx / (name + ".html")).read_text(encoding="utf-8")
         if name == "bao_cao_hai_ke_hoach_ky":   # grader rerun 21: column headers written as a first row of td cells
+            html = html.replace("<th>Ước cả năm</th>", "<th>Cả năm ước (10+2)</th>")   # rerun 22: a label carrying figures
             html = html.replace("<th>", "<td>").replace("</th>", "</td>")
         src.write_text(html, encoding="utf-8")
         reps[name] = build(src)
@@ -3017,7 +3018,7 @@ def test_a_full_year_english_question_is_answered_in_english(tmp_path, monkeypat
         pg.goto(Path(reps["bao_cao_hai_ke_hoach_ky"]["out"]).as_uri())
         pg.wait_for_timeout(1500)
         a = typed("What's the full-year EBIT forecast?")   # a one-cell answer whose header is a td cell is still worded in English
-        assert "«EBIT», full-year estimate («Ước cả năm»): VND 236.0 bn" in a, a
+        assert "«EBIT», «Cả năm ước (10+2)»: VND 236.0 bn" in a, a
         pg.goto(Path(reps["bao_cao_ca_nam_theo_cot"]["out"]).as_uri())
         pg.wait_for_timeout(1500)
         a = typed("How much did Marketing spend in October?")   # the month report's plain «Thực hiện» column, from Marketing's own table
@@ -3029,4 +3030,16 @@ def test_a_full_year_english_question_is_answered_in_english(tmp_path, monkeypat
         typed("How did net revenue do against the flexible budget in October?")
         a = typed("And as a percentage of the original plan?")   # a percentage is never answered with one amount column
         assert "VND 150.0 bn" not in a, a
+        # rerun 22: a pair of tables with the same columns, one for the month and one to date, told apart by their headings
+        pg.goto(Path(reps["bao_cao_kenh_thang_luy_ke"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        a = typed("What did general trade sell this year so far?")
+        assert "actual («TH»): VND 20,900.0 m" in a and "Year to date: these figures are from the table «2. Doanh thu theo kênh lũy kế 10 tháng»" in a, a
+        a = typed("How much did general trade sell in October?")   # never the to-date table's figure
+        assert "20,900" not in a and "20.900" not in a, a
+        # a percentage asked on a line whose plan is shared: never answered with amounts only
+        pg.goto(Path(reps["bao_cao_kenh_tach"]["out"]).as_uri())
+        pg.wait_for_timeout(1500)
+        a = typed("What percentage of plan did modern trade reach in October?")
+        assert "%" in a.split("I read")[0] or a.startswith("I could not match your English question"), a
         browser.close()
